@@ -6,13 +6,13 @@ import SwitchboardCore
 /// sheet shows what happened.
 enum DoneRemoval: Equatable {
   case checking
-  case confirming(DoneRemovalPlan)
-  case removing(DoneRemovalPlan, done: Int)
-  case finished(DoneRemovalResult)
+  case confirming(RemovalPlan)
+  case removing(RemovalPlan, done: Int)
+  case finished(RemovalResult)
 }
 
 enum DoneRemovalText {
-  static func title(_ plan: DoneRemovalPlan) -> String {
+  static func title(_ plan: RemovalPlan) -> String {
     switch plan.remove.count {
     case 0: "No Done session can be deleted"
     case 1: "Delete 1 Done session?"
@@ -26,7 +26,7 @@ enum DoneRemovalText {
     skipped == 0 ? "Removed \(removed)" : "Removed \(removed), skipped \(skipped)"
   }
 
-  static func deletes(_ item: DoneRemovalPlan.Item) -> String {
+  static func deletes(_ item: RemovalPlan.Item) -> String {
     var parts = ["session"]
     if item.worktree != nil { parts.append("worktree") }
     if item.branch != nil { parts.append("branch") }
@@ -63,7 +63,7 @@ extension BoardModel {
       then: { value in
         guard self.doneRemoval == .checking else { return }
         do {
-          var plan = try JSONCoding.convert(value, to: DoneRemovalPlan.self)
+          var plan = try JSONCoding.convert(value, to: RemovalPlan.self)
           let shown = self.shownIDs
           let removable = self.removableIDs
           let unreadIDs = shown.subtracting(removable)
@@ -82,12 +82,12 @@ extension BoardModel {
   /// Removes the plan's sessions one request at a time, so the sheet can show
   /// progress. sbd checks each session again. A session that fails its
   /// checks, or left Done, is skipped, and the rest continue.
-  func removeDone(_ plan: DoneRemovalPlan) {
+  func removeDone(_ plan: RemovalPlan) {
     guard case .confirming = doneRemoval else { return }
     doneRemoval = .removing(plan, done: 0)
     let send = send
     Task.detached {
-      var result = DoneRemovalResult(removed: [], skipped: plan.skip, partial: [])
+      var result = RemovalResult(removed: [], skipped: plan.skip, partial: [])
       for (n, item) in plan.remove.enumerated() {
         // A filter change after the plan can hide a session. The loop checks each one just before its send.
         if let refusal = await MainActor.run(body: { self.removalRefusal(item.id) }) {
@@ -99,7 +99,7 @@ extension BoardModel {
         args["confirmed"] = true
         args["targets"] = [.string(item.id)]
         do {
-          result.add(try JSONCoding.convert(try send("rm-done", args), to: DoneRemovalResult.self))
+          result.add(try JSONCoding.convert(try send("rm-done", args), to: RemovalResult.self))
         } catch {
           result.skipped.append(.init(id: item.id, name: item.name, reason: "\(error)"))
         }
@@ -207,7 +207,7 @@ struct DoneRemovalSheet: View {
 
 private struct SkipList: View {
   let title: String
-  let skips: [DoneRemovalPlan.Skip]
+  let skips: [RemovalPlan.Skip]
 
   var body: some View {
     if !skips.isEmpty {

@@ -266,6 +266,8 @@ public final class Service {
         return .success(try cleanup(request.args, caller: caller))
       case "rm-done":
         return .success(try removeDone(request.args, caller: caller))
+      case "rm-plan":
+        return .success(try removalPlan(request.args, caller: caller))
       case "merge":
         return .success(try mergeRequest(request.args))
       case "review":

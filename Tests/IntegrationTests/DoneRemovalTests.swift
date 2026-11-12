@@ -77,6 +77,31 @@ extension Instance {
     try client.call("rm-done", ["worktree": .bool(worktree), "remote_branch": .bool(remoteBranch)])
   }
 
+  /// The `rm-plan` op. Nil `targets` leaves the field out.
+  fileprivate func planRemoval(
+    _ targets: [String]?, scope: String, worktree: Bool = true, remoteBranch: Bool = false
+  ) throws -> JSON {
+    var args: [String: JSON] = [
+      "scope": .string(scope), "worktree": .bool(worktree), "remote_branch": .bool(remoteBranch),
+    ]
+    if let targets { args["targets"] = .array(targets.map(JSON.string)) }
+    return try client.call("rm-plan", args)
+  }
+
+  /// A work session in its own worktree that the user acknowledged, so it is Waiting.
+  fileprivate func waitingSession(_ repo: String, branch: String) throws -> SessionSummary {
+    let s = try worktreeSession(repo, branch: branch)
+    try waitFor(s.id, "the summary of the first reply") { $0.state == .needsYou && $0.triage?.source == .summary }
+    try sb("ack", s.id)
+    return try waitFor(s.id, "Waiting") { $0.state == .waiting }
+  }
+
+  /// The chat of a new group with no members.
+  fileprivate func chatSession(_ group: String) throws -> SessionSummary {
+    let g = try JSONCoding.decode(GroupSummary.self, from: sb("group", "add", "--json", group))
+    return try JSONCoding.decode(SessionSummary.self, from: sb("chat", g.id, "--json"))
+  }
+
   /// The confirmed `rm-done` on `targets`.
   fileprivate func removeDone(_ targets: [String], worktree: Bool = true) throws -> JSON {
     try client.call(
@@ -98,6 +123,11 @@ private func planned(_ plan: JSON) -> Set<String> {
 }
 
 private func item(_ plan: JSON, _ id: String) -> JSON? { plan["remove"]?.array?.first { $0["id"]?.string == id } }
+
+/// The plan with `remove` and `skip` in id order, so two plans compare whatever order the checks finished in.
+private func sorted(_ plan: RemovalPlan) -> RemovalPlan {
+  RemovalPlan(remove: plan.remove.sorted { $0.id < $1.id }, skip: plan.skip.sorted { $0.id < $1.id })
+}
 
 /// A field that the preview sends as null, or leaves out as Swift's encoder does for nil.
 private func isNull(_ value: JSON?) -> Bool { value == nil || value == .null }
@@ -135,7 +165,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
 
     let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
 
-    let result = try JSONCoding.decode(DoneRemovalResult.self, from: r.stdout)
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
     #expect(result.removed == [a.id])
     #expect(result.skipped.isEmpty)
   }
@@ -406,6 +436,234 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try sbd.get(followup.id).state == .done)
   }
 
+  // MARK: rm-plan for a list of work sessions
+
+  @Test func rmPlanForWorkPlansAWaitingSessionAndSkipsTheManagerAChatAndAnUnstartedFollowup() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let waiting = try sbd.waitingSession(repo, branch: "haacked/waiting")
+    let manager = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("manager", "--json"))
+    let chat = try sbd.chatSession("Flags")
+    let followup = try add(sbd, ["prompt": "Check the rollout.", "repository": "acme/widgets"])
+    try #require(try sbd.get(waiting.id).state == .waiting)
+
+    let plan = try sbd.planRemoval([waiting.id, manager.id, chat.id, followup.id], scope: "work")
+
+    #expect(planned(plan) == [waiting.id], Comment(rawValue: plan.text))
+    #expect(item(plan, waiting.id)?["worktree"]?.string == waiting.cwd)
+    for (s, kind) in [(manager, "manager"), (chat, "chat"), (followup, "follow-up")] {
+      let reason = try #require(skip(plan["skip"], s.id)?["reason"]?.string, Comment(rawValue: plan.text))
+      #expect(reason.lowercased().contains(kind), Comment(rawValue: reason))
+    }
+  }
+
+  @Test func rmPlanForWorkRemovesNothing() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let waiting = try sbd.waitingSession(repo, branch: "haacked/waiting")
+
+    _ = try sbd.planRemoval([waiting.id], scope: "work")
+
+    #expect(try sbd.intact(waiting))
+    #expect(try sbd.get(waiting.id).live)
+    #expect(try sbd.branchExists(repo, "haacked/waiting"))
+  }
+
+  /// A multi-select delete is not limited to Done.
+  @Test func rmPlanForWorkPlansADoneWorkSession() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let done = try sbd.worktreeSession(repo, branch: "haacked/done")
+    try sbd.markDone(done.id)
+
+    let plan = try sbd.planRemoval([done.id], scope: "work")
+
+    #expect(planned(plan) == [done.id], Comment(rawValue: plan.text))
+  }
+
+  /// The Manager stays out of the plan in every state, not only in Done.
+  @Test func rmPlanForWorkSkipsTheManagerMarkedDone() throws {
+    let sbd = try Instance()
+    let manager = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("manager", "--json"))
+    try sbd.markDone(manager.id)
+
+    let plan = try sbd.planRemoval([manager.id], scope: "work")
+
+    #expect(planned(plan).isEmpty)
+    let reason = try #require(skip(plan["skip"], manager.id)?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(reason.lowercased().contains("manager"), Comment(rawValue: reason))
+  }
+
+  @Test func rmPlanForWorkRunsRmsChecks() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.waitingSession(repo, branch: "haacked/dirty")
+    let clean = try sbd.waitingSession(repo, branch: "haacked/clean")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+
+    let plan = try sbd.planRemoval([dirty.id, clean.id], scope: "work")
+
+    #expect(planned(plan) == [clean.id], Comment(rawValue: plan.text))
+    let reason = try #require(skip(plan["skip"], dirty.id)?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(reason.contains("uncommitted"), Comment(rawValue: reason))
+  }
+
+  @Test(arguments: [true, false])
+  func rmPlanForWorkSkipsASessionWithAnOpenToDo(worktree: Bool) throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let held = try sbd.waitingSession(repo, branch: "haacked/held")
+    let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
+
+    let plan = try sbd.planRemoval([held.id], scope: "work", worktree: worktree)
+
+    #expect(planned(plan).isEmpty)
+    let reason = try #require(skip(plan["skip"], held.id)?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(
+      reason.contains("\(held.name) has an open to-do: \(todo.id) \"tell Alex in #flags that the fix shipped\""),
+      Comment(rawValue: reason))
+  }
+
+  @Test(arguments: ["work", "done"])
+  func rmPlanSkipsATargetThatNamesNoSession(scope: String) throws {
+    let sbd = try Instance()
+
+    let plan = try sbd.planRemoval(["nope"], scope: scope)
+
+    #expect(planned(plan).isEmpty)
+    let reason = try #require(skip(plan["skip"], "nope")?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(reason.contains("no longer exists"), Comment(rawValue: reason))
+  }
+
+  /// Delete All's rule still holds when the caller names the targets.
+  @Test func rmPlanForDoneSkipsATargetThatIsNotDone() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let waiting = try sbd.waitingSession(repo, branch: "haacked/waiting")
+    let done = try sbd.worktreeSession(repo, branch: "haacked/done")
+    try sbd.markDone(done.id)
+
+    let plan = try sbd.planRemoval([waiting.id, done.id], scope: "done")
+
+    #expect(planned(plan) == [done.id], Comment(rawValue: plan.text))
+    let reason = try #require(skip(plan["skip"], waiting.id)?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(reason.contains("is no longer in Done"), Comment(rawValue: reason))
+  }
+
+  /// sb runs below a's shell pane, so a plan that removes a's worktree must skip a, as `rm` refuses it.
+  @Test func rmPlanForWorkFromInsideASessionSkipsThatSession() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/inside")
+    let terminals = try sbd.client.terminals(a.id)
+    try sbd.waitFor(a.id, "claude's pid") { $0.claudePid != nil }
+    // A tick installs a snapshot that holds the shell pane's pid.
+    try sbd.advanceClock(1)
+    let request: JSON = [
+      "op": "rm-plan", "args": ["scope": "work", "worktree": true, "targets": .array([.string(a.id)])],
+    ]
+    let client = [
+      #"$s = IO::Socket::UNIX->new(Peer => $ARGV[0]) or die "connect: $!\n";"#,
+      #"print $s "$ARGV[1]\n";"#,
+      "print scalar <$s>",
+    ].joined(separator: " ")
+    try sbd.writeScript(
+      "plan", "perl -MIO::Socket::UNIX -e \(shellQuote(client)) \"$SB_HOME/sbd.sock\" \(shellQuote(request.text))")
+
+    try sbd.typeInShell(terminals, "sh \"$SB_HOME/plan.sh\"")
+    let r = try sbd.scriptResult("plan")
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let response = try #require(JSON.parse(r.stdout), Comment(rawValue: "stdout: \(r.stdout)\nstderr: \(r.stderr)"))
+    let plan = try #require(response["result"], Comment(rawValue: response.text))
+    #expect(planned(plan).isEmpty)
+    let reason = try #require(skip(plan["skip"], a.id)?["reason"]?.string, Comment(rawValue: plan.text))
+    #expect(reason.contains(insideRefusal("sb rm --worktree", a.id)), Comment(rawValue: reason))
+  }
+
+  @Test(arguments: [nil, "Done", "all"] as [String?])
+  func rmPlanRefusesAMissingOrUnknownScope(scope: String?) throws {
+    let sbd = try Instance()
+    var args: [String: JSON] = ["worktree": true]
+    if let scope { args["scope"] = .string(scope) }
+
+    #expect(failure(sbd, "rm-plan", args).contains("rm-plan needs scope done or work"))
+  }
+
+  @Test func rmPlanForWorkWithoutTargetsIsRefused() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    _ = try sbd.waitingSession(repo, branch: "haacked/waiting")
+
+    #expect(failure(sbd, "rm-plan", ["scope": "work"]).contains("rm-plan with scope work needs targets"))
+  }
+
+  @Test(arguments: [.string("s1"), .array([.string("s1"), .number(2)])] as [JSON])
+  func rmPlanRefusesTargetsThatAreNotAListOfIds(targets: JSON) throws {
+    let sbd = try Instance()
+
+    #expect(
+      failure(sbd, "rm-plan", ["scope": "done", "targets": targets]).contains(
+        "rm-plan needs targets as a list of session ids"))
+  }
+
+  /// An empty list plans nothing. It never stands for every Done session.
+  @Test func rmPlanForDoneWithAnEmptyListPlansNothing() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let done = try sbd.worktreeSession(repo, branch: "haacked/done")
+    try sbd.markDone(done.id)
+
+    let plan = try sbd.planRemoval([], scope: "done")
+
+    #expect(planned(plan).isEmpty, Comment(rawValue: plan.text))
+    #expect(plan["skip"]?.array?.isEmpty == true, Comment(rawValue: plan.text))
+  }
+
+  @Test func rmPlanPlansARepeatedTargetOnce() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let waiting = try sbd.waitingSession(repo, branch: "haacked/waiting")
+
+    let plan = try sbd.planRemoval([waiting.id, waiting.id, "nope", "nope"], scope: "work")
+
+    #expect(plan["remove"]?.array?.map { $0["id"]?.string } == [waiting.id], Comment(rawValue: plan.text))
+    #expect(plan["skip"]?.array?.map { $0["id"]?.string } == ["nope"], Comment(rawValue: plan.text))
+  }
+
+  // MARK: rm-plan for Done matches rm-done's preview
+
+  /// Each fixture session exercises a different rule: a clean Done session goes, one with uncommitted files and
+  /// one with an open to-do fail rm's checks, and a session outside Done and the Manager marked Done stay out.
+  @Test(arguments: [(true, true), (true, false), (false, true), (false, false)])
+  func rmPlanForDoneWithoutTargetsMatchesRmDonesPreview(worktree: Bool, remoteBranch: Bool) throws {
+    let s = try Setup()
+    let merged = try s.finished(.breaker, state: "MERGED", push: true)
+    let dirty = try s.sbd.worktreeSession(s.repo, branch: "haacked/dirty")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    let held = try s.sbd.worktreeSession(s.repo, branch: "haacked/held")
+    _ = try s.sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
+    let active = try s.sbd.worktreeSession(s.repo, branch: "haacked/active")
+    let manager = try JSONCoding.decode(SessionSummary.self, from: s.sbd.sb("manager", "--json"))
+    try s.pollUntilDone(merged)
+    try s.sbd.markDone(dirty.id)
+    try s.sbd.markDone(held.id)
+    try s.sbd.markDone(manager.id)
+    #expect(try s.sbd.get(active.id).state != .done)
+
+    let preview = try s.sbd.planDoneRemoval(worktree: worktree, remoteBranch: remoteBranch)
+    let plan = try s.sbd.planRemoval(nil, scope: "done", worktree: worktree, remoteBranch: remoteBranch)
+
+    let expected = sorted(try JSONCoding.decode(RemovalPlan.self, from: preview.text))
+    let got = sorted(try JSONCoding.decode(RemovalPlan.self, from: plan.text))
+    #expect(got == expected)
+    #expect(expected.remove.map(\.id).contains(merged.id), Comment(rawValue: preview.text))
+    #expect(expected.skip.map(\.id).contains(held.id), Comment(rawValue: preview.text))
+    let listed = Set(expected.remove.map(\.id) + expected.skip.map(\.id))
+    #expect(!listed.contains(active.id))
+    #expect(!listed.contains(manager.id))
+  }
+
   // MARK: Confirmation
 
   @Test func refusesInsideClaudeWithoutYes() throws {
@@ -526,7 +784,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
 
     let r = try s.sbd.rmDone("--worktree", "--delete-remote-branch", "--json")
 
-    let plan = try JSONCoding.decode(DoneRemovalPlan.self, from: r.stdout)
+    let plan = try JSONCoding.decode(RemovalPlan.self, from: r.stdout)
     #expect(plan.remove.map(\.id) == [merged.id])
     #expect(plan.remove.first?.remoteBranch == true)
   }

@@ -21,10 +21,10 @@ func removeDone(_ a: Args) {
   let preview = call("rm-done", args, timeout: 300)
   let yes = a.switches.contains("--yes")
   if a.json && !yes { return printJSON(preview) }
-  let plan = decode(preview, as: DoneRemovalPlan.self)
+  let plan = decode(preview, as: RemovalPlan.self)
   let text = describe(plan)
   if plan.remove.isEmpty {
-    if a.json { return printResult(DoneRemovalResult(removed: [], skipped: plan.skip, partial: [])) }
+    if a.json { return printResult(RemovalResult(removed: [], skipped: plan.skip, partial: [])) }
     print(text)
     return
   }
@@ -34,11 +34,11 @@ func removeDone(_ a: Args) {
     confirm(verb: "remove", count, text, refused: "removed nothing")
   }
   args["confirmed"] = true
-  var done = DoneRemovalResult(removed: [], skipped: plan.skip, partial: [])
+  var done = RemovalResult(removed: [], skipped: plan.skip, partial: [])
   // One request per session keeps each removal within its own timeout, as the app does.
   for item in plan.remove {
     args["targets"] = .array([.string(item.id)])
-    done.add(decode(call("rm-done", args, timeout: 300), as: DoneRemovalResult.self))
+    done.add(decode(call("rm-done", args, timeout: 300), as: RemovalResult.self))
   }
   if a.json { return printResult(done) }
   print("removed \(done.removed.count), skipped \(done.skipped.count)")
@@ -46,11 +46,11 @@ func removeDone(_ a: Args) {
   for s in done.skipped { print("  skipped \(s.id)  \(s.name): \(s.reason)".printable) }
 }
 
-private func printResult(_ result: DoneRemovalResult) {
+private func printResult(_ result: RemovalResult) {
   do { printJSON(try JSON(encoding: result)) } catch { die("\(error)") }
 }
 
-private func describe(_ plan: DoneRemovalPlan) -> String {
+private func describe(_ plan: RemovalPlan) -> String {
   var lines: [String] = []
   if plan.remove.isEmpty { lines.append("No Done session to remove.") }
   for item in plan.remove {

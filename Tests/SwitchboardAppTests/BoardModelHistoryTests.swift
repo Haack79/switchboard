@@ -412,11 +412,11 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
     let model = appliedModel(sessions(["b", "c"]) + [needsItem("d", state: .done)])
     model.send = { _, args in
       let id = args["targets"]?.array?.first?.string ?? ""
-      return try JSON(encoding: DoneRemovalResult(removed: [id], skipped: [], partial: []))
+      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
     }
     try selectBetween(model, "c", "d", "b")
     let before = model.history.entries.count
-    let plan = DoneRemovalPlan(
+    let plan = RemovalPlan(
       remove: [.init(id: "d", name: "d", pr: nil, worktree: nil, branch: nil, remoteBranch: false)], skip: [])
     model.doneRemoval = .confirming(plan)
 

@@ -5,8 +5,8 @@ import Testing
 @testable import SwitchboardApp
 
 @Suite struct DoneRemovalTextTests {
-  func item(worktree: String? = nil, branch: String? = nil, remoteBranch: Bool = false) -> DoneRemovalPlan.Item {
-    DoneRemovalPlan.Item(
+  func item(worktree: String? = nil, branch: String? = nil, remoteBranch: Bool = false) -> RemovalPlan.Item {
+    RemovalPlan.Item(
       id: "s1", name: "one", pr: 7, worktree: worktree, branch: branch, remoteBranch: remoteBranch)
   }
 
@@ -67,11 +67,11 @@ import Testing
        "skip":[]}
       """#
 
-    let plan = try JSONCoding.decode(DoneRemovalPlan.self, from: text)
+    let plan = try JSONCoding.decode(RemovalPlan.self, from: text)
 
     #expect(
       plan.remove == [
-        DoneRemovalPlan.Item(
+        RemovalPlan.Item(
           id: "s1", name: "one", pr: 122953, worktree: "/wt/one", branch: "feat", remoteBranch: true)
       ])
   }
@@ -81,25 +81,25 @@ import Testing
       {"remove":[{"id":"s1","name":"one","pr":null,"worktree":null,"branch":null,"remoteBranch":false}],"skip":[]}
       """#
 
-    let plan = try JSONCoding.decode(DoneRemovalPlan.self, from: text)
+    let plan = try JSONCoding.decode(RemovalPlan.self, from: text)
 
     #expect(
       plan.remove == [
-        DoneRemovalPlan.Item(id: "s1", name: "one", pr: nil, worktree: nil, branch: nil, remoteBranch: false)
+        RemovalPlan.Item(id: "s1", name: "one", pr: nil, worktree: nil, branch: nil, remoteBranch: false)
       ])
   }
 
   @Test func decodesASkipWithItsReason() throws {
     let text = #"{"remove":[],"skip":[{"id":"s2","name":"two","reason":"has uncommitted files"}]}"#
 
-    let plan = try JSONCoding.decode(DoneRemovalPlan.self, from: text)
+    let plan = try JSONCoding.decode(RemovalPlan.self, from: text)
 
-    #expect(plan.skip == [DoneRemovalPlan.Skip(id: "s2", name: "two", reason: "has uncommitted files")])
+    #expect(plan.skip == [RemovalPlan.Skip(id: "s2", name: "two", reason: "has uncommitted files")])
   }
 
   @Test func encodesRemoteBranchInCamelCase() throws {
-    let plan = DoneRemovalPlan(
-      remove: [DoneRemovalPlan.Item(id: "s1", name: "one", pr: nil, worktree: nil, branch: nil, remoteBranch: true)],
+    let plan = RemovalPlan(
+      remove: [RemovalPlan.Item(id: "s1", name: "one", pr: nil, worktree: nil, branch: nil, remoteBranch: true)],
       skip: [])
 
     let json = try JSON(encoding: plan)
@@ -125,9 +125,9 @@ final class SentArgs: @unchecked Sendable {
       sent.append(args)
       let id = args["targets"]?.array?.first?.string ?? ""
       if id == "b" { throw Refusal(description: "the socket closed") }
-      return try JSON(encoding: DoneRemovalResult(removed: [id], skipped: [], partial: []))
+      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
     }
-    let plan = DoneRemovalPlan(
+    let plan = RemovalPlan(
       remove: ["a", "b", "c"].map { .init(id: $0, name: $0, pr: nil, worktree: nil, branch: nil, remoteBranch: false) },
       skip: [.init(id: "d", name: "d", reason: "has uncommitted files")])
     model.doneRemoval = .confirming(plan)
@@ -162,11 +162,11 @@ final class SentArgs: @unchecked Sendable {
     orgSession("lo", nil, state: .done), orgSession("un", nil, read: nil, state: .done),
   ]
 
-  func item(_ id: String) -> DoneRemovalPlan.Item {
+  func item(_ id: String) -> RemovalPlan.Item {
     .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
   }
 
-  func skip(_ id: String) -> DoneRemovalPlan.Skip { .init(id: id, name: id, reason: "has uncommitted files") }
+  func skip(_ id: String) -> RemovalPlan.Skip { .init(id: id, name: id, reason: "has uncommitted files") }
 
   func model(_ filter: OrgFilter, _ list: [SessionSummary] = done) -> BoardModel {
     let model = orgFilterModel(filter)
@@ -177,14 +177,14 @@ final class SentArgs: @unchecked Sendable {
   /// A `send` that records every request, answers the check with `plan`, and removes each confirmed target.
   /// `beforeAnswer` runs on the main actor after a confirmed request is recorded and before it is answered.
   func recordingSend(
-    _ sent: SentArgs, plan: DoneRemovalPlan, beforeAnswer: (@MainActor @Sendable (String) -> Void)? = nil
+    _ sent: SentArgs, plan: RemovalPlan, beforeAnswer: (@MainActor @Sendable (String) -> Void)? = nil
   ) -> @Sendable (String, [String: JSON]) throws -> JSON {
     { op, args in
       sent.append(args)
       guard args["confirmed"] == .bool(true) else { return try JSON(encoding: plan) }
       let id = args["targets"]?.array?.first?.string ?? ""
       if let beforeAnswer { DispatchQueue.main.sync { MainActor.assumeIsolated { beforeAnswer(id) } } }
-      return try JSON(encoding: DoneRemovalResult(removed: [id], skipped: [], partial: []))
+      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
     }
   }
 
@@ -192,7 +192,7 @@ final class SentArgs: @unchecked Sendable {
     sent.value.filter { $0["confirmed"] == .bool(true) }.flatMap { $0["targets"]?.array?.compactMap(\.string) ?? [] }
   }
 
-  func confirm(_ model: BoardModel, _ plan: DoneRemovalPlan) async -> DoneRemovalResult? {
+  func confirm(_ model: BoardModel, _ plan: RemovalPlan) async -> RemovalResult? {
     model.doneRemoval = .confirming(plan)
     model.removeDone(plan)
     await settle { if case .finished = model.doneRemoval { true } else { false } }
@@ -205,7 +205,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aPlanShowsOnlyTheSessionsThatTheFilterShows() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter(keys: ["posthog"]))
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("hk"), item("un")], skip: [skip("lo"), skip("ph2")])
+    let plan = RemovalPlan(remove: [item("ph"), item("hk"), item("un")], skip: [skip("lo"), skip("ph2")])
     model.send = recordingSend(sent, plan: plan)
 
     model.checkDoneRemoval()
@@ -224,7 +224,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aFilteredPlanKeepsSbdsSkipsForShownSessions() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter(keys: ["posthog"]))
-    let plan = DoneRemovalPlan(remove: [], skip: [skip("ph"), skip("un"), skip("hk")])
+    let plan = RemovalPlan(remove: [], skip: [skip("ph"), skip("un"), skip("hk")])
     model.send = recordingSend(sent, plan: plan)
 
     model.checkDoneRemoval()
@@ -242,7 +242,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aPlanDropsAnIdThatTheBoardDoesNotList() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter())
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("ghost")], skip: [skip("phantom"), skip("lo")])
+    let plan = RemovalPlan(remove: [item("ph"), item("ghost")], skip: [skip("phantom"), skip("lo")])
     model.send = recordingSend(sent, plan: plan)
 
     model.checkDoneRemoval()
@@ -261,7 +261,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func confirmingAfterAFilterChangeThatHidesAPlannedIdNeverSendsIt() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter())
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("hk"), item("lo")], skip: [])
+    let plan = RemovalPlan(remove: [item("ph"), item("hk"), item("lo")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     model.orgFilter = OrgFilter(keys: ["posthog"])
@@ -276,7 +276,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aFilterChangeBetweenTwoSendsSkipsTheSecondId() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter())
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("hk")], skip: [])
+    let plan = RemovalPlan(remove: [item("ph"), item("hk")], skip: [])
     model.send = recordingSend(sent, plan: plan) { id in
       if id == "ph" { model.orgFilter = OrgFilter(keys: ["posthog"]) }
     }
@@ -291,7 +291,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aSessionWhoseOrgBecomesKnownAndHiddenWhileTheSheetIsOpenIsSkipped() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter(keys: ["posthog"]))
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("un")], skip: [])
+    let plan = RemovalPlan(remove: [item("ph"), item("un")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     model.apply(
@@ -307,7 +307,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func aSessionWhoseOrgIsUnknownIsNeverSentUnderAFilter() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter(keys: ["posthog"]))
-    let plan = DoneRemovalPlan(remove: [item("ph"), item("un")], skip: [])
+    let plan = RemovalPlan(remove: [item("ph"), item("un")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     let result = try #require(await confirm(model, plan))
@@ -321,7 +321,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func anIdThatTheBoardDoesNotListIsNeverSent() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter())
-    let plan = DoneRemovalPlan(remove: [item("ghost"), item("ph")], skip: [])
+    let plan = RemovalPlan(remove: [item("ghost"), item("ph")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     let result = try #require(await confirm(model, plan))
@@ -334,7 +334,7 @@ final class SentArgs: @unchecked Sendable {
   @Test func underAllOrgsTheRequestsMatchTheUnfilteredOnes() async throws {
     let sent = SentArgs()
     let model = model(OrgFilter())
-    let plan = DoneRemovalPlan(remove: Self.done.map { item($0.id) }, skip: [])
+    let plan = RemovalPlan(remove: Self.done.map { item($0.id) }, skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     model.checkDoneRemoval()
