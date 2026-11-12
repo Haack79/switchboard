@@ -54,9 +54,12 @@ final class BoardModel: ObservableObject {
   @Published var confirmingCleanup: String?
   /// The ids of the sessions whose cleanup is running.
   @Published var cleaningUp: Set<String> = []
-  /// The Delete All sheet's state, or nil while it is closed.
+  /// The Delete All sheet's confirmation, or nil while the sheet doesn't ask.
   @Published var doneRemoval: DoneRemoval?
-  var presentingSheet: Bool { showingNew || showingImport || showingSearch || doneRemoval != nil }
+  /// The Delete All sheet's progress, or nil while no confirmed Delete All runs or shows its result.
+  @Published var doneRemovalProgress: DoneRemovalProgress?
+  var showingDoneRemoval: Bool { doneRemoval != nil || doneRemovalProgress != nil }
+  var presentingSheet: Bool { showingNew || showingImport || showingSearch || showingDoneRemoval }
   /// The view that the detail pane shows while no session is selected.
   @Published var mainView = MainView.inbox {
     didSet { navigate() }
@@ -169,7 +172,7 @@ final class BoardModel: ObservableObject {
   /// Polls run apart from actions, because an action such as `open` or `new`
   /// can take seconds.
   private let poller = DispatchQueue(label: "switchboard.poll")
-  private let worker = DispatchQueue(label: "switchboard.actions")
+  let worker = DispatchQueue(label: "switchboard.actions")
   /// Merges wait on gh for up to 120 s, and review requests for up to 60 s.
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)
@@ -1015,10 +1018,16 @@ final class BoardModel: ObservableObject {
   /// Deletes a Done session with everything `deletePlan` names. sbd runs the safety checks of `rm`.
   func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    perform(
-      "rm", Self.deleteRequest(s, resolve: resolve),
-      then: { _ in self.deselect([s.id]) },
-      finally: { self.deleting.remove(s.id) })
+    let plan = Self.deletePlan(s)
+    let item = RemovalPlan.Item(
+      id: s.id, name: s.name, pr: s.pr?.number, worktree: plan.worktree, branch: plan.branch,
+      remoteBranch: plan.branch != nil)
+    removeSessions(
+      [item], args: Self.deleteRequest(s, resolve: resolve), request: .rm,
+      finished: { result in
+        self.actionError = result.skipped.first.map { "rm: \($0.reason)" }
+        self.deleting.remove(s.id)
+      })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.

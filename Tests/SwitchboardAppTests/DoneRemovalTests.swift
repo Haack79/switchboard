@@ -134,9 +134,9 @@ final class SentArgs: @unchecked Sendable {
     model.selection = "a"
 
     model.removeDone(plan)
-    await settle { if case .finished = model.doneRemoval { true } else { false } }
+    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
 
-    guard case .finished(let result) = model.doneRemoval else {
+    guard case .finished(let result) = model.doneRemovalProgress else {
       Issue.record("Delete All did not finish")
       return
     }
@@ -150,6 +150,90 @@ final class SentArgs: @unchecked Sendable {
       #expect(args["worktree"] == .bool(true))
       #expect(args["remote_branch"] == .bool(true))
     }
+  }
+}
+
+@MainActor final class Finished: Sendable {
+  var result: RemovalResult?
+}
+
+/// Delete All runs off `worker`. The Done delete icon's `rm` runs on `worker`, in order with the other actions.
+@MainActor
+@Suite struct DoneRemovalQueues {
+  func item(_ id: String) -> RemovalPlan.Item {
+    .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
+  }
+
+  @Test func deleteAllFinishesWhileWorkerIsBusy() async {
+    let model = appliedModel([needsItem("d", state: .done)])
+    let gate = DispatchSemaphore(value: 0)
+    model.send = { op, args in
+      if op == "hold" { gate.wait() }
+      let id = args["targets"]?.array?.first?.string ?? ""
+      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
+    }
+    model.perform("hold", [:])
+    let plan = RemovalPlan(remove: [item("d")], skip: [])
+    model.doneRemoval = .confirming(plan)
+
+    model.removeDone(plan)
+    #expect(model.presentingSheet)
+    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
+    gate.signal()
+
+    #expect(model.doneRemovalProgress == .finished(RemovalResult(removed: ["d"], skipped: [], partial: [])))
+  }
+
+  @Test func theIconsDeleteRunsInOrderWithTheOtherActions() async {
+    let sent = SentArgs()
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([done])
+    model.send = { op, _ in
+      sent.append(["op": .string(op)])
+      return .null
+    }
+
+    model.perform("before", [:])
+    model.deleteDone(done)
+    model.perform("after", [:])
+    await settle { sent.value.count >= 3 }
+
+    #expect(sent.value.prefix(3).map { $0["op"]?.string } == ["before", "rm", "after"])
+  }
+
+  @Test func aFailedIconDeleteShowsTheBannerAndKeepsTheSelection() async {
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([done])
+    model.send = { op, _ in
+      if op == "rm" { throw Refusal(description: "has uncommitted files") }
+      return .null
+    }
+    model.selection = "d"
+
+    model.deleteDone(done)
+    await settle { model.deleting.isEmpty }
+
+    #expect(model.actionError == "rm: has uncommitted files")
+    #expect(model.selection == "d")
+  }
+
+  @Test func rmRefusesMoreThanOneSessionAndSendsNothing() async {
+    let sent = SentArgs()
+    let model = appliedModel(["a", "b"].map { needsItem($0, state: .done) })
+    model.send = { op, _ in
+      sent.append(["op": .string(op)])
+      return .null
+    }
+    let finished = Finished()
+
+    model.removeSessions(
+      [item("a"), item("b")], args: ["worktree": true], request: .rm, finished: { finished.result = $0 })
+    await settle { finished.result != nil }
+
+    #expect(!sent.value.contains { $0["op"] == "rm" })
+    #expect(finished.result?.removed == [])
+    #expect(finished.result?.skipped.map(\.id) == ["a", "b"])
+    #expect(finished.result?.skipped.allSatisfy { $0.reason == BoardModel.rmTakesOneReason } == true)
   }
 }
 
@@ -195,8 +279,8 @@ final class SentArgs: @unchecked Sendable {
   func confirm(_ model: BoardModel, _ plan: RemovalPlan) async -> RemovalResult? {
     model.doneRemoval = .confirming(plan)
     model.removeDone(plan)
-    await settle { if case .finished = model.doneRemoval { true } else { false } }
-    guard case .finished(let result) = model.doneRemoval else { return nil }
+    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
+    guard case .finished(let result) = model.doneRemovalProgress else { return nil }
     return result
   }
 

@@ -73,7 +73,14 @@ struct ContentView: View {
   }
 
   private var isShowingDoneRemoval: Binding<Bool> {
-    Binding(get: { model.doneRemoval != nil }, set: { if !$0 { model.doneRemoval = nil } })
+    Binding(
+      get: { model.showingDoneRemoval },
+      set: {
+        if !$0 {
+          model.doneRemoval = nil
+          model.doneRemovalProgress = nil
+        }
+      })
   }
 
   private var isConfirmingCleanup: Binding<Bool> {
@@ -174,7 +181,7 @@ struct ContentView: View {
       SessionSearchView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model) }
+      DoneRemovalSheet().environmentObject(model)
     }
   }
 }

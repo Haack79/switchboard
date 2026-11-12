@@ -421,7 +421,7 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
     model.doneRemoval = .confirming(plan)
 
     model.removeDone(plan)
-    await settle { if case .finished = model.doneRemoval { true } else { false } }
+    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
 
     #expect(model.selection == nil)
     #expect(model.history.entries.count == before)
