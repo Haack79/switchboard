@@ -79,3 +79,69 @@ extension SessionSummary {
   /// A Done session that the Done delete icon and Delete All may remove.
   public var isRemovableDone: Bool { state == .done && isRemovableWork }
 }
+
+/// A session's place in sbd's removal job, stored in the session's JSON.
+/// `worktree`, `branch`, and `remoteBranch` are the `rm` arguments that the
+/// job runs with.
+public struct Removal: Codable, Equatable, Sendable {
+  public enum State: String, Codable, Sendable {
+    case queued
+    case running
+    /// The job stopped before it forgot the session. `error` says why.
+    case failed
+  }
+
+  public var state: State
+  /// When `rm-queue` queued the session, in ms since the epoch.
+  public var requested: Int64
+  /// The time before which the job does not start the session, in ms since the epoch.
+  public var notBefore: Int64?
+  public var worktree: Bool
+  public var branch: Bool
+  public var remoteBranch: Bool
+  /// `rm`'s message for a failed removal.
+  public var error: String?
+  /// The trash path of the worktree's folder, written before the folder moves there.
+  public var trash: String?
+  /// The ids of the session's open to-dos that the removal resolves.
+  public var resolve: [String]?
+
+  public init(requested: Int64, worktree: Bool, branch: Bool, remoteBranch: Bool, resolve: [String]) {
+    self.state = .queued
+    self.requested = requested
+    self.worktree = worktree
+    self.branch = branch
+    self.remoteBranch = remoteBranch
+    self.resolve = resolve
+  }
+
+  /// True while the job holds the session: queued or running.
+  public var holdsSession: Bool { state != .failed }
+}
+
+/// A branch or remote branch that a removal kept after it forgot the session,
+/// so no session is left to show the error.
+public struct RemovalNotice: Codable, Equatable, Sendable {
+  public var id: Int64
+  public var session: String
+  public var name: String
+  public var message: String
+
+  public init(id: Int64, session: String, name: String, message: String) {
+    self.id = id
+    self.session = session
+    self.name = name
+    self.message = message
+  }
+}
+
+/// What `rm-queue` returns: the sessions it queued, and those it skipped with the reason.
+public struct RemovalQueued: Codable, Equatable, Sendable {
+  public var queued: [String]
+  public var skipped: [RemovalPlan.Skip]
+
+  public init(queued: [String], skipped: [RemovalPlan.Skip]) {
+    self.queued = queued
+    self.skipped = skipped
+  }
+}

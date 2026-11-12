@@ -12,18 +12,22 @@ extension Service {
   /// After the worktree is gone, the session records the cleanup whatever
   /// happens to the branch, because its folder is missing. A failed delete
   /// keeps the branch and throws. A caller inside the session is refused
-  /// before anything stops, as `beginPaneStop` describes.
+  /// before anything stops, as `beginPaneStop` describes. So is a session
+  /// that the removal job holds, or that `rm` or another `cleanup` is removing.
   func cleanup(_ args: JSON, caller: Caller) throws -> JSON {
     let command = "sb cleanup"
     let ancestry = try caller.ancestry(command: command)
     let (session, pr, sharedWith): (Session, PullRequest?, String?) = try queue.sync {
       let id = try lookup(args)
       guard !starting.contains(id) else { throw APIError("\(id) is starting") }
+      if let refusal = removalRefusal(id) { throw refusal }
       let e = entries[id]!
       if e.facts.cleanedUp != nil { throw APIError("\(id) is already cleaned up") }
       try requireNoTurn(e)
+      guard removing.insert(id).inserted else { throw APIError("\(id) is being deleted") }
       return (e.session, e.facts.pr, sharedSession(e.session))
     }
+    defer { queue.sync { _ = removing.remove(session.id) } }
     let (repo, branch, supacode) = try checkCleanup(session, pr: pr, sharedWith: sharedWith)
     let branchName = branch?.name ?? session.branch ?? ""
     let fresh = buildSnapshot()
@@ -35,7 +39,7 @@ extension Service {
       install(fresh)
       return try beginPaneStop(session.id, ancestry: ancestry, command: command)
     }
-    try finishPaneStop(session, stop, command: command)
+    try finishPaneStop(session, stop, again: "run `\(command)` again")
     _ = try checkCleanup(session, pr: pr, sharedWith: sharedWith)
     let released = try releaseFiles(
       session, repo: repo, branch: branch, supacode: supacode, pr: pr, folderGone: false, remoteBranch: nil)

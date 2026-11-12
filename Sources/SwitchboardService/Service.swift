@@ -15,6 +15,8 @@ public final class Service {
   let queue = DispatchQueue(label: "sbd.state")
   /// Each paste waits 300 ms before its Enter, so pastes run here, in order.
   let pasteQueue = DispatchQueue(label: "sbd.paste")
+  /// The removal job runs here, one session at a time.
+  let removalQueue = DispatchQueue(label: "sbd.removal")
 
   struct Entry {
     var session: Session
@@ -93,6 +95,10 @@ public final class Service {
   var requestingReview: Set<String> = []
   /// The sessions whose decision list `decision-submit` is sending.
   var submittingDecisions: Set<String> = []
+  /// The sessions that the removal job takes next, in order.
+  var removalOrder: [String] = []
+  /// The sessions whose files `rm` or `cleanup` is removing. `rm-queue` skips them.
+  var removing: Set<String> = []
   var snapshot = Snapshot()
   /// The main checkout of each session folder that a lookup read, or nil for
   /// a folder in no git repo, with the time of the lookup. A folder stays in
@@ -225,6 +231,7 @@ public final class Service {
       for id in entries.keys {
         if case .running = claudeState(id) { deliverPending(id, after: 0) }
       }
+      resumeRemovals()
     }
   }
 
@@ -268,6 +275,8 @@ public final class Service {
         return .success(try removeDone(request.args, caller: caller))
       case "rm-plan":
         return .success(try removalPlan(request.args, caller: caller))
+      case "rm-queue":
+        return .success(try queueRemovals(request.args, caller: caller))
       case "merge":
         return .success(try mergeRequest(request.args))
       case "review":
@@ -343,6 +352,11 @@ public final class Service {
     let fresh = Service.actsOnProcesses.contains(request.op) ? buildSnapshot() : nil
     return try queue.sync {
       if let fresh { install(fresh) }
+      if Service.actsOnProcesses.contains(request.op), let id = try? lookup(request.args),
+        let refusal = removalRefusal(id)
+      {
+        throw refusal
+      }
       return try body()
     }
   }
@@ -397,6 +411,8 @@ public final class Service {
       return try noteRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
+    case "rm-retry", "rm-keep", "removal-notices", "removal-notice-dismiss":
+      return try removalRequest(op, args)
     case "manager-ls":
       return try JSON(encoding: managerList())
     case "manager-mcp":
@@ -931,6 +947,7 @@ public final class Service {
     _ id: String, _ text: String, byUser: Bool = true, launchesWithPrompt: Bool = true, from: String? = nil
   ) throws -> Delivery {
     guard entries[id] != nil else { throw APIError("no session \(id)") }
+    if let refusal = removalRefusal(id) { throw refusal }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
     // a message with images waits for a paste.
@@ -983,7 +1000,9 @@ public final class Service {
     entries[id]!.deliveryGeneration += 1
     let generation = entries[id]!.deliveryGeneration
     queue.asyncAfter(deadline: .now() + delay) { [self] in
-      guard let e = entries[id], !e.pending.isEmpty, e.deliveryGeneration == generation else { return }
+      // A session that the removal job holds keeps its messages. `failRemoval` delivers them.
+      guard let e = entries[id], !e.pending.isEmpty, e.deliveryGeneration == generation, removalRefusal(id) == nil
+      else { return }
       let now = nowMs()
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
@@ -1075,6 +1094,11 @@ public final class Service {
   /// requeues the message when the store fails.
   private func startPaste(_ id: String, _ message: QueuedMessage) -> Bool {
     entries[id]?.heldText = nil
+    // The removal job can take the session after `deliverPending` let the paste start.
+    if removalRefusal(id) != nil {
+      requeue(id, message)
+      return false
+    }
     var data: [String: JSON] = ["text": .string(message.text)]
     if let session = entries[id]?.session, let path = transcriptFile(session),
       let size = machine(for: session).size(path)
@@ -1102,8 +1126,9 @@ public final class Service {
   }
 
   /// Waits while the gate file exists in the home. Only a test instance has
-  /// gates, and they run on the paste queue, never on the state queue.
-  private func waitAtGate(_ gate: String) {
+  /// gates, and they run on the paste queue or the removal queue, never on
+  /// the state queue.
+  func waitAtGate(_ gate: String) {
     guard config.testClock else { return }
     while FileManager.default.fileExists(atPath: "\(home.path)/\(gate)") { usleep(50_000) }
   }
@@ -1143,7 +1168,8 @@ public final class Service {
   /// before anything stops, unless `resolve` names each open to-do. A to-do
   /// that arrives later keeps the session, even after its worktree is gone.
   /// A removal of the worktree refuses a caller inside the session before
-  /// anything stops, as `beginPaneStop` describes.
+  /// anything stops, as `beginPaneStop` describes. It refuses a session that
+  /// the removal job holds, or that another `rm` or `cleanup` is removing.
   func remove(_ args: JSON, caller: Caller) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
@@ -1161,42 +1187,26 @@ public final class Service {
     let command = "sb rm --worktree"
     let ancestry = removesWorktree ? try caller.ancestry(command: command) : nil
     do {
-      let (session, pr, sharedWith): (Session, PullRequest?, String?) = try queue.sync {
+      let id: String = try queue.sync {
         let id = try lookup(args)
-        // The start would otherwise leave its new worktree behind.
-        guard !starting.contains(id) else { throw APIError("\(id) is starting") }
-        guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
-        try checkTodos(id, resolving: resolving)
-        let entry = entries[id]!
-        return (entry.session, entry.facts.pr, sharedSession(entry.session))
+        if let refusal = removalRefusal(id) { throw refusal }
+        guard removing.insert(id).inserted else { throw APIError("\(id) is being deleted") }
+        return id
       }
-      let machine = self.machine(for: session)
-      let folderGone = !machine.exists(session.cwd)
-      let checked = try checkRemoval(
-        session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
-        branch: removesBranch)
-      // The branch's git config is deleted with the branch, so the remote is read first.
-      // A local branch that is already gone still has its remote branch checked.
-      let remoteTarget: (repo: String, remote: String, branch: String)? = {
-        guard removesRemoteBranch, let repo = checked.repo, let name = checked.branch?.name ?? session.branch
-        else { return nil }
-        return (repo, trackedRemote(repo, name, on: machine), name)
-      }()
+      defer { queue.sync { _ = removing.remove(id) } }
+      let check = try checkBeforeRemoval(
+        id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
+        resolving: resolving)
+      let session = check.session
       let (repo, branch, supacode) = try stopForRemoval(
-        session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
-        branch: removesBranch, resolving: resolving, ancestry: ancestry, command: command)
+        session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone, worktree: removesWorktree,
+        branch: removesBranch, resolving: resolving, ancestry: ancestry, command: command,
+        again: "run `\(command)` again")
       let released = try releaseFiles(
-        session, repo: repo, branch: branch, supacode: supacode, pr: pr, folderGone: folderGone,
-        remoteBranch: remoteTarget)
+        session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, folderGone: check.folderGone,
+        remoteBranch: check.remoteTarget)
       try forgetRemoved(session, released, resolving: resolving)
-      if let kept = released.keptBranch {
-        let remote = removesRemoteBranch ? " It also kept the remote branch." : ""
-        throw APIError("Removed \(session.id) and its worktree, and kept \(kept.name): \(kept.error)\(remote)")
-      }
-      if let remoteError = released.keptRemoteBranch {
-        throw APIError(
-          "Removed \(session.id), its worktree, and its local branch, and kept the remote branch: \(remoteError)")
-      }
+      if let kept = released.keptMessage(session.id, remoteBranch: removesRemoteBranch) { throw APIError(kept) }
       return [
         "removed": .string(session.id), "worktree_removed": .bool(released.worktree),
         "branch_removed": .bool(released.branch), "remote_branch_removed": .bool(released.remoteBranch),
@@ -1207,6 +1217,45 @@ public final class Service {
     }
   }
 
+  /// What `checkBeforeRemoval` read, for the phases that follow it.
+  struct RemovalCheck {
+    var session: Session
+    var pr: PullRequest?
+    var sharedWith: String?
+    var folderGone: Bool
+    /// The remote branch that `releaseFiles` deletes, or nil when it stays.
+    var remoteTarget: (repo: String, remote: String, branch: String)?
+  }
+
+  /// `rm`'s first phase. It refuses a session that is starting or merging,
+  /// or that has an open to-do that `resolving` doesn't name, then runs
+  /// `checkRemoval`. It reads the remote of the branch that `remoteBranch`
+  /// deletes before anything stops, because the branch's git config goes
+  /// with the branch. It runs off the state queue.
+  func checkBeforeRemoval(
+    _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>
+  ) throws -> RemovalCheck {
+    let (session, pr, sharedWith): (Session, PullRequest?, String?) = try queue.sync {
+      guard let entry = entries[id] else { throw APIError("no session \(id)") }
+      // The start would otherwise leave its new worktree behind.
+      guard !starting.contains(id) else { throw APIError("\(id) is starting") }
+      guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
+      try checkTodos(id, resolving: removalResolving(id, resolving))
+      return (entry.session, entry.facts.pr, sharedSession(entry.session))
+    }
+    let machine = self.machine(for: session)
+    let folderGone = !machine.exists(session.cwd)
+    let checked = try checkRemoval(
+      session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: worktree, branch: branch)
+    // A local branch that is already gone still has its remote branch checked.
+    var remoteTarget: (repo: String, remote: String, branch: String)?
+    if remoteBranch, let repo = checked.repo, let name = checked.branch?.name ?? session.branch {
+      remoteTarget = (repo, trackedRemote(repo, name, on: machine), name)
+    }
+    return RemovalCheck(
+      session: session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, remoteTarget: remoteTarget)
+  }
+
   /// `rm`'s second phase, after `checkRemoval`. It closes the panes and waits
   /// for their processes as `beginPaneStop` and `finishPaneStop` describe
   /// when `worktree` is set, and otherwise only sends SIGTERM to claude. It
@@ -1215,7 +1264,7 @@ public final class Service {
   /// runs again after the stop. It runs off the state queue.
   func stopForRemoval(
     _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
-    resolving: Set<String>, ancestry: Set<Int>?, command: String
+    resolving: Set<String>, ancestry: Set<Int>?, command: String, again: String
   ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool) {
     let machine = self.machine(for: session)
     let fresh = buildSnapshot()
@@ -1226,13 +1275,14 @@ public final class Service {
         throw APIError("\(session.id) changed while it was being removed")
       }
       // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
-      try store.checkDeletable(session: session.id, resolving: checkTodos(session.id, resolving: resolving))
+      try store.checkDeletable(
+        session: session.id, resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving)))
       install(fresh)
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
       if case .running(let pid) = claudeState(session.id) { machine.signal(pid, SIGTERM) }
       return nil
     }
-    if let stop { try finishPaneStop(session, stop, command: command) }
+    if let stop { try finishPaneStop(session, stop, again: again) }
     return try checkRemoval(
       session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: worktree, branch: branch)
   }
@@ -1244,6 +1294,19 @@ public final class Service {
     var remoteBranch = false
     var keptBranch: (name: String, error: any Error)?
     var keptRemoteBranch: (any Error)?
+
+    /// The sentence that names the branch or remote branch that stayed after
+    /// the session's removal, or nil when none stayed. `remoteBranch` says
+    /// whether the removal asked for the remote branch.
+    func keptMessage(_ id: String, remoteBranch: Bool) -> String? {
+      if let kept = keptBranch {
+        let remote = remoteBranch ? " It also kept the remote branch." : ""
+        return "Removed \(id) and its worktree, and kept \(kept.name): \(kept.error)\(remote)"
+      }
+      return keptRemoteBranch.map {
+        "Removed \(id), its worktree, and its local branch, and kept the remote branch: \($0)"
+      }
+    }
   }
 
   /// `rm`'s third phase: removes the worktree's folder and record when
@@ -1310,7 +1373,7 @@ public final class Service {
         stayed = " It kept the remote branch: \(remoteError)"
       }
       do {
-        try forgetSession(session.id, resolving: resolving)
+        try forgetSession(session.id, resolving: removalResolving(session.id, resolving))
       } catch var error as OpenTodoError {
         error.kept = kept
         error.stayed = stayed
@@ -1887,6 +1950,7 @@ public final class Service {
     if verdict.state == .readyToMerge, let since = e.facts.readyToMergeSince { out.since = since }
     if e.queuedSince != nil { out.reason = queuedReason }
     out.shellClosed = s.shellClosed
+    out.removal = s.removal
     // A follow-up has been Not started since it was added, which for an
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }

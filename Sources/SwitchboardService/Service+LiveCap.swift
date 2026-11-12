@@ -13,9 +13,11 @@ extension Service {
 
   var queuedReason: String { "queued: \(liveCount()) of \(liveCap) live" }
 
-  /// The session, when its folder exists and its claude is stopped.
+  /// The session, when its folder exists, its claude is stopped, and the
+  /// removal job doesn't hold it.
   func requireStartable(_ id: String) throws -> Session {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
+    if let refusal = removalRefusal(id) { throw refusal }
     try requireFolder(session)
     guard claudeState(id) == .stopped else { throw APIError("\(id) is already running") }
     return session

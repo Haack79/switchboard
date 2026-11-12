@@ -106,6 +106,8 @@ public struct Session: Codable, Equatable, Sendable {
   /// True once sbd gave a Manager conversation its first `mcp` list. A
   /// conversation that the user later set to the full setup keeps nil.
   public var mcpScoped: Bool?
+  /// Set while sbd's removal job holds the session, and after it failed.
+  public var removal: Removal?
 
   public var kind: SessionKind { SessionKind(manager: manager, chat: chat) }
 
@@ -275,6 +277,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// shows. nil when no source names one, for every session that has no
   /// `board`, and for a follow-up that hasn't started.
   public var issues: [SessionIssue]?
+  /// The session's place in sbd's removal job, or nil when no removal is
+  /// queued, running, or failed.
+  public var removal: Removal?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,

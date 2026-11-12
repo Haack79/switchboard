@@ -74,6 +74,53 @@ extension Service {
     return try JSON(encoding: planRemoval(targets, scope: scope, RemovalOptions(args, caller: caller)))
   }
 
+  /// `rm-queue` hands `targets` to the removal job and returns at once with a
+  /// `RemovalQueued`. It runs `rm-plan`'s checks that read no git: `scope`,
+  /// the session's open to-dos, and a caller inside a session whose worktree
+  /// would go. It skips a session that is starting or merging, whose files
+  /// `rm` or `cleanup` is removing, or that already has a removal. `resolve` lists the open to-dos that the user
+  /// confirmed. Each session takes the ids that name its own open to-dos,
+  /// and a session with an open to-do that `resolve` doesn't list is skipped.
+  /// The job runs git's checks when it takes the session.
+  func queueRemovals(_ args: JSON, caller: Caller) throws -> JSON {
+    guard let scope = args["scope"]?.string.flatMap(RemovalScope.init(rawValue:)) else {
+      throw APIError("rm-queue needs scope done or work")
+    }
+    guard case .array(let list)? = args["targets"], list.allSatisfy({ $0.string != nil }) else {
+      throw APIError("rm-queue needs targets as a list of session ids")
+    }
+    var options = try RemovalOptions(args, caller: caller)
+    options.resolve = try resolveArgument(args)
+    var seen = Set<String>()
+    let targets = list.compactMap(\.string).filter { seen.insert($0).inserted }
+    let result: RemovalQueued = queue.sync {
+      var result = RemovalQueued(queued: [], skipped: [])
+      for id in targets {
+        switch checkedRemovalTarget(id, scope: scope, options) {
+        case .failure(let skipped):
+          result.skipped.append(skipped.skip)
+        case .success(let t):
+          let removal = Removal(
+            requested: nowMs(), worktree: t.worktree, branch: t.branch, remoteBranch: t.remoteBranch,
+            resolve: t.resolve)
+          do {
+            try update(id) { $0.removal = removal }
+          } catch {
+            // `update` changes the entry before the store refuses the save.
+            entries[id]?.session.removal = nil
+            result.skipped.append(.init(id: id, name: t.session.name, reason: "\(error)"))
+            continue
+          }
+          removalOrder.append(id)
+          result.queued.append(id)
+        }
+      }
+      return result
+    }
+    if !result.queued.isEmpty { runRemovals() }
+    return try JSON(encoding: result)
+  }
+
   /// Sorts the sessions into those that `rm` would remove and those it
   /// refuses, by running `rm`'s checks. Nil `targets` takes every session
   /// that `scope` admits. A repeated target is planned once. The checks only
@@ -119,6 +166,8 @@ extension Service {
     var worktree: Bool
     var remoteBranch: Bool
     var ancestry: Set<Int>?
+    /// The open to-dos that the removal resolves, across every target.
+    var resolve: Set<String> = []
 
     init(_ args: JSON, caller: Caller) throws {
       worktree = args["worktree"]?.bool == true
@@ -134,50 +183,67 @@ extension Service {
     var worktree: Bool
     var branch: Bool
     var remoteBranch: Bool
+    /// The ids in `RemovalOptions.resolve` that name the session's open to-dos.
+    var resolve: [String]
   }
 
   private struct Skipped: Error {
     var skip: RemovalPlan.Skip
   }
 
-  /// The arguments of the Done delete icon's `rm` for the session, without
-  /// running git. A session that is gone, that `scope` doesn't admit, or
-  /// that has an open to-do fails with the reason, and so does a session
-  /// whose worktree would go while the caller runs inside it.
   private func removalTarget(_ id: String, scope: RemovalScope, _ options: RemovalOptions) -> Result<
     RemovalTarget, Skipped
   > {
-    queue.sync {
-      guard let e = entries[id] else {
-        return .failure(Skipped(skip: .init(id: id, name: id, reason: "\(id) no longer exists")))
-      }
-      let s = e.session
-      guard scope.admits(summary(id)) else {
-        let reason =
-          switch scope {
-          case .done: "\(s.name) is no longer in Done"
-          case .work:
-            s.kind.label.map { "\(s.name) is \($0)" }
-              ?? (s.waitsToStart ? "\(s.name) is a follow-up that hasn't started" : "\(s.name) isn't a work session")
-          }
-        return .failure(Skipped(skip: .init(id: id, name: s.name, reason: reason)))
-      }
-      do {
-        try checkTodos(id, resolving: [])
-      } catch {
-        let reason = (error as? OpenTodoError).map { "\(s.name) has an open to-do: \($0.list)" } ?? "\(error)"
-        return .failure(Skipped(skip: .init(id: id, name: s.name, reason: reason)))
-      }
-      let removesWorktree = options.worktree && s.repo != nil
-      if removesWorktree, let refusal = insideRefusal(id, options.ancestry, command: "sb rm --worktree") {
-        return .failure(Skipped(skip: .init(id: id, name: s.name, reason: "\(refusal)")))
-      }
-      let removesBranch = removesWorktree && s.branch != nil && e.facts.pr?.state == .merged
-      return .success(
-        RemovalTarget(
-          session: s, pr: e.facts.pr, sharedWith: sharedSession(s), worktree: removesWorktree,
-          branch: removesBranch, remoteBranch: removesBranch && options.remoteBranch))
+    queue.sync { checkedRemovalTarget(id, scope: scope, options) }
+  }
+
+  /// The arguments of the Done delete icon's `rm` for the session, without
+  /// running git. A session that is gone, that already has a removal, that
+  /// is starting or merging, whose files `rm` or `cleanup` is removing, that
+  /// `scope` doesn't admit, or that has an open
+  /// to-do that `options.resolve` doesn't list fails with the reason, and so
+  /// does a session whose worktree would go while the caller runs inside it.
+  /// It runs on the state queue.
+  private func checkedRemovalTarget(_ id: String, scope: RemovalScope, _ options: RemovalOptions) -> Result<
+    RemovalTarget, Skipped
+  > {
+    func skip(_ name: String, _ reason: String) -> Result<RemovalTarget, Skipped> {
+      .failure(Skipped(skip: .init(id: id, name: name, reason: reason)))
     }
+    guard let e = entries[id] else { return skip(id, "\(id) no longer exists") }
+    let s = e.session
+    if let removal = s.removal {
+      return skip(
+        s.name, removal.holdsSession ? "\(s.name) is being deleted" : "\(s.name) failed to delete. Retry it or keep it")
+    }
+    if starting.contains(id) { return skip(s.name, "\(id) is starting") }
+    if merging.contains(id) { return skip(s.name, "\(id) is merging its PR") }
+    if removing.contains(id) { return skip(s.name, "\(s.name) is being deleted") }
+    guard scope.admits(summary(id)) else {
+      let reason =
+        switch scope {
+        case .done: "\(s.name) is no longer in Done"
+        case .work:
+          s.kind.label.map { "\(s.name) is \($0)" }
+            ?? (s.waitsToStart ? "\(s.name) is a follow-up that hasn't started" : "\(s.name) isn't a work session")
+        }
+      return skip(s.name, reason)
+    }
+    let resolve = options.resolve.intersection(s.openTodos.map(\.id))
+    do {
+      try checkTodos(id, resolving: resolve)
+    } catch {
+      return skip(s.name, (error as? OpenTodoError).map { "\(s.name) has an open to-do: \($0.list)" } ?? "\(error)")
+    }
+    let removesWorktree = options.worktree && s.repo != nil
+    if removesWorktree, let refusal = insideRefusal(id, options.ancestry, command: "sb rm --worktree") {
+      return skip(s.name, "\(refusal)")
+    }
+    let removesBranch = removesWorktree && s.branch != nil && e.facts.pr?.state == .merged
+    return .success(
+      RemovalTarget(
+        session: s, pr: e.facts.pr, sharedWith: sharedSession(s), worktree: removesWorktree,
+        branch: removesBranch, remoteBranch: removesBranch && options.remoteBranch, resolve: resolve.sorted()))
   }
 }
 

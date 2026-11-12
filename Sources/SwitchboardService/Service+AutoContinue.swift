@@ -61,7 +61,7 @@ extension Service {
   /// The sessions whose tracked state is Claude can continue, oldest first,
   /// each with its verdict.
   private func autoContinueCandidates(now: Int64) -> [(id: String, verdict: Verdict)] {
-    entries.values.filter { $0.facts.lastState == .canContinue }
+    entries.values.filter { $0.facts.lastState == .canContinue && $0.session.removal?.holdsSession != true }
       .sorted { ($0.facts.stateSince, $0.session.id) < ($1.facts.stateSince, $1.session.id) }
       .map { ($0.session.id, Attention.evaluate($0.session, $0.facts, now: now)) }
   }

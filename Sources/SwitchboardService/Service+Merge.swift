@@ -11,10 +11,12 @@ extension Service {
   /// an optional `repository` name it by its open PR. After a merge, sbd
   /// resumes the session with a message. After an enqueue, sbd sets a queue
   /// wait that resumes the session when the PR merges. A failed command
-  /// records its error and fails the request. It changes nothing else.
+  /// records its error and fails the request. It changes nothing else. It
+  /// refuses a session that the removal job holds.
   func mergeRequest(_ args: JSON) throws -> JSON {
     let (id, pr, method): (String, PullRequest?, MergeMethod) = try queue.sync {
       let id = try sessionByPR(args)
+      if let refusal = removalRefusal(id) { throw refusal }
       let e = entries[id]!
       let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
       guard verdict.state == .readyToMerge, let pr = e.facts.pr else {

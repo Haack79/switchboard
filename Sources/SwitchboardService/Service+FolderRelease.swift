@@ -70,11 +70,12 @@ extension Service {
   /// that a later call finds it. A process that still runs or still uses the
   /// folder 5 s after the pane closes throws. sbd does not signal those
   /// processes, because the user may want to keep them.
-  /// `command` names the command that the error tells the user to run again.
-  func finishPaneStop(_ session: Session, _ stop: PaneStop, command: String) throws {
+  /// `again` is the clause, in lower case, that tells the user how to try again.
+  func finishPaneStop(_ session: Session, _ stop: PaneStop, again: String) throws {
     // A process can write to the folder until it exits. `worktree remove` deletes ignored files.
     if let pid = stop.claudePid, !Processes.waitForExit([pid], seconds: 5).isEmpty {
-      throw APIError("\(session.id)'s claude has not exited. Run `\(command)` again once it has.")
+      throw APIError(
+        "\(session.id)'s claude has not exited. \(again.prefix(1).uppercased())\(again.dropFirst()) once it has.")
     }
     host.kill(paneName(session.id, .claude))
     let deadline = Date().addingTimeInterval(5)
@@ -91,7 +92,7 @@ extension Service {
       running.sorted().map { "\($0) (\(commands[$0] ?? "?"), started by the session)" }
       + users.map { "\($0.pid) (\(commands[$0.pid] ?? "?"), \($0.use.rawValue) \($0.path))" }
     throw APIError(
-      "Processes from \(session.id) or in \(session.cwd) still run: \(named.joined(separator: ", ")). Stop them, then run `\(command)` again."
+      "Processes from \(session.id) or in \(session.cwd) still run: \(named.joined(separator: ", ")). Stop them, then \(again)."
     )
   }
 }
