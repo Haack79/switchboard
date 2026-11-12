@@ -37,27 +37,18 @@ extension Service {
     }
     try finishPaneStop(session, stop, command: command)
     _ = try checkCleanup(session, pr: pr, sharedWith: sharedWith)
-    let machine = self.machine(for: session)
-    try removeWorktree(repo, session.cwd, on: machine)
-    var branchRemoved = false
-    var branchError: Error?
-    if let branch {
-      do {
-        branchRemoved = try deleteBranch(repo, branch, pr: pr, inMain: supacode, on: machine)
-      } catch {
-        branchError = error
-      }
-    }
+    let released = try releaseFiles(
+      session, repo: repo, branch: branch, supacode: supacode, pr: pr, folderGone: false, remoteBranch: nil)
     queue.sync {
       _ = record(
         session.id, "cleanup",
         [
           "worktree": .string(session.cwd), "branch": .string(branchName),
-          "branch_removed": .bool(branchRemoved),
+          "branch_removed": .bool(released.branch),
         ])
     }
-    if let branchError {
-      throw APIError("Removed the worktree of \(session.id), and kept \(branchName): \(branchError)")
+    if let kept = released.keptBranch {
+      throw APIError("Removed the worktree of \(session.id), and kept \(branchName): \(kept.error)")
     }
     return ["cleaned": .string(session.id), "worktree": .string(session.cwd), "branch": .string(branchName)]
   }

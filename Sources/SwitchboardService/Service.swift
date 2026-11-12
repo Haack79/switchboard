@@ -1170,112 +1170,157 @@ public final class Service {
       }
       let machine = self.machine(for: session)
       let folderGone = !machine.exists(session.cwd)
-      var (repo, branch, supacode) = try checkRemoval(
+      let checked = try checkRemoval(
         session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
         branch: removesBranch)
       // The branch's git config is deleted with the branch, so the remote is read first.
       // A local branch that is already gone still has its remote branch checked.
       let remoteTarget: (repo: String, remote: String, branch: String)? = {
-        guard removesRemoteBranch, let repo, let name = branch?.name ?? session.branch else { return nil }
+        guard removesRemoteBranch, let repo = checked.repo, let name = checked.branch?.name ?? session.branch
+        else { return nil }
         return (repo, trackedRemote(repo, name, on: machine), name)
       }()
-      let fresh = buildSnapshot()
-      let stop: PaneStop? = try queue.sync {
-        guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
-          !merging.contains(session.id)
-        else {
-          throw APIError("\(session.id) changed while it was being removed")
-        }
-        // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
-        try store.checkDeletable(session: session.id, resolving: checkTodos(session.id, resolving: resolving))
-        install(fresh)
-        if removesWorktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
-        if case .running(let pid) = claudeState(session.id) { machine.signal(pid, SIGTERM) }
-        return nil
-      }
-      if let stop {
-        try finishPaneStop(session, stop, command: command)
-        (repo, branch, supacode) = try checkRemoval(
-          session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
-          branch: removesBranch)
-      }
-      // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
-      // folder's path through a symlink, so it gets the path that it lists for the worktree.
-      if let repo {
-        let listed = folderGone ? try worktreeEntry(repo, at: session.cwd, on: machine)?.path : session.cwd
-        if let listed { try removeWorktree(repo, listed, on: machine) }
-      }
-      var branchRemoved = false
-      var branchError: Error?
-      if let repo, let branch {
-        do {
-          branchRemoved = try deleteBranch(repo, branch, pr: pr, inMain: supacode, on: machine)
-        } catch {
-          branchError = error
-        }
-      }
-      var remoteRemoved = false
-      var remoteError: Error?
-      if let target = remoteTarget, branchError == nil, !branchExists(target.repo, target.branch, on: machine),
-        let pr = mergedPR(pr, of: target.branch)
-      {
-        do {
-          remoteRemoved = try deleteRemoteBranch(target.repo, target.remote, target.branch, pr: pr, on: machine)
-        } catch {
-          remoteError = error
-        }
-      }
-      try queue.sync {
-        // A follow-up can start between the two steps.
-        guard !starting.contains(session.id), !merging.contains(session.id),
-          entries[session.id]?.session.cwd == session.cwd
-        else {
-          throw APIError("\(session.id) changed while it was being removed")
-        }
-        // A to-do can arrive while the panes stop. The record stays. The refusal names what rm already removed.
-        let removed = [
-          repo != nil ? "the worktree" : nil, branchRemoved ? "the local branch" : nil,
-          remoteRemoved ? "the remote branch" : nil,
-        ].compactMap { $0 }
-        let kept =
-          removed.isEmpty
-          ? "Kept \(session.id)" : "Removed \(englishList(removed)) of \(session.id) and kept the session"
-        var stayed = ""
-        if let branchError, let branch {
-          stayed = " It kept \(branch.name): \(branchError)"
-        } else if let remoteError {
-          stayed = " It kept the remote branch: \(remoteError)"
-        }
-        do {
-          try forgetSession(session.id, resolving: resolving)
-        } catch var error as OpenTodoError {
-          error.kept = kept
-          error.stayed = stayed
-          throw error
-        } catch let error where !removed.isEmpty {
-          throw APIError("\(kept): \(error)\(stayed)")
-        }
-        host.kill(paneName(session.id, .claude))
-        host.kill(paneName(session.id, .shell))
-        try detachPlans { $0.session == session.id }
-      }
-      try? FileManager.default.removeItem(atPath: home.sessionFolder(session.id))
-      if let branchError, let branch {
+      let (repo, branch, supacode) = try stopForRemoval(
+        session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
+        branch: removesBranch, resolving: resolving, ancestry: ancestry, command: command)
+      let released = try releaseFiles(
+        session, repo: repo, branch: branch, supacode: supacode, pr: pr, folderGone: folderGone,
+        remoteBranch: remoteTarget)
+      try forgetRemoved(session, released, resolving: resolving)
+      if let kept = released.keptBranch {
         let remote = removesRemoteBranch ? " It also kept the remote branch." : ""
-        throw APIError("Removed \(session.id) and its worktree, and kept \(branch.name): \(branchError)\(remote)")
+        throw APIError("Removed \(session.id) and its worktree, and kept \(kept.name): \(kept.error)\(remote)")
       }
-      if let remoteError {
+      if let remoteError = released.keptRemoteBranch {
         throw APIError(
           "Removed \(session.id), its worktree, and its local branch, and kept the remote branch: \(remoteError)")
       }
       return [
-        "removed": .string(session.id), "worktree_removed": .bool(repo != nil), "branch_removed": .bool(branchRemoved),
-        "remote_branch_removed": .bool(remoteRemoved),
+        "removed": .string(session.id), "worktree_removed": .bool(released.worktree),
+        "branch_removed": .bool(released.branch), "remote_branch_removed": .bool(released.remoteBranch),
       ]
     } catch var error as OpenTodoError {
       error.flags = flags
       throw error
     }
+  }
+
+  /// `rm`'s second phase, after `checkRemoval`. It closes the panes and waits
+  /// for their processes as `beginPaneStop` and `finishPaneStop` describe
+  /// when `worktree` is set, and otherwise only sends SIGTERM to claude. It
+  /// first refuses a session that changed since the checks, or whose record
+  /// the store can't delete. It returns what `checkRemoval` returns when it
+  /// runs again after the stop. It runs off the state queue.
+  func stopForRemoval(
+    _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
+    resolving: Set<String>, ancestry: Set<Int>?, command: String
+  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool) {
+    let machine = self.machine(for: session)
+    let fresh = buildSnapshot()
+    let stop: PaneStop? = try queue.sync {
+      guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
+        !merging.contains(session.id)
+      else {
+        throw APIError("\(session.id) changed while it was being removed")
+      }
+      // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
+      try store.checkDeletable(session: session.id, resolving: checkTodos(session.id, resolving: resolving))
+      install(fresh)
+      if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
+      if case .running(let pid) = claudeState(session.id) { machine.signal(pid, SIGTERM) }
+      return nil
+    }
+    if let stop { try finishPaneStop(session, stop, command: command) }
+    return try checkRemoval(
+      session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: worktree, branch: branch)
+  }
+
+  /// What `releaseFiles` removed, and the error that kept each branch that stayed.
+  struct ReleasedFiles {
+    var worktree: Bool
+    var branch = false
+    var remoteBranch = false
+    var keptBranch: (name: String, error: any Error)?
+    var keptRemoteBranch: (any Error)?
+  }
+
+  /// `rm`'s third phase: removes the worktree's folder and record when
+  /// `repo` is set, then the branch, then the remote branch of
+  /// `remoteBranch`. A failed worktree removal throws. A failed branch check
+  /// or delete keeps the branch, keeps the remote branch, and is returned.
+  /// The remote branch goes only once the local branch is gone and only with
+  /// a merged PR for it. It runs off the state queue.
+  func releaseFiles(
+    _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
+    folderGone: Bool, remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?
+  ) throws -> ReleasedFiles {
+    let machine = self.machine(for: session)
+    // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
+    // folder's path through a symlink, so it gets the path that it lists for the worktree.
+    if let repo {
+      let listed = folderGone ? try worktreeEntry(repo, at: session.cwd, on: machine)?.path : session.cwd
+      if let listed { try removeWorktree(repo, listed, on: machine) }
+    }
+    var released = ReleasedFiles(worktree: repo != nil)
+    if let repo, let branch {
+      do {
+        released.branch = try deleteBranch(repo, branch, pr: pr, inMain: supacode, on: machine)
+      } catch {
+        released.keptBranch = (branch.name, error)
+      }
+    }
+    if let target = remoteTarget, released.keptBranch == nil,
+      !branchExists(target.repo, target.branch, on: machine), let pr = mergedPR(pr, of: target.branch)
+    {
+      do {
+        released.remoteBranch = try deleteRemoteBranch(target.repo, target.remote, target.branch, pr: pr, on: machine)
+      } catch {
+        released.keptRemoteBranch = error
+      }
+    }
+    return released
+  }
+
+  /// `rm`'s last phase: forgets the session, closes its panes, detaches its
+  /// plans, and deletes its folder in the sb home. It refuses a session that
+  /// changed since the checks. A to-do that arrived since the checks keeps
+  /// the session, and its error names what `releaseFiles` removed and kept.
+  func forgetRemoved(_ session: Session, _ released: ReleasedFiles, resolving: Set<String>) throws {
+    try queue.sync {
+      // A follow-up can start between the two steps.
+      guard !starting.contains(session.id), !merging.contains(session.id),
+        entries[session.id]?.session.cwd == session.cwd
+      else {
+        throw APIError("\(session.id) changed while it was being removed")
+      }
+      // A to-do can arrive while the panes stop. The record stays. The refusal names what rm already removed.
+      let removed = [
+        released.worktree ? "the worktree" : nil, released.branch ? "the local branch" : nil,
+        released.remoteBranch ? "the remote branch" : nil,
+      ].compactMap { $0 }
+      let kept =
+        removed.isEmpty
+        ? "Kept \(session.id)" : "Removed \(englishList(removed)) of \(session.id) and kept the session"
+      var stayed = ""
+      if let keptBranch = released.keptBranch {
+        stayed = " It kept \(keptBranch.name): \(keptBranch.error)"
+      } else if let remoteError = released.keptRemoteBranch {
+        stayed = " It kept the remote branch: \(remoteError)"
+      }
+      do {
+        try forgetSession(session.id, resolving: resolving)
+      } catch var error as OpenTodoError {
+        error.kept = kept
+        error.stayed = stayed
+        throw error
+      } catch let error where !removed.isEmpty {
+        throw APIError("\(kept): \(error)\(stayed)")
+      }
+      host.kill(paneName(session.id, .claude))
+      host.kill(paneName(session.id, .shell))
+      try detachPlans { $0.session == session.id }
+    }
+    try? FileManager.default.removeItem(atPath: home.sessionFolder(session.id))
   }
 
   /// The checks that `rm` makes before it stops anything. Returns the repo
