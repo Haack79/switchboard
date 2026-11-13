@@ -1319,13 +1319,26 @@ public final class Service {
     _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
     folderGone: Bool, remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?
   ) throws -> ReleasedFiles {
+    if let repo { try releaseWorktree(session, repo: repo, folderGone: folderGone) }
+    return releaseBranches(session, repo: repo, branch: branch, supacode: supacode, pr: pr, remoteBranch: remoteTarget)
+  }
+
+  /// Removes the worktree's folder and record. With `folderGone`, it removes
+  /// only the record, and nothing when git no longer lists the worktree.
+  func releaseWorktree(_ session: Session, repo: String, folderGone: Bool) throws {
     let machine = self.machine(for: session)
     // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
     // folder's path through a symlink, so it gets the path that it lists for the worktree.
-    if let repo {
-      let listed = folderGone ? try worktreeEntry(repo, at: session.cwd, on: machine)?.path : session.cwd
-      if let listed { try removeWorktree(repo, listed, on: machine) }
-    }
+    let listed = folderGone ? try worktreeEntry(repo, at: session.cwd, on: machine)?.path : session.cwd
+    if let listed { try removeWorktree(repo, listed, on: machine) }
+  }
+
+  /// The branch and remote-branch half of `releaseFiles`, after the worktree is gone.
+  func releaseBranches(
+    _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
+    remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?
+  ) -> ReleasedFiles {
+    let machine = self.machine(for: session)
     var released = ReleasedFiles(worktree: repo != nil)
     if let repo, let branch {
       do {
@@ -1605,9 +1618,10 @@ public final class Service {
   /// remote branch and `worktree remove` keeps the branch. `worktree remove`
   /// deletes ignored files. With `onlyBuildOutputIgnored`, an ignored file that
   /// is not build output or in `cleanupDeletes` also refuses. Any git failure
-  /// refuses the removal.
+  /// refuses the removal. `folder` is where the worktree's files are, when
+  /// they moved away from the path that git lists. The errors name `session.cwd`.
   func checkWorktreeIsLossless(
-    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool
+    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool, in folder: String? = nil
   ) throws -> (repo: String, supacode: Bool) {
     let repo = try worktreeRepo(session)
     if let sharedWith {
@@ -1622,22 +1636,24 @@ public final class Service {
       throw APIError("\(session.cwd) is not a worktree of \(repo)")
     }
     if entry.locked && !entry.lockedBySupacode { throw lockedError(session.cwd) }
-    let status = try readStatus(session.cwd, listingIgnored: onlyBuildOutputIgnored, on: machine)
+    let folder = folder ?? session.cwd
+    let status = try readStatus(folder, listingIgnored: onlyBuildOutputIgnored, on: machine)
     guard status.changed == 0 else {
       throw APIError("\(session.cwd) has uncommitted files (\(status.changed)). Commit or discard them first.")
     }
-    try requireNoHiddenChanges(session.cwd, on: machine)
+    try requireNoHiddenChanges(folder, naming: session.cwd, on: machine)
     if onlyBuildOutputIgnored { try requireOnlyBuildOutputIgnored(session.cwd, ignored: status.ignored) }
     try requireNoUnpushedCommits(
-      in: session.cwd, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, on: machine)
+      in: folder, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, on: machine)
     if entry.lockedBySupacode { _ = try supacodeExecutable() }
     return (repo, entry.lockedBySupacode)
   }
 
-  /// Throws when a tracked file has git's assume-unchanged or skip-worktree
-  /// flag, because `git status` doesn't list a change to such a file.
-  private func requireNoHiddenChanges(_ cwd: String, on machine: any Machine) throws {
-    let listed = try gitOutput(cwd, ["ls-files", "-v", "-z"], on: machine)
+  /// Throws when a tracked file in `folder` has git's assume-unchanged or
+  /// skip-worktree flag, because `git status` doesn't list a change to such a
+  /// file. The error names `cwd`.
+  private func requireNoHiddenChanges(_ folder: String, naming cwd: String, on machine: any Machine) throws {
+    let listed = try gitOutput(folder, ["ls-files", "-v", "-z"], on: machine)
     let hidden = listed.split(separator: "\0").filter { $0.first.map { $0.isLowercase || $0 == "S" } ?? false }
       .map { String($0.dropFirst(2)) }
     guard hidden.isEmpty else {
