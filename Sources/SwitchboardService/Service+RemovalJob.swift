@@ -25,7 +25,9 @@ extension Service {
 
   /// `rm-retry` queues a failed removal again, and refuses a session that is
   /// starting, merging, or that `rm` or `cleanup` is removing. `rm-keep`
-  /// clears it, and the session goes back to the state its events give it.
+  /// moves the worktree's folder back from the trash, then clears the
+  /// removal, and the session goes back to the state its events give it. A
+  /// folder that can't move back keeps the removal.
   /// Both refuse a session with no failed removal. `removal-notices` lists the notices,
   /// oldest first. `removal-notice-dismiss` deletes the notice `id`.
   func removalRequest(_ op: String, _ args: JSON) throws -> JSON {
@@ -40,6 +42,7 @@ extension Service {
         guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
       }
       if op == "rm-keep" {
+        try restoreFromTrash(id)
         try update(id) { $0.removal = nil }
       } else {
         try update(id) {
@@ -61,8 +64,8 @@ extension Service {
 
   /// Rebuilds the job's order from the stored removals after a restart, the
   /// running removal first, and starts the job. A running removal starts
-  /// over from `rm`'s checks. A failed removal waits for `rm-retry`. It runs
-  /// on the state queue.
+  /// over from `rm`'s checks, or continues from the trash as `runRemoval`
+  /// says. A failed removal waits for `rm-retry`. It runs on the state queue.
   func resumeRemovals() {
     let held = entries.values.compactMap { e in e.session.removal.map { (id: e.session.id, removal: $0) } }
       .filter(\.removal.holdsSession)
@@ -107,16 +110,20 @@ extension Service {
     return nil
   }
 
-  /// Runs `rm`'s phases on the session with the removal's arguments. It
-  /// resolves the to-dos in the removal's `resolve` that are still open, and
-  /// a to-do that is open and not in `resolve` fails the removal. A
-  /// failure before the session is forgotten records the removal as failed
-  /// with `rm`'s message, and the session stays. A branch or remote branch
-  /// that stayed after the session was forgotten becomes a removal notice.
-  /// It runs on `removalQueue`.
+  /// Runs `rm`'s phases on the session with the removal's arguments. The
+  /// worktree goes through the trash as `releaseThroughTrash` says, and the
+  /// trash folder is purged once the session is forgotten. A removal whose
+  /// folder an earlier run moved to the trash continues from there, as
+  /// `folderInTrash` says. It resolves the to-dos in the removal's `resolve`
+  /// that are still open, and a to-do that is open and not in `resolve`
+  /// fails the removal. A failure before the session is forgotten records
+  /// the removal as failed with `rm`'s message, and the session stays. A
+  /// branch or remote branch that stayed after the session was forgotten
+  /// becomes a removal notice. It runs on `removalQueue`.
   private func runRemoval(_ id: String, _ removal: Removal) {
     let resolving = Set(removal.resolve ?? [])
     do {
+      let inTrash = try folderInTrash(id, removal)
       let check = try checkBeforeRemoval(
         id, worktree: removal.worktree, branch: removal.branch, remoteBranch: removal.remoteBranch,
         resolving: resolving)
@@ -125,10 +132,17 @@ extension Service {
         session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone,
         worktree: removal.worktree, branch: removal.branch, resolving: resolving, ancestry: nil,
         command: "sb rm --worktree", again: "retry the delete")
-      let released = try releaseFiles(
-        session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, folderGone: check.folderGone,
-        remoteBranch: check.remoteTarget)
+      let trash = try releaseThroughTrash(
+        session, removal, inTrash: inTrash, repo: repo, supacode: supacode, check: check)
+      let released =
+        trash == nil
+        ? try releaseFiles(
+          session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, folderGone: check.folderGone,
+          remoteBranch: check.remoteTarget)
+        : releaseBranches(
+          session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, remoteBranch: check.remoteTarget)
       try forgetRemoved(session, released, resolving: resolving)
+      if let trash { purge(trash) }
       if let kept = released.keptMessage(id, remoteBranch: removal.remoteBranch) {
         logLine(kept)
         queue.sync {

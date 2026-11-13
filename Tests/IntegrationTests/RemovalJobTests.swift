@@ -2,113 +2,7 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// The GitHub URL of the repo that the recorded PRs belong to.
-private let posthog = "https://github.com/PostHog/posthog.git"
-
-/// A recorded PR in PostHog/posthog and its head branch.
-private struct RecordedPR {
-  let number: Int
-  let branch: String
-
-  static let breaker = RecordedPR(number: 122953, branch: "haacked/cdp-dlq-breaker-counts-lookups")
-  static let groups = RecordedPR(number: 122179, branch: "posthog/groups-list-two-phase-dedup")
-}
-
-/// The gate file that holds the removal worker. While it exists, the worker records `running` on the session it
-/// takes next and waits before it stops that session's panes. The worker runs one session at a time, so every
-/// session queued after that one stays `queued`.
-private let holdRemoval = "hold-removal"
-
-/// An sbd whose poller asks a FakeGitHub, and a PostHog/posthog checkout whose origin is a bare repo in the home
-/// that holds main.
-private struct Setup {
-  let github: FakeGitHub
-  let sbd: Instance
-  let repo: String
-  let origin: String
-
-  init() throws {
-    github = try FakeGitHub()
-    sbd = try Instance.withGitHub(github)
-    repo = try Repos.create("\(sbd.home.path)/posthog", origin: posthog)
-    origin = "\(sbd.home.path)/origin.git"
-    try sbd.git(sbd.home.path, "init", "-q", "--bare", origin)
-    try sbd.git(repo, "config", "url.\(origin).insteadOf", posthog)
-    try sbd.git(repo, "push", "-q", "origin", "main")
-  }
-
-  /// A session in a worktree that sbd made on the PR's branch, after a commit. GitHub reports the PR as merged
-  /// with that commit as its head. The commit is on no remote unless `push` is true.
-  func merged(_ pr: RecordedPR, push: Bool = false) throws -> SessionSummary {
-    let s = try sbd.worktreeSession(repo, branch: pr.branch)
-    try sbd.commit(s.cwd, "\(pr.number).txt")
-    if push { try sbd.git(s.cwd, "push", "-q", "origin", pr.branch) }
-    let tip = try sbd.git(s.cwd, "rev-parse", "HEAD")
-    github.change(pr.number) {
-      $0["state"] = "MERGED"
-      $0["headRefOid"] = .string(tip)
-    }
-    return s
-  }
-
-  /// Polls GitHub and waits until each session is Done.
-  func pollUntilDone(_ sessions: SessionSummary...) throws {
-    try sbd.poll(all: true)
-    for s in sessions { try sbd.waitFor(s.id, "Done") { $0.state == .done } }
-  }
-}
-
 extension Instance {
-  /// The `rm-queue` op. Nil `resolve` leaves the field out.
-  fileprivate func queueRemoval(
-    _ targets: [String], scope: String = "done", worktree: Bool = true, remoteBranch: Bool = false,
-    resolve: [String]? = nil
-  ) throws -> JSON {
-    var args: [String: JSON] = [
-      "targets": .array(targets.map(JSON.string)), "scope": .string(scope), "worktree": .bool(worktree),
-      "remote_branch": .bool(remoteBranch),
-    ]
-    if let resolve { args["resolve"] = .array(resolve.map(JSON.string)) }
-    return try client.call("rm-queue", args)
-  }
-
-  /// Marks the session Done and waits until its state is Done.
-  fileprivate func markSessionDone(_ id: String) throws {
-    try sb("done", id)
-    try waitFor(id, "Done") { $0.state == .done }
-  }
-
-  /// The sessions as `ls` lists them, as raw JSON, so the test reads fields that `SessionSummary` may lack.
-  fileprivate func listedSessions() throws -> [JSON] {
-    let result = try client.call("ls")
-    return try #require(result.array, Comment(rawValue: "ls returned \(result.text)"))
-  }
-
-  fileprivate func listedIds() throws -> Set<String> { Set(try listedSessions().compactMap { $0["id"]?.string }) }
-
-  /// The session's `removal` in `ls`, or nil when the session has none or `ls` no longer lists it.
-  fileprivate func removal(_ id: String) throws -> JSON? {
-    guard let removal = try listedSessions().first(where: { $0["id"]?.string == id })?["removal"], removal != .null
-    else { return nil }
-    return removal
-  }
-
-  fileprivate func removalState(_ id: String) throws -> String? { try removal(id)?["state"]?.string }
-
-  @discardableResult
-  fileprivate func waitForRemoval(_ id: String, _ state: String, timeout: Double = 60) throws -> JSON {
-    try waitFor("\(id)'s removal to be \(state)", timeout: timeout, fetch: { try removal(id) }) {
-      $0["state"]?.string == state
-    }
-  }
-
-  /// Waits until `ls` lists none of the sessions. The worker removes one session at a time.
-  fileprivate func waitUntilGone(_ ids: String..., timeout: Double = 60) throws {
-    try waitFor("the removal of \(ids.joined(separator: ", "))", timeout: timeout) {
-      try listedIds().isDisjoint(with: ids)
-    }
-  }
-
   /// The `removal-notices` op's list.
   fileprivate func removalNotices() throws -> [JSON] {
     let result = try client.call("removal-notices")
@@ -120,10 +14,6 @@ extension Instance {
   /// there.
   fileprivate func removalNotice(for id: String) throws -> JSON? {
     try removalNotices().first { $0["session"]?.string == id || $0["id"]?.string == id }
-  }
-
-  fileprivate func localBranch(_ repo: String, _ name: String) throws -> Bool {
-    try runCommand("/usr/bin/git", ["-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/\(name)"]).status == 0
   }
 
   /// How many times the stub ran with the session's conversation, which counts the launches of its claude.
@@ -153,9 +43,6 @@ extension Instance {
     return try waitFor(s.id, "the stop and the deferred card") { !$0.live && $0.cards.first?.deferred == true }
   }
 }
-
-/// The ids in an `rm-queue` result's `queued`.
-private func queued(_ result: JSON) -> [String] { result["queued"]?.array?.compactMap(\.string) ?? [] }
 
 /// The `skipped` entry for the session, or nil when the list doesn't name it.
 private func skipped(_ result: JSON, _ id: String) -> JSON? {
@@ -532,9 +419,9 @@ private final class FolderHold {
 
   /// The local branch moves after `git worktree remove`, so the branch check fails after the session's folder went.
   @Test func aBranchThatFailsAfterTheWorktreeGoesRecordsARemovalNotice() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.merged(.breaker)
-    try s.sbd.runAfterWorktreeRemoval(s.repo, "git -C \"$REPO\" branch -f \(RecordedPR.breaker.branch) main")
+    try s.sbd.runAfterWorktreeRemoval(s.repo, "git -C \"$REPO\" branch -f \(RemovalPR.breaker.branch) main")
     // The restart drops the polled PR, so poll it again.
     try s.pollUntilDone(merged)
 
@@ -542,7 +429,7 @@ private final class FolderHold {
 
     try s.sbd.waitUntilGone(merged.id)
     #expect(!FileManager.default.fileExists(atPath: merged.cwd))
-    #expect(try s.sbd.localBranch(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
     let notices = try s.sbd.removalNotices()
     let notice = try #require(
       notices.first { $0["session"]?.string == merged.id || $0["id"]?.string == merged.id },
@@ -554,14 +441,14 @@ private final class FolderHold {
 
   /// The remote branch moved after the merge, so the removal forgets the session and keeps the remote branch.
   @Test func aRemovalNoticePersistsAcrossARestartUntilItIsDismissed() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.merged(.breaker, push: true)
     try s.pollUntilDone(merged)
     let other = "\(s.sbd.home.path)/other"
     try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
-    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "checkout", "-q", RemovalPR.breaker.branch)
     try s.sbd.commit(other, "later.txt")
-    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "push", "-q", "origin", RemovalPR.breaker.branch)
     #expect(queued(try s.sbd.queueRemoval([merged.id], remoteBranch: true)) == [merged.id])
     try s.sbd.waitUntilGone(merged.id)
     let notice = try #require(try s.sbd.removalNotice(for: merged.id), "no removal notice names \(merged.id)")

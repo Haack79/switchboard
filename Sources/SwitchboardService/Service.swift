@@ -17,6 +17,8 @@ public final class Service {
   let pasteQueue = DispatchQueue(label: "sbd.paste")
   /// The removal job runs here, one session at a time.
   let removalQueue = DispatchQueue(label: "sbd.removal")
+  /// Deletes the trash folders, one at a time.
+  let trashQueue = DispatchQueue(label: "sbd.trash", qos: .background)
 
   struct Entry {
     var session: Session
@@ -231,6 +233,7 @@ public final class Service {
       for id in entries.keys {
         if case .running = claudeState(id) { deliverPending(id, after: 0) }
       }
+      purgeUnnamedTrash()
       resumeRemovals()
     }
   }
@@ -1189,7 +1192,7 @@ public final class Service {
     do {
       let id: String = try queue.sync {
         let id = try lookup(args)
-        if let refusal = removalRefusal(id) { throw refusal }
+        if let refusal = removalRefusal(id) ?? trashRefusal(id) { throw refusal }
         guard removing.insert(id).inserted else { throw APIError("\(id) is being deleted") }
         return id
       }
@@ -1424,7 +1427,7 @@ public final class Service {
   /// The session's repo, or throws when sbd made no worktree for the session. When the repo folder is
   /// gone, because the session started from a linked worktree that was later removed, this returns the
   /// one known main checkout that still lists the session's worktree.
-  private func worktreeRepo(_ session: Session) throws -> String {
+  func worktreeRepo(_ session: Session) throws -> String {
     guard let repo = session.repo else {
       throw APIError(
         "\(session.id) runs in \(session.cwd), and sbd didn't make a worktree for it. Remove the session without the worktree instead."

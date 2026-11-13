@@ -43,6 +43,9 @@ public struct Home: Sendable {
 
   /// Where sbd writes a session's launcher script.
   public func sessionFolder(_ id: String) -> String { "\(path)/sessions/\(id)" }
+  /// Where the removal job moves a worktree's folder before it deletes it in
+  /// the background. Each folder is named after its session's id.
+  public var trash: String { "\(path)/trash" }
   /// Where sbd keeps copies of the images sent to a session. Removing the
   /// session removes its session folder, and these with it.
   public func attachmentsFolder(_ id: String) -> String { "\(sessionFolder(id))/attachments" }
@@ -118,6 +121,9 @@ public struct Config: Codable, Equatable, Sendable {
   public var cleanupDeletes: [String] = []
   /// The supacode command, which deletes a worktree that Supacode locked. A test points it at a stub.
   public var supacode = "supacode"
+  /// Makes the removal job treat the trash as on another volume than every
+  /// worktree. sbd reads it only with `testClock`.
+  public var testTrashOtherVolume = false
   /// The Claude config folders whose sessions `sb import` lists, or nil for
   /// `ClaudeAccount.discover()`. ~/.claude means Claude's default account.
   public var claudeConfigDirs: [String]?
@@ -139,6 +145,7 @@ public struct Config: Codable, Equatable, Sendable {
     case claude, idleStopSeconds, liveCap, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs, autoMode, env
     case testClock, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile, cleanupDeletes, supacode
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates
+    case testTrashOtherVolume
   }
 
   public init(from decoder: Decoder) throws {
@@ -185,6 +192,8 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
+    testTrashOtherVolume =
+      try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)
     github = try c.decodeIfPresent(GitHubSettings.self, forKey: .github) ?? d.github
     depot = try c.decodeIfPresent(DepotSettings.self, forKey: .depot) ?? d.depot

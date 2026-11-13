@@ -85,8 +85,10 @@ extension Service {
   /// The one function that deletes a session record. It refuses unless
   /// `resolving` names exactly the session's open to-dos. It records each of
   /// them in `resolved_todos` in the same transaction as the delete. A
-  /// failed delete leaves them open. It runs on the state queue.
+  /// failed delete leaves them open. It refuses a session whose worktree
+  /// sits in the trash unchecked, as `trashRefusal` says. It runs on the state queue.
   func forgetSession(_ id: String, resolving: Set<String>) throws {
+    if let refusal = trashRefusal(id) { throw refusal }
     try store.delete(session: id, resolving: checkTodos(id, resolving: resolving))
     entries[id] = nil
     pruneDeclinedSuggestions()

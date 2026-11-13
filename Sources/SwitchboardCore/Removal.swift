@@ -103,6 +103,10 @@ public struct Removal: Codable, Equatable, Sendable {
   public var error: String?
   /// The trash path of the worktree's folder, written before the folder moves there.
   public var trash: String?
+  /// True once the trash check passed and git dropped the worktree's record,
+  /// before the branch deletes. A restart then continues without the check,
+  /// because the record that the check needs is gone.
+  public var released: Bool?
   /// The ids of the session's open to-dos that the removal resolves.
   public var resolve: [String]?
 

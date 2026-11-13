@@ -999,40 +999,6 @@ private func parse(_ r: CommandResult) throws -> JSON {
 
 // MARK: - Worktrees that Supacode locked
 
-/// The lock reason that Supacode writes.
-private let supacodeLock = #"{"build":"1792934673","createdAt":1793889333,"owner":"supacode","version":"0.11.6"}"#
-
-extension Instance {
-  /// Points sbd's `supacode` at a stub, and returns the file where the stub records each call. The stub that
-  /// works removes the worktree and force-deletes its branch with git, as Supacode does with its default
-  /// settings. The stub that fails prints a message and exits 1.
-  fileprivate func useSupacodeStub(failing: Bool = false, removes: Bool = true) throws -> String {
-    let calls = "\(home.path)/supacode-calls.log"
-    let stub = "\(home.path)/supacode-stub"
-    let body =
-      failing
-      ? #"echo "Supacode is not running" >&2; exit 1"#
-      : !removes
-        ? "exit 0"
-        : #"""
-        path=$(printf '%b' "${4//%/\\x}")
-        path=${path%/}
-        main=$(/usr/bin/git -C "$path" worktree list --porcelain | head -1 | cut -d' ' -f2-)
-        branch=$(/usr/bin/git -C "$path" branch --show-current)
-        /usr/bin/git -C "$main" worktree unlock "$path" && /usr/bin/git -C "$main" worktree remove "$path" || exit 1
-        [ -z "$branch" ] || /usr/bin/git -C "$main" branch -q -D "$branch"
-        """#
-    try "#!/bin/bash\necho \"$@\" >> \(calls)\n\(body)\n".write(toFile: stub, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub)
-    try restart(setting: "supacode", to: .string(stub))
-    return calls
-  }
-
-  fileprivate func lockForSupacode(_ repo: String, _ cwd: String) throws {
-    try git(repo, "worktree", "lock", "--reason", supacodeLock, cwd)
-  }
-}
-
 private func calls(_ log: String) -> [String] {
   ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
 }
