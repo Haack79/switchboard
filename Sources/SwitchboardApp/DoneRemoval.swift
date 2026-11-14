@@ -1,20 +1,41 @@
 import SwiftUI
 import SwitchboardCore
 
-/// The Delete All sheet's confirmation: sbd checks every Done session, and
-/// the user confirms the plan.
+/// The removal sheet's confirmation: sbd checks the sessions, and the user confirms the plan. Delete All plans
+/// every Done session with the `done` scope. Delete N Sessions… plans the multi-selection with the `work` scope.
+/// `rm-queue` sends the same scope as the plan. Each check has its own `request`, so a reply to a check that the
+/// user cancelled never fills a later one.
 enum DoneRemoval: Equatable {
-  case checking
-  case confirming(RemovalPlan)
+  case checking(RemovalScope, request: UUID)
+  case confirming(RemovalPlan, scope: RemovalScope)
 }
 
 enum DoneRemovalText {
-  static func title(_ plan: RemovalPlan) -> String {
-    switch plan.remove.count {
-    case 0: "No Done session can be deleted"
-    case 1: "Delete 1 Done session?"
-    case let n: "Delete \(n) Done sessions?"
+  static func title(_ plan: RemovalPlan, scope: RemovalScope) -> String {
+    let kind = scope == .done ? "Done session" : "session"
+    return switch plan.remove.count {
+    case 0: "No \(kind) can be deleted"
+    case 1: "Delete 1 \(kind)?"
+    case let n: "Delete \(n) \(kind)s?"
     }
+  }
+
+  static func checking(_ scope: RemovalScope) -> String {
+    scope == .done ? "Checking the Done sessions…" : "Checking the sessions…"
+  }
+
+  /// The heading of the sessions that the plan skips.
+  static func stays(_ scope: RemovalScope) -> String { scope == .done ? "Stays in Done" : "Stays" }
+
+  static func selected(_ count: Int) -> String { "\(count) sessions selected" }
+
+  static func deleteSessions(_ count: Int) -> String {
+    count == 1 ? "Delete 1 Session…" : "Delete \(count) Sessions…"
+  }
+
+  /// The plan row's note for a session whose claude the delete stops while it works, or nil.
+  static func working(_ session: SessionSummary?) -> String? {
+    session?.state == .working ? "claude is working and stops" : nil
   }
 
   static func removing(_ count: Int) -> String { count == 1 ? "Removing 1 session…" : "Removing \(count) sessions…" }
@@ -40,20 +61,27 @@ extension BoardModel {
   /// branch and the remote branch when the PR merged.
   nonisolated static let doneRemovalArgs: [String: JSON] = ["worktree": true, "remote_branch": true]
 
-  /// The `rm-queue` that hands the Done sessions `ids` to sbd's removal job. `resolve` holds the ids of the
+  /// The `rm-queue` that hands the sessions `ids` to sbd's removal job. `resolve` holds the ids of the
   /// open to-dos that the confirmation showed.
-  nonisolated static func queueRequest(_ ids: [String], resolve: [String] = []) -> [String: JSON] {
+  nonisolated static func queueRequest(
+    _ ids: [String], scope: RemovalScope, resolve: [String] = []
+  ) -> [String: JSON] {
+    resolving(planRequest(ids, scope: scope), resolve)
+  }
+
+  /// The `rm-plan` arguments for the sessions `ids`. `rm-queue` takes the same ones.
+  nonisolated static func planRequest(_ ids: [String], scope: RemovalScope) -> [String: JSON] {
     var args = doneRemovalArgs
-    args["scope"] = .string(RemovalScope.done.rawValue)
+    args["scope"] = .string(scope.rawValue)
     args["targets"] = .array(ids.map(JSON.string))
-    return resolving(args, resolve)
+    return args
   }
 
   nonisolated static let unreadOrgReason = "sbd hasn't read its org yet"
   nonisolated static let hiddenOrgReason = "hidden by the org filter"
   nonisolated static let unlistedReason = "no longer listed"
 
-  /// Why Delete All may not remove the session now, or nil when it may.
+  /// Why the removal sheet may not remove the session now, or nil when it may.
   func removalRefusal(_ id: String) -> String? {
     if removableIDs.contains(id) { return nil }
     if shownIDs.contains(id) { return Self.unreadOrgReason }
@@ -61,16 +89,25 @@ extension BoardModel {
   }
 
   /// Asks sbd which Done sessions it would remove and which it would skip.
-  /// The plan leaves out the sessions that the org filter hides. Under a
-  /// filter, a shown session whose org sbd hasn't read yet moves from the
-  /// remove list to the skip list.
-  func checkDoneRemoval() {
+  func checkDoneRemoval() { checkRemoval(.done, "rm-done", Self.doneRemovalArgs) }
+
+  /// Asks sbd which sessions of the multi-selection it would remove, in any state, and which it would skip.
+  func checkSelectionRemoval() {
+    checkRemoval(.work, "rm-plan", Self.planRequest(multiSelected.map(\.id), scope: .work))
+  }
+
+  /// Asks sbd for a plan, then shows it in the removal sheet. The plan
+  /// leaves out the sessions that the org filter hides. Under a filter, a
+  /// shown session whose org sbd hasn't read yet moves from the remove list
+  /// to the skip list.
+  private func checkRemoval(_ scope: RemovalScope, _ op: String, _ args: [String: JSON]) {
     guard !showingDoneRemoval else { return }
-    doneRemoval = .checking
+    let checking = DoneRemoval.checking(scope, request: UUID())
+    doneRemoval = checking
     perform(
-      "rm-done", Self.doneRemovalArgs,
+      op, args,
       then: { value in
-        guard self.doneRemoval == .checking else { return }
+        guard self.doneRemoval == checking else { return }
         do {
           var plan = try JSONCoding.convert(value, to: RemovalPlan.self)
           let shown = self.shownIDs
@@ -80,19 +117,19 @@ extension BoardModel {
           plan.remove.removeAll { !removable.contains($0.id) }
           plan.skip.removeAll { !shown.contains($0.id) }
           plan.skip += unread.map { .init(id: $0.id, name: $0.name, reason: Self.unreadOrgReason) }
-          self.doneRemoval = .confirming(plan)
+          self.doneRemoval = .confirming(plan, scope: scope)
         } catch {
-          self.actionError = "rm-done: \(error)"
+          self.actionError = "\(op): \(error)"
         }
       },
-      finally: { if self.doneRemoval == .checking { self.doneRemoval = nil } })
+      finally: { if self.doneRemoval == checking { self.doneRemoval = nil } })
   }
 
   /// Closes the sheet and hands the plan's sessions to sbd's removal job in one `rm-queue`, off `worker`,
   /// so the request never waits behind a slow action. The app leaves out a session that `removalRefusal`
   /// refuses at that moment, because a filter change after the plan can hide it.
   func removeDone(_ plan: RemovalPlan) {
-    guard case .confirming = doneRemoval else { return }
+    guard case .confirming(_, let scope) = doneRemoval else { return }
     doneRemoval = nil
     var targets: [String] = []
     var refused: [RemovalPlan.Skip] = []
@@ -103,17 +140,17 @@ extension BoardModel {
         targets.append(item.id)
       }
     }
-    queueRemovals(targets, refused: refused, on: .global(qos: .userInitiated))
+    queueRemovals(targets, scope: scope, refused: refused, on: .global(qos: .userInitiated))
   }
 
   /// Sends one `rm-queue` for `ids`. The banner names each session in `refused` and each session that sbd
   /// skipped. sbd lists a queued session as held, so the refresh after the reply hides it.
   func queueRemovals(
-    _ ids: [String], resolve: [String] = [], refused: [RemovalPlan.Skip] = [], on queue: DispatchQueue? = nil,
-    finally: (() -> Void)? = nil
+    _ ids: [String], scope: RemovalScope, resolve: [String] = [], refused: [RemovalPlan.Skip] = [],
+    on queue: DispatchQueue? = nil, finally: (() -> Void)? = nil
   ) {
     perform(
-      "rm-queue", Self.queueRequest(ids, resolve: resolve), on: queue,
+      "rm-queue", Self.queueRequest(ids, scope: scope, resolve: resolve), on: queue,
       then: { value in
         let skipped = (try? JSONCoding.convert(value, to: RemovalQueued.self))?.skipped ?? []
         self.actionError = DoneRemovalText.skipped(refused + skipped)
@@ -156,26 +193,29 @@ struct DoneRemovalSheet: View {
 
   @ViewBuilder private func confirmationView(_ confirmation: DoneRemoval) -> some View {
     switch confirmation {
-    case .checking:
-      ProgressView("Checking the Done sessions…")
+    case .checking(let scope, _):
+      ProgressView(DoneRemovalText.checking(scope))
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { model.doneRemoval = nil }.keyboardShortcut(.cancelAction)
       }
-    case .confirming(let plan):
-      Text(DoneRemovalText.title(plan)).font(.headline)
+    case .confirming(let plan, let scope):
+      Text(DoneRemovalText.title(plan, scope: scope)).font(.headline)
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
           ForEach(plan.remove, id: \.id) { item in
             VStack(alignment: .leading, spacing: 2) {
               Text(item.name + (item.pr.map { "  #\($0)" } ?? "")).fontWeight(.medium)
               Text("Deletes the \(DoneRemovalText.deletes(item))").font(.caption).foregroundStyle(.secondary)
+              if let working = DoneRemovalText.working(model.summary(item.id)) {
+                Text(working).font(.caption).foregroundStyle(.orange)
+              }
               if let worktree = item.worktree {
                 Text(worktree).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
               }
             }
           }
-          SkipList(title: "Stays in Done", skips: plan.skip)
+          SkipList(title: DoneRemovalText.stays(scope), skips: plan.skip)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
       }

@@ -30,6 +30,26 @@ import os
 
     #expect(text == "session, worktree, branch, and remote branch")
   }
+
+  // MARK: scope
+
+  @Test(arguments: [
+    (0, RemovalScope.done, "No Done session can be deleted"), (1, .done, "Delete 1 Done session?"),
+    (2, .done, "Delete 2 Done sessions?"), (0, .work, "No session can be deleted"), (1, .work, "Delete 1 session?"),
+    (2, .work, "Delete 2 sessions?"),
+  ])
+  func theTitleNamesDoneSessionsOnlyInTheDoneScope(_ count: Int, _ scope: RemovalScope, _ expected: String) {
+    let plan = RemovalPlan(remove: Array(repeating: item(), count: count), skip: [])
+
+    #expect(DoneRemovalText.title(plan, scope: scope) == expected)
+  }
+
+  @Test func theWorkScopeChecksAndKeepsSessionsWithoutNamingDone() {
+    #expect(DoneRemovalText.checking(.done) == "Checking the Done sessions…")
+    #expect(DoneRemovalText.checking(.work) == "Checking the sessions…")
+    #expect(DoneRemovalText.stays(.done) == "Stays in Done")
+    #expect(DoneRemovalText.stays(.work) == "Stays")
+  }
 }
 
 /// The app decodes what sbd's `rm-done` sends.
@@ -112,7 +132,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
       sent.append(op, args)
       return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
-    model.doneRemoval = .confirming(Self.plan)
+    model.doneRemoval = .confirming(Self.plan, scope: .done)
     return model
   }
 
@@ -168,7 +188,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
       if op == "rm-queue" { throw Refusal(description: "the socket closed") }
       return .null
     }
-    model.doneRemoval = .confirming(Self.plan)
+    model.doneRemoval = .confirming(Self.plan, scope: .done)
 
     model.removeDone(Self.plan)
     await settle { model.actionError != nil }
@@ -193,7 +213,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     }
     model.perform("hold", [:])
     let plan = RemovalPlan(remove: [removalItem("d")], skip: [])
-    model.doneRemoval = .confirming(plan)
+    model.doneRemoval = .confirming(plan, scope: .done)
 
     model.removeDone(plan)
     await settle { !sent.queues.isEmpty }
@@ -338,7 +358,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
 
   /// Confirms `plan` and returns the targets of every `rm-queue` that Delete N sent.
   func confirm(_ model: BoardModel, _ plan: RemovalPlan, _ sent: SentRequests) async -> [String] {
-    model.doneRemoval = .confirming(plan)
+    model.doneRemoval = .confirming(plan, scope: .done)
     model.removeDone(plan)
     await settle { !sent.queues.isEmpty }
     return sent.queues.flatMap { $0["targets"]?.array?.compactMap(\.string) ?? [] }
@@ -355,7 +375,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     model.checkDoneRemoval()
     await settle { if case .confirming = model.doneRemoval { true } else { false } }
 
-    guard case .confirming(let shown) = model.doneRemoval else {
+    guard case .confirming(let shown, _) = model.doneRemoval else {
       Issue.record("the check did not finish")
       return
     }
@@ -374,7 +394,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     model.checkDoneRemoval()
     await settle { if case .confirming = model.doneRemoval { true } else { false } }
 
-    guard case .confirming(let shown) = model.doneRemoval else {
+    guard case .confirming(let shown, _) = model.doneRemoval else {
       Issue.record("the check did not finish")
       return
     }
@@ -392,7 +412,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     model.checkDoneRemoval()
     await settle { if case .confirming = model.doneRemoval { true } else { false } }
 
-    guard case .confirming(let shown) = model.doneRemoval else {
+    guard case .confirming(let shown, _) = model.doneRemoval else {
       Issue.record("the check did not finish")
       return
     }
@@ -460,7 +480,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
 
     model.checkDoneRemoval()
     await settle { if case .confirming = model.doneRemoval { true } else { false } }
-    guard case .confirming(let shown) = model.doneRemoval else {
+    guard case .confirming(let shown, _) = model.doneRemoval else {
       Issue.record("the check did not finish")
       return
     }

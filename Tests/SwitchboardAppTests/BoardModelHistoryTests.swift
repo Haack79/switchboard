@@ -495,7 +495,7 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
     try selectBetween(model, "c", "d", "b")
     let before = model.history.entries.count
     let plan = RemovalPlan(remove: [removalItem("d")], skip: [])
-    model.doneRemoval = .confirming(plan)
+    model.doneRemoval = .confirming(plan, scope: .done)
 
     model.removeDone(plan)
     await settle { !sent.queues.isEmpty }

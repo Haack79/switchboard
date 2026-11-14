@@ -37,10 +37,16 @@ final class BoardModel: ObservableObject {
   /// The last failed action, shown until the next one succeeds.
   @Published var actionError: String?
   /// Selecting a session that the org filter hides adds its org to the filter. The filter change runs inside
-  /// the navigation, so it records nothing of its own.
+  /// the navigation, so it records nothing of its own. Every change ends a multi-selection.
   @Published var selection: String? {
-    didSet { navigate { if let selection, selection != oldValue { showOrg(of: selection) } } }
+    didSet {
+      if !multiSelection.isEmpty { multiSelection = [] }
+      navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
+    }
   }
+  /// The sessions that the sidebar selects with ⌘-click or ⇧-click: two or more ids, or none. `selection` stays
+  /// the one session that history records. `sidebarSelection` sets it.
+  @Published var multiSelection: Set<String> = []
   /// The New Session sheet's opening, or nil while it is closed.
   @Published var newSession: NewSessionRequest?
   @Published var showingImport = false
@@ -259,12 +265,18 @@ final class BoardModel: ObservableObject {
     hoverCard = HoverCard.panel(for: self)
   }
 
-  /// Clears a selection that the org filter hides, closes the hover card of a session that is no longer
-  /// shown, and counts the shown sessions in the Dock badge. The current history entry follows what the window
-  /// shows, because a refresh can change the Inbox's first item.
+  /// Clears a selection that the org filter hides or the removal job holds, drops those sessions from the
+  /// multi-selection, closes the hover card of a session that is no longer shown, and counts the shown sessions
+  /// in the Dock badge. The current history entry follows what the window shows, because a refresh can change
+  /// the Inbox's first item.
   private func clearHiddenSelectionAndUpdateBadge() {
     let listed = shownIDs
-    navigate(.replace) { if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil } }
+    navigate(.replace) {
+      // Clearing `selection` ends the multi-selection, so the listed rest is read first.
+      let multi = multiSelection.intersection(listed)
+      if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil }
+      keepMultiSelection(multi)
+    }
     hoverCard?.sessionsChanged(shown: listed)
     if NSApp != nil { NSApp.dockTile.badgeLabel = needsUser.isEmpty ? nil : "\(needsUser.count)" }
   }
@@ -1224,7 +1236,7 @@ final class BoardModel: ObservableObject {
   /// safety checks of `rm`. The request runs on `worker`, in order with the other actions.
   func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    queueRemovals([s.id], resolve: resolve, finally: { self.deleting.remove(s.id) })
+    queueRemovals([s.id], scope: .done, resolve: resolve, finally: { self.deleting.remove(s.id) })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.

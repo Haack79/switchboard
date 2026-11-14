@@ -84,7 +84,9 @@ struct ContentView: View {
         if let error = model.actionError {
           WarningBanner(error) { Button("Dismiss") { model.actionError = nil } }
         }
-        if let s = model.selected, let f = s.followup, f.started == nil {
+        if model.showsMultiSelection {
+          MultiSelectionView()
+        } else if let s = model.selected, let f = s.followup, f.started == nil {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
@@ -204,11 +206,14 @@ struct Sidebar: View {
   var body: some View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
-    List(selection: $model.selection) {
+    List(selection: model.sidebarSelection) {
       if !model.managers.isEmpty {
         Section {
           ForEach(model.managers) { manager in
-            SessionRow(session: manager, activeAccount: activeAccount, hoverCard: model.hoverCard).tag(manager.id)
+            SessionRow(session: manager, activeAccount: activeAccount, hoverCard: model.hoverCard)
+              .clickAnchor(manager.id)
+              .tag(manager.id)
+              .contextMenu { DeleteSelectedMenuItem(id: manager.id) }
           }
         } header: {
           HStack {
@@ -231,13 +236,16 @@ struct Sidebar: View {
           ForEach(group.rows) { row in
             HStack(spacing: 4) {
               SessionRow(
-                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard)
+                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard
+              )
+              .clickAnchor(row.id)
               NotesButton(session: row.session)
               if CleanupOffer.canCleanUp(row.session) { CleanupButton(session: row.session) }
               if row.session.isRemovableDone { DeleteButton(session: row.session) }
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              DeleteSelectedMenuItem(id: row.id)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -270,6 +278,13 @@ struct Sidebar: View {
         return .ignored
       }
       model.focusTerminal()
+      return .handled
+    }
+    .onKeyPress(keys: [.delete]) { press in
+      guard press.modifiers.intersection([.command, .option, .control, .shift]) == .command,
+        model.showsMultiSelection, model.removableSelectionCount > 0, !model.showingDoneRemoval
+      else { return .ignored }
+      model.checkSelectionRemoval()
       return .handled
     }
     .takesListFocus(.sidebar, $focused, model: model)
@@ -364,6 +379,23 @@ struct Sidebar: View {
     Binding(
       get: { !model.collapsed.contains(state) },
       set: { if $0 { model.collapsed.remove(state) } else { model.collapsed.insert(state) } })
+  }
+}
+
+/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing.
+struct DeleteSelectedMenuItem: View {
+  @EnvironmentObject var model: BoardModel
+  let id: String
+
+  var body: some View {
+    if model.showsMultiSelection, model.multiSelection.contains(id) {
+      let count = model.removableSelectionCount
+      Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
+        model.checkSelectionRemoval()
+      }
+      .disabled(count == 0 || model.showingDoneRemoval)
+      Divider()
+    }
   }
 }
 

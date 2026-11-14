@@ -53,13 +53,13 @@ import Testing
   @Test func trashRequestResolvesTheShownTodos() {
     let s = session(mixed)
 
-    let request = BoardModel.queueRequest([s.id], resolve: TodoDeletion(s).ids)
+    let request = BoardModel.queueRequest([s.id], scope: .done, resolve: TodoDeletion(s).ids)
 
     #expect(request["resolve"] == ["n3", "n4"])
   }
 
   @Test func trashRequestKeepsTheQueueFieldsBesideResolve() {
-    let request = BoardModel.queueRequest([session(mixed).id], resolve: ["n3", "n4"])
+    let request = BoardModel.queueRequest([session(mixed).id], scope: .done, resolve: ["n3", "n4"])
 
     #expect(
       request == [
@@ -72,7 +72,7 @@ import Testing
       todoFixture("n3", "tell Alex in #flags"), todoFixture("n5", "added after the dialog opened"),
     ])
 
-    let request = BoardModel.queueRequest([current.id], resolve: ["n3"])
+    let request = BoardModel.queueRequest([current.id], scope: .done, resolve: ["n3"])
 
     #expect(request["resolve"] == ["n3"])
   }
@@ -86,7 +86,7 @@ import Testing
   func trashRequestHasNoResolveWithoutAnOpenTodo(_ notes: [Note]) {
     let s = session(notes)
 
-    let request = BoardModel.queueRequest([s.id], resolve: TodoDeletion(s).ids)
+    let request = BoardModel.queueRequest([s.id], scope: .done, resolve: TodoDeletion(s).ids)
 
     #expect(request["resolve"] == nil)
   }

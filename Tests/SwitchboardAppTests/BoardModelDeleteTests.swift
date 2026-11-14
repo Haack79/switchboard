@@ -50,7 +50,7 @@ import Testing
   /// sbd adds the branch and the remote branch when the PR merged, and leaves out the worktree of a session
   /// that it made no worktree for.
   @Test func queuesTheSessionWithTheWorktreeAndTheRemoteBranch() {
-    let request = BoardModel.queueRequest(["s1"])
+    let request = BoardModel.queueRequest(["s1"], scope: .done)
     #expect(request == ["scope": "done", "targets": ["s1"], "worktree": true, "remote_branch": true])
   }
 

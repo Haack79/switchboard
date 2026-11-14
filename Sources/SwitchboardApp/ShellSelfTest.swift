@@ -15,11 +15,17 @@ import SwiftUI
 /// `NavShortcuts` to the menu bar as a US keyboard types it, and reports the title of the menu item that ran.
 /// `mouse <3|4>` posts a press of mouse button 4 or 5 (button numbers 3 and 4) over the window to the app's
 /// event queue, so it passes through the app's event monitors as a real press does. `where` reports the place
-/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does.
+/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `cmd-click <session>` ⌘-clicks
+/// the session's sidebar row with mouse events at the row's place in the window. `detail` reports
+/// "N sessions selected" while the detail pane shows the multi-selection, else the place that the window shows.
+/// `click-delete-selected` clicks Delete N Sessions… in the detail pane the same way. `sheet` reports the removal
+/// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`.
 @MainActor
 enum ShellSelfTest {
+  static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
+
   static func start(_ model: BoardModel) {
-    guard let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"] else { return }
+    guard let folder else { return }
     let path = "\(folder)/cmd"
     Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
       MainActor.assumeIsolated {
@@ -94,12 +100,45 @@ enum ShellSelfTest {
       return "posted"
     case "where":
       return "\(model.location.place)"
+    case "cmd-click":
+      return click(anchor: rest, modifiers: .command, throughWindow: true)
+    case "detail":
+      return model.showsMultiSelection ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
+    case "click-delete-selected":
+      return click(anchor: "delete-selected", modifiers: [], throughWindow: false)
+    case "sheet":
+      switch model.doneRemoval {
+      case nil: return "none"
+      case .checking: return "checking"
+      case .confirming(let plan, _): return "confirming \(plan.remove.count)"
+      }
     case "snapshot":
       Snapshot.write(to: rest)
       return "wrote"
     default:
       return "unknown command"
     }
+  }
+
+  /// How far into its leading edge `click(anchor:)` clicks a view: past a row's padding, onto a button's icon.
+  private static let clickInset: CGFloat = 12
+
+  /// Clicks `clickInset` pt into the leading edge of the view whose `clickAnchor` is `name`, at its vertical
+  /// middle, and reports the type of the view that the window hits there. Without `throughWindow`, the mouse-down
+  /// goes to that view. A window that is not key drops a first click on a button, and a hidden launch never makes
+  /// its window key. A sidebar row needs the window, because the window's handling of the mouse-down selects the row.
+  private static func click(
+    anchor name: String, modifiers: NSEvent.ModifierFlags, throughWindow: Bool
+  ) -> String {
+    guard let window, let root = window.contentView else { return "no window" }
+    guard let anchor = ClickAnchorView.find(name, in: root) else { return "no \(name)" }
+    let frame = anchor.convert(anchor.bounds, to: nil)
+    let point = NSPoint(x: frame.minX + clickInset, y: frame.midY)
+    guard let hit = (root.superview ?? root).hitTest(point) else { return "nothing at \(name)" }
+    guard TerminalSelfTest.click(at: point, in: window, modifiers: modifiers, on: throughWindow ? nil : hit) else {
+      return "no event"
+    }
+    return "clicked at \(Int(point.x)),\(Int(point.y)) on \(type(of: hit))"
   }
 
   /// Reports the menu item that `shortcut` runs. When none runs, it reports the item that owns the key and
@@ -164,4 +203,36 @@ enum ShellSelfTest {
   }
 
   private static func log(_ text: String) { FileHandle.standardError.write(Data("shelltest: \(text)\n".utf8)) }
+}
+
+extension View {
+  /// Puts a `ClickAnchorView` named `name` behind this view while SB_SHELL_TEST runs, so ShellSelfTest can click
+  /// this view at its place in the window. SwiftUI builds no accessibility elements without an assistive app.
+  @ViewBuilder func clickAnchor(_ name: String) -> some View {
+    if ShellSelfTest.folder != nil { background(ClickAnchor(name: name)) } else { self }
+  }
+}
+
+private struct ClickAnchor: NSViewRepresentable {
+  let name: String
+
+  func makeNSView(context: Context) -> ClickAnchorView { ClickAnchorView() }
+
+  func updateNSView(_ view: ClickAnchorView, context: Context) { view.name = name }
+}
+
+/// An empty view with the frame of the view that it is the background of.
+final class ClickAnchorView: NSView {
+  var name = ""
+
+  /// The anchored view gets every click.
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  static func find(_ name: String, in view: NSView) -> ClickAnchorView? {
+    if let anchor = view as? ClickAnchorView, anchor.name == name { return anchor }
+    for subview in view.subviews {
+      if let found = find(name, in: subview) { return found }
+    }
+    return nil
+  }
 }
