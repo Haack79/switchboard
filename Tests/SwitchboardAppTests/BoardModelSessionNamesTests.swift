@@ -338,7 +338,22 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(model.sessions.contains { $0.id == liveID })
     }
 
-    /// The system cannot open the scheme, so the app keeps the link and does nothing.
+    /// `reveal` shows the session in the sidebar as a click does, so the collapsed Not started section opens.
+    @Test func aLinkToAFollowupThatHasNotStartedOpensItsSection() throws {
+      let model = offlineModel()
+      var followup = unstartedFollowup(liveID)
+      followup.name = liveName
+      model.apply(.success([named(otherID, otherName)]), followups: [followup], removed: nil)
+      try #require(!model.sidebarOrder.contains(liveID))
+
+      _ = model.openSessionLink(SessionLink.url(for: liveID))
+
+      #expect(model.selection == liveID)
+      #expect(model.sidebarOrder.contains(liveID))
+    }
+
+    /// The app keeps a link to a session that is gone and does nothing. Launch Services would otherwise hand the
+    /// link to whichever build of the app it picks.
     @Test(arguments: [goneID, "sxxxxx"])
     func aLinkToASessionThatIsGoneIsHandledAndRevealsNothing(_ id: String) {
       let model = offlineModel()
@@ -353,12 +368,57 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(shown.value == 0)
     }
 
+    /// An in-app click on a link to a session that is gone leaves no error and nothing for a later refresh to select.
+    @Test(arguments: [goneID, "sxxxxx"])
+    func aLinkToASessionThatIsGoneSetsNoErrorAndNoPendingFocus(_ id: String) {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
+
+      _ = model.openSessionLink(SessionLink.url(for: id))
+
+      #expect(model.actionError == nil)
+      #expect(model.pendingFocus == nil)
+    }
+
+    /// The app claims its whole scheme, so Launch Services never hands one of its links to another build.
+    @Test(arguments: [
+      "switchboard:seb4ec",
+      "switchboard:/session/seb4ec",
+      "switchboard:///session/seb4ec",
+      "Switchboard://session/seb4ec",
+      "SWITCHBOARD://session/seb4ec",
+      "switchboard://SESSION/seb4ec",
+      "switchboard://session/seb4ec?x=1",
+      "switchboard://session/seb4ec#top",
+      "switchboard://session/seb4ec/",
+      "switchboard://other/seb4ec",
+      "switchboard://session/seb4e",
+      "switchboard://",
+      "switchboard:",
+    ])
+    func aSwitchboardURLThatDoesNotParseIsHandledAndRevealsNothing(_ string: String) throws {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: nil)
+      let url = try #require(URL(string: string))
+      let shown = Counter()
+      model.showWindow = { shown.increment() }
+
+      let handled = model.openSessionLink(url)
+
+      #expect(handled)
+      #expect(model.selection == nil)
+      #expect(shown.value == 0)
+    }
+
     @Test(arguments: [
       "https://github.com/haacked/switchboard/pull/309",
       "https://example.com/seb4ec",
+      "https://session/seb4ec",
       "file:///tmp/seb4ec",
       "switchboard-session:",
+      "switchboard-session:seb4ec",
       "switchboard-session://seb4ec",
+      "switchboards://session/seb4ec",
       "other:seb4ec",
     ])
     func anotherURLIsLeftToTheSystem(_ string: String) throws {
@@ -373,6 +433,128 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(!handled)
       #expect(model.selection == nil)
       #expect(shown.value == 0)
+    }
+  }
+
+  // MARK: In-app and external links
+
+  /// An in-app click goes through `openSessionLink`. A URL from another app goes through `openExternalLink`.
+  enum LinkPath: String, CaseIterable {
+    case inApp, external
+
+    @MainActor func open(_ url: URL, on model: BoardModel) {
+      switch self {
+      case .inApp: _ = model.openSessionLink(url)
+      case .external: model.openExternalLink(url)
+      }
+    }
+  }
+
+  /// Both paths take the same link to a live session to the same place.
+  @MainActor
+  @Suite struct LinkParity {
+    @Test func bothPathsSelectALiveSession() {
+      let inApp = offlineModel()
+      let external = offlineModel()
+      for model in [inApp, external] {
+        model.apply(.success([named(liveID, liveName), named(otherID, otherName)]), followups: nil, removed: nil)
+      }
+
+      LinkPath.inApp.open(SessionLink.url(for: liveID), on: inApp)
+      LinkPath.external.open(SessionLink.url(for: liveID), on: external)
+
+      #expect(inApp.selection == liveID)
+      #expect(external.selection == inApp.selection)
+    }
+
+    @Test(arguments: LinkPath.allCases)
+    func aLiveLinkShowsTheWindowOnce(_ path: LinkPath) {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: nil)
+      let shown = Counter()
+      model.showWindow = { shown.increment() }
+
+      path.open(SessionLink.url(for: liveID), on: model)
+
+      #expect(shown.value == 1)
+    }
+
+    @Test(arguments: LinkPath.allCases)
+    func aLiveLinkToAFollowupThatHasNotStartedOpensItsSection(_ path: LinkPath) {
+      let model = offlineModel()
+      var followup = unstartedFollowup(liveID)
+      followup.name = liveName
+      model.apply(.success([named(otherID, otherName)]), followups: [followup], removed: nil)
+
+      path.open(SessionLink.url(for: liveID), on: model)
+
+      #expect(model.selection == liveID)
+      #expect(model.sidebarOrder.contains(liveID))
+    }
+
+    @Test(arguments: LinkPath.allCases)
+    func aLiveLinkToASessionThatTheOrgFilterHidesShowsItsOrg(_ path: LinkPath) {
+      let model = orgFilterModel(posthogOnly)
+      model.apply(
+        .success([orgSession("sph234", "PostHog/posthog"), orgSession(liveID, "haacked/switchboard")]),
+        followups: nil, removed: nil)
+
+      path.open(SessionLink.url(for: liveID), on: model)
+
+      #expect(model.selection == liveID)
+      #expect(model.sessions.contains { $0.id == liveID })
+    }
+
+    @Test(arguments: LinkPath.allCases)
+    func aLinkToARemovedSessionSelectsNothing(_ path: LinkPath) {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
+
+      path.open(SessionLink.url(for: goneID), on: model)
+
+      #expect(model.selection == nil)
+      #expect(model.pendingFocus == nil)
+    }
+
+    /// The user clicked the in-app link while looking at the text that names the removed session, which
+    /// already shows as removed.
+    @Test func anInAppLinkToARemovedSessionSetsNoError() {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
+
+      LinkPath.inApp.open(SessionLink.url(for: goneID), on: model)
+
+      #expect(model.actionError == nil)
+    }
+
+    /// A URL from another app is the user's only sign of the session, so the app says why it shows nothing.
+    @Test func anExternalLinkToARemovedSessionSetsTheRemovedError() {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
+
+      LinkPath.external.open(SessionLink.url(for: goneID), on: model)
+
+      #expect(model.actionError?.contains("removed") == true)
+    }
+
+    /// An in-app link to an unknown id names no session the user can wait for.
+    @Test func anInAppLinkToAnUnknownSessionLeavesNoPendingFocus() {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: nil)
+
+      LinkPath.inApp.open(SessionLink.url(for: "sxxxxx"), on: model)
+
+      #expect(model.pendingFocus == nil)
+    }
+
+    /// `sb focus` can open the link for a session that `sb new` made a moment earlier, before the app lists it.
+    @Test func anExternalLinkToAnUnknownSessionWaitsForARefreshThatListsIt() {
+      let model = offlineModel()
+      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: nil)
+
+      LinkPath.external.open(SessionLink.url(for: "sxxxxx"), on: model)
+
+      #expect(model.pendingFocus == "sxxxxx")
     }
   }
 

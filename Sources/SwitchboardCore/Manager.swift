@@ -52,6 +52,7 @@ public enum Manager {
 
     - `sb ls` lists the sessions by what they need.
     - `sb get s1a2b3` shows one session: its reason, last reply, PR, waits, and notes.
+    - `sb focus s1a2b3` brings the Switchboard app to the front, launching it if needed, and selects the session. Use it when the user asks to see a session, or when a session needs them, because it takes over their screen.
     - `sb new ~/dev/org/repo --branch haacked/fix-cache --base origin/main --name fix-cache --prompt "Fix the cache bug in docs/bug.md. Open a draft PR."` starts a session in a new worktree. The prompt is the session's whole brief, so make it self-contained.
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
     - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` resumes you once when a session reaches the state.

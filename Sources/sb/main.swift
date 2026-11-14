@@ -65,6 +65,8 @@ let usage = """
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
     get <session>                 show one session
+    focus <session>               show the session in the Switchboard app, launching
+                                  the app if it isn't running
     slash <session>               the commands that the session's claude takes
                                   after /: its skills, its commands, and Claude
                                   Code's built-ins
@@ -593,6 +595,24 @@ func attach(_ a: Args) -> Never {
   die("can't run \(command[0]): \(UnixSocket.errnoText())")
 }
 
+/// Opens the session's `switchboard://session/<id>` link. When this sb sits in
+/// a Switchboard app, `open -a` sends the link to that app, so Launch Services
+/// can't pick one of the build/Switchboard.app copies in the checkouts.
+func focus(_ a: Args) -> Never {
+  let result = call("get", ["session": .string(a.session("focus"))])
+  let s = summary(result)
+  let app = AppBundle.containing(executable: ownExecutable())
+  // SB_OPEN lets a test keep `focus` away from Launch Services.
+  let open = ProcessInfo.processInfo.environment["SB_OPEN"] ?? "/usr/bin/open"
+  let opened: CommandResult
+  do {
+    opened = try runCommand(open, (app.map { ["-a", $0.path] } ?? []) + [SessionLink.url(for: s.id).absoluteString])
+  } catch { die("can't open Switchboard: \(error)") }
+  guard opened.status == 0 else { die("can't open Switchboard: \(opened.problem)") }
+  if a.json { printJSON(result) } else { printSession(s) }
+  exit(0)
+}
+
 func watch(_ a: Args) -> Never {
   let id = a.session("watch")
   guard let until = a.values["--until"], let state = AttentionState(rawValue: until) else {
@@ -775,6 +795,8 @@ case "manager":
   manager(a)
 case "get", "show":
   sessionCommand("get", a)
+case "focus":
+  focus(a)
 case "open":
   if a.switches.contains("--terminals") {
     printJSON(call("open", ["session": .string(a.session("open")), "terminals": true]))
