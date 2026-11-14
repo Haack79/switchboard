@@ -42,16 +42,16 @@ struct PendingChatMessage: Equatable, Identifiable {
     }
   }
 
-  /// The pending messages that `log` does not answer, in order. A user message answers a pending message when it
-  /// comes after the pending message's `after` and after the message that answered the one before, and holds its
-  /// text. Each log message answers one pending message at most. When the log no longer holds `after`, the search
+  /// The pending messages that `log` does not record, in order. A user message records a pending message when it
+  /// comes after the pending message's `after` and after the message that recorded the one before, and holds its
+  /// text. Each log message records one pending message at most. When the log no longer holds `after`, the search
   /// starts at the log's first message. A failed message stays.
-  static func unanswered(_ pending: [PendingChatMessage], log: [ChatMessage]) -> [PendingChatMessage] {
+  static func notInLog(_ pending: [PendingChatMessage], log: [ChatMessage]) -> [PendingChatMessage] {
     var cursor = 0
     return pending.filter { message in
       if message.failed { return true }
       let start = max(cursor, message.after.flatMap { log.lastIndex(of: $0) }.map { $0 + 1 } ?? 0)
-      guard let match = log[start...].firstIndex(where: message.isAnswered) else { return true }
+      guard let match = log[start...].firstIndex(where: message.isRecorded) else { return true }
       cursor = match + 1
       return false
     }
@@ -59,7 +59,7 @@ struct PendingChatMessage: Equatable, Identifiable {
 
   /// Whether `message` is the transcript's record of this message. The match reads the text the way
   /// `Transcript.hasUserMessage` matches a paste, because the transcript adds image markers to a prompt.
-  private func isAnswered(by message: ChatMessage) -> Bool {
+  private func isRecorded(by message: ChatMessage) -> Bool {
     guard message.role == .user, !message.isNotice, message.commandOutput == nil else { return false }
     let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
     // Foundation's `contains` finds no empty string. An images-only message has no text.

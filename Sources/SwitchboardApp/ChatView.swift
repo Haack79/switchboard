@@ -115,7 +115,7 @@ private struct ChatMessages: View {
       }
       // The scroll follows the last message, because the count stops changing once the log is full.
       .onChange(of: messages.last, initial: true) { scrollToBottom(proxy) }
-      .onChange(of: pending.map(\.id)) { scrollToBottom(proxy) }
+      .onChange(of: pending) { scrollToBottom(proxy) }
     }
   }
 
@@ -159,11 +159,19 @@ private struct PendingBubble: View {
       if !message.text.isEmpty { InlineText(plain: message.text).textSelection(.enabled) }
       if let progress = message.progress {
         HStack(spacing: 6) {
-          ProgressView().controlSize(.mini)
-          Text(progress).font(.caption).foregroundStyle(.secondary)
+          HStack(spacing: 6) {
+            ProgressView().controlSize(.mini)
+            Text(progress).font(.caption).foregroundStyle(.secondary)
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(progress)
+          // An accepted message can fail to reach the transcript. The user can then remove its bubble. The button sits
+          // outside the ignored group so that VoiceOver reaches it.
+          if message.accepted {
+            Spacer()
+            Button("Hide") { model.dismissPending(message.id, in: session) }.controlSize(.small)
+          }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(progress)
       } else if let error = message.error {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           InlineText(plain: "Not sent: \(error)").font(.caption).foregroundStyle(.red)

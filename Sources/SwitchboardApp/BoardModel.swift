@@ -867,6 +867,8 @@ final class BoardModel: ObservableObject {
       "send", args,
       then: { result in
         if let pending {
+          // `perform` clears `actionError` only for a request without a `failed` handler.
+          self.actionError = nil
           self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
         }
         sent?()
@@ -877,7 +879,7 @@ final class BoardModel: ObservableObject {
 
   private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
     guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
-    pendingChat[session]![i].status = status
+    pendingChat[session]?[i].status = status
   }
 
   func dismissPending(_ message: UUID, in session: String) {
@@ -1095,8 +1097,8 @@ final class BoardModel: ObservableObject {
           self.chatLogs[session] = messages
         }
         if let messages, let pending = self.pendingChat[session] {
-          let unanswered = PendingChatMessage.unanswered(pending, log: messages)
-          if unanswered != pending { self.pendingChat[session] = unanswered }
+          let left = PendingChatMessage.notInLog(pending, log: messages)
+          if left != pending { self.pendingChat[session] = left }
         }
       }
     }

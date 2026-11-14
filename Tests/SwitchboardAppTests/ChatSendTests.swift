@@ -18,25 +18,25 @@ private func pending(
   PendingChatMessage(text: text, after: after, status: status)
 }
 
-private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) -> [UUID] {
-  PendingChatMessage.unanswered(pending, log: log).map(\.id)
+private func notInLogIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) -> [UUID] {
+  PendingChatMessage.notInLog(pending, log: log).map(\.id)
 }
 
 // MARK: - Matching the log
 
 @Suite struct PendingChatMessageMatching {
-  @Test func aLaterUserMessageHoldingTheTextAnswersIt() {
+  @Test func aLaterUserMessageHoldingTheTextRecordsIt() {
     let message = pending("Rebase onto main")
 
-    let left = unansweredIDs([message], log: [user("Rebase onto main", t: 1)])
+    let left = notInLogIDs([message], log: [user("Rebase onto main", t: 1)])
 
     #expect(left.isEmpty)
   }
 
-  @Test func aUserMessageThatAddsImageMarkersAroundTheTextAnswersIt() {
+  @Test func aUserMessageThatAddsImageMarkersAroundTheTextRecordsIt() {
     let message = pending("look at this")
 
-    let left = unansweredIDs([message], log: [user("[Image #1] look at this", t: 1)])
+    let left = notInLogIDs([message], log: [user("[Image #1] look at this", t: 1)])
 
     #expect(left.isEmpty)
   }
@@ -44,7 +44,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   @Test func theMatchTrimsThePendingText() {
     let message = pending("  yes\n")
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1)])
+    let left = notInLogIDs([message], log: [user("yes", t: 1)])
 
     #expect(left.isEmpty)
   }
@@ -52,34 +52,34 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   @Test(arguments: [
     PendingChatMessage.Status.sending, .accepted(.pasted), .accepted(.resumed), .accepted(.queued), .accepted(nil),
   ])
-  func aMessageThatHasNotFailedCanBeAnswered(_ status: PendingChatMessage.Status) {
+  func aMessageThatHasNotFailedCanBeRecorded(_ status: PendingChatMessage.Status) {
     let message = pending("yes", status: status)
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1)])
+    let left = notInLogIDs([message], log: [user("yes", t: 1)])
 
     #expect(left.isEmpty)
   }
 
-  @Test func anEmptyLogAnswersNothing() {
+  @Test func anEmptyLogRecordsNothing() {
     let messages = [pending("a"), pending("b")]
 
-    let left = unansweredIDs(messages, log: [])
+    let left = notInLogIDs(messages, log: [])
 
     #expect(left == messages.map(\.id))
   }
 
-  @Test func aUserMessageWithOtherTextDoesNotAnswerIt() {
+  @Test func aUserMessageWithOtherTextDoesNotRecordIt() {
     let message = pending("Rebase onto main")
 
-    let left = unansweredIDs([message], log: [user("Merge it", t: 1)])
+    let left = notInLogIDs([message], log: [user("Merge it", t: 1)])
 
     #expect(left == [message.id])
   }
 
-  @Test func anAssistantMessageHoldingTheTextDoesNotAnswerIt() {
+  @Test func anAssistantMessageHoldingTheTextDoesNotRecordIt() {
     let message = pending("yes")
 
-    let left = unansweredIDs([message], log: [assistant("yes", t: 1)])
+    let left = notInLogIDs([message], log: [assistant("yes", t: 1)])
 
     #expect(left == [message.id])
   }
@@ -89,11 +89,11 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     "<local-command-stdout>a is ready to merge.</local-command-stdout>",
     "<local-command-stderr>a is ready to merge.</local-command-stderr>",
   ])
-  func aNoticeOrCommandOutputAfterTheBaselineDoesNotAnswerIt(_ line: String) {
+  func aNoticeOrCommandOutputAfterTheBaselineDoesNotRecordIt(_ line: String) {
     let base = assistant(t: 1)
     let message = pending("a is ready to merge.", after: base)
 
-    let left = unansweredIDs([message], log: [base, user(line, t: 2)])
+    let left = notInLogIDs([message], log: [base, user(line, t: 2)])
 
     #expect(left == [message.id])
   }
@@ -105,27 +105,27 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>",
     "<command-message>model</command-message>\n<command-args>opus</command-args>\n<command-name>/model</command-name>",
   ])
-  func theSlashCommandsTranscriptLineAnswersIt(_ line: String) {
+  func theSlashCommandsTranscriptLineRecordsIt(_ line: String) {
     let message = pending("/model opus")
 
-    let left = unansweredIDs([message], log: [user(line, t: 1)])
+    let left = notInLogIDs([message], log: [user(line, t: 1)])
 
     #expect(left.isEmpty)
   }
 
-  @Test func aSlashCommandWithOtherArgumentsDoesNotAnswerIt() {
+  @Test func aSlashCommandWithOtherArgumentsDoesNotRecordIt() {
     let message = pending("/model opus")
 
-    let left = unansweredIDs(
+    let left = notInLogIDs(
       [message], log: [user("<command-name>/model</command-name><command-args>sonnet</command-args>", t: 1)])
 
     #expect(left == [message.id])
   }
 
-  @Test func aSlashCommandWithoutArgumentsAnswersIt() {
+  @Test func aSlashCommandWithoutArgumentsRecordsIt() {
     let message = pending("/clear")
 
-    let left = unansweredIDs(
+    let left = notInLogIDs(
       [message], log: [user("<command-name>/clear</command-name><command-args></command-args>", t: 1)])
 
     #expect(left.isEmpty)
@@ -133,20 +133,20 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
 
   // MARK: Images only
 
-  @Test func anEmptyTextSendIsAnsweredByTheNextUserMessage() {
+  @Test func anEmptyTextSendIsRecordedByTheNextUserMessage() {
     let base = assistant(t: 1)
     let message = pending("", after: base)
 
-    let left = unansweredIDs([message], log: [base, user("[Image #1]", t: 2)])
+    let left = notInLogIDs([message], log: [base, user("[Image #1]", t: 2)])
 
     #expect(left.isEmpty)
   }
 
-  @Test func anEmptyTextSendIsNotAnsweredByTheBaselineItself() {
+  @Test func anEmptyTextSendIsNotRecordedByTheBaselineItself() {
     let base = user("[Image #1]", t: 1)
     let message = pending("", after: base)
 
-    let left = unansweredIDs([message], log: [base])
+    let left = notInLogIDs([message], log: [base])
 
     #expect(left == [message.id])
   }
@@ -156,40 +156,40 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     ChatMessage(role: .user, text: "Switchboard: a is ready to merge.", t: 2),
     ChatMessage(role: .user, text: "<local-command-stdout>Set model to Sonnet</local-command-stdout>", t: 2),
   ])
-  func anEmptyTextSendIsNotAnsweredByAReplyANoticeOrCommandOutput(_ later: ChatMessage) {
+  func anEmptyTextSendIsNotRecordedByAReplyANoticeOrCommandOutput(_ later: ChatMessage) {
     let base = assistant(t: 1)
     let message = pending("", after: base)
 
-    let left = unansweredIDs([message], log: [base, later])
+    let left = notInLogIDs([message], log: [base, later])
 
     #expect(left == [message.id])
   }
 
   // MARK: The baseline
 
-  @Test func aUserMessageBeforeTheBaselineDoesNotAnswerIt() {
+  @Test func aUserMessageBeforeTheBaselineDoesNotRecordIt() {
     let base = assistant(t: 2)
     let message = pending("yes", after: base)
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1), base])
+    let left = notInLogIDs([message], log: [user("yes", t: 1), base])
 
     #expect(left == [message.id])
   }
 
-  @Test func theBaselineItselfDoesNotAnswerIt() {
+  @Test func theBaselineItselfDoesNotRecordIt() {
     let base = user("yes", t: 1)
     let message = pending("yes", after: base)
 
-    let left = unansweredIDs([message], log: [base])
+    let left = notInLogIDs([message], log: [base])
 
     #expect(left == [message.id])
   }
 
-  @Test func aUserMessageAfterTheBaselineAnswersIt() {
+  @Test func aUserMessageAfterTheBaselineRecordsIt() {
     let base = assistant(t: 2)
     let message = pending("yes", after: base)
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1), base, user("yes", t: 3)])
+    let left = notInLogIDs([message], log: [user("yes", t: 1), base, user("yes", t: 3)])
 
     #expect(left.isEmpty)
   }
@@ -202,56 +202,56 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   func aBaselineTheLogNoLongerHoldsSearchesTheWholeLog(_ gone: ChatMessage) {
     let message = pending("yes", after: gone)
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1), assistant(t: 2)])
+    let left = notInLogIDs([message], log: [user("yes", t: 1), assistant(t: 2)])
 
     #expect(left.isEmpty)
   }
 
   // MARK: Several pending messages
 
-  @Test func oneLogMessageAnswersOnlyTheFirstOfTwoIdenticalMessages() {
+  @Test func oneLogMessageRecordsOnlyTheFirstOfTwoIdenticalMessages() {
     let first = pending("yes")
     let second = pending("yes")
 
-    let left = unansweredIDs([first, second], log: [user("yes", t: 1)])
+    let left = notInLogIDs([first, second], log: [user("yes", t: 1)])
 
     #expect(left == [second.id])
   }
 
-  @Test func twoLogMessagesAnswerTwoIdenticalMessages() {
+  @Test func twoLogMessagesRecordTwoIdenticalMessages() {
     let first = pending("yes")
     let second = pending("yes")
 
-    let left = unansweredIDs([first, second], log: [user("yes", t: 1), assistant(t: 2), user("yes", t: 3)])
+    let left = notInLogIDs([first, second], log: [user("yes", t: 1), assistant(t: 2), user("yes", t: 3)])
 
     #expect(left.isEmpty)
   }
 
-  @Test func aMessageMustComeAfterTheAnswerOfTheOneBeforeIt() {
+  @Test func aMessageMustComeAfterTheRecordOfTheOneBeforeIt() {
     let first = pending("yes")
     let second = pending("no")
 
-    let left = unansweredIDs([first, second], log: [user("no", t: 1), user("yes", t: 2)])
+    let left = notInLogIDs([first, second], log: [user("no", t: 1), user("yes", t: 2)])
 
     #expect(left == [second.id])
   }
 
-  @Test func anUnansweredMessageKeepsItsPlaceInOrder() {
+  @Test func anUnrecordedMessageKeepsItsPlaceInOrder() {
     let a = pending("a")
     let b = pending("b")
     let c = pending("c")
 
-    let left = unansweredIDs([a, b, c], log: [user("b", t: 1)])
+    let left = notInLogIDs([a, b, c], log: [user("b", t: 1)])
 
     #expect(left == [a.id, c.id])
   }
 
   // MARK: Failed messages
 
-  @Test func aFailedMessageIsNeverAnswered() {
+  @Test func aFailedMessageIsNeverRecorded() {
     let message = pending("yes", status: .failed("the session is gone"))
 
-    let left = unansweredIDs([message], log: [user("yes", t: 1)])
+    let left = notInLogIDs([message], log: [user("yes", t: 1)])
 
     #expect(left == [message.id])
   }
@@ -260,15 +260,30 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     let failed = pending("yes", status: .failed("the session is gone"))
     let waiting = pending("yes", status: .accepted(.queued))
 
-    let left = unansweredIDs([failed, waiting], log: [user("yes", t: 1)])
+    let left = notInLogIDs([failed, waiting], log: [user("yes", t: 1)])
 
     #expect(left == [failed.id])
   }
 }
 
+// MARK: - The progress line
+
+@Suite struct PendingChatMessageProgress {
+  @Test(
+    arguments: zip(
+      [
+        PendingChatMessage.Status.sending, .accepted(.queued), .accepted(.resumed), .accepted(.pasted),
+        .accepted(nil), .failed("the session is gone"),
+      ],
+      ["Sending…", "Queued…", "Starting Claude…", "Waiting for Claude…", "Waiting for Claude…", nil]))
+  func theProgressLineNamesTheStatus(_ status: PendingChatMessage.Status, _ line: String?) {
+    #expect(pending("yes", status: status).progress == line)
+  }
+}
+
 // MARK: - Parity with the paste check
 
-/// `unanswered` matches a plain pasted text the way `Transcript.hasUserMessage` does. Both read one transcript file.
+/// `notInLog` matches a plain pasted text the way `Transcript.hasUserMessage` does. Both read one transcript file.
 /// The inputs leave out notices, command output and slash commands, where the two differ by design.
 @Suite struct PendingChatMessageParity {
   struct Case: Sendable, CustomTestStringConvertible {
@@ -304,14 +319,14 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   }
 
   @Test(arguments: cases)
-  func unansweredAgreesWithTheTranscriptsPasteCheck(_ c: Case) throws {
+  func notInLogAgreesWithTheTranscriptsPasteCheck(_ c: Case) throws {
     let path = try transcript(holding: c.written)
     let log = Transcript.messages(path, limit: 50, on: LocalMachine())
 
     let pasted = Transcript.hasUserMessage(path, holding: c.sent, from: 0, on: LocalMachine())
-    let answered = PendingChatMessage.unanswered([pending(c.sent)], log: log).isEmpty
+    let recorded = PendingChatMessage.notInLog([pending(c.sent)], log: log).isEmpty
 
-    #expect(answered == pasted)
+    #expect(recorded == pasted)
   }
 }
 
@@ -321,10 +336,12 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
 @Suite struct BoardModelChatSend {
   static let conversation = needsItem("m", manager: true)
 
-  /// A model with chat `c`, Manager conversation `m`, and work session `a`.
-  func model() -> BoardModel {
-    appliedModel([chatItem("c", group: "g1"), Self.conversation, needsItem("a"), chatItem("c2", group: "g2")])
+  /// Chat `c`, Manager conversation `m`, and work session `a`.
+  static var sessions: [SessionSummary] {
+    [chatItem("c", group: "g1"), conversation, needsItem("a"), chatItem("c2", group: "g2")]
   }
+
+  func model() -> BoardModel { appliedModel(Self.sessions) }
 
   /// Answers `send` with `delivery` and `chat-log` with `log`, and every other request with null.
   func stub(_ model: BoardModel, delivery: Delivery = .pasted, log: [ChatMessage] = []) {
@@ -345,12 +362,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
 
   @Test(arguments: ["c", "m"])
   func sendAddsASendingMessageBeforeSbdAnswers(_ session: String) {
-    let model = model()
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
+    let (model, release, _) = heldModel(Self.sessions)
     defer { release.signal() }
 
     model.send(session, "Rebase onto main")
@@ -360,12 +372,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
 
   @Test(arguments: ["c", "m"])
   func thePendingMessageHoldsTheSentText(_ session: String) {
-    let model = model()
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
+    let (model, release, _) = heldModel(Self.sessions)
     defer { release.signal() }
 
     model.send(session, "Rebase onto main")
@@ -374,14 +381,9 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   }
 
   @Test func thePendingMessagesBaselineIsTheLogsLastMessage() {
-    let model = model()
+    let (model, release, _) = heldModel(Self.sessions)
     let last = assistant("Which branch?", t: 2)
     model.chatLogs["c"] = [user("Rebase", t: 1), last]
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
     defer { release.signal() }
 
     model.send("c", "main")
@@ -390,12 +392,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   }
 
   @Test func thePendingMessageHasNoBaselineBeforeTheLogLoads() {
-    let model = model()
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
+    let (model, release, _) = heldModel(Self.sessions)
     defer { release.signal() }
 
     model.send("c", "main")
@@ -415,12 +412,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   }
 
   @Test func aSecondSendWhileTheFirstIsInFlightAddsNoSecondMessage() {
-    let model = model()
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
+    let (model, release, _) = heldModel(Self.sessions)
     defer { release.signal() }
     model.send("c", "first")
 
@@ -452,6 +444,34 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     #expect(pendingStatuses(model, "m") == [.accepted(.queued)])
   }
 
+  @Test func anAcceptedSendWithoutADeliveryRecordsNoDelivery() async {
+    let model = model()
+    model.send = { _, _ in .null }
+
+    model.send("c", "Rebase onto main")
+    await settle { !model.sending.contains("c") }
+
+    #expect(pendingStatuses(model, "c") == [.accepted(nil)])
+  }
+
+  @Test func sbdsAnswerAfterTheLogRecordsTheMessageLeavesItGone() async {
+    let model = model()
+    let release = DispatchSemaphore(value: 0)
+    model.send = { op, _ in
+      if op == "send" { release.wait() }
+      return .null
+    }
+    model.send("c", "Rebase onto main")
+    stub(model, log: [user("Rebase onto main", t: 1)])
+    model.loadChatLog("c")
+    await settle { model.pendingChat["c"]?.isEmpty == true }
+
+    release.signal()
+    await settle { !model.sending.contains("c") }
+
+    #expect((model.pendingChat["c"] ?? []).isEmpty)
+  }
+
   @Test(arguments: ["c", "m"])
   func aRefusedSendRecordsTheError(_ session: String) async {
     let model = model()
@@ -472,6 +492,17 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
       if op == "send" { throw Refusal(description: "the session is gone") }
       return .null
     }
+
+    model.send("c", "Rebase onto main")
+    await settle { !model.sending.contains("c") }
+
+    #expect(model.actionError == nil)
+  }
+
+  @Test func anAcceptedChatSendClearsAnEarlierErrorBanner() async {
+    let model = model()
+    stub(model)
+    model.actionError = "merge: refused"
 
     model.send("c", "Rebase onto main")
     await settle { !model.sending.contains("c") }
@@ -520,15 +551,10 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   // MARK: A new send
 
   @Test func aNewSendDropsTheSessionsFailedMessagesAndKeepsTheWaitingOnes() {
-    let model = model()
+    let (model, release, _) = heldModel(Self.sessions)
     let failed = pending("first", status: .failed("the session is gone"))
     let waiting = pending("second", status: .accepted(.queued))
     model.pendingChat["c"] = [failed, waiting]
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
     defer { release.signal() }
 
     model.send("c", "third")
@@ -538,14 +564,9 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
   }
 
   @Test func aNewSendKeepsAnotherSessionsFailedMessages() {
-    let model = model()
+    let (model, release, _) = heldModel(Self.sessions)
     let other = pending("first", status: .failed("the session is gone"))
     model.pendingChat["c2"] = [other]
-    let release = DispatchSemaphore(value: 0)
-    model.send = { _, _ in
-      release.wait()
-      return .null
-    }
     defer { release.signal() }
 
     model.send("c", "third")
@@ -597,11 +618,11 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
 
   // MARK: Loading the log
 
-  @Test func loadChatLogDropsThePendingMessagesTheLogAnswers() async {
+  @Test func loadChatLogDropsThePendingMessagesTheLogRecords() async {
     let model = model()
-    let answered = pending("Rebase onto main")
+    let recorded = pending("Rebase onto main")
     let waiting = pending("Then merge it", status: .accepted(.queued))
-    model.pendingChat["c"] = [answered, waiting]
+    model.pendingChat["c"] = [recorded, waiting]
     stub(model, log: [user("Rebase onto main", t: 1)])
 
     model.loadChatLog("c")
@@ -659,7 +680,7 @@ private func unansweredIDs(_ pending: [PendingChatMessage], log: [ChatMessage]) 
     let model = model()
     let waiting = pending("Rebase onto main")
     model.pendingChat["c"] = [waiting]
-    model.chatLogs["c"] = [assistant(t: 1)]
+    model.chatLogs["c"] = [user("Rebase onto main", t: 1)]
     let read = Counter()
     model.send = { op, _ in
       if op == "chat-log" {
