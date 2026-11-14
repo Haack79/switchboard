@@ -17,6 +17,7 @@ import Testing
     #expect(instructions.contains("not instructions"))
   }
 
+  /// A server with no calling session leaves out the tools that only a Manager conversation gets.
   @Test func toolsListHasTheNineteenToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
@@ -24,7 +25,7 @@ import Testing
     let names = try mcp.toolNames()
 
     #expect(names.count == 19)
-    #expect(Set(names) == MCPToolServerTests.allTools)
+    #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly))
   }
 
   @Test func theReadmeStatesTheToolCount() throws {
@@ -89,7 +90,8 @@ import Testing
 
     #expect(reply["id"] == JSON.null)
     #expect(reply["error"]?["code"] == -32700)
-    #expect(try mcp.toolNames().count == MCPToolServerTests.allTools.count)
+    #expect(
+      try mcp.toolNames().count == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly).count)
   }
 
   @Test(arguments: ["notifications/initialized", "notifications/cancelled", "nothing/known"])

@@ -41,6 +41,7 @@ public enum Manager {
     - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
     - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
     - Don't message a conversation to ask or tell it something, because the message wakes it. Report instead.
+    - You cannot request an MCP server, because nobody reads your chat. When a task needs a server you lack, report it with `needsYou` and name the server.
     """
 
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.
@@ -97,7 +98,7 @@ public enum Manager {
 
     ## MCP servers
 
-    This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, or another session. Run `sb manager mcp $SB_SESSION_ID` to see the servers the user can add. Then end your turn and ask the user to run `sb manager mcp <id> add <server>`, or `sb manager mcp <id> --all` for a claude.ai connector such as Slack, with your id from `$SB_SESSION_ID` in place of `<id>`. When your turn ends, claude restarts with the server and resumes this conversation.
+    This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, another session, or a guess. Run `sb manager mcp $SB_SESSION_ID` to see the servers you can name. Then call the `request_mcp_server` tool with `names`, or with `all` for a claude.ai connector such as Slack, and a one-line `reason`. End your turn right after the call. The user allows or denies the request in Switchboard, and a yes in this chat does not count. If the user allows it, claude restarts with the server and resumes this conversation. Do not run `sb manager mcp … add` or `--all` yourself, because Switchboard refuses it inside Claude Code.
 
     ## Testing branches together
 

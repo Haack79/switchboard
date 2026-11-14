@@ -443,9 +443,11 @@ public enum Triage {
 
   /// Whether a card of this kind stops the session's turn until the user
   /// answers it. A send card does not: the turn goes on, and the card expires.
+  /// An MCP server request does, because the conversation ends its turn to
+  /// wait for the server.
   static func blocks(_ kind: Card.Kind) -> Bool {
     switch kind {
-    case .permission, .question, .trust: true
+    case .permission, .question, .trust, .mcp: true
     case .send: false
     }
   }
@@ -568,6 +570,15 @@ public enum Triage {
           TriageOption(label: "Trust", action: .allow, recommended: true),
           TriageOption(label: "Exit", action: .deny),
         ], source: .card)
+    case .mcp:
+      return TriageItem(
+        title: title(card.reason), kind: .approval, summary: card.mcpRequest?.effect ?? "",
+        options: [
+          TriageOption(label: "Allow", action: .allow, recommended: true),
+          TriageOption(label: "Deny", action: .deny),
+        ], source: .card,
+        details: TriageDetails(
+          openByDefault: true, toolInput: .init(tool: card.tool, text: card.mcpRequest?.reason ?? "")))
     case .permission:
       return TriageItem(
         title: title(card.reason), kind: .approval, summary: permissionSummary(card),

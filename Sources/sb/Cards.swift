@@ -14,7 +14,7 @@ func cards(_ a: Args) {
     return
   }
   if cards.isEmpty {
-    print("No permission prompts, questions, group messages, or folder trust prompts are open.")
+    print("No permission prompts, questions, group messages, folder trust prompts, or MCP server requests are open.")
     return
   }
   // Claude chose this text, so control characters print as escapes.
@@ -41,6 +41,10 @@ func cards(_ a: Args) {
       for line in (card.send?.text ?? "").split(separator: "\n", omittingEmptySubsequences: false) {
         out("      | \(line)")
       }
+    case .mcp:
+      out("\(head)  \(card.summary)")
+      out("      reason: \(card.mcpRequest?.reason ?? "")")
+      out("      allow restarts claude with it, deny leaves the servers as they are")
     case .question:
       out("\(head)  question")
       for q in card.questions {
@@ -77,10 +81,14 @@ func answer(_ command: String, _ a: Args) {
   }
   let result = call("answer", args)
   if a.json { return printJSON(result) }
-  if result["decision"] != nil {
+  if result["targets"] != nil {
     let sent = decode(result, as: GroupSend.self)
     print(sent.decision?.rawValue ?? "")
     return printDeliveries(sent)
+  }
+  if result["reason"] != nil {
+    let status = decode(result, as: MCPServerRequestStatus.self)
+    return print("\(status.decision.rawValue). \(status.name): \(Manager.serversText(status.loaded))".printable)
   }
   print(result["delivery"]?.string ?? "answered")
 }

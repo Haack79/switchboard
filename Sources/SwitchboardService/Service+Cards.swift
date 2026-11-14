@@ -111,8 +111,17 @@ extension Service {
     switch card.kind {
     case .send: return try answerGroupMessage(card, args)
     case .trust: return try answerTrust(card, args)
+    case .mcp: return try answerMCPRequest(card, args)
     case .permission, .question: return try answerPrompt(card, args, extra: extra)
     }
+  }
+
+  private func answerMCPRequest(_ card: Card, _ args: JSON) throws -> JSON {
+    guard let request = card.mcpRequest else { throw APIError("card \(card.id) has no MCP server request") }
+    // The conversation's turn already ended, so a deny message has no one to read it.
+    guard args["answers"] == nil, let behavior = args["behavior"]?.string, behavior == "allow" || behavior == "deny"
+    else { throw APIError("card \(card.id) asks to add an MCP server. Allow it or deny it") }
+    return try decideMCPRequest(card, request, allow: behavior == "allow")
   }
 
   private func answerGroupMessage(_ card: Card, _ args: JSON) throws -> JSON {

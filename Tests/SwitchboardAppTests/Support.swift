@@ -148,7 +148,7 @@ func carded(_ s: SessionSummary, kind: Card.Kind, card id: Int64 = 1) throws -> 
   return s
 }
 
-/// A card as sbd lists it. A send card holds a message to group g1.
+/// A card as sbd lists it. A send card holds a message to group g1. An mcp card asks to add grafana.
 func cardFixture(_ id: Int64, session: String, kind: Card.Kind) throws -> Card {
   var json: [String: JSON] = [
     "id": .number(Double(id)), "session": .string(session), "kind": .string(kind.rawValue), "tool": "Bash",
@@ -157,6 +157,11 @@ func cardFixture(_ id: Int64, session: String, kind: Card.Kind) throws -> Card {
   if kind == .send {
     json["tool"] = "send_group"
     json["send"] = ["group": "g1", "groupName": "Flags", "text": "Rebase.", "targets": [], "expires": 0]
+  }
+  if kind == .mcp {
+    json["tool"] = "request_mcp_server"
+    json["summary"] = "add grafana to this conversation"
+    json["mcpRequest"] = ["servers": ["grafana"], "reason": "Read the deploy dashboards."]
   }
   return try JSONCoding.convert(JSON.object(json), to: Card.self)
 }
