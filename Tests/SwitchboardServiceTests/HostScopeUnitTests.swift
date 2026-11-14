@@ -1119,11 +1119,12 @@ private func cliOutput(_ answer: Response) throws -> (status: Int?, stdout: Data
   func getForTheHostsOwnSessionThroughCliPrintsTheAnswerOfTheRawRequest() throws {
     try withSessions(sbPath: builtSb) { service in
       try HostServer.listen(service: service, host: "mini").run()
-      // A `get` starts the lookups of the checkout and its origin, and `repositoryRead` changes when they end.
-      // The lookups run on the global queue, which a parallel test run keeps busy.
+      // A `get` starts the lookups of the checkout and its origin, and its answer changes when they end.
+      // The lookups run on the global queue, which a parallel test run keeps busy. Tests that advance the shared
+      // clock can start a lookup again, so this waits for `repositoryRead` and not for the lookups to stop.
       let read = waitUntil(seconds: 40) {
-        _ = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
-        return service.queue.sync { service.checkoutLookups.isEmpty && service.repositoryLookups.isEmpty }
+        let answer = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
+        return answer.result?["repositoryRead"]?.bool == true
       }
       #expect(read, "the lookups of m1's checkout didn't end")
 

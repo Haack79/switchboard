@@ -384,7 +384,7 @@ private let otherDestination = "haacked@other.local"
     "plan-attach", "plan-update", "plan-propose", "plan-apply", "plan-artifact-read", "plan-artifact-rewrite",
     "plan-artifact-apply", "plan-artifact-reject", "plan-artifact-report", "plan-followup", "plan-ls", "plan-get",
     "plan-detach", "plan-auto", "plan-proposals", "plan-reject", "followup-add", "followup-ls", "followup-start",
-    "followup-rm", "followup-import", "pr-merged", "docket-start", "merge", "review", "ack", "resolved-todos",
+    "followup-rm", "followup-import", "docket-start", "merge", "review", "ack", "resolved-todos",
     "dependency-resolved", "activity", "activity-report", "activity-clear", "live-next", "draft-post", "draft-check",
     "issues", "issues-refresh", "issues-start", "issues-clone", "issues-source-add", "issues-source-rm",
     "issues-settings", "issues-dismiss",
