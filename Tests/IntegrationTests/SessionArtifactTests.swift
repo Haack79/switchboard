@@ -10,12 +10,12 @@ let artifactPageCodeURL = "https://claude.ai/code/artifact/\(artifactPageUUID)"
 private let scratchPage = "/private/tmp/claude-501/project/session/scratchpad/report.html"
 
 extension Instance {
-  /// The input of a first publish, as the plan's Evidence section records it.
+  /// The input of a first publish, as Claude Code's Artifact tool sends it.
   static let artifactFirstInput: JSON = [
     "file_path": .string(scratchPage), "icon": "chart", "description": "How the delta rates chart is built.",
   ]
 
-  /// The `tool_response` of a publish, in the shape of the plan's Evidence section.
+  /// The `tool_response` of a publish, in the shape that Claude Code's Artifact tool returns.
   static func artifactResponse(
     url: String = artifactPageURL, artifactId: String = artifactPageUUID, title: String = "Delta Rates",
     republish: Bool = false
@@ -348,7 +348,7 @@ private func storedGroupsJSON(_ sbd: Instance) throws -> String {
     #expect(rows.first?["title"]?.string == "Delta Rates v2")
   }
 
-  // MARK: sb rm keeps the rows on the group (Risk 5)
+  // MARK: sb rm keeps the rows on the group
 
   @Test func afterSbRmTheRowStaysOnTheGroupWithTheSameFields() throws {
     let sbd = try Instance()
@@ -514,7 +514,7 @@ private func storedGroupsJSON(_ sbd: Instance) throws -> String {
 }
 
 /// A session on a remote host records its artifacts from hooks that reach sbd through the box's shim, live or
-/// from the spool after a reconnect (Risk 7).
+/// from the spool after a reconnect.
 @Suite(.blocking(timeLimit: .seconds(240))) struct RemoteSessionArtifactTests {
   private func payload(_ claudeSessionId: String) -> JSON {
     Instance.artifactPayload(claudeSessionId: claudeSessionId, toolUseId: "toolu_\(UUID().uuidString)")

@@ -26,7 +26,7 @@ func artifactHook(
   return event(kind, t, fields)
 }
 
-/// The `tool_response` of a first publish or a republish, in the shape of the plan's Evidence section.
+/// The `tool_response` of a first publish or a republish, in the shape that Claude Code's Artifact tool returns.
 func artifactPublishResponse(
   url: String = artifactShortURL, artifactId: String? = artifactUUID, title: String? = "Delta Rates",
   republish: Bool = false
@@ -82,7 +82,7 @@ private let publishes: [PublishCase] = [
     name: "no action and a file_path", input: ["file_path": .string(artifactPage)],
     response: artifactPublishResponse(), recorded: artifactShortURL),
   PublishCase(
-    name: "the Evidence first publish", input: artifactFirstInput, response: artifactPublishResponse(),
+    name: "a first publish", input: artifactFirstInput, response: artifactPublishResponse(),
     recorded: artifactShortURL),
   PublishCase(
     name: "a republish with an input url", input: input(["url": .string(artifactShortURL)]),
@@ -242,7 +242,7 @@ private let refusedLinks = [
   "",
 ]
 
-/// The publish guard (Risk 1): an event records the artifact at U only when it is an Artifact `PostToolUse`
+/// The publish guard: an event records the artifact at U only when it is an Artifact `PostToolUse`
 /// whose action is absent or `publish`, that uploads or copies no assets, and whose `tool_response` is an object
 /// with a `url` that `ArtifactLink` accepts. A subagent's hook decides the same as the main session's.
 @Suite struct ArtifactCallTests {
@@ -296,7 +296,7 @@ private let refusedLinks = [
 
   // MARK: The parse result
 
-  @Test func parseReturnsThePublishOfTheEvidencePayload() {
+  @Test func parseReturnsThePublishOfARealPayload() {
     let call = ArtifactCall.parse(artifactHook(1000, input: artifactFirstInput, response: artifactPublishResponse()))
 
     #expect(call == .publish(url: artifactShortURL, artifactId: artifactUUID, title: "Delta Rates"))
@@ -404,7 +404,7 @@ private let deletes: [DeleteCase] = [
   DeleteCase(name: "a read of the link", input: ["action": "read", "url": .string(artifactShortURL)], removes: false),
 ]
 
-/// The delete guard (Risk 2): a delete marks an entry removed only when it is an Artifact `PostToolUse` with
+/// The delete guard: a delete marks an entry removed only when it is an Artifact `PostToolUse` with
 /// action `delete`, no `path`, and a `url` that `ArtifactLink` accepts and that names one of the session's
 /// entries by URL or by artifact id. The entry stays in the list.
 @Suite struct ArtifactDeleteCallTests {

@@ -232,7 +232,7 @@ private func delete(_ t: Int64, _ url: String = artifactShortURL) -> Event {
   }
 }
 
-/// Startup builds facts from a snapshot and the events after it (Risk 6). For Artifact events, that gives the
+/// Startup builds facts from a snapshot and the events after it. For Artifact events, that gives the
 /// same replay as applying the whole log, wherever the snapshot cuts it.
 @Suite struct SessionArtifactSnapshotTests {
   let session = Session(id: "s1", name: "one", cwd: "/tmp/a", branch: "main", claudeSessionId: "u1", created: 5)

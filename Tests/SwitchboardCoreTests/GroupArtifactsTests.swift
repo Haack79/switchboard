@@ -186,7 +186,7 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
     #expect(list([m]).map(\.url) == [a, z])
   }
 
-  // MARK: The same list before and after sb rm (Risk 5)
+  // MARK: The same list before and after sb rm
 
   /// A group whose member `s` has artifacts, with the other members and the kept rows around it.
   struct RemovalCase: Sendable, CustomTestStringConvertible {

@@ -15,18 +15,6 @@ extension Wait {
   }
 }
 
-extension SessionArtifact {
-  /// When a delete removed the artifact, else when its last publish ran, such as `updated 5m ago`.
-  func caption(now: Int64 = nowMs()) -> String {
-    removed.map { "removed \(ago($0, now: now)) ago" } ?? "updated \(ago(updated, now: now)) ago"
-  }
-}
-
-extension [SessionArtifact] {
-  /// The last update first, then by URL, the order that sbd gives a group's list.
-  var newestFirst: [SessionArtifact] { sorted { ($1.updated, $0.url) < ($0.updated, $1.url) } }
-}
-
 /// What the session view's side panel shows: the session's open waits, its notes, and its artifacts.
 struct SidePanel {
   static let width: CGFloat = 240

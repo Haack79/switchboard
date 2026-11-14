@@ -207,13 +207,10 @@ extension Service {
 
   /// The group with the sessions' artifacts added to its kept rows, each row with its session's id and name.
   func keepingArtifacts(of sessions: [Entry], in group: SessionGroup) -> SessionGroup {
-    let rows = sessions.flatMap { e in
-      e.facts.artifacts.map { GroupArtifact($0, session: e.session.id, sessionName: e.session.name) }
-    }
-    guard !rows.isEmpty else { return group }
-    var kept = group
-    kept.artifacts = (group.artifacts ?? []) + rows
-    return kept
+    group.keeping(
+      sessions.flatMap { e in
+        e.facts.artifacts.map { GroupArtifact($0, session: e.session.id, sessionName: e.session.name) }
+      })
   }
 
   private func groupSummary(_ id: String, rowFollowups: PlanRowFollowups? = nil) -> GroupSummary {

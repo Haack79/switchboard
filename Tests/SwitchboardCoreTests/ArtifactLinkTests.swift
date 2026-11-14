@@ -88,8 +88,6 @@ private func planAttachLink(_ doc: String) -> String? {
 }
 
 @Suite struct ArtifactLinkTests {
-  // Happy path
-
   @Test(arguments: accepted)
   func artifactLinkInEachFormNormalizesWithoutQueryOrFragment(_ link: String, _ expected: String) {
     #expect(ArtifactLink.normalized(link) == expected)
@@ -101,8 +99,6 @@ private func planAttachLink(_ doc: String) -> String? {
     #expect(link == "https://claude.ai/artifact/AbCdEfGh")
   }
 
-  // Guard: every Risk 3 input that is not a claude.ai artifact link
-
   @Test(arguments: refused)
   func linkThatIsNotAClaudeArtifactIsRefused(_ link: String) {
     #expect(ArtifactLink.normalized(link) == nil)
@@ -111,8 +107,6 @@ private func planAttachLink(_ doc: String) -> String? {
   @Test func artifactPathSegmentIsCaseSensitive() {
     #expect(ArtifactLink.normalized("https://claude.ai/ARTIFACT/3f9c2a1b") == nil)
   }
-
-  // Property: anything the parser returns is a clean claude.ai artifact link
 
   @Test(arguments: allInputs)
   func everyNormalizedLinkIsACleanClaudeArtifactLink(_ link: String) throws {
@@ -137,8 +131,6 @@ private func planAttachLink(_ doc: String) -> String? {
     #expect(ArtifactLink.normalized(normalized) == normalized)
   }
 
-  // Parity: plan attach accepts exactly the links the parser accepts
-
   @Test(arguments: allInputs.filter { $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) })
   func planAttachReadsTheSameArtifactLinkAsTheParser(_ link: String) {
     #expect(planAttachLink(link) == ArtifactLink.normalized(link))
@@ -150,8 +142,6 @@ private func planAttachLink(_ doc: String) -> String? {
 
     #expect(planAttachLink(normalized) == normalized)
   }
-
-  // id(of:)
 
   @Test(arguments: [
     ("https://claude.ai/artifact/AbCdEfGhIjKlMnOpQrStUv", "AbCdEfGhIjKlMnOpQrStUv"),

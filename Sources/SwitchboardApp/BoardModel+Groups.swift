@@ -51,24 +51,4 @@ extension BoardModel {
     groups.removeAll { $0.id == id }
     perform("group-rm", ["group": .string(id)])
   }
-
-  /// Attaches the artifact as a plan of the group. The group's chat reads it, which may start the chat. The
-  /// request can wait on that start, so it runs apart from other actions. `then` lists the plan on the group
-  /// unless a refresh already did, so the row shows "Plan" as soon as its button turns back on.
-  func useArtifactAsPlan(url: String, group: String) {
-    let key = "\(group) \(url)"
-    guard usingAsPlan.insert(key).inserted else { return }
-    perform(
-      "plan-attach", ["doc": .string(url), "group": .string(group)], on: planWrites,
-      then: { result in
-        guard let doc = try? JSONCoding.convert(result, to: PlanDocument.self),
-          let g = self.groups.firstIndex(where: { $0.id == group }),
-          self.groups[g].plans?.contains(where: { $0.id == doc.id }) != true
-        else { return }
-        self.groups[g].plans = (self.groups[g].plans ?? []) + [PlanSummary(doc)]
-      },
-      finally: { self.usingAsPlan.remove(key) })
-  }
-
-  func isUsingAsPlan(url: String, group: String) -> Bool { usingAsPlan.contains("\(group) \(url)") }
 }

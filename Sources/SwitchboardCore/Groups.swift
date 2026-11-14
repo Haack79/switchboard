@@ -46,6 +46,14 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     return clean.isEmpty ? nil : clean
   }
 
+  /// The group with `rows` added after its kept artifact rows. No rows leave the group unchanged.
+  public func keeping(_ rows: [GroupArtifact]) -> SessionGroup {
+    guard !rows.isEmpty else { return self }
+    var kept = self
+    kept.artifacts = (artifacts ?? []) + rows
+    return kept
+  }
+
   /// This group with `other`'s notes added, oldest first. A note of `other`
   /// whose id this group already uses gets a new id. This group keeps its
   /// description. Without one, it takes `other`'s, or a line that names both
@@ -53,8 +61,7 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// note at `now`, so no text is lost. This group keeps its account and
   /// never takes `other`'s. It adds `other`'s kept artifact rows after its own.
   public func absorbing(_ other: SessionGroup, now: Int64) -> SessionGroup {
-    var kept = self
-    if let theirs = other.artifacts, !theirs.isEmpty { kept.artifacts = (artifacts ?? []) + theirs }
+    var kept = keeping(other.artifacts ?? [])
     for var note in other.notes {
       if kept.notes.contains(where: { $0.id == note.id }) { note.id = shortId("n", taken: kept.notes.map(\.id)) }
       kept.notes.append(note)

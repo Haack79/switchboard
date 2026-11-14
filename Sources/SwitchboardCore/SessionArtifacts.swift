@@ -66,6 +66,28 @@ public struct GroupArtifact: Codable, Equatable, Sendable {
   public func names(_ link: String) -> Bool { ArtifactCall.names(link, url: url, artifactId: artifactId) }
 }
 
+/// The fields that order an artifact row and caption it.
+public protocol ArtifactRecord {
+  var url: String { get }
+  var updated: Int64 { get }
+  var removed: Int64? { get }
+}
+
+extension SessionArtifact: ArtifactRecord {}
+extension GroupArtifact: ArtifactRecord {}
+
+extension ArtifactRecord {
+  /// When a delete removed the artifact, else when its last publish ran, such as `updated 5m ago`.
+  public func caption(now: Int64 = nowMs()) -> String {
+    removed.map { "removed \(ago($0, now: now)) ago" } ?? "updated \(ago(updated, now: now)) ago"
+  }
+}
+
+extension Array where Element: ArtifactRecord {
+  /// The last update first, then by URL.
+  public var newestFirst: [Element] { sorted { ($1.updated, $0.url) < ($0.updated, $1.url) } }
+}
+
 /// What one Artifact tool call did to an artifact's page, as its hook says.
 public enum ArtifactCall: Equatable, Sendable {
   /// The call created or redeployed the page at `url`.
@@ -158,7 +180,7 @@ public enum GroupArtifacts {
         member.artifacts.map { GroupArtifact($0, session: member.session, sessionName: member.name) }
       }
       + kept
-    return components(rows).map(merge).sorted { ($1.updated, $0.url) < ($0.updated, $1.url) }
+    return components(rows).map(merge).newestFirst
   }
 
   /// The rows grouped by the same-artifact rule. The rule is not transitive, so each group holds every row that
@@ -183,11 +205,10 @@ public enum GroupArtifacts {
 
   private static func merge(_ rows: [GroupArtifact]) -> GroupArtifact {
     // Ties on `updated` go to the row that sorts first by its other fields, never by input position.
-    var merged = rows.max { latest($1, over: $0) }!
+    let ordered = rows.sorted { latest($0, over: $1) }
+    var merged = ordered[0]
     merged.published = rows.map(\.published).min()!
-    if merged.artifactId == nil {
-      merged.artifactId = rows.filter { $0.artifactId != nil }.min { latest($0, over: $1) }?.artifactId
-    }
+    merged.artifactId = merged.artifactId ?? ordered.first { $0.artifactId != nil }?.artifactId
     let removed = rows.compactMap(\.removed).max()
     merged.removed = removed.flatMap { $0 >= merged.updated ? $0 : nil }
     return merged

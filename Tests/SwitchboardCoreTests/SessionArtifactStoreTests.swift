@@ -5,7 +5,7 @@ import Testing
 
 /// A removal whose session kept artifacts saves its group in the same transaction that deletes the session.
 /// `checkDeletable` runs the same statements, so a group save that fails stops `sb rm` before it stops any pane or
-/// removes the worktree (Risk 4).
+/// removes the worktree.
 @Suite struct SessionArtifactRemovalStoreTests {
   static let session = Session(id: "s1", name: "flags-cache", cwd: "/tmp/a", claudeSessionId: "u1", created: 5)
 

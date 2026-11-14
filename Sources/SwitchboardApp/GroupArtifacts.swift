@@ -20,7 +20,7 @@ struct GroupArtifactRows {
   }
 
   let rows: [Row]
-  /// Such as `Artifacts (2)`, counting the artifacts that no delete removed, or nil when the group has none.
+  /// The link's title, such as `Artifacts (2)`, which counts the artifacts that no delete removed. It is nil when the group has none.
   let linkTitle: String?
 
   /// `liveNames` maps each live session's id to its current name. A removed session's row keeps its own name.
@@ -33,9 +33,14 @@ struct GroupArtifactRows {
         planLinks.contains(where: artifact.names) ? .plan : artifact.removed == nil ? .useAsPlan : .removed
       return Row(
         artifact: artifact, sessionLabel: "by \(liveNames[artifact.session] ?? artifact.sessionName)",
-        caption: "updated \(ago(artifact.updated, now: now)) ago", action: action)
+        caption: artifact.caption(now: now), action: action)
     }
-    linkTitle = artifacts.isEmpty ? nil : "Artifacts (\(artifacts.count(where: { $0.removed == nil })))"
+    linkTitle = Self.linkTitle(group)
+  }
+
+  static func linkTitle(_ group: GroupSummary) -> String? {
+    guard let artifacts = group.artifacts, !artifacts.isEmpty else { return nil }
+    return "Artifacts (\(artifacts.count(where: { $0.removed == nil })))"
   }
 }
 
@@ -45,14 +50,14 @@ struct GroupArtifactsLink: View {
   @State private var showing = false
 
   var body: some View {
-    if let title = GroupArtifactRows(group: group, liveNames: [:]).linkTitle {
+    if let title = GroupArtifactRows.linkTitle(group) {
       Button(title) { showing = true }
         .buttonStyle(.link).font(.caption).lineLimit(1)
         .help("Show the artifacts that this group's sessions published")
         .accessibilityIdentifier("group-artifacts-\(group.id)")
         .popover(isPresented: $showing, arrowEdge: .bottom) { GroupArtifactList(group: group).frame(width: 420) }
-        // The link keeps `showing` after the group's last artifact removes it. Without the reset, the popover
-        // would open by itself when the group lists an artifact again.
+        // `showing` stays true when the link leaves the view because the group has no artifacts. Without the reset,
+        // the popover would open by itself when the group lists an artifact again.
         .onDisappear { showing = false }
     }
   }
