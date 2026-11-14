@@ -16,11 +16,6 @@ extension Service {
       return try removeFollowup(args)
     case "followup-import":
       return try importFollowups(args)
-    case "pr-merged":
-      guard let text = args["pr"]?.string, let pr = Wait.PullRequest(parsing: text), pr.repository != nil else {
-        throw APIError("pr-merged needs a PR as owner/name#12 or a PR URL")
-      }
-      return try JSON(encoding: pullRequestMerged(pr))
     default:
       throw APIError("unknown request \(op)")
     }
@@ -248,16 +243,16 @@ extension Service {
   }
 
   /// Marks the follow-ups that wait for this PR to merge as ready, and returns
-  /// them. github-poller calls it when it sees the merge.
-  func pullRequestMerged(_ pr: Wait.PullRequest) -> [SessionSummary] {
+  /// how many it marked. github-poller calls it when it sees the merge.
+  func pullRequestMerged(_ pr: Wait.PullRequest) -> Int {
     queue.sync {
       let now = nowMs()
-      return entries.keys.sorted().compactMap { id in
-        guard let s = entries[id]?.session, waitsToFire(s), let waiting = s.followup?.trigger.pr, waiting.same(as: pr)
-        else { return nil }
-        markReady(id, now: now)
-        return summary(id)
+      let ids = entries.keys.sorted().filter { id in
+        guard let s = entries[id]?.session, waitsToFire(s), let waiting = s.followup?.trigger.pr else { return false }
+        return waiting.same(as: pr)
       }
+      for id in ids { markReady(id, now: now) }
+      return ids.count
     }
   }
 
