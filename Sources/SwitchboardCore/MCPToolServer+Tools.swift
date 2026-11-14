@@ -91,12 +91,12 @@ extension MCPToolServer {
           "Starts claude in plan mode, so it writes a plan and waits for approval before it edits a file."),
         "after": string("For a follow-up, a PR such as pr:123 whose merge moves it to Needs you."),
         "wait": string(
-          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state. In a Manager conversation, the operator resumes instead."
+          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state. In a Manager conversation, the operator resumes instead of you. To be resumed yourself, omit `wait` and call `set_wait` with `here: true`."
         ),
       ], required: ["repository", "branch", "prompt"]),
     Tool(
       "set_wait",
-      "Sets a wait on a session, by default the calling session. In a Manager conversation, a wait that resumes goes to the operator, which gets the message instead, unless it waits on the session's own PR or a PR given without its repository. Pass `here` to keep it on the conversation. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
+      "Sets a wait on a session, by default the calling session. In a Manager conversation, a wait that resumes goes to the operator, and the operator gets the message instead of you. A PR wait stays on the conversation when it has no `target`, which means the session's own PR, or a PR given without its repository. A wait that notifies also stays, and a manual wait notifies by default. Pass `here` to keep any other wait on the conversation. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
       [
         "session": session,
         "kind": string(
