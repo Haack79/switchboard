@@ -32,13 +32,15 @@ struct InlineText: View {
     var result = AttributedString()
     var lines: [String] = []
     var listed: Set<String> = []
-    for piece in names.pieces(text) {
+    for piece in InlineMentions(names: names, repo: nil).pieces(text) {
       var part = MarkdownText.attributed(piece.run)
-      if let match = piece.match, links {
+      switch piece.mention {
+      case .session(let match)? where links:
         if !match.removed { part.link = SessionLink.url(for: match.id) }
         if listed.insert(match.id).inserted {
           lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
         }
+      case .session?, nil: break
       }
       result += part
     }
