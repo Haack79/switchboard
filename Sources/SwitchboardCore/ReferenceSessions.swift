@@ -6,7 +6,7 @@ public enum ReferenceSessions {
   /// them, so an issue with no repository is in the session's repository.
   public static func matching(_ ref: GitHubRef, in sessions: [SessionSummary]) -> [SessionSummary] {
     sessions.filter { session in
-      session.pr.map { $0.number == ref.number && Dependencies.sameRepo($0.repo, ref.repo) } == true
+      session.pr.map { ref.same(repo: $0.repo, number: $0.number) } == true
         || IssueInbox.ids(of: session).contains(ref.key)
     }
   }

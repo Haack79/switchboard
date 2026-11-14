@@ -58,7 +58,7 @@ struct ReferenceCardContent: Equatable {
       let meta = (d.author.map { ["by \($0)"] } ?? []) + ages(opened: d.createdAt, updated: d.updatedAt, now: now)
       self.meta = meta.isEmpty ? nil : meta.joined(separator: " · ")
       labels = Array(d.labels.prefix(Self.maxLabels))
-      extraLabels = d.labels.count - labels.count
+      extraLabels = (d.labelCount ?? d.labels.count) - labels.count
       if d.kind == .pr, d.state == .open { prLines = Self.prLines(d) }
     }
   }

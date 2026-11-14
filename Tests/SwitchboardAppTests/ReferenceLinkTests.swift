@@ -51,17 +51,7 @@ private func session(pr prRepo: String?, repository: String?, read: Bool? = true
 /// These tests count and read the links. `InlineTextTests.References` checks each link's URL.
 @MainActor
 @Suite struct HostedReferenceLink {
-  let opened = OpenedURLs()
-
-  private func host<V: View>(_ view: V) -> HostedView {
-    HostedView(
-      view.environment(
-        \.openURL,
-        OpenURLAction {
-          opened.append($0)
-          return .handled
-        }))
-  }
+  private func host<V: View>(_ view: V) -> HostedView { HostedView(view) }
 
   @Test func aPlainTextWithNoLinkExposesNoLink() {
     let hosted = host(InlineText(plain: "Nothing to see"))

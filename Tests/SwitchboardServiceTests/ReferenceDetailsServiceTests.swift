@@ -10,14 +10,6 @@ import os
 
 private let repo = "acme/widgets"
 
-/// A reference query written out in full. The control tests send it through the poller, so the harness is
-/// proven before any `ref-details` result is read.
-private let planQuery = """
-  query($o: String!, $n: String!, $num: Int!) { rateLimit { cost } repository(owner: $o, name: $n) {
-  issueOrPullRequest(number: $num) { __typename ... on Issue { number title url state createdAt updatedAt
-  author { login } labels(first: 10) { nodes { name } } } } } }
-  """
-
 /// A gh that logs each call beside itself and answers `auth token` with `token-<n>`, where n counts the calls.
 private let fakeGh = """
   #!/bin/sh
@@ -305,14 +297,14 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
 
   // MARK: Harness controls
 
-  /// The poller reaches the fake and reads the written-out query. A failure here is the harness, not `ref-details`.
+  /// The poller reaches the fake and reads its answer. A failure here is the harness, not `ref-details`.
   @Test func controlThePollerReachesTheFake() throws {
     let h = try Harness()
     h.api.put(7, issueNode(7))
     var stats = GitHubPoller.Stats()
 
     let response = try h.service.github!.request(
-      planQuery, ["o": "acme", "n": "widgets", "num": 7], stats: &stats)
+      GitHub.referenceQuery, ["o": "acme", "n": "widgets", "num": 7], stats: &stats)
 
     #expect(response["data"]?["repository"]?["issueOrPullRequest"]?["title"] == "Fetched title")
     #expect(h.api.requests.map(\.key) == ["acme/widgets#7"])
@@ -325,7 +317,7 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
     h.api.unauthorizeNext()
     var stats = GitHubPoller.Stats()
 
-    _ = try h.service.github!.request(planQuery, ["o": "acme", "n": "widgets", "num": 7], stats: &stats)
+    _ = try h.service.github!.request(GitHub.referenceQuery, ["o": "acme", "n": "widgets", "num": 7], stats: &stats)
 
     #expect(h.ghCalls == 2)
     #expect(h.api.requests.map(\.authorization) == ["bearer token-1", "bearer token-2"])
@@ -630,14 +622,15 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
 
     _ = try concurrently(2) { _ in
       var stats = GitHubPoller.Stats()
-      return (try? poller.request(planQuery, ["o": "acme", "n": "widgets", "num": 7], stats: &stats)) != nil
+      let variables: JSON = ["o": "acme", "n": "widgets", "num": 7]
+      return (try? poller.request(GitHub.referenceQuery, variables, stats: &stats)) != nil
     }
 
     #expect(h.api.requests.count == 2)
     #expect(poller.graphQLPausedUntil > nowMs() + 500_000)
   }
 
-  /// A rate limit that one of 20 concurrent fetches meets pauses later fetches, so no write of the pause is lost.
+  /// A rate limit that one of 20 concurrent fetches meets pauses the next fetch, which fails without a request.
   @Test func aRateLimitDuringConcurrentFetchesPausesTheNextFetch() throws {
     let h = try Harness()
     for n in 1...21 { h.api.put(n, issueNode(n)) }

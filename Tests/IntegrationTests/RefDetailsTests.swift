@@ -2,11 +2,6 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-// These tests need FakeGitHub to answer the `reference` query (`repository { issueOrPullRequest(number:) }`).
-// `putReference(_:)` adds an item. Each request is logged with kind "reference" and the id "owner/name#N".
-// An unknown repository answers `repository: null`. An unknown number answers `issueOrPullRequest: null`.
-// `reply(...)` still replaces the next answer.
-
 private let widgets = "acme/widgets"
 private let ledger = "acme/ledger"
 
@@ -269,8 +264,7 @@ extension FakeGitHub {
     #expect(lines.count == 3)
     #expect(lines.first == "acme/widgets#7 issue open")
     #expect(lines.dropFirst().first == "Totals round twice")
-    #expect(lines.last?.contains("by robin-k") == true)
-    #expect(lines.last?.contains("bug") == true)
+    #expect(lines.last == "by robin-k, labels: bug, ui")
   }
 
   @Test func sbRefPrintsAnOpenPRWithItsChecksReviewAndMergeability() throws {
@@ -286,5 +280,16 @@ extension FakeGitHub {
     #expect(lines.count == 4)
     #expect(lines.first == "acme/widgets#9 pr open")
     #expect(lines.dropFirst().first == "Round totals once")
+    #expect(lines.last == "checks SUCCESS, review APPROVED, mergeable MERGEABLE")
+  }
+
+  @Test func sbRefMarksADraftPR() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    github.putReference(FakeGitHub.FakeReference(repo: widgets, number: 9, pull: true, draft: true))
+
+    let lines = try sbd.sb("ref", "acme/widgets#9").split(separator: "\n").map(String.init)
+
+    #expect(lines.first == "acme/widgets#9 pr open draft")
   }
 }

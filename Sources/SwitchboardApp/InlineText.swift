@@ -303,12 +303,14 @@ final class ReferenceHover {
     guard let card, let view else { return }
     let next = point.flatMap { point in entries.first { $0.rect.contains(point) } }
       .map { (id: ReferenceCardID(ref: $0.ref), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect)) }
-    if next?.anchor == current?.anchor, next?.anchor.rect == current?.anchor.rect { return }
+    if next?.anchor == current?.anchor { return }
     let previous = current
     current = next
     // The card expects the next reference's enter before the last one's exit.
     if let next { card.entered(next.id, anchor: next.anchor) }
-    if let previous, previous.anchor != next?.anchor { card.exited(previous.id, anchor: previous.anchor) }
+    if let previous, !previous.anchor.isSameTarget(as: next?.anchor) {
+      card.exited(previous.id, anchor: previous.anchor)
+    }
   }
 
   /// Forgets the reference under the pointer, after the text left its window.

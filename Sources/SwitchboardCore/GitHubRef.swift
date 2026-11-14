@@ -69,6 +69,11 @@ public struct GitHubRef: Equatable, Hashable, Sendable {
 
   public var isPull: Bool { form == .pullURL }
 
+  /// Whether `other#n` is this item. GitHub numbers issues and pull requests together, so `form` is ignored.
+  public func same(repo other: String, number n: Int) -> Bool {
+    n == number && Dependencies.sameRepo(other, repo)
+  }
+
   /// The lowercased `owner/name#123`. GitHub compares repository names without case.
   public var key: String { InboxIssue.id(repo, number) }
 

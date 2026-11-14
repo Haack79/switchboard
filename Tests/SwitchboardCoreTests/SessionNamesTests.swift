@@ -216,8 +216,9 @@ private let unchangedMarkdown: [String] = [
 
 private let docsLink = "https://example.com/docs"
 
-/// A repository that a bare `#123` would refer to. No row holds a reference, so the rows give the same pieces with it.
-private let contextRepo = "haacked/switchboard"
+/// No repository, and a repository that a bare `#123` would refer to. No row holds a reference, so the rows give the
+/// same pieces with either.
+private let contexts: [String?] = [nil, "haacked/switchboard"]
 
 /// Markdown and the pieces the matcher gives for it.
 private let changedMarkdown: [(String, [Piece])] = [
@@ -324,11 +325,11 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(SessionNames(live: ["seb4ec": "a"], removed: [:]) != SessionNames(live: [:], removed: ["seb4ec": "a"]))
   }
 
-  @Test(arguments: unchangedPlain)
-  func plainTextThatMustNotChangePassesThrough(_ input: String) {
+  @Test(arguments: unchangedPlain, contexts)
+  func plainTextThatMustNotChangePassesThrough(_ input: String, _ repo: String?) {
     let text = MarkdownText(stringLiteral: input)
 
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == unchanged(text))
   }
 
   @Test(arguments: unchangedPlain)
@@ -336,10 +337,10 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(names.replacingIDs(in: input) == input)
   }
 
-  @Test(arguments: changedPlain)
-  func plainTextIdsBecomeNames(_ input: String, _ expected: String) {
+  @Test(arguments: changedPlain, contexts)
+  func plainTextIdsBecomeNames(_ row: (String, String), _ repo: String?) {
     #expect(
-      InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: input)) == expectedPieces(expected))
+      InlineMentions(names: names, repo: repo).pieces(MarkdownText(stringLiteral: row.0)) == expectedPieces(row.1))
   }
 
   @Test(arguments: changedPlain)
@@ -356,20 +357,6 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(names.replacingIDs(in: input) == input)
   }
 
-  @Test(arguments: unchangedPlain)
-  func plainTextThatMustNotChangePassesThroughWithAContextRepo(_ input: String) {
-    let text = MarkdownText(stringLiteral: input)
-
-    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == unchanged(text))
-  }
-
-  @Test(arguments: changedPlain)
-  func plainTextIdsBecomeNamesWithAContextRepo(_ input: String, _ expected: String) {
-    #expect(
-      InlineMentions(names: names, repo: contextRepo).pieces(MarkdownText(stringLiteral: input))
-        == expectedPieces(expected))
-  }
-
   @Test(arguments: [
     ("Fix the stream reader", "Fix the ⟨stream⟩ reader"),
     ("streams", "streams"),
@@ -384,32 +371,18 @@ private let changedMarkdown: [(String, [Piece])] = [
         == expectedPieces(expected, live: live))
   }
 
-  @Test(arguments: unchangedMarkdown)
-  func markdownThatMustNotChangePassesThrough(_ markdown: String) throws {
+  @Test(arguments: unchangedMarkdown, contexts)
+  func markdownThatMustNotChangePassesThrough(_ markdown: String, _ repo: String?) throws {
     let text = try paragraph(markdown)
 
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == unchanged(text))
   }
 
-  @Test(arguments: changedMarkdown)
-  func markdownIdsBecomeNames(_ markdown: String, _ expected: [InlineMentions.Piece]) throws {
-    let text = try paragraph(markdown)
+  @Test(arguments: changedMarkdown, contexts)
+  func markdownIdsBecomeNames(_ row: (String, [InlineMentions.Piece]), _ repo: String?) throws {
+    let text = try paragraph(row.0)
 
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == expected)
-  }
-
-  @Test(arguments: unchangedMarkdown)
-  func markdownThatMustNotChangePassesThroughWithAContextRepo(_ markdown: String) throws {
-    let text = try paragraph(markdown)
-
-    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == unchanged(text))
-  }
-
-  @Test(arguments: changedMarkdown)
-  func markdownIdsBecomeNamesWithAContextRepo(_ markdown: String, _ expected: [InlineMentions.Piece]) throws {
-    let text = try paragraph(markdown)
-
-    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == expected)
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == row.1)
   }
 
   /// A code block never becomes a paragraph's `MarkdownText`, so its ids never reach `pieces`.

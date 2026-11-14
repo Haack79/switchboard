@@ -15,10 +15,10 @@ struct HoverAnchor: Equatable {
     self.rect = rect
   }
 
-  /// Two anchors are the same target when they name the same part of the same
-  /// view. The rect is placement data only: SwiftUI records it again on each
-  /// draw, so an enter and its exit can carry different rects.
-  static func == (a: HoverAnchor, b: HoverAnchor) -> Bool { a.view === b.view && a.part == b.part }
+  /// Whether `other` names the same part of the same view. The rect is
+  /// placement data only: SwiftUI records it again on each draw, so an enter
+  /// and its exit can carry different rects.
+  func isSameTarget(as other: HoverAnchor?) -> Bool { view === other?.view && part == other?.part }
 }
 
 /// Draws the hover card that `HoverCard` decides to show.
@@ -33,11 +33,12 @@ protocol HoverCardPresenter<ID>: AnyObject {
   func refresh(below anchor: HoverAnchor)
 }
 
-/// Decides when a session tile's hover card shows. The card opens after the
-/// pointer rests on a tile for `delay`. It stays open while the pointer is on
-/// the tile or on the card, and closes `grace` after the pointer leaves both.
-/// A model update leaves the card open unless the session is no longer shown.
-/// A rebuilt tile replaces its anchor view. The new anchor keeps the card.
+/// Decides when a hover target's card shows, for a session tile or a
+/// reference in text. The card opens after the pointer rests on a target for
+/// `delay`. It stays open while the pointer is on the target or on the card,
+/// and closes `grace` after the pointer leaves both. For the session card, a
+/// model update leaves the card open unless the session is no longer shown.
+/// A rebuilt target replaces its anchor view. The new anchor keeps the card.
 /// A mouse down closes the card, except one in `clickableWindow`.
 @MainActor
 final class HoverCard<ID: Hashable & Sendable> {
@@ -94,7 +95,7 @@ final class HoverCard<ID: Hashable & Sendable> {
   }
 
   func exited(_ id: ID, anchor: HoverAnchor) {
-    guard hovered?.anchor == anchor else { return }
+    guard anchor.isSameTarget(as: hovered?.anchor) else { return }
     hovered = nil
     if suppressed == id { suppressed = nil }
     if shown == nil { cancel() } else if !onCard { closeAfterGrace() }
@@ -174,7 +175,7 @@ final class HoverCard<ID: Hashable & Sendable> {
 
   /// Places the card below `anchor` when it is another target or sits at another rect.
   private func adopt(_ anchor: HoverAnchor) {
-    guard anchor != self.anchor || anchor.rect != self.anchor?.rect else { return }
+    guard anchor != self.anchor else { return }
     self.anchor = anchor
     presenter.refresh(below: anchor)
   }

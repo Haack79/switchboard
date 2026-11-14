@@ -184,14 +184,14 @@ private func spell(_ pieces: [Piece], _ input: String) -> Bool {
 private struct Found: Equatable, CustomStringConvertible {
   let text: String
   let key: String
-  let form: GitHubRefFormCase
+  let form: GitHubRef.Form
 
   var description: String { "\(text) -> \(key) (\(form))" }
 }
 
 private func found(_ pieces: [Piece]) -> [Found] {
   pieces.compactMap { piece in
-    referenced(piece.mention).map { Found(text: piece.run.text, key: $0.key, form: GitHubRefFormCase($0.form)) }
+    referenced(piece.mention).map { Found(text: piece.run.text, key: $0.key, form: $0.form) }
   }
 }
 

@@ -3,33 +3,21 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// `GitHubRef.Form`, mirrored so that a row holds no Core type whose conformances the test would depend on.
-enum GitHubRefFormCase: Sendable, Equatable {
-  case pullURL, issueURL, shorthand
-
-  init(_ form: GitHubRef.Form) {
-    switch form {
-    case .pullURL: self = .pullURL
-    case .issueURL: self = .issueURL
-    case .shorthand: self = .shorthand
-    }
-  }
-}
-
-/// The fields of a `GitHubRef`, compared one by one. A reference's own equality may compare only its key.
+/// The fields of a `GitHubRef`, which a test can build for any form. `GitHubRef`'s own initializer builds only a
+/// shorthand.
 struct GitHubRefFields: Sendable, Equatable {
   let repo: String
   let number: Int
-  let form: GitHubRefFormCase
+  let form: GitHubRef.Form
 
-  init(_ repo: String, _ number: Int, _ form: GitHubRefFormCase) {
+  init(_ repo: String, _ number: Int, _ form: GitHubRef.Form) {
     self.repo = repo
     self.number = number
     self.form = form
   }
 
   init(_ ref: GitHubRef) {
-    self.init(ref.repo, ref.number, GitHubRefFormCase(ref.form))
+    self.init(ref.repo, ref.number, ref.form)
   }
 }
 

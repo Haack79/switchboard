@@ -424,4 +424,30 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     #expect(panel.frame.height > loading)
     withExtendedLifetime(window) {}
   }
+
+  /// The reference card's panel takes clicks, so a click on one of its links does not close it first. The session
+  /// card's panel does not.
+  @Test func onlyTheReferenceCardsPanelTakesClicks() throws {
+    _ = NSApplication.shared
+    let sbd = FakeSbd()
+    sbd.reply(.answer(try json(prReply)), .answer(try json(prReply)))
+    let model = model(sbd)
+    let window = NSWindow(
+      contentRect: NSRect(x: 200, y: 200, width: 400, height: 300), styleMask: [.titled], backing: .buffered,
+      defer: false)
+    window.isReleasedWhenClosed = false
+    let anchor = NSView(frame: NSRect(x: 20, y: 250, width: 40, height: 14))
+    window.contentView?.addSubview(anchor)
+
+    model.referenceCard?.pin(ReferenceCardID(ref: ref), below: HoverAnchor(view: anchor))
+    model.hoverCard?.pin("A", below: HoverAnchor(view: anchor))
+    defer {
+      model.referenceCard?.interrupt()
+      model.hoverCard?.interrupt()
+    }
+
+    #expect(model.referenceCard?.clickableWindow != nil)
+    #expect(model.hoverCard?.clickableWindow == nil)
+    withExtendedLifetime(window) {}
+  }
 }

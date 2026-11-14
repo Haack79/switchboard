@@ -20,7 +20,9 @@ func refCommand(_ a: Args) {
     printJSON(result)
     return
   }
-  print("\(details.repo)#\(details.number) \(details.kind.rawValue) \(details.state.rawValue)")
+  print(
+    "\(details.repo)#\(details.number) \(details.kind.rawValue) \(details.state.rawValue)\(details.draft ? " draft" : "")"
+  )
   print(details.title)
   let about = [
     details.author.map { "by \($0)" },

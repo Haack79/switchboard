@@ -65,6 +65,12 @@ private func inReadingOrder(_ entries: [ReferenceRects.Entry]) -> Bool {
   }
 }
 
+/// Every `ReferenceAnchorView` under `view`.
+@MainActor
+private func anchorViews(in view: NSView) -> [ReferenceAnchorView] {
+  view.subviews.flatMap { ($0 as? ReferenceAnchorView).map { [$0] } ?? anchorViews(in: $0) }
+}
+
 /// Hosted proof that hover detection works in the real `Text`. Row (a) is the control: when it fails,
 /// the harness is wrong, not the API, and the rows after it say nothing.
 @MainActor
@@ -79,6 +85,24 @@ struct InlineTextHoverTests {
     let entries = await drawn.recorded()
 
     #expect(entries.map(\.key) == ["o/r#1", "o/r#2"])
+  }
+
+  /// `inlineLinks` gives the text the model's reference card. No rects are injected here, so the card alone turns on
+  /// the hover path.
+  @Test func inlineLinksGivesTheTextTheModelsReferenceCard() async throws {
+    _ = NSApplication.shared
+    let host = NSHostingView(rootView: InlineText(plain: twoReferences).inlineLinks(model).frame(width: width))
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+
+    await settle { !anchorViews(in: host).isEmpty }
+
+    let anchor = try #require(anchorViews(in: host).first)
+    #expect(anchor.card === model.referenceCard)
+    withExtendedLifetime(window) {}
   }
 
   /// (b) `MarkdownView` makes its text selectable. The renderer must still run.

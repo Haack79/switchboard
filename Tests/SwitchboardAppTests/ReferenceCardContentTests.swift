@@ -136,6 +136,12 @@ private func session(_ id: String, pr: (repo: String, number: Int)? = nil, issue
       #expect(loaded(try details(["labels": .array(names.map(JSON.string))])).extraLabels == 6)
     }
 
+    @Test func theCountUsesGitHubsTotalWhenTheReadHoldsFewerLabels() throws {
+      let names = (1...10).map { "label-\($0)" }
+
+      #expect(loaded(try details(["labels": .array(names.map(JSON.string)), "labelCount": 15])).extraLabels == 9)
+    }
+
     @Test func sixLabelsShowAllOfThemAndNoCount() throws {
       let names = (1...6).map { "label-\($0)" }
 

@@ -281,6 +281,22 @@ private let issueItems = [
     #expect(GitHub.parseReference(data) == nil)
   }
 
+  @Test func aFetchedItemCarriesGitHubsLabelTotal() throws {
+    let data: JSON = [
+      "repository": [
+        "issueOrPullRequest": [
+          "__typename": "Issue", "number": 7, "title": "Many labels", "url": "https://github.com/acme/widgets/issues/7",
+          "state": "OPEN", "labels": ["totalCount": 15, "nodes": .array((1...10).map { ["name": .string("l\($0)")] })],
+        ]
+      ]
+    ]
+
+    let details = try #require(GitHub.parseReference(data))
+
+    #expect(details.labels.count == 10)
+    #expect(details.labelCount == 15)
+  }
+
   @Test func theQueryReadsOneItemByOwnerNameAndNumber() {
     let query = GitHub.referenceQuery
 

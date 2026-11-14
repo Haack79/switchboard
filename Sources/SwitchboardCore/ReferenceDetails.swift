@@ -34,6 +34,8 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
   /// nil when the source has no author, as for a deleted account.
   public var author: String?
   public var labels: [String]
+  /// How many labels the item has, which can be more than `labels` holds. nil when the source did not count them.
+  public var labelCount: Int?
   /// ISO 8601 times, as GitHub sends them. nil when the source did not read them.
   public var createdAt: String?
   public var updatedAt: String?
@@ -81,7 +83,7 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
   init(
     repo: String, number: Int, kind: Kind, title: String, url: String, state: State, draft: Bool, author: String?,
     labels: [String], createdAt: String?, updatedAt: String?, checks: String?, reviewDecision: ReviewDecision?,
-    mergeable: Mergeable?
+    mergeable: Mergeable?, labelCount: Int? = nil
   ) {
     self.repo = repo
     self.number = number
@@ -92,6 +94,7 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
     self.draft = draft
     self.author = author
     self.labels = labels
+    self.labelCount = labelCount
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.checks = checks
@@ -120,10 +123,12 @@ extension GitHub {
         issueOrPullRequest(number: $num) {
           __typename
           ... on Issue {
-            number title url state createdAt updatedAt author { login } labels(first: 10) { nodes { name } }
+            number title url state createdAt updatedAt author { login }
+            labels(first: 10) { totalCount nodes { name } }
           }
           ... on PullRequest {
-            number title url state isDraft createdAt updatedAt author { login } labels(first: 10) { nodes { name } }
+            number title url state isDraft createdAt updatedAt author { login }
+            labels(first: 10) { totalCount nodes { name } }
             reviewDecision mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
           }
         }
@@ -152,7 +157,8 @@ extension GitHub {
       createdAt: node["createdAt"]?.string, updatedAt: node["updatedAt"]?.string,
       checks: pull ? nodes(node["commits"]).first?["commit"]?["statusCheckRollup"]?["state"]?.string : nil,
       reviewDecision: pull ? node["reviewDecision"]?.string.flatMap(ReviewDecision.init(rawValue:)) : nil,
-      mergeable: pull ? node["mergeable"]?.string.flatMap(Mergeable.init(rawValue:)) : nil)
+      mergeable: pull ? node["mergeable"]?.string.flatMap(Mergeable.init(rawValue:)) : nil,
+      labelCount: node["labels"]?["totalCount"]?.int)
   }
 }
 

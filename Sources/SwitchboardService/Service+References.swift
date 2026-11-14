@@ -38,9 +38,7 @@ extension Service {
   /// A session's PR or a cached issue that `ref` names. A cached issue's read time is the end of the last poll that
   /// read the Issues sources. It runs on the state queue.
   private func localReferenceDetails(_ ref: GitHubRef) -> ReferenceDetails? {
-    let pr = entries.values.lazy.compactMap(\.facts.pr).first {
-      $0.number == ref.number && Dependencies.sameRepo($0.repo, ref.repo)
-    }
+    let pr = entries.values.lazy.compactMap(\.facts.pr).first { ref.same(repo: $0.repo, number: $0.number) }
     if let pr { return ReferenceDetails(pr: pr) }
     guard let issue = issueCache.issues.first(where: { $0.id == ref.key }) else { return nil }
     var details = ReferenceDetails(issue: issue)
