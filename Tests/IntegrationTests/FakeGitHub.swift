@@ -4,20 +4,21 @@ import SwitchboardCore
 /// A GitHub API on 127.0.0.1 for one test. It answers the poller's GraphQL
 /// lookup, status, and body queries from the PR nodes and comment bodies that
 /// Fixtures/github-*.json recorded, which a test can change between polls,
-/// and its code owner queries from the configs and changed files that a test
-/// sets. It
+/// its code owner queries from the configs and changed files that a test
+/// sets, and its reference queries from the items that a test puts. It
 /// answers a REST GET from the routes that a test sets, and 404 for any other
 /// path. It also serves issues and contents files that GET, PATCH, and PUT
 /// change, as GitHub does. It records each request.
 final class FakeGitHub {
   struct Request {
     /// lookup, status, base, bodies, codeowners, files, approvals, actions,
-    /// mergeDetails, or issues.
+    /// mergeDetails, issues, or reference.
     var kind: String
     /// The node ids that a status, base, body, files, approvals, or actions query
     /// asked for, each lookup key as owner/name:branch or owner/name#number,
-    /// the owner/name:branch of a codeowners query, or the aliases of an issues
-    /// query, r<i> for a repository and o<i> for an org search.
+    /// the owner/name:branch of a codeowners query, the aliases of an issues
+    /// query, r<i> for a repository and o<i> for an org search, or the
+    /// lowercase owner/name#number of a reference query.
     var ids: [String]
     var authorization: String?
   }
@@ -143,6 +144,49 @@ final class FakeGitHub {
         "author": author.map { ["login": .string($0)] } ?? .null,
       ]
     }
+  }
+
+  /// By lowercase owner/name#number.
+  private var references: [String: FakeReference] = [:]
+
+  /// An issue or PR that the reference query reads. The values are GitHub's, such as `MERGED`.
+  struct FakeReference {
+    var repo: String
+    var number: Int
+    var pull = false
+    var title = "Totals round twice"
+    var state = "OPEN"
+    var draft = false
+    var author: String? = "robin-k"
+    var labels: [String] = []
+    var createdAt = "2026-11-01T10:00:00Z"
+    var updatedAt = "2026-11-10T10:00:00Z"
+    var checks: String?
+    var reviewDecision: String?
+    var mergeable: String?
+
+    var node: JSON {
+      var node: [String: JSON] = [
+        "__typename": .string(pull ? "PullRequest" : "Issue"), "number": .number(Double(number)),
+        "title": .string(title), "url": .string("https://github.com/\(repo)/\(pull ? "pull" : "issues")/\(number)"),
+        "state": .string(state), "createdAt": .string(createdAt), "updatedAt": .string(updatedAt),
+        "author": author.map { ["login": .string($0)] } ?? .null,
+        "labels": ["nodes": .array(labels.map { ["name": .string($0)] })],
+      ]
+      if pull {
+        node["isDraft"] = .bool(draft)
+        node["reviewDecision"] = reviewDecision.map(JSON.string) ?? .null
+        node["mergeable"] = mergeable.map(JSON.string) ?? .null
+        let rollup: JSON = checks.map { ["state": .string($0)] } ?? .null
+        node["commits"] = ["nodes": [["commit": ["statusCheckRollup": rollup]]]]
+      }
+      return .object(node)
+    }
+  }
+
+  /// Adds the item, or replaces the one with its repo and number, for the reference query.
+  func putReference(_ reference: FakeReference) {
+    lock.withLock { references["\(reference.repo.lowercased())#\(reference.number)"] = reference }
   }
 
   /// Adds the issue, or replaces the one with its repo and number. Its repo then exists for a repository source.
@@ -762,6 +806,22 @@ final class FakeGitHub {
             "nodes": .array(page.map(\.node)),
           ]
           data[alias] = match.1 == "r" ? ["issues": connection] : connection
+        }
+      } else if query.contains("issueOrPullRequest(") {
+        // Before the PullRequest selection, which the query's `... on PullRequest` would match.
+        kind = "reference"
+        let repo = "\(variables["o"]?.string ?? "")/\(variables["n"]?.string ?? "")".lowercased()
+        let key = "\(repo)#\(variables["num"]?.int ?? 0)"
+        ids = [key]
+        if !references.keys.contains(where: { $0.hasPrefix("\(repo)#") }) {
+          data["repository"] = .null
+          errors.append(["type": "NOT_FOUND", "path": ["repository"], "message": "Could not resolve to a Repository"])
+        } else if let reference = references[key] {
+          data["repository"] = ["issueOrPullRequest": reference.node]
+        } else {
+          data["repository"] = ["issueOrPullRequest": .null]
+          errors.append(
+            ["type": "NOT_FOUND", "path": ["repository", "issueOrPullRequest"], "message": "Could not resolve"])
         }
       } else if let selection = Selection(query: query, on: "PullRequest") {
         let prQuery: PRQuery

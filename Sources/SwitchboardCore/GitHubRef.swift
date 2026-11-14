@@ -22,6 +22,12 @@ public struct GitHubRef: Equatable, Hashable, Sendable {
     self.form = form
   }
 
+  /// `repo#number` when `repo` passes `Issues.validRepo` and `number` has 1 to 9 digits and is not 0.
+  public init?(repo: String, number: Int) {
+    guard Issues.validRepo(repo), Issues.number(String(number)) != nil else { return nil }
+    self.init(repo: repo, number: number, form: .shorthand)
+  }
+
   /// Reads `owner/name#123`, or a URL that `init(url:)` reads. Spaces and tabs around the text are dropped.
   public init?(parsing text: String) {
     self.init(trimmed: text.trimmingCharacters(in: .whitespaces))
@@ -87,7 +93,7 @@ extension GitHubRef {
   /// path before any query or fragment holds no `%` or `\`, no empty segment
   /// before the number, and no `.` or `..` segment. The number has no leading
   /// zero, and the owner and name pass `isLinkableRepo`.
-  init?(linkableURL text: String) {
+  public init?(linkableURL text: String) {
     guard let scheme = text.range(of: "://") else { return nil }
     let host = text[scheme.upperBound...]
     guard host.prefix(11).lowercased() == "github.com/" else { return nil }

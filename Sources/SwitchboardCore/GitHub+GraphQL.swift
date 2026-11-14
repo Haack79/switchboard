@@ -8,7 +8,7 @@ extension GitHub {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
-          id number url title state isDraft mergedAt closedAt mergeCommit { oid } body author { login }
+          id number url title state isDraft createdAt mergedAt closedAt mergeCommit { oid } body author { login }
           headRefName headRefOid baseRefName mergeable reviewDecision isMergeQueueEnabled isInMergeQueue
           repository { nameWithOwner defaultBranchRef { name } trunkConfig: object(expression: "HEAD:.trunk") { id } }
           labels(first: 20) { nodes { name } }
@@ -229,7 +229,7 @@ extension GitHub {
     // A decision that ReviewDecision doesn't know stays unread, so it never
     // reads as "no review required".
     let reviewDecision = node["reviewDecision"]?.string.flatMap(ReviewDecision.init(rawValue:))
-    let pr = PullRequest(
+    var pr = PullRequest(
       id: id, number: number, url: node["url"]?.string ?? "", repo: repo,
       title: node["title"]?.string ?? "", state: PRState(rawValue: node["state"]?.string ?? "") ?? .open,
       draft: node["isDraft"]?.bool ?? false, head: node["headRefName"]?.string ?? "",
@@ -248,6 +248,7 @@ extension GitHub {
       mergeQueue: node["isMergeQueueEnabled"]?.bool, inMergeQueue: node["isInMergeQueue"]?.bool,
       author: node["author"].map(login), codeOwnerRequests: node["reviewRequests"].flatMap(codeOwnerRequests),
       closesIssues: node["body"]?.string.flatMap { Issues.closingRefs(inBody: $0, repo: repo) })
+    pr.createdAt = node["createdAt"]?.string
     var seen: Set<String> = []
     let comments = (nodes(node["firstComments"]) + nodes(node["lastComments"])).compactMap(parseComment)
       .filter { seen.insert($0.id).inserted }.sorted { $0.createdAt < $1.createdAt }

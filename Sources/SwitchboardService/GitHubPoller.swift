@@ -640,7 +640,14 @@ final class GitHubPoller {
     let limit = GitHub.rateLimit(status: status, headers: headers, response: json, now: Date().timeIntervalSince1970)
     if let pause = limit.pause {
       let until = nowMs() + Int64(pause * 1000)
-      http.withLock { if graphQL { $0.graphQLPausedUntil = until } else { $0.restPausedUntil = until } }
+      // Requests run at once, so a later answer must not shorten the pause that an earlier one set.
+      http.withLock {
+        if graphQL {
+          $0.graphQLPausedUntil = max($0.graphQLPausedUntil, until)
+        } else {
+          $0.restPausedUntil = max($0.restPausedUntil, until)
+        }
+      }
     }
     if limit.limited { throw APIError("GitHub rate limit: \(GitHub.message(json))") }
     return (status, headers, body, json)

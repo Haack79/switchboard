@@ -163,6 +163,9 @@ public struct PullRequest: Codable, Equatable, Sendable {
   public var inMergeQueue: Bool?
   /// The PR author's login. nil when the poll did not read it.
   public var author: String?
+  /// When the PR was opened, as GitHub sends it. nil when the poll did not read it, as in events that an older sbd
+  /// recorded.
+  public var createdAt: String?
   /// The code owner groups that the changed files need. nil when the base
   /// branch requires no code owner review. Also nil when sbd cannot tell.
   public var codeOwners: CodeOwnerRequirement?
