@@ -622,12 +622,15 @@ import Testing
   @Test func theAnswerToAConversationsClearListsTheClearedIds() throws {
     let sbd = try Instance()
     let h = try handed(sbd)
+    let here = try waitInside(sbd, h.a, ["--here", "--kind", "date", "--until", "4h", "--note", "here"])
+    let aOwn = try #require(here.waits.first { $0.note == "here" }?.id, "\(here.waits)")
 
     let answer = try #require(JSON.parse(try sbd.sb(["wait", "--json", h.a.id, "--clear"], env: inside(h.a.id))))
 
     let cleared = (answer["cleared"]?.array ?? []).compactMap(\.string)
-    #expect(Set(cleared) == Set(h.fromA), "\(answer.text)")
-    #expect(cleared.count == h.fromA.count)
+    #expect(Set(cleared) == Set(h.fromA + [aOwn]), "\(answer.text)")
+    #expect(cleared.count == h.fromA.count + 1)
+    #expect(try sbd.get(h.a.id).waits.isEmpty)
   }
 
   /// How `sb wait --clear` names the conversation that Claude runs in.

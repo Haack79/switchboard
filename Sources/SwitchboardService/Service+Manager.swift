@@ -113,7 +113,7 @@ extension Service {
       let (open, them) = reports == 1 ? ("an open report", "it") : ("\(reports) open reports", "them")
       throw APIError(
         "the operator has \(open) that needs you, and removing it would drop \(them). "
-          + "Answer \(them) in the Inbox, or acknowledge \(them) with: sb ack \(name). Then run: sb rm \(name)")
+          + "Answer or acknowledge \(them) in the Inbox. Then run: sb rm \(name)")
     }
   }
 

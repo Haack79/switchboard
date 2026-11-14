@@ -10,10 +10,9 @@ func operatorCommand(_ a: Args) {
   default: break
   }
   if a.switches.contains("--log") { return printChatLog(a, ["operator": true]) }
-  var args: [String: JSON] = [:]
+  var args = fromArg
   let text = a.positional.joined(separator: " ")
   if !text.isEmpty { args["text"] = .string(text) }
-  if author == .claude, let from = ProcessInfo.processInfo.environment["SB_SESSION_ID"] { args["from"] = .string(from) }
   printOpenOrSend(a, call("operator", args, timeout: 300))
 }
 

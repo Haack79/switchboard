@@ -543,14 +543,14 @@ public final class Service {
       // the user's and close the operator's reports. Its launch trigger stays `send`. A sender that sbd no
       // longer knows goes unrecorded.
       let sender = try? lookup(["session": args["from"] ?? .null])
-      let from = sender == id ? nil : sender
       // A message from another session, such as the Manager, doesn't hold the session for the user.
       let fromSession = args["from"] != nil || args["insideClaude"]?.bool == true
       // claude's prompt shows an attached image as `[Image #n]` after the text, so the request keeps the text alone.
       let typed = (Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text)
         .trimmingCharacters(in: .whitespacesAndNewlines)
       let request = fromSession ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
-      let delivery = try send(id, text, trigger: from == nil ? .send : .session, from: sender)
+      let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
+      let delivery = try send(id, text, trigger: trigger, from: sender)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       return ["delivery": .string(delivery.rawValue)]
     case "dependency-resolved":

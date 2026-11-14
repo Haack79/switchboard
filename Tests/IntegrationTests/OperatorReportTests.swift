@@ -553,6 +553,19 @@ import Testing
     #expect(try operators(sbd).isEmpty)
   }
 
+  @Test func sbAckOfTheOperatorInsideClaudeIsRefusedAndLeavesTheReportOpen() throws {
+    let sbd = try Instance()
+    let c = try conversationHelpers.idleConversation(sbd, name: "Queue work", "hello")
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+
+    let refused = try sbd.run(["ack", "Operator"], env: inside(c.id))
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("inside Claude Code"), "\(refused.stderr)")
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
   @Test func rmOnTheOperatorSucceedsAfterTheUserAnswers() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)

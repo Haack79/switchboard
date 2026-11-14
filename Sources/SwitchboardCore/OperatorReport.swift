@@ -33,6 +33,12 @@ public struct OperatorReport: Codable, Equatable, Sendable {
 }
 
 extension SessionFacts {
+  /// Whether an `ack` now would close open reports. An ack doesn't close any reports while a prompt blocks the session.
+  public var ackClosesReports: Bool {
+    !openReports.isEmpty
+      && !Triage.hasBlockingPrompt(cards: cards, openPrompt: openPermission != nil || openQuestion != nil)
+  }
+
   /// Keeps the `needsYou` reports that are open. A message that the user wrote closes the reports recorded
   /// before it. Its `sent` event has no `by` and no `from`, so neither a message that sbd sent nor one from a
   /// session closes one. An `ack` closes them too, unless a prompt blocks the session: the Inbox then shows
@@ -46,7 +52,7 @@ extension SessionFacts {
       acknowledgment = nil
     case "sent" where event.data["by"] == nil && event.data["from"] == nil:
       openReports = []
-    case "ack" where !Triage.hasBlockingPrompt(cards: cards, openPrompt: openPermission != nil || openQuestion != nil):
+    case "ack" where ackClosesReports:
       openReports = []
     default:
       break
