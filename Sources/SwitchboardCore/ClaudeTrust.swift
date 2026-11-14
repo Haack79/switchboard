@@ -29,7 +29,7 @@ public enum ClaudeTrust {
     let own: String
     switch session.kind {
     case .work: return nil
-    case .manager: own = home.managerFolder
+    case .manager, .operator: own = home.managerFolder
     case .chat:
       guard let group = session.chat else { return nil }
       own = home.chatFolder(group)

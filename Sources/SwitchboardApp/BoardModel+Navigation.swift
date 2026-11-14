@@ -23,15 +23,21 @@ extension BoardModel {
   func requestListFocus() { listFocusRequests += 1 }
 
   /// Closes the search panel and selects `id` as a sidebar click does, even when the session has an Inbox
-  /// item. A work session's collapsed section opens, and so does the archive for an archived conversation, so
-  /// the sidebar shows the selected row.
+  /// item.
   func openFromSearch(_ id: String) {
     showingSearch = false
     guard let session = board.first(where: { $0.id == id }) else { return }
+    showInSidebar(session)
+  }
+
+  /// Selects the session as a sidebar click does. A work session's collapsed section opens, and so does the
+  /// archive for an archived conversation, so the sidebar shows the selected row.
+  func showInSidebar(_ session: SessionSummary) {
     if session.kind == .work { collapsed.remove(session.state) }
     if session.activity?.archived == true { showingArchive = true }
-    selection = id
-    requestListFocus()
+    selection = session.id
+    // A list focus request would take keyboard focus from an open sheet's fields.
+    if !presentingSheet { requestListFocus() }
   }
 
   /// The focused Board card while the Board still shows it, else the first card, as the Inbox falls back to

@@ -209,5 +209,7 @@ import Testing
       #expect(guide.contains("set a `session` wait on it"))
       #expect(!guide.contains("tell you themselves"))
     }
+    #expect(Manager.guide.contains("Your waits go to the operator"))
+    #expect(!Manager.guide.contains("resumes you once"))
   }
 }

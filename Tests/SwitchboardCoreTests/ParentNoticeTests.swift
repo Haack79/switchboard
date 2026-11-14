@@ -193,5 +193,6 @@ private func heard(_ prs: [Int?]) -> [ChildMark] {
     #expect(SessionKind.work.hearsChildNotices)
     #expect(!SessionKind.manager.hearsChildNotices)
     #expect(!SessionKind.chat.hearsChildNotices)
+    #expect(!SessionKind.operator.hearsChildNotices)
   }
 }

@@ -207,6 +207,7 @@ struct Sidebar: View {
     let activeAccount = model.activeAccountFolder
     List(selection: $model.selection) {
       ConversationsSection(activeAccount: activeAccount)
+      OperatorRow(activeAccount: activeAccount)
       ForEach(model.sidebarGroups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
