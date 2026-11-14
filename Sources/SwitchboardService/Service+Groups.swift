@@ -196,12 +196,12 @@ extension Service {
   }
 
   /// The group whose artifact list shows the session's artifacts: a work session's group, or the group whose
-  /// chat it is. The Manager has none.
+  /// chat it is. The Manager and the operator have none.
   func artifactGroup(of session: Session) -> String? {
     switch session.kind {
     case .work: session.group
     case .chat: session.chat
-    case .manager: nil
+    case .manager, .operator: nil
     }
   }
 
