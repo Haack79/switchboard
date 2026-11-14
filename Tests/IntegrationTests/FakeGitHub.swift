@@ -498,10 +498,8 @@ final class FakeGitHub {
     lock.withLock {
       nextComment += 1
       let id = "IC_fake\(nextComment)"
-      let bot = author.hasSuffix("[bot]")
       let node: JSON = [
-        "id": .string(id),
-        "author": ["__typename": bot ? "Bot" : "User", "login": .string(bot ? String(author.dropLast(5)) : author)],
+        "id": .string(id), "author": Self.author(author),
         "createdAt": .string(time), "lastEditedAt": .null, "includesCreatedEdit": false,
       ]
       let pr = prs.first { $0.value["number"]?.int == number }!.key

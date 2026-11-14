@@ -263,6 +263,11 @@ private func panelDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
   return (item.review?.threads?.shown ?? []).flatMap { MergeReviewPanel.drafts($0, in: item) }
 }
 
+/// The drafts that the Drafts section shows beside the panel.
+private func sectionDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
+  DecisionCard.sectionDrafts(item, held: DecisionCard.heldDrafts(item, listOpen: listOpen))
+}
+
 /// A Ready to merge item and how it places its drafts.
 struct DraftPlacement: Sendable, CustomTestStringConvertible {
   var label: String
@@ -316,7 +321,7 @@ private let draftPlacements: [DraftPlacement] = [
   func thePanelAndTheDraftsSectionTogetherShowEachDraftOnce(_ placement: DraftPlacement, _ listOpen: Bool) {
     let item = placement.item
 
-    let shown = panelDrafts(item, listOpen: listOpen) + DecisionCard.sectionDrafts(item, listOpen: listOpen)
+    let shown = panelDrafts(item, listOpen: listOpen) + sectionDrafts(item, listOpen: listOpen)
 
     #expect(shown.map(\.number).sorted() == item.drafts.map(\.number).sorted())
   }
@@ -325,7 +330,7 @@ private let draftPlacements: [DraftPlacement] = [
     let item = reviewItem(openThreads([1001]), [.ready(replyTarget), .checking])
 
     #expect(panelDrafts(item, listOpen: false).map(\.number) == [1])
-    #expect(DecisionCard.sectionDrafts(item, listOpen: false).map(\.number) == [2])
+    #expect(sectionDrafts(item, listOpen: false).map(\.number) == [2])
   }
 
   /// The panel is hidden, so a draft that a thread holds would otherwise show nowhere.
@@ -333,19 +338,19 @@ private let draftPlacements: [DraftPlacement] = [
     let item = reviewItem(openThreads([1001]), [.ready(replyTarget), .checking])
     #expect(item.review?.draftNumbers == [1])
 
-    #expect(DecisionCard.sectionDrafts(item, listOpen: true) == item.drafts)
+    #expect(sectionDrafts(item, listOpen: true) == item.drafts)
   }
 
   @Test func anItemWithoutAReviewKeepsEveryDraftInTheDraftsSection() {
     let item = reviewItem(openThreads([1001]), everyDraftPost, reviewed: false)
 
-    #expect(DecisionCard.sectionDrafts(item, listOpen: false) == item.drafts)
+    #expect(sectionDrafts(item, listOpen: false) == item.drafts)
   }
 
   @Test func theDraftsSectionKeepsTheItemsOrder() {
     let item = reviewItem(openThreads([1001]), [.checking, .ready(replyTarget), .copyOnly(reason: nil), .checking])
 
-    #expect(DecisionCard.sectionDrafts(item, listOpen: false).map(\.number) == [1, 3, 4])
+    #expect(sectionDrafts(item, listOpen: false).map(\.number) == [1, 3, 4])
   }
 
   /// A thread row draws its drafts as reply fields, as the Drafts section draws the same drafts.

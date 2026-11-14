@@ -31,8 +31,6 @@ private func ownedPR(_ groups: [[String]]?, requests: [String]?, verdicts: [Revi
 private let carolOnHead = sampleVerdict("carol", "APPROVED", on: samplePRHead)
 
 @Suite struct MergeReviewTests {
-  // Review threads
-
   @Test func withoutDetailsTheThreadCountsAreUnknown() {
     #expect(MergeReview(reviewedPR(nil)).threads == nil)
   }
@@ -57,8 +55,6 @@ private let carolOnHead = sampleVerdict("carol", "APPROVED", on: samplePRHead)
     #expect(review.threads == MergeReview.Threads(total: total, read: read, open: open))
   }
 
-  // Test plan
-
   @Test func withoutDetailsThereAreNoTestGaps() {
     #expect(MergeReview(reviewedPR(nil)).testGaps.isEmpty)
   }
@@ -74,8 +70,6 @@ private let carolOnHead = sampleVerdict("carol", "APPROVED", on: samplePRHead)
 
     #expect(MergeReview(reviewedPR(details(testGaps: [gap]))).testGaps == [gap])
   }
-
-  // Code owners
 
   @Test func aWaitingCodeOwnerGroupIsAGap() {
     let review = MergeReview(ownedPR([["@PostHog/team-flags"]], requests: []))
@@ -139,8 +133,6 @@ private let carolOnHead = sampleVerdict("carol", "APPROVED", on: samplePRHead)
 
     #expect(MergeReview(pr).codeOwnerGap == .waiting([["@PostHog/team-flags"]]))
   }
-
-  // Whole value
 
   @Test func aPRWithNothingToPauseHasNoGaps() {
     let review = MergeReview(reviewedPR(details(threads: 4, openThreads: 0)))
@@ -409,8 +401,6 @@ extension MergeReviewTests {
 /// the same text.
 extension MergeReviewTests {
   @Suite struct Rows {
-    // Review threads
-
     @Test(arguments: [
       (1, 1, 1, "1 open review thread"),
       (2, 2, 2, "2 open review threads"),
@@ -454,8 +444,6 @@ extension MergeReviewTests {
       #expect(!title.hasPrefix("0 ") && !title.contains(" 0 open"))
     }
 
-    // Before the read
-
     @Test(arguments: [MergeReview.Row.approval, .threads])
     func withoutDetailsTheRowSaysSbdHasNotReadThem(_ row: MergeReview.Row) throws {
       let review = MergeReview(approvedPR([headApproval], details: nil))
@@ -463,8 +451,6 @@ extension MergeReviewTests {
       let text = try #require(rowText(review, row))
       #expect(text.contains("sbd hasn't read the review details yet"), "\(text)")
     }
-
-    // Test plan
 
     @Test func testGapsGiveAnAmberTestPlanRowThatNamesEach() throws {
       let gaps = ["Not run: the database-backed suites.", "Tested by hand"]
@@ -479,8 +465,6 @@ extension MergeReviewTests {
     @Test func noTestGapHidesTheTestPlanRow() {
       #expect(rowText(MergeReview(approvedPR([headApproval])), .testPlan) == nil)
     }
-
-    // Other reviewers
 
     @Test func waitingCodeOwnerGroupsGiveTheRequiredWording() throws {
       let review = MergeReview(ownedPR([["@PostHog/team-flags"], ["@alice", "@bob"]], requests: []))
@@ -514,8 +498,6 @@ extension MergeReviewTests {
       #expect(rowText(MergeReview(approvedPR([headApproval])), .reviewers) == nil)
     }
 
-    // Approvals
-
     @Test func noApprovalWhereNoReviewIsRequiredSaysSo() throws {
       var pr = readyPR()
       pr.mergeDetails = MergeDetails()
@@ -546,8 +528,6 @@ extension MergeReviewTests {
 
       #expect(try #require(rowText(review, .testPlan)).contains(gap))
     }
-
-    // One list drives every path
 
     @Test(arguments: [
       approvedPR([headApproval]),

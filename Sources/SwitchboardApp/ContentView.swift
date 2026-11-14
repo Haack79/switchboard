@@ -964,19 +964,26 @@ extension BoardHolder {
   }
 }
 
-/// Who holds a Waiting card, in a capsule.
-struct HolderBadge: View {
-  let holder: BoardHolder
-
-  var body: some View {
-    Text(holder.badgeTitle)
-      .font(.caption2.bold())
+extension View {
+  /// Small secondary text on one line in a gray capsule.
+  func capsuleBadge() -> some View {
+    font(.caption2.bold())
       .lineLimit(1)
       .fixedSize()
       .padding(.horizontal, 5)
       .padding(.vertical, 1)
       .background(Capsule().fill(Color.secondary.opacity(0.15)))
       .foregroundStyle(.secondary)
+  }
+}
+
+/// Who holds a Waiting card, in a capsule.
+struct HolderBadge: View {
+  let holder: BoardHolder
+
+  var body: some View {
+    Text(holder.badgeTitle)
+      .capsuleBadge()
       .help("Held by \(holder.badgeTitle)")
       .accessibilityLabel("Held by \(holder.badgeTitle)")
   }

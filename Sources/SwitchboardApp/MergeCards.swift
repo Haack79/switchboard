@@ -44,9 +44,7 @@ func mergeBatchTitle(_ sessions: [SessionSummary]) -> String {
 func mergeBatchLine(_ session: SessionSummary) -> String? {
   guard let pr = session.pr else { return nil }
   let line = "\(session.mergeVerb) #\(pr.number) \(pr.title) (\(pr.repo))"
-  let amber = (session.triage?.review?.lines ?? []).filter(\.amber).map {
-    $0.title.prefix(1).lowercased() + $0.title.dropFirst()
-  }
+  let amber = (session.triage?.review?.amberLines ?? []).map { Triage.uncapitalized($0.title) }
   return amber.isEmpty ? line : "\(line); check first: \(amber.joined(separator: ", "))"
 }
 
@@ -54,7 +52,7 @@ func mergeBatchLine(_ session: SessionSummary) -> String? {
 /// amber review rows. A PR whose item has no review is not counted as amber.
 func mergeBatchHeader(_ sessions: [SessionSummary]) -> String {
   let header = "\(sessions.count) PRs are ready to merge"
-  switch sessions.filter({ $0.triage?.review?.amber.isEmpty == false }).count {
+  switch sessions.filter({ $0.triage?.review?.amberLines.isEmpty == false }).count {
   case 0: return header
   case 1: return "\(header), 1 needs a look"
   case let n: return "\(header), \(n) need a look"

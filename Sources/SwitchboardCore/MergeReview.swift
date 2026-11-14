@@ -151,9 +151,9 @@ public struct MergeReview: Codable, Equatable, Sendable {
 
   public init(_ pr: PullRequest) {
     let details = pr.mergeDetails
-    detailsRead = details != nil
+    let detailsRead = details != nil
     let reviews = details?.reviews ?? []
-    approvals = pr.verdicts.filter(\.isApproval)
+    let approvals = pr.verdicts.filter(\.isApproval)
       .sorted { ($0.submittedAt ?? "") > ($1.submittedAt ?? "") }
       .map { verdict in
         let detail = reviews.first {
@@ -164,13 +164,9 @@ public struct MergeReview: Codable, Equatable, Sendable {
           commitsSince: detail?.commitsSince, body: detail.flatMap { $0.body.isEmpty ? nil : $0.body },
           url: detail?.url, notes: detail?.notes ?? [], noteCount: detail?.noteCount ?? 0)
       }
-    noReviewRequired = approvals.isEmpty && pr.reviewDecision == nil && pr.reviewDecisionRead == true
-    threads = details.map {
-      Threads(
-        total: $0.threads, read: $0.threadsRead, open: $0.openThreads,
-        shown: ($0.threadDetails ?? []).map(Thread.init))
-    }
-    testGaps = details?.testGaps ?? []
+    let noReviewRequired = approvals.isEmpty && pr.reviewDecision == nil && pr.reviewDecisionRead == true
+    let testGaps = details?.testGaps ?? []
+    let codeOwnerGap: CodeOwnerGap?
     if let status = CodeOwnerStatus(pr), !status.satisfied {
       codeOwnerGap = .waiting(status.groups.filter { !$0.approved }.map(\.owners))
     } else if let requests = pr.codeOwnerRequests, !requests.isEmpty {
@@ -178,25 +174,33 @@ public struct MergeReview: Codable, Equatable, Sendable {
     } else {
       codeOwnerGap = nil
     }
-    pendingReviewers = pr.reviewRequests ?? []
-    changesRequestedBy = pr.changesRequestedBy
-    amber = []
-    amber = Row.allCases.filter { isAmber($0) }
-  }
-
-  /// Unknown counts as amber: a row is green only when sbd read that it is.
-  private func isAmber(_ row: Row) -> Bool {
-    switch row {
-    case .approval:
-      guard detailsRead, !approvals.contains(where: { $0.atHead == nil }) else { return true }
-      return approvals.isEmpty ? !noReviewRequired : !approvals.contains { $0.atHead == true }
-    case .threads:
-      guard let t = threads else { return true }
-      return t.open > 0 || t.read < t.total
-    case .reviewers:
-      return !pendingReviewers.isEmpty || codeOwnerGap != nil || !changesRequestedBy.isEmpty
-    case .testPlan:
-      return !testGaps.isEmpty
+    let pendingReviewers = pr.reviewRequests ?? []
+    let changesRequestedBy = pr.changesRequestedBy
+    self.approvals = approvals
+    self.noReviewRequired = noReviewRequired
+    self.detailsRead = detailsRead
+    threads = details.map {
+      Threads(
+        total: $0.threads, read: $0.threadsRead, open: $0.openThreads,
+        shown: ($0.threadDetails ?? []).map(Thread.init))
+    }
+    self.testGaps = testGaps
+    self.codeOwnerGap = codeOwnerGap
+    self.pendingReviewers = pendingReviewers
+    self.changesRequestedBy = changesRequestedBy
+    // A row is amber unless sbd read that it is green.
+    amber = Row.allCases.filter { row in
+      switch row {
+      case .approval:
+        guard detailsRead, !approvals.contains(where: { $0.atHead == nil }) else { return true }
+        return approvals.isEmpty ? !noReviewRequired : !approvals.contains { $0.atHead == true }
+      case .threads:
+        return details.map(\.mayHaveOpenThreads) ?? true
+      case .reviewers:
+        return !pendingReviewers.isEmpty || codeOwnerGap != nil || !changesRequestedBy.isEmpty
+      case .testPlan:
+        return !testGaps.isEmpty
+      }
     }
   }
 
@@ -204,14 +208,16 @@ public struct MergeReview: Codable, Equatable, Sendable {
   /// leaves them out, so each draft shows once.
   public var draftNumbers: [Int] { threads?.shown.flatMap(\.drafts) ?? [] }
 
-  /// Sets each shown thread's drafts: those whose resolved target is a reply
-  /// in that thread on the PR `repo`#`number`.
+  /// Sets each shown thread's drafts: those that name a comment to reply to
+  /// and whose resolved target is a reply in that thread on the PR
+  /// `repo`#`number`. A recorded post gives a draft a target even without
+  /// `replyTo`. The app draws such a draft without a Post button.
   mutating func attach(drafts: [InboxDraft], repo: String, number: Int) {
     guard var t = threads else { return }
     for i in t.shown.indices {
       guard let root = t.shown[i].rootId else { continue }
       t.shown[i].drafts = drafts.filter { draft in
-        guard let target = draft.post.target else { return false }
+        guard draft.replyTo != nil, let target = draft.post.target else { return false }
         return target.target.kind == .reviewComment && Dependencies.sameRepo(target.target.repo, repo)
           && target.target.pr == number && target.root == root
       }.map(\.number)
@@ -219,7 +225,10 @@ public struct MergeReview: Codable, Equatable, Sendable {
     threads = t
   }
 
-  public static let notRead = "sbd hasn't read the review details yet."
+  private static let notRead = "sbd hasn't read the review details yet."
+
+  /// The approval row's note while sbd hasn't read the review details. nil otherwise.
+  public var approvalNote: String? { detailsRead ? nil : Self.notRead }
 
   /// The rows that the panel shows, in panel order. The approval and threads
   /// rows always show. The other rows show only when amber. The text is
@@ -230,6 +239,9 @@ public struct MergeReview: Codable, Equatable, Sendable {
     if amber.contains(.testPlan) { lines.append(line(.testPlan, "The test plan has gaps", testGaps)) }
     return lines
   }
+
+  /// The amber rows of `lines`, which lists every amber row.
+  public var amberLines: [Line] { lines.filter(\.amber) }
 
   private func line(_ row: Row, _ title: String, _ details: [String]) -> Line {
     Line(row: row, amber: amber.contains(row), title: title, details: details)
@@ -247,7 +259,7 @@ public struct MergeReview: Codable, Equatable, Sendable {
       let body = a.body.map { ": " + oneLine($0, max: 200) } ?? ""
       return "\(a.author)\(a.bot == true ? " (bot)" : ""), \(a.place)\(notes)\(body)"
     }
-    return (detailsRead ? [] : [Self.notRead]) + lines
+    return (approvalNote.map { [$0] } ?? []) + lines
   }
 
   private var threadsTitle: String {

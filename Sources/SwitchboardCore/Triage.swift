@@ -717,6 +717,10 @@ public enum Triage {
     text.prefix(1).uppercased() + text.dropFirst()
   }
 
+  public static func uncapitalized(_ text: String) -> String {
+    text.prefix(1).lowercased() + text.dropFirst()
+  }
+
   // MARK: Order
 
   /// The list's groups, first to last: a held prompt or question; a decision,

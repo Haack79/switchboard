@@ -33,6 +33,9 @@ public struct MergeDetails: Codable, Equatable, Sendable {
   /// order. nil when the read lacks them.
   public var reviews: [ReviewDetail]?
 
+  /// Whether the read found an open thread or left some threads unread.
+  public var mayHaveOpenThreads: Bool { openThreads > 0 || threadsRead < threads }
+
   /// An unresolved review thread and its first comment.
   public struct ThreadDetail: Codable, Equatable, Sendable {
     /// The first comment's id, as `ReplyTarget.parse` reads it from `url`.
@@ -81,6 +84,9 @@ public struct MergeDetails: Codable, Equatable, Sendable {
       public var line: Int?
       public var excerpt: String
       public var url: String
+
+      /// Where the comment is: "a.swift:12", or "a.swift" without a line.
+      public var place: String { line.map { "\(path):\($0)" } ?? path }
     }
   }
 
@@ -350,13 +356,12 @@ extension GitHub {
   static func reviewDetail(_ node: JSON, commits: [String?]?) -> MergeDetails.ReviewDetail {
     let commit = node["commit"]?["oid"]?.string
     let body = node["body"]?.string ?? ""
-    let max = MergeDetails.maxReviewBody
     var since: Int?
     if let commit, let commits, let i = commits.lastIndex(of: commit) { since = commits.count - 1 - i }
     return MergeDetails.ReviewDetail(
       author: login(node["author"]), bot: isBot(node["author"]) ? true : nil, state: node["state"]?.string ?? "",
       commit: commit, commitsSince: since,
-      body: body.count <= max ? body : String(body.prefix(max - 1)) + "…", url: node["url"]?.string ?? "",
+      body: truncated(body, max: MergeDetails.maxReviewBody), url: node["url"]?.string ?? "",
       notes: nodes(node["comments"]).prefix(MergeDetails.maxNotes).map { note in
         MergeDetails.ReviewDetail.Note(
           path: note["path"]?.string ?? "", line: note["line"]?.int ?? note["originalLine"]?.int,

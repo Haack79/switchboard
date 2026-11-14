@@ -19,6 +19,7 @@ struct DecisionCard: View {
 
   var body: some View {
     let list = session.stepList
+    let held = Self.heldDrafts(item, listOpen: list != nil)
     VStack(alignment: .leading, spacing: Self.rowSpacing) {
       header
       VStack(alignment: .leading, spacing: 8) {
@@ -36,9 +37,9 @@ struct DecisionCard: View {
         }
       }
       if Self.showsReview(item, listOpen: list != nil), let review = item.review {
-        MergeReviewPanel(session: session, item: item, review: review).id(item.ref)
+        MergeReviewPanel(session: session, item: item, review: review, held: held).id(item.ref)
       }
-      DraftsSection(session: session, item: item, drafts: Self.sectionDrafts(item, listOpen: list != nil))
+      DraftsSection(session: session, item: item, drafts: Self.sectionDrafts(item, held: held))
       // A new item starts with its own open or closed Details.
       CardDetails(session: session, ref: item.ref, details: item.details, callouts: list == nil ? [] : item.callouts)
         .id(item.ref)
@@ -68,12 +69,17 @@ struct DecisionCard: View {
     item.review != nil && !listOpen
   }
 
-  /// The drafts that the Drafts section shows: every draft that no thread in
-  /// Before you merge holds, so each draft shows once.
-  static func sectionDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
-    guard showsReview(item, listOpen: listOpen) else { return item.drafts }
-    let held = MergeReviewPanel.heldDrafts(in: item)
-    return item.drafts.filter { !held.contains($0.number) }
+  /// The numbers of the drafts that the threads of Before you merge show.
+  /// None while the card hides the panel.
+  static func heldDrafts(_ item: TriageItem, listOpen: Bool) -> Set<Int> {
+    guard showsReview(item, listOpen: listOpen) else { return [] }
+    return Set(item.review?.draftNumbers ?? [])
+  }
+
+  /// The drafts that the Drafts section shows: every draft not in `held`, so
+  /// each draft shows once.
+  static func sectionDrafts(_ item: TriageItem, held: Set<Int>) -> [InboxDraft] {
+    item.drafts.filter { !held.contains($0.number) }
   }
 
   /// Whether the Action says that the item has no summary: a fallback item

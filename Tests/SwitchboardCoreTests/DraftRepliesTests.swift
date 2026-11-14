@@ -1109,7 +1109,17 @@ extension DraftRepliesTests {
     try expectEachDraftOnce(item)
   }
 
-  /// The draft's `post` decides the match, not its `replyTo` or a recorded
+  /// A recorded post gives a draft a target even without `replyTo`. The app
+  /// draws such a draft without a reply field, so it stays in the Drafts section.
+  @Test func aRecordedPostOfADraftWithoutReplyToStaysInTheDraftsSection() throws {
+    let item = try readyDrafted([draft(replyTo: nil)], [try resolvedEvent(4), try postingEvent(5)])
+    try #require(item.drafts.first?.post.target != nil)
+
+    #expect(try #require(item.review).draftNumbers.isEmpty)
+    try expectEachDraftOnce(item)
+  }
+
+  /// The draft's `post` decides the match, not the comment that its `replyTo` names or a recorded
   /// resolution. A `replyTo` on another PR makes the draft copy-only.
   @Test func aDraftWhoseReplyToNamesAnotherPRStaysInTheDraftsSection() throws {
     let item = try readyDrafted(

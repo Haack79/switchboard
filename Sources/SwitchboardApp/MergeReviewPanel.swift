@@ -6,23 +6,23 @@ import SwitchboardCore
 /// more to show. Rows start closed. The threads row opens when a thread holds
 /// one of the session's drafts, and again when a thread takes a new draft
 /// from the Drafts section, so the draft stays in view. Anyone who can comment on the PR wrote
-/// the bodies and excerpts, so they draw as plain text, and their links open
+/// the bodies and excerpts. They draw as plain text. Their links open
 /// only over https.
 struct MergeReviewPanel: View {
   let session: SessionSummary
   let item: TriageItem
   let review: MergeReview
+  /// The numbers of the drafts that the shown threads hold.
+  let held: Set<Int>
   @State private var open: Set<MergeReview.Row>
 
-  init(session: SessionSummary, item: TriageItem, review: MergeReview) {
+  init(session: SessionSummary, item: TriageItem, review: MergeReview, held: Set<Int>) {
     self.session = session
     self.item = item
     self.review = review
-    _open = State(initialValue: Self.heldDrafts(in: item).isEmpty ? [] : [.threads])
+    self.held = held
+    _open = State(initialValue: held.isEmpty ? [] : [.threads])
   }
-
-  /// The rows the panel shows, in panel order.
-  static func rows(_ review: MergeReview) -> [MergeReview.Line] { review.lines }
 
   /// A green checkmark, or the warning callout's icon and color.
   static func icon(amber: Bool) -> (name: String, color: Color) {
@@ -31,20 +31,12 @@ struct MergeReviewPanel: View {
     return (style.icon, style.color)
   }
 
-  static func botTag(_ bot: Bool?) -> String? { bot == true ? "bot" : nil }
-
   /// The URL to open, or nil unless it is https.
   static func link(_ url: String?) -> URL? { url.flatMap(URL.init(httpsOnly:)) }
 
-  /// The drafts that `thread` holds, in the item's order. Only a reply draft
-  /// moves into a thread. The Drafts section keeps every other draft.
+  /// The drafts that `thread` holds, in the item's order.
   static func drafts(_ thread: MergeReview.Thread, in item: TriageItem) -> [InboxDraft] {
-    item.drafts.filter { thread.drafts.contains($0.number) && DraftsSection.usesReplyView($0, in: item) }
-  }
-
-  /// The numbers of the drafts that the item's shown threads hold.
-  static func heldDrafts(in item: TriageItem) -> Set<Int> {
-    Set((item.review?.threads?.shown ?? []).flatMap { drafts($0, in: item) }.map(\.number))
+    item.drafts.filter { thread.drafts.contains($0.number) }
   }
 
   /// VoiceOver can't see the icon's color, so the label says whether the row needs a look.
@@ -55,9 +47,9 @@ struct MergeReviewPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       SectionTitle(text: "Before you merge")
-      ForEach(Self.rows(review), id: \.row) { row($0) }
+      ForEach(review.lines, id: \.row) { row($0) }
     }
-    .onChange(of: Self.heldDrafts(in: item)) { old, new in
+    .onChange(of: held) { old, new in
       if !new.isSubset(of: old) { open.insert(.threads) }
     }
   }
@@ -95,7 +87,7 @@ struct MergeReviewPanel: View {
     VStack(alignment: .leading, spacing: 10) {
       switch line.row {
       case .approval:
-        if !review.detailsRead { note(MergeReview.notRead) }
+        if let text = review.approvalNote { note(text) }
         ForEach(Array(review.approvals.enumerated()), id: \.offset) { ApprovalRow(approval: $1) }
       case .threads:
         if let text = review.threadsNote { note(text) }
@@ -124,7 +116,7 @@ private struct ApprovalRow: View {
     VStack(alignment: .leading, spacing: 4) {
       WrappingRow(spacing: 6) {
         InlineText(plain: approval.author, links: false).fontWeight(.semibold)
-        if let tag = MergeReviewPanel.botTag(approval.bot) { BotTag(text: tag) }
+        if approval.bot == true { BotTag() }
         Text(verbatim: approval.place).foregroundStyle(.secondary)
       }
       .font(.callout)
@@ -135,7 +127,7 @@ private struct ApprovalRow: View {
       }
       ForEach(Array(approval.notes.enumerated()), id: \.offset) { _, note in
         VStack(alignment: .leading, spacing: 2) {
-          Text(verbatim: note.line.map { "\(note.path):\($0)" } ?? note.path)
+          Text(verbatim: note.place)
             .font(.caption.monospaced()).foregroundStyle(.secondary)
             .lineLimit(1).truncationMode(.middle)
           InlineText(plain: note.excerpt, links: false).font(.callout).lineLimit(2).textSelection(.enabled)
@@ -174,7 +166,7 @@ private struct ThreadRow: View {
         .lineLimit(1).truncationMode(.middle)
       WrappingRow(spacing: 6) {
         InlineText(plain: thread.author, links: false)
-        if let tag = MergeReviewPanel.botTag(thread.bot) { BotTag(text: tag) }
+        if thread.bot == true { BotTag() }
         Text(verbatim: thread.replyLabel).foregroundStyle(.secondary)
       }
       .font(.callout)
@@ -192,14 +184,5 @@ private struct ThreadRow: View {
 }
 
 private struct BotTag: View {
-  let text: String
-
-  var body: some View {
-    Text(verbatim: text)
-      .font(.caption2.bold())
-      .padding(.horizontal, 5)
-      .padding(.vertical, 1)
-      .background(Capsule().fill(Color.secondary.opacity(0.15)))
-      .foregroundStyle(.secondary)
-  }
+  var body: some View { Text(verbatim: "bot").capsuleBadge() }
 }

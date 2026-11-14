@@ -24,7 +24,7 @@ extension GitHubPoller {
       if Attention.atMergeDecision(facts) {
         decisions.insert(id)
         if (cached?.read ?? .min) < read.polled {
-          due[id] = cached.map { $0.details.openThreads > 0 || $0.details.threadsRead < $0.details.threads } ?? true
+          due[id] = cached.map { $0.details.mayHaveOpenThreads } ?? true
         }
       } else if cached == nil, BoardColumn.wantsNudgeDetails(pr) {
         due[id] = false
@@ -51,8 +51,8 @@ extension GitHubPoller {
     var read: Set<String> = []
     for chunk in GitHub.chunks(ids.sorted()) {
       do {
-        let variables: JSON = ["ids": .array(chunk.map(JSON.string)), "threads": .bool(threads)]
-        let response = try request(GitHub.mergeDetailsQuery, variables, stats: &stats)
+        let response = try request(
+          GitHub.mergeDetailsQuery, idsVariable(chunk, with: ["threads": .bool(threads)]), stats: &stats)
         let nodes = response["data"]?["nodes"]?.array ?? []
         for (i, id) in chunk.enumerated() {
           guard i < nodes.count, let (head, details) = GitHub.parseMergeDetails(nodes[i]) else {

@@ -88,15 +88,8 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
   }
 
   @Test(arguments: panelShapes)
-  func thePanelShowsTheRowsThatTheReviewLists(_ shape: PanelShape) {
-    let review = MergeReview(shape.pr)
-
-    #expect(MergeReviewPanel.rows(review).map(\.row) == review.lines.map(\.row))
-  }
-
-  @Test(arguments: panelShapes)
   func theApprovalAndThreadsRowsAlwaysShow(_ shape: PanelShape) {
-    let rows = MergeReviewPanel.rows(MergeReview(shape.pr)).map(\.row)
+    let rows = MergeReview(shape.pr).lines.map(\.row)
 
     #expect(Array(rows.prefix(2)) == [.approval, .threads])
   }
@@ -106,19 +99,19 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
   func everyAmberRowShows(_ shape: PanelShape) {
     let review = MergeReview(shape.pr)
 
-    let shown = Set(MergeReviewPanel.rows(review).map(\.row))
+    let shown = Set(review.lines.map(\.row))
 
     #expect(Set(review.amber).isSubset(of: shown))
   }
 
   @Test func greenOtherReviewersAndTestPlanRowsAreHidden() {
-    let rows = MergeReviewPanel.rows(MergeReview(reviewedPR())).map(\.row)
+    let rows = MergeReview(reviewedPR()).lines.map(\.row)
 
     #expect(rows == [.approval, .threads])
   }
 
   @Test func anAmberOtherReviewersRowShows() {
-    let rows = MergeReviewPanel.rows(MergeReview(reviewedPR(reviewRequests: ["@carol"]))).map(\.row)
+    let rows = MergeReview(reviewedPR(reviewRequests: ["@carol"])).lines.map(\.row)
 
     #expect(rows == [.approval, .threads, .reviewers])
   }
@@ -126,15 +119,18 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
   @Test func anAmberTestPlanRowShows() {
     let pr = reviewedPR(details: MergeDetails(testGaps: ["- [ ] Check the e2e suite"], threadDetails: []))
 
-    #expect(MergeReviewPanel.rows(MergeReview(pr)).map(\.row) == [.approval, .threads, .testPlan])
+    #expect(MergeReview(pr).lines.map(\.row) == [.approval, .threads, .testPlan])
   }
 
   @Test(arguments: [MergeReview.Row.approval, .threads])
   func detailsNotReadSayTheReviewDetailsAreUnread(_ row: MergeReview.Row) throws {
-    let line = try #require(MergeReviewPanel.rows(MergeReview(reviewedPR(details: nil))).first { $0.row == row })
+    let review = MergeReview(reviewedPR(details: nil))
+    let line = try #require(review.lines.first { $0.row == row })
+    let note = row == .approval ? review.approvalNote : review.threadsNote
 
     #expect(line.amber)
-    #expect(line.details.contains(MergeReview.notRead))
+    #expect(note == "sbd hasn't read the review details yet.")
+    #expect(line.details.contains(try #require(note)))
   }
 
   // MARK: Icons
@@ -143,7 +139,7 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
   func eachRowIsAmberExactlyWhenTheReviewListsIt(_ shape: PanelShape) {
     let review = MergeReview(shape.pr)
 
-    for line in MergeReviewPanel.rows(review) {
+    for line in review.lines {
       #expect(line.amber == review.amber.contains(line.row), "\(line.row)")
     }
   }
@@ -183,15 +179,6 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
   }
 
   // MARK: Author and reply labels
-
-  @Test func aBotAuthorGetsABotTag() {
-    #expect(MergeReviewPanel.botTag(true) == "bot")
-  }
-
-  @Test(arguments: [Bool?.none, false])
-  func anAuthorThatIsNotABotGetsNoTag(_ bot: Bool?) {
-    #expect(MergeReviewPanel.botTag(bot) == nil)
-  }
 
   @Test func aRepliedThreadSaysYouReplied() {
     #expect(shownThread(reviewThread(replied: true)).replyLabel == "you replied")
@@ -281,7 +268,7 @@ private func approval(atHead: Bool?, commitsSince: Int? = nil, url: String? = ni
 
   @Test(arguments: panelShapes)
   func eachRowsLabelReadsItsTitle(_ shape: PanelShape) {
-    for line in MergeReviewPanel.rows(MergeReview(shape.pr)) {
+    for line in MergeReview(shape.pr).lines {
       #expect(MergeReviewPanel.accessibilityLabel(line).contains(line.title), "\(line.row)")
     }
   }
