@@ -40,7 +40,7 @@ struct InlineText: View {
         if listed.insert(match.id).inserted {
           lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
         }
-      case .session?, nil: break
+      case .session?, .reference?, nil: break
       }
       result += part
     }

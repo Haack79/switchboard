@@ -100,6 +100,11 @@ private let unchangedPlain: [String] = [
   "%seb4ec", "seb4ec%", "+seb4ec", "seb4ec+",
   // The same shapes with the removed session's id.
   "sq7kpm-claude", "sessions/sq7kpm/claude.sh", "sq7kpm.jsonl",
+  // An id inside a URL that Markdown did not link. The URL runs to the next whitespace, as a GFM autolink does.
+  "https://example.com/?seb4ec", "https://example.com/a,seb4ec", "https://example.com/(seb4ec)",
+  "https://example.com/x?a;seb4ec", "see https://example.com/?seb4ec now", "http://example.com/a,seb4ec",
+  "(https://example.com/x)seb4ec", "see https://example.com/x,seb4ec", "https://github.com/o/r/pull/new/x,seb4ec",
+  "https://example.com/?sq7kpm",
 ]
 
 /// Unstyled text and the pieces the matcher gives for it, written as described in `expectedPieces`.
@@ -185,6 +190,12 @@ private let changedPlain: [(String, String)] = [
   ("seb4ec (zsh-startup-for-switchboard-v2)", "⟨seb4ec⟩ (zsh-startup-for-switchboard-v2)"),
   ("seb4ec (zsh-startup-for-switchboard and more)", "⟨seb4ec⟩ (zsh-startup-for-switchboard and more)"),
   ("sgcctv (seb4ec)", "⟨sgcctv⟩ (⟨seb4ec⟩)"),
+  // A URL ends at whitespace, and GFM leaves trailing punctuation out of it.
+  ("https://example.com/x seb4ec", "https://example.com/x ⟨seb4ec⟩"),
+  ("see https://example.com/x, seb4ec", "see https://example.com/x, ⟨seb4ec⟩"),
+  ("see https://example.com/x. seb4ec", "see https://example.com/x. ⟨seb4ec⟩"),
+  ("(https://example.com/x) seb4ec", "(https://example.com/x) ⟨seb4ec⟩"),
+  ("seb4ec https://example.com/?seb4ec", "⟨seb4ec⟩ https://example.com/?seb4ec"),
 ]
 
 /// Markdown that the matcher must leave exactly as `MarkdownBlock.parse` gives it.
@@ -204,6 +215,9 @@ private let unchangedMarkdown: [String] = [
 ]
 
 private let docsLink = "https://example.com/docs"
+
+/// A repository that a bare `#123` would refer to. No row holds a reference, so the rows give the same pieces with it.
+private let contextRepo = "haacked/switchboard"
 
 /// Markdown and the pieces the matcher gives for it.
 private let changedMarkdown: [(String, [Piece])] = [
@@ -342,6 +356,20 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(names.replacingIDs(in: input) == input)
   }
 
+  @Test(arguments: unchangedPlain)
+  func plainTextThatMustNotChangePassesThroughWithAContextRepo(_ input: String) {
+    let text = MarkdownText(stringLiteral: input)
+
+    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == unchanged(text))
+  }
+
+  @Test(arguments: changedPlain)
+  func plainTextIdsBecomeNamesWithAContextRepo(_ input: String, _ expected: String) {
+    #expect(
+      InlineMentions(names: names, repo: contextRepo).pieces(MarkdownText(stringLiteral: input))
+        == expectedPieces(expected))
+  }
+
   @Test(arguments: [
     ("Fix the stream reader", "Fix the ⟨stream⟩ reader"),
     ("streams", "streams"),
@@ -368,6 +396,20 @@ private let changedMarkdown: [(String, [Piece])] = [
     let text = try paragraph(markdown)
 
     #expect(InlineMentions(names: names, repo: nil).pieces(text) == expected)
+  }
+
+  @Test(arguments: unchangedMarkdown)
+  func markdownThatMustNotChangePassesThroughWithAContextRepo(_ markdown: String) throws {
+    let text = try paragraph(markdown)
+
+    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == unchanged(text))
+  }
+
+  @Test(arguments: changedMarkdown)
+  func markdownIdsBecomeNamesWithAContextRepo(_ markdown: String, _ expected: [InlineMentions.Piece]) throws {
+    let text = try paragraph(markdown)
+
+    #expect(InlineMentions(names: names, repo: contextRepo).pieces(text) == expected)
   }
 
   /// A code block never becomes a paragraph's `MarkdownText`, so its ids never reach `pieces`.
