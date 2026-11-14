@@ -349,7 +349,7 @@ private func chatSummary(
       e("UserPromptSubmit", ["prompt": "three"]),
     ]
     for cut in 1..<events.count {
-      try store.delete(session: chat.id, name: chat.name)
+      try store.delete(session: SessionRemoval(id: chat.id, name: chat.name))
       try store.save(chat)
       for event in events[..<cut] { try store.append(event) }
       _ = try Snapshots.refresh(store, chat, build: "b1")

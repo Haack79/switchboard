@@ -1045,3 +1045,237 @@ extension WaitResolution {
     #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4 h"))
   }
 }
+
+// MARK: Handing a conversation's wait to the operator
+
+let handoffConversation = kindSession(.manager)
+let cacheFix = Wait.SessionTarget(id: "c1", name: "Plan the cache fix")
+
+/// A request that Claude in a conversation sends for a wait of the kind, with no `then`.
+func byClaude(_ kind: Wait.Kind, target: String? = nil) -> WaitRequest {
+  var r = minimalRequest(kind)
+  if let target { r.target = target }
+  r.by = Author.claude.rawValue
+  return r
+}
+
+/// Whether sbd hands off the wait that `request` builds, when the request names `named` and no operator exists
+/// unless `operatorID` names one.
+func handsOffRequest(
+  _ request: WaitRequest, named: Session = handoffConversation, here: Bool = false, operatorID: String? = nil
+) throws -> Bool {
+  handsOff(try buildWait(request), namedSession: named, here: here, operatorID: operatorID)
+}
+
+/// PR targets that name no repository, so the wait reads the waiter's own repository.
+let bareTargets = ["1204", "#1204", "pr:1204", "pr:#1204"]
+/// PR targets that name their repository.
+let qualifiedTargets = [
+  "PostHog/posthog#1204", "pr:PostHog/posthog#1204", "https://github.com/PostHog/posthog/pull/1204",
+  "https://github.com/PostHog/posthog/pull/1204/files",
+]
+
+/// Decision 5: sbd stores a wait on the operator only when the wait resolves the
+/// same way on the operator as it would on the conversation, and only the
+/// recipient of the message changes.
+@Suite struct HandoffWaitTests {
+  // The row that hands off. Each test below changes one input of it.
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func claudesResumeWaitOnAConversationThatReadsNothingOfTheWaiterHandsOff(_ kind: Wait.Kind) throws {
+    #expect(try handsOffRequest(byClaude(kind)))
+  }
+
+  // Named-session kind (a)
+
+  @Test(arguments: [SessionKind.work, .chat, .operator])
+  func aWaitNamedOnASessionThatIsNotAConversationStays(_ kind: SessionKind) throws {
+    #expect(try !handsOffRequest(byClaude(.date), named: kindSession(kind)))
+  }
+
+  // then (b)
+
+  @Test(arguments: [Wait.Then.notify, .caller])
+  func aWaitThatDoesNotResumeStays(_ then: Wait.Then) throws {
+    var r = byClaude(.session)
+    r.then = then.rawValue
+
+    #expect(try !handsOffRequest(r))
+  }
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func anExplicitResumeHandsOff(_ kind: Wait.Kind) throws {
+    var r = byClaude(kind)
+    r.then = Wait.Then.resume.rawValue
+
+    #expect(try handsOffRequest(r))
+  }
+
+  /// A manual wait notifies unless the request says otherwise.
+  @Test func aManualWaitWithTheDefaultThenStays() throws {
+    var r = byClaude(.manual)
+    r.note = "ask Alex"
+
+    #expect(try !handsOffRequest(r))
+  }
+
+  /// A request with no kind is a manual wait, so it notifies too.
+  @Test func aRequestWithNoKindStays() throws {
+    let r = WaitRequest(note: "ask Alex", by: Author.claude.rawValue)
+
+    #expect(try !handsOffRequest(r))
+  }
+
+  @Test func aManualWaitThatResumesHandsOff() throws {
+    var r = byClaude(.manual)
+    r.note = "ask Alex"
+    r.until = "2h"
+    r.then = Wait.Then.resume.rawValue
+
+    #expect(try handsOffRequest(r))
+  }
+
+  // by (c)
+
+  @Test(arguments: [Author.you.rawValue, nil] as [String?])
+  func aWaitThatTheUserSetStays(_ by: String?) throws {
+    var r = byClaude(.session)
+    r.by = by
+
+    #expect(try !handsOffRequest(r))
+  }
+
+  // here (d)
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func hereKeepsTheWaitOnTheConversation(_ kind: Wait.Kind) throws {
+    #expect(try !handsOffRequest(byClaude(kind), here: true))
+  }
+
+  // What the wait reads (e)
+
+  @Test(arguments: prKinds)
+  func aPRWaitWithNoTargetStays(_ kind: Wait.Kind) throws {
+    #expect(try !handsOffRequest(byClaude(kind)))
+  }
+
+  @Test(arguments: prKinds, bareTargets)
+  func aPRWaitOnABarePRNumberStays(_ kind: Wait.Kind, _ target: String) throws {
+    #expect(try !handsOffRequest(byClaude(kind, target: target)))
+  }
+
+  @Test(arguments: prKinds, qualifiedTargets)
+  func aPRWaitOnAPRThatNamesItsRepositoryHandsOff(_ kind: Wait.Kind, _ target: String) throws {
+    #expect(try handsOffRequest(byClaude(kind, target: target)))
+  }
+
+  // A session wait on the operator
+
+  @Test func aSessionWaitOnTheOperatorStays() throws {
+    #expect(try !handsOffRequest(byClaude(.session), operatorID: flagCache.id))
+  }
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func aWaitThatDoesNotTargetAnExistingOperatorHandsOff(_ kind: Wait.Kind) throws {
+    #expect(try handsOffRequest(byClaude(kind), operatorID: "op1"))
+  }
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func aRequestThatFailsEveryConditionStays(_ kind: Wait.Kind) throws {
+    var r = byClaude(kind)
+    r.by = Author.you.rawValue
+    r.then = Wait.Then.notify.rawValue
+
+    #expect(try !handsOffRequest(r, named: kindSession(.work), here: true))
+  }
+}
+
+/// `readsWaiter` answers, for every kind, whether the wait's resolution reads
+/// the session that holds it.
+@Suite struct ReadsWaiterWaitTests {
+  @Test(arguments: Wait.Kind.allCases, [nil, pr1204, posthog1204] as [Wait.PullRequest?])
+  func aWaitReadsTheWaiterOnlyForAPRKindWithNoRepository(_ kind: Wait.Kind, _ pr: Wait.PullRequest?) {
+    let wait = waitOn(kind, pr: prKinds.contains(kind) ? pr : nil)
+
+    #expect(wait.readsWaiter == (prKinds.contains(kind) && pr?.repository == nil))
+  }
+
+  @Test(arguments: [Wait.Kind.session, .date, .manual])
+  func aWaitThatSbdResolvesItselfReadsNothingOfTheWaiter(_ kind: Wait.Kind) {
+    #expect(!waitOn(kind, session: flagCache, until: farFuture).readsWaiter)
+  }
+}
+
+/// A handed-off wait's message names the conversation that handed it off.
+@Suite struct HandedFromMessageWaitTests {
+  func handedFrom(_ wait: Wait) -> Wait {
+    var w = wait
+    w.handedFrom = cacheFix
+    return w
+  }
+
+  static let kid = Wait.SessionTarget(id: "k1", name: "kid")
+
+  @Test func aHandedOffWaitsMessageNamesTheConversationBeforeTheNote() {
+    let wait = handedFrom(waitOn(.session, session: Self.kid, state: .done, note: "remove its worktree"))
+
+    #expect(
+      wait.message(outcome: "it did")
+        == #"Switchboard: kid to reach Done: it did. For Manager conversation "Plan the cache fix". Your note: remove its worktree."#
+    )
+  }
+
+  @Test func aHandedOffWaitWithNoNoteEndsWithTheConversation() {
+    let wait = handedFrom(waitOn(.session, session: Self.kid, state: .done))
+
+    #expect(
+      wait.message(outcome: "it did")
+        == #"Switchboard: kid to reach Done: it did. For Manager conversation "Plan the cache fix"."#)
+  }
+
+  /// A manual wait's summary is its note, so the message does not repeat it.
+  @Test func aHandedOffManualWaitNamesTheConversationAndDoesNotRepeatTheNote() {
+    var wait = handedFrom(waitOn(.manual, note: "ask Alex"))
+    wait.then = .resume
+
+    #expect(
+      wait.message(outcome: "time to recheck")
+        == #"Switchboard: ask Alex: time to recheck. For Manager conversation "Plan the cache fix"."#)
+  }
+
+  @Test func aHandedOffWaitsMessageEndsTheOutcomeSentenceOnce() {
+    let wait = handedFrom(waitOn(.ci, pr: posthog1204, note: "merge when green."))
+
+    #expect(
+      wait.message(outcome: "the checks failed!")
+        == #"Switchboard: CI on PostHog/posthog#1204: the checks failed! For Manager conversation "Plan the cache fix". Your note: merge when green."#
+    )
+  }
+
+  @Test func aWaitThatWasNotHandedOffNamesNoConversation() {
+    let wait = waitOn(.session, session: Self.kid, state: .done, note: "remove its worktree")
+
+    #expect(wait.handedFrom == nil)
+    #expect(
+      wait.message(outcome: "it did") == "Switchboard: kid to reach Done: it did. Your note: remove its worktree.")
+  }
+
+  @Test func aHandedOffWaitKeepsHandedFromThroughJSON() throws {
+    let wait = handedFrom(waitOn(.date, until: farFuture, note: "loop tick"))
+
+    let decoded = try JSONCoding.convert(JSON(encoding: wait), to: Wait.self)
+
+    #expect(decoded == wait)
+    #expect(decoded.handedFrom == cacheFix)
+  }
+
+  /// A wait stored before handoffs existed has no `handedFrom` key.
+  @Test func aStoredWaitWithoutHandedFromLoadsWithNone() throws {
+    var json = try #require(try JSON(encoding: waitOn(.date, until: farFuture)).object)
+    json["handedFrom"] = nil
+
+    let decoded = try JSONCoding.convert(JSON.object(json), to: Wait.self)
+
+    #expect(decoded.handedFrom == nil)
+  }
+}

@@ -138,6 +138,9 @@ final class BoardModel: ObservableObject {
   /// Artifact plans whose Apply or Reject is on its way to sbd. Their buttons
   /// stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringArtifacts: Set<String> = []
+  /// The artifacts, as `<group> <url>`, that "Use as plan" is attaching. Their buttons stay disabled until sbd
+  /// replies, so a second click can't ask the group's chat to read the artifact again.
+  @Published var usingAsPlan: Set<String> = []
   /// The decision requests that wait for sbd: `<session>/<number>` for an
   /// answer, and `<session>/submit` and `<session>/discard`.
   @Published var deciding: Set<String> = []
@@ -246,7 +249,8 @@ final class BoardModel: ObservableObject {
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)
   /// A plan apply waits for sbd's GitHub poll and then writes to GitHub, so
-  /// it runs apart from other actions too.
+  /// it runs apart from other actions too. An artifact attach runs here because
+  /// it can wait for the group's chat to start.
   private let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
   private var timer: Timer?
   /// Whether Switchboard is the active app. A chat's replies count as read only while it is. Tests replace it.
@@ -370,6 +374,11 @@ final class BoardModel: ObservableObject {
 
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
+
+  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
+  var operatorSession: SessionSummary? {
+    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  }
 
   /// A state's sessions in the sidebar, each one followed by its children.
   struct SidebarGroup: Identifiable {
@@ -689,6 +698,13 @@ final class BoardModel: ObservableObject {
     }
   }
 
+  /// Selects the operator. sbd creates it when none exists, and resumes a stopped one.
+  func openOperator() {
+    perform("operator", [:]) { value in
+      if let id = value["id"]?.string { self.selectUnlisted(id) }
+    }
+  }
+
   /// Selects the group's chat. The first time, it starts the chat. A chat
   /// that exists resumes only when the user sends it a message or shows its terminal.
   func openChat(_ group: String) {
@@ -855,6 +871,30 @@ final class BoardModel: ObservableObject {
       },
       finally: { self.answeringArtifacts.remove(plan) })
   }
+
+  /// Attaches the artifact as a plan of the group. The group's chat reads it, which may start the chat. The
+  /// request can wait on that start, so it runs on `planWrites`. `then` lists the plan on the group unless a
+  /// refresh already did, so the row shows "Plan" as soon as its button turns back on.
+  func useArtifactAsPlan(url: String, group: String) {
+    let key = usingAsPlanKey(url: url, group: group)
+    guard usingAsPlan.insert(key).inserted else { return }
+    perform(
+      "plan-attach", ["doc": .string(url), "group": .string(group)], on: planWrites,
+      then: { result in
+        guard let doc = try? JSONCoding.convert(result, to: PlanDocument.self),
+          let g = self.groups.firstIndex(where: { $0.id == group }),
+          self.groups[g].plans?.contains(where: { $0.id == doc.id }) != true
+        else { return }
+        self.groups[g].plans = (self.groups[g].plans ?? []) + [PlanSummary(doc)]
+      },
+      finally: { self.usingAsPlan.remove(key) })
+  }
+
+  func isUsingAsPlan(url: String, group: String) -> Bool {
+    usingAsPlan.contains(usingAsPlanKey(url: url, group: group))
+  }
+
+  private func usingAsPlanKey(url: String, group: String) -> String { "\(group) \(url)" }
 
   private func followUpKey(plan: String, row: String) -> String { "\(plan) \(row)" }
 

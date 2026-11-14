@@ -39,9 +39,9 @@ public struct PlanSource: Codable, Equatable, Hashable, Sendable {
     let file = path?.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: ["/"])
     if file?.isEmpty == true { throw APIError("--path needs a file in the PR") }
     if let url = URL(string: text), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" {
-      if let artifact = PlanSource.artifact(url) {
+      if let artifact = ArtifactLink.normalized(text) {
         if file != nil { throw APIError("--path names a file in a PR, and \(text) is an artifact") }
-        self = artifact
+        self.init(kind: .artifact, url: artifact)
         return
       }
       let parts = url.path.split(separator: "/").map(String.init)
@@ -62,23 +62,6 @@ public struct PlanSource: Codable, Equatable, Hashable, Sendable {
     }
     if file != nil { throw APIError("--path names a file in a PR, and \(text) is a local file") }
     self.init(kind: .file, path: standard)
-  }
-
-  private static let artifactIdCharacters = CharacterSet(
-    charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
-
-  /// An artifact from a `https://claude.ai/artifact/<id>` or
-  /// `https://claude.ai/code/artifact/<id>` link, without its query or fragment.
-  /// The id may hold only ASCII letters, digits, `-`, and `_`. `url.path` is
-  /// percent-decoded, and the URL goes into the text of the chat's turns, so
-  /// an id with `%0A` would add lines to those turns.
-  static func artifact(_ url: URL) -> PlanSource? {
-    let parts = url.path.split(separator: "/").map(String.init)
-    guard url.host?.lowercased() == "claude.ai", url.scheme?.lowercased() == "https", parts.count >= 2,
-      [["artifact"], ["code", "artifact"]].contains(Array(parts.dropLast())),
-      parts.last!.unicodeScalars.allSatisfy(artifactIdCharacters.contains)
-    else { return nil }
-    return PlanSource(kind: .artifact, url: "https://claude.ai/" + parts.joined(separator: "/"))
   }
 
   /// `pull` is nil for `owner/name#N`, which names an issue or a PR.
