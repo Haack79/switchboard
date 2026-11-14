@@ -15,17 +15,23 @@ extension Wait {
   }
 }
 
-/// What the session view's side panel shows: the session's open waits and its notes.
+/// What the session view's side panel shows: the session's open waits, its notes, and its artifacts.
 struct SidePanel {
   static let width: CGFloat = 240
   static let noWaits = "No open waits."
   static let noNotes = "No notes."
+  static let noArtifacts = "No artifacts."
 
   let waitsTitle: String
   let hasNotes: Bool
   let notesTitle: String
   /// sbd resolves no wait on its own while the session is marked Done. Nil unless such a session has an open wait.
   let doneCaption: String?
+  /// The title counts only the artifacts that no delete removed.
+  let artifactsTitle: String
+  /// True when the session lists any artifact, a removed one included.
+  let hasArtifacts: Bool
+  let artifacts: [SessionArtifact]
 
   init(_ s: SessionSummary) {
     waitsTitle = Self.title("Waits", s.waits.count)
@@ -33,6 +39,9 @@ struct SidePanel {
     notesTitle = Self.title("Notes", s.notes.count)
     doneCaption =
       s.markedDone && !s.waits.isEmpty ? "Waits don't resolve on their own while the session is marked Done." : nil
+    artifacts = (s.artifacts ?? []).newestFirst
+    hasArtifacts = !artifacts.isEmpty
+    artifactsTitle = Self.title("Artifacts", artifacts.count(where: { $0.removed == nil }))
   }
 
   private static func title(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) (\(count))" : name }
@@ -65,6 +74,25 @@ struct SidePanelView: View {
         title(panel.notesTitle)
         if !panel.hasNotes { Text(SidePanel.noNotes).foregroundStyle(.secondary) }
         NotesList(session: session)
+        Divider()
+        title(panel.artifactsTitle)
+        if !panel.hasArtifacts { Text(SidePanel.noArtifacts).foregroundStyle(.secondary) }
+        ForEach(panel.artifacts, id: \.url) { artifact in
+          VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              // The title is untrusted text from the tool result, so it never renders as Markdown.
+              Text(verbatim: artifact.title).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+              Spacer(minLength: 0)
+              if artifact.removed == nil, let url = URL(string: artifact.url) {
+                Button("Open") { NSWorkspace.shared.open(url) }
+                  .buttonStyle(.link)
+                  .help(artifact.url)
+                  .accessibilityLabel("Open artifact \(artifact.title)")
+              }
+            }
+            Text(artifact.caption()).font(.caption).foregroundStyle(.secondary)
+          }
+        }
       }
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
