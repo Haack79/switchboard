@@ -321,6 +321,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var dependencies: [Dependency]?
   /// The plans attached to the session and to its group, or nil when there are none.
   public var plans: [PlanSummary]?
+  /// The artifacts that the session published, in first-publish order, or nil when there are none.
+  public var artifacts: [SessionArtifact]?
   /// The review that a docket row tracks, or nil for any other session.
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.

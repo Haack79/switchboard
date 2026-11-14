@@ -55,7 +55,7 @@ import Testing
     try store.save(s)
     try #require(try Self.dump("\(dir)/sb.db").contains("rk3x9p"))
 
-    try store.delete(session: s.id, name: s.name)
+    try store.delete(session: SessionRemoval(id: s.id, name: s.name))
 
     #expect(try store.sessions().isEmpty)
     let dump = try Self.dump("\(dir)/sb.db")
@@ -78,7 +78,7 @@ import Testing
     try store.save(s)
     try store.save(other)
 
-    try store.delete(session: s.id, name: s.name)
+    try store.delete(session: SessionRemoval(id: s.id, name: s.name))
 
     #expect(try store.sessions() == [other])
   }
