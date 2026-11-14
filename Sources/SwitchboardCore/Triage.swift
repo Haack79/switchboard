@@ -21,6 +21,8 @@ public enum TriageSource: String, Codable, Sendable {
   case summary
   /// The last paragraph of the reply, because no summary exists.
   case fallback
+  /// The operator's open reports that need the user.
+  case report
 }
 
 /// What a click on an option does. Each one runs a request that sbd already
@@ -419,6 +421,8 @@ public enum Triage {
       return (item(facts, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live))
     case .blockingPrompts:
       return (promptItem(facts, verdict), nil, false)
+    case .operatorItems:
+      return (operatorItem(facts, verdict), nil, false)
     }
   }
 
@@ -723,6 +727,14 @@ public enum Triage {
     switch s.kind.inboxItems {
     case .all: true
     case .blockingPrompts: s.triage != nil && hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+    case .operatorItems:
+      // The summary doesn't say which rule gave a `.rule` item. sbd gives the operator one only for the wait
+      // rule or a dialog without a card, and both reach the Inbox.
+      switch s.triage?.source {
+      case .report, .rule: true
+      case .card: hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+      case .session, .summary, .fallback, nil: false
+      }
     }
   }
 

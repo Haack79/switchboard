@@ -41,6 +41,9 @@ public enum Manager {
     - Nobody reads your chat. End each turn with at most one line.
     - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do.
     - A loop's `date` waits are yours. Before you re-arm one, run `sb get \(operatorName)` and check that no other wait for that loop is open.
+    - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
+    - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
+    - Don't message a conversation to ask or tell it something. It would wake for it. Report instead.
     """
 
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.

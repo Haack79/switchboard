@@ -192,6 +192,10 @@ public struct MCPToolServer: Sendable {
       return try client.call("group-suggest", pick(args, ["accept"]))
     case "plan_artifact":
       return try planArtifact(args, scoped)
+    case "report":
+      var request = pick(args, ["text", "needsYou", "session"])
+      if let caller { request["caller"] = .string(caller) }
+      return try client.call("operator-report", request)
     default:
       throw APIError("no tool \(name)")
     }

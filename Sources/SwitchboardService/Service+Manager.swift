@@ -52,7 +52,9 @@ extension Service {
 
   /// The `operator` request: sends `text` to the operator, or without text
   /// opens it. It creates the operator when none exists. The answer is the
-  /// operator's summary, with `delivery` when it took text.
+  /// operator's summary, with `delivery` when it took text. `from` names the
+  /// session whose Claude sent the text, so the text doesn't close the
+  /// operator's reports.
   func operatorRequest(_ args: JSON) -> Response {
     do {
       let text = args["text"]?.string.flatMap { $0.isEmpty ? nil : $0 }
@@ -63,7 +65,7 @@ extension Service {
       }
       // An open right after the creation could read the starting claude as stopped and launch it again.
       if let created, text == nil { return .success(try JSON(encoding: created)) }
-      return try openOrSend(id, text)
+      return try openOrSend(id, text, from: args["from"]?.string)
     } catch {
       return .failure("\(error)")
     }
@@ -99,17 +101,56 @@ extension Service {
     return oldest.id
   }
 
-  /// Refuses to remove the operator while it has an open wait, because the removal would drop the wait
-  /// without a message.
+  /// Refuses to remove the operator while it has an open wait or an open `needsYou` report, because the
+  /// removal would drop it without a message.
   func refuseOperatorRemoval(_ id: String) throws {
-    guard let session = entries[id]?.session, session.kind == .operator else { return }
-    let count = session.waits?.count ?? 0
-    guard count > 0 else { return }
+    guard let e = entries[id], e.session.kind == .operator else { return }
     let name = Manager.operatorName
-    let (waits, them) = count == 1 ? ("wait", "it") : ("waits", "them")
-    throw APIError(
-      "the operator has \(count) open \(waits), and removing it would drop \(them). "
-        + "Clear \(them) first with: sb wait \(name) --clear. Then run: sb rm \(name)")
+    let count = e.session.waits?.count ?? 0
+    if count > 0 {
+      let (waits, them) = count == 1 ? ("wait", "it") : ("waits", "them")
+      throw APIError(
+        "the operator has \(count) open \(waits), and removing it would drop \(them). "
+          + "Clear \(them) first with: sb wait \(name) --clear. Then run: sb rm \(name)")
+    }
+    let reports = e.facts.openReports.count
+    if reports > 0 {
+      let (open, them) = reports == 1 ? ("an open report", "it") : ("\(reports) open reports", "them")
+      throw APIError(
+        "the operator has \(open) that needs you, and removing it would drop \(them). "
+          + "Answer \(them) in the Inbox, or acknowledge \(them) with: sb ack \(name). Then run: sb rm \(name)")
+    }
+  }
+
+  /// The `operator-report` request, which records a report on the operator. Only the operator may make it,
+  /// so `caller` must be the operator's id. `session` names the session that the report is about.
+  func operatorReport(_ args: JSON) throws -> JSON {
+    guard let caller = args["caller"]?.string, let id = operatorID(), caller == id else {
+      throw APIError("only the operator records reports. Send the operator a message with: sb operator <text>")
+    }
+    let text = oneLine(args["text"]?.string ?? "", max: TriageCard.lineLength)
+    guard !text.isEmpty else { throw APIError("a report needs text") }
+    var data: [String: JSON] = ["text": .string(text), "needsYou": .bool(args["needsYou"]?.bool == true)]
+    if let about = args["session"]?.string { data["about"] = .string(try lookup(["session": .string(about)])) }
+    let event = try recordStored(id, OperatorReport.event, .object(data))
+    return try reportRow(OperatorReport(event)!, of: id)
+  }
+
+  /// The `operator-reports` request: the operator's reports, oldest first, each with whether it is open. It
+  /// lists the newest `Event.defaultLimit`, or every one with `all`. Without an operator, the list is empty.
+  func operatorReports(_ args: JSON) throws -> JSON {
+    guard let id = operatorID() else { return [] }
+    let limit = args["all"]?.bool == true ? Int.max : Event.defaultLimit
+    let events = try store.events(session: id, kind: OperatorReport.event, limit: limit, newest: true)
+    return .array(try events.compactMap(OperatorReport.init).map { try reportRow($0, of: id) })
+  }
+
+  /// The report as `sb operator reports` lists it, with `open` and the name of the session that it is about.
+  private func reportRow(_ report: OperatorReport, of id: String) throws -> JSON {
+    var row = try JSON(encoding: report).object ?? [:]
+    row["open"] = .bool(entries[id]!.facts.openReports.contains { $0.id == report.id })
+    if let name = report.about.flatMap({ entries[$0]?.session.name }) { row["aboutName"] = .string(name) }
+    return .object(row)
   }
 
   /// Where a relaunch for changed MCP servers stands.

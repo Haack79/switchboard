@@ -474,11 +474,15 @@ extension Attention {
   /// its recheck time, naming each overdue wait. Otherwise Waiting while the
   /// session has an open wait.
   static func waitVerdict(_ session: Session, _ facts: SessionFacts, now: Int64) -> Verdict? {
-    if let outcome = facts.waitOutcome { return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info) }
+    if let outcome = facts.waitOutcome {
+      return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info, byWaitRule: true)
+    }
     guard let waits = session.waits, !waits.isEmpty else { return nil }
     let overdue = waits.filter { $0.isOverdue(now: now) }
     if !overdue.isEmpty {
-      return Verdict(state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info)
+      return Verdict(
+        state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info,
+        byWaitRule: true)
     }
     return Verdict(state: .waiting, reason: oneLine(waits.map(\.line).joined(separator: "; ")))
   }

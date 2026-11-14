@@ -162,5 +162,13 @@ extension MCPToolServer {
         "text": string("The same text, when you did not save it to a file. Send file or text, not both."),
         "version": string("The version or update time that the Artifact tool showed, if any."),
       ], required: ["plan", "kind"]),
+    Tool(
+      "report",
+      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it.",
+      [
+        "text": string("What happened, or the question for the user, in one line."),
+        "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
+        "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
+      ], required: ["text"]),
   ]
 }

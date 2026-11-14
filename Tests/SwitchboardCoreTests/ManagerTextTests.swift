@@ -24,4 +24,13 @@ import Testing
   @Test func theOperatorPromptSaysToCheckTheOperatorBeforeItReArmsALoop() {
     #expect(Manager.operatorPrompt.contains("`sb get \(Manager.operatorName)`"), "\(Manager.operatorPrompt)")
   }
+
+  @Test func theOperatorPromptSaysToReportWithTheReportToolAndNeedsYou() {
+    #expect(Manager.operatorPrompt.contains("`report`"), "\(Manager.operatorPrompt)")
+    #expect(Manager.operatorPrompt.contains("`needsYou`"), "\(Manager.operatorPrompt)")
+  }
+
+  @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
+    #expect(Manager.operatorPrompt.contains("CLAUDE.md"), "\(Manager.operatorPrompt)")
+  }
 }

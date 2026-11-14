@@ -177,6 +177,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Set from a `link_down` until the next `link_up`: sbd can't read the session's host, so the events that
   /// would update these facts are not arriving.
   public var unread: UnreadHost?
+  /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
+  public var openReports: [OperatorReport] = []
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -364,6 +366,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     applyAutoContinue(event, userPrompt: userPrompt)
     applyAcknowledgment(event, promptsBefore: promptsBefore)
     applyRequest(event, userPrompt: userPrompt, turnEnded: turnWasRunning && !turnRunning)
+    applyReports(event)
   }
 
   private mutating func startTurn(_ t: Int64) {
@@ -430,6 +433,9 @@ public struct Verdict: Equatable, Sendable {
   /// True for the Ready to merge verdict, the only one that asks the user to
   /// merge or enqueue the PR. Its summary says what the PR does.
   public var summarizesPR = false
+  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
+  /// blocking prompts, the operator's Inbox admits only this one.
+  public var byWaitRule = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -516,6 +522,7 @@ public enum Attention {
         state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
     }
     if let v = openPromptVerdict(facts) { return v }
+    if let v = reportVerdict(session, facts) { return v }
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning {
       if let tool = facts.runningTool {

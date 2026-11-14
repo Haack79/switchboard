@@ -64,6 +64,14 @@ let usage = """
                                   conversations hand it, creating it the first
                                   time. With text, send it a message
     operator --log                the operator's last messages
+    operator report [--needs-you] [--session S] <text>
+                                  record a report. Only the operator runs it.
+                                  --needs-you puts it in the Inbox until you
+                                  answer the operator or acknowledge it. S is
+                                  the session that it is about
+    operator reports [--all]      list the operator's reports, oldest first, and
+                                  whether each is open. --all lifts the limit of
+                                  \(Event.defaultLimit)
     get <session>                 show one session
     slash <session>               the commands that the session's claude takes
                                   after /: its skills, its commands, and Claude

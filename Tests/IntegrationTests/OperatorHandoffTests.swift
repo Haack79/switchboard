@@ -315,12 +315,15 @@ import Testing
     #expect(try operators(sbd).isEmpty)
   }
 
+  /// The wait names Done because an operator with no prompt, or an idle one, is already in Needs you. A wait
+  /// for Needs you would resolve at the next tick. sbd refuses to mark the operator done.
   @Test func aSessionWaitWhoseTargetIsTheOperatorStaysOnTheConversation() throws {
     let sbd = try Instance()
     let c = try conversation(sbd)
     let op = try operatorHelpers.openOperator(sbd)
+    try #require(try sbd.get(op.id).state != .done)
 
-    let answer = try waitInside(sbd, c, ["--kind", "session", "--target", "Operator", "--state", "needs_you"])
+    let answer = try waitInside(sbd, c, ["--kind", "session", "--target", "Operator", "--state", "done"])
 
     #expect(answer.id == c.id)
     let waits = try sbd.get(c.id).waits

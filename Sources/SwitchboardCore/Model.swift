@@ -178,7 +178,8 @@ public enum SessionKind: String, Codable, Sendable {
   public var inboxItems: InboxItems {
     switch self {
     case .work: .all
-    case .manager, .chat, .operator: .blockingPrompts
+    case .manager, .chat: .blockingPrompts
+    case .operator: .operatorItems
     }
   }
 }
@@ -190,6 +191,9 @@ public enum InboxItems: Sendable {
   /// sessions it manages, and those sessions have their own items. A reply
   /// waits on the user's next message, which the chat pane takes.
   case blockingPrompts
+  /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
+  /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
+  case operatorItems
 }
 
 /// One entry in the event log: a hook payload, or something sbd did.

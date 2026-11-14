@@ -1007,3 +1007,102 @@ enum WaitingCause: String, CaseIterable, Sendable {
     #expect(v == Verdict(state: .needsYou, reason: "read its last reply and decide what's next"))
   }
 }
+
+/// The operator's report verdict. It nests under `TriageOperatorTests`, so
+/// that suite's filter runs it.
+extension TriageOperatorTests {
+  @Suite struct ReportVerdicts {
+    func verdict(_ events: [Event], waits: [Wait] = []) -> Verdict {
+      Attention.evaluate(operatorSession(waits: waits), opFacts(events), now: 1000)
+    }
+
+    @Test func anOpenReportPutsTheOperatorInNeedsYouWithItsText() {
+      let v = verdict(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
+
+      #expect(v == Verdict(state: .needsYou, reason: "PR #12 is green. Merge it?"))
+    }
+
+    @Test(arguments: [(2, "b (and 1 more)"), (3, "c (and 2 more)"), (4, "d (and 3 more)")] as [(Int, String)])
+    func severalOpenReportsGiveTheLatestTextAndTheCountOfTheRest(_ count: Int, _ reason: String) {
+      let texts = ["a", "b", "c", "d"].prefix(count)
+      let reports = texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) }
+
+      let v = verdict(opIdle + reports)
+
+      #expect(v == Verdict(state: .needsYou, reason: reason))
+    }
+
+    @Test func aClosedReportLeavesTheCount() {
+      let v = verdict(opIdle + [opReport(10, "a"), opAck(11), opReport(12, "b")])
+
+      #expect(v == Verdict(state: .needsYou, reason: "b"))
+    }
+
+    @Test func aReportWithoutNeedsYouGivesNoReportVerdict() {
+      let v = verdict(opIdle + [opReport(10, "Removed the kid's worktree.", needsYou: false)])
+
+      #expect(v.reason != "Removed the kid's worktree.")
+    }
+
+    /// What the operator holds besides its report, which the report verdict comes before.
+    enum Beside: CaseIterable, Sendable {
+      case openWait, overdueWait, notifyOutcome, questionReply, offerReply, informationalReply, noPrompt
+
+      func events() throws -> [Event] {
+        switch self {
+        case .openWait, .overdueWait, .informationalReply: opIdle
+        case .notifyOutcome: opIdle + [try opNotified(5)]
+        case .questionReply: [opPrompt(1, "go"), opStop(2, proseQuestion)]
+        case .offerReply: [opPrompt(1, "go"), opStop(2, "I removed the worktree. Want me to top up the queue?")]
+        case .noPrompt: []
+        }
+      }
+
+      var waits: [Wait] {
+        switch self {
+        case .openWait: [SwitchboardCoreTests.openWait]
+        case .overdueWait: [SwitchboardCoreTests.overdueWait]
+        default: []
+        }
+      }
+    }
+
+    @Test(arguments: Beside.allCases) func theReportVerdictComesBeforeTheWaitAndReplyVerdicts(_ beside: Beside) throws {
+      let without = verdict(try beside.events(), waits: beside.waits)
+      try #require(without.reason != "Merge it?")
+
+      let v = verdict(try beside.events() + [opReport(10, "Merge it?")], waits: beside.waits)
+
+      #expect(v == Verdict(state: .needsYou, reason: "Merge it?"))
+    }
+
+    @Test func aReportMadeAfterTheUsersMessageStillWins() {
+      let v = verdict(opIdle + [opUserSent(9, "go on")] + opTurn(10, "go on") + [opReport(20, "Merge it?")])
+
+      #expect(v == Verdict(state: .needsYou, reason: "Merge it?"))
+    }
+
+    @Test func aReportClosedByTheUsersMessageGivesTheReplyVerdictAgain() {
+      let v = verdict(opIdle + [opReport(10, "Merge it?"), opUserSent(11, "yes")] + opTurn(12, "yes"))
+
+      #expect(v == Attention.replyVerdict("Done: yes"))
+    }
+
+    @Test func aReportClosedByAckGivesTheWaitVerdictAgain() {
+      let v = verdict(opIdle + [opReport(10, "Merge it?"), opAck(11)], waits: [overdueWait])
+
+      #expect(v.state == .needsYou)
+      #expect(v.reason == overdueWait.overdueLine)
+    }
+
+    /// Only the operator has a report verdict. The same facts on another kind give the verdict they gave before.
+    @Test(arguments: [SessionKind.work, .manager, .chat]) func anotherKindIgnoresReports(_ kind: SessionKind) {
+      let events = opIdle + [opReport(10, "Merge it?")]
+
+      let v = Attention.evaluate(kindSession(kind), opFacts(events), now: 1000)
+
+      #expect(v == Attention.evaluate(kindSession(kind), opFacts(opIdle), now: 1000))
+      #expect(v.reason != "Merge it?")
+    }
+  }
+}
