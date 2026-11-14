@@ -36,7 +36,8 @@ extension BoardModel {
     if session.kind == .work { collapsed.remove(session.state) }
     if session.activity?.archived == true { showingArchive = true }
     selection = session.id
-    requestListFocus()
+    // A list focus request would take keyboard focus from an open sheet's fields.
+    if !presentingSheet { requestListFocus() }
   }
 
   /// The focused Board card while the Board still shows it, else the first card, as the Inbox falls back to

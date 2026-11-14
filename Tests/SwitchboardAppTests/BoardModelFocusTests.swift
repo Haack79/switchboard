@@ -197,6 +197,18 @@ private func tombstone(_ id: String) -> RemovedSession {
     #expect(sheet.isOpen(on: model))
   }
 
+  /// A list focus request would take keyboard focus from the sheet's fields.
+  @Test(arguments: Sheet.allCases)
+  func focusWithAnOpenSheetLeavesListFocusAlone(_ sheet: Sheet) {
+    let model = appliedModel([workSession(targetID)])
+    sheet.open(on: model)
+    let before = model.listFocusRequests
+
+    model.focus(targetID)
+
+    #expect(model.listFocusRequests == before)
+  }
+
   @Test(arguments: Sheet.allCases)
   func focusWithAnOpenSheetChangesTheSelection(_ sheet: Sheet) {
     let model = appliedModel([workSession(targetID)])
@@ -226,6 +238,41 @@ private func tombstone(_ id: String) -> RemovedSession {
 
     #expect(model.selection == targetID)
     #expect(model.actionError == nil)
+    #expect(model.pendingFocus == nil)
+  }
+
+  /// The main window starts the refreshes, so a focus that waits for one opens a closed window.
+  @Test func focusOnAnUnlistedSessionShowsTheWindowOnce() {
+    let model = offlineModel()
+    let shown = Counter()
+    model.showWindow = { shown.increment() }
+
+    model.focus(targetID)
+
+    #expect(shown.value == 1)
+    #expect(model.pendingFocus == targetID)
+  }
+
+  /// `ls` leaves out an unstarted follow-up, so the next refresh must read `followup-ls` to list one.
+  @Test func aFocusThatWaitsMakesTheNextRefreshReadTheFollowups() throws {
+    let model = appliedModel([workSession(otherID)])
+    model.refresh()
+    try #require(!model.followupsDue)
+
+    model.focus(targetID)
+
+    #expect(model.followupsDue)
+  }
+
+  /// `sb focus` usually runs while the user has a session open.
+  @Test func aPendingFocusStartedWithAnotherSessionSelectedSelectsTheSessionWhenListed() {
+    let model = appliedModel([workSession(otherID), workSession(thirdID)])
+    model.selection = thirdID
+    model.focus(targetID)
+
+    model.apply(.success([workSession(otherID), workSession(thirdID), workSession(targetID)]), followups: nil)
+
+    #expect(model.selection == targetID)
     #expect(model.pendingFocus == nil)
   }
 
@@ -372,6 +419,18 @@ private func tombstone(_ id: String) -> RemovedSession {
     #expect(model.actionError?.contains("removed") == true)
   }
 
+  /// The error banner shows only in the window, so a closed window opens for it.
+  @Test func focusOnARemovedSessionShowsTheWindowOnce() {
+    let model = offlineModel()
+    model.apply(.success([workSession(otherID)]), followups: nil, removed: [tombstone(goneID)])
+    let shown = Counter()
+    model.showWindow = { shown.increment() }
+
+    model.focus(goneID)
+
+    #expect(shown.value == 1)
+  }
+
   @Test func focusOnARemovedSessionLeavesNoPendingFocusAndSelectsNothing() {
     let model = offlineModel()
     model.apply(.success([workSession(otherID)]), followups: nil, removed: [tombstone(goneID)])
@@ -447,5 +506,17 @@ private func tombstone(_ id: String) -> RemovedSession {
 
     #expect(model.selection == nil)
     #expect(model.pendingFocus == nil)
+  }
+
+  /// The error banner shows only in the window, so a closed window opens for it.
+  @Test func aMalformedSwitchboardLinkShowsTheWindowOnce() throws {
+    let model = appliedModel([workSession(targetID)])
+    let shown = Counter()
+    model.showWindow = { shown.increment() }
+    let url = try #require(URL(string: malformedLinks[0]))
+
+    model.openExternalLink(url)
+
+    #expect(shown.value == 1)
   }
 }

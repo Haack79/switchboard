@@ -3,8 +3,8 @@ import SwitchboardCore
 import Testing
 
 /// `sb focus` resolves the reference through sbd and opens the session's link with `$SB_OPEN`. Each test points
-/// `SB_OPEN` at a stub that records its arguments. sb runs from the build folder here, outside an app bundle, so
-/// the stub gets the URL with no `-a`.
+/// `SB_OPEN` at a stub that records its arguments. sb runs from the build folder outside an app bundle, so the
+/// stub gets the URL with no `-a`, except in the test that copies sb into an app.
 @Suite(.blocking(timeLimit: .seconds(120))) struct FocusTests {
   /// An `open` stand-in. It writes each argument on its own line and ends each call with a `--end--` line. It
   /// prints `stderr` to standard error and exits with `status`.
@@ -221,5 +221,30 @@ import Testing
 
     #expect(r.status == 0, "\(r.stderr)")
     #expect(open.calls() == [[SessionLink.url(for: child.id).absoluteString]])
+  }
+
+  // MARK: Inside the app
+
+  /// `open -a` keeps Launch Services from picking a build/Switchboard.app copy in another checkout.
+  @Test func focusFromAnSbInsideTheAppSendsTheLinkToThatApp() throws {
+    let sbd = try Instance()
+    let open = try FakeOpen(in: sbd)
+    let s = try sbd.new(name: "flag-cache-race")
+    let app = URL(fileURLWithPath: "\(sbd.home.path)/Switchboard.app")
+    let macOS = app.appendingPathComponent("Contents/MacOS")
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    let plist: [String: Any] = [
+      "CFBundleIdentifier": AppBundle.identifier, "CFBundleExecutable": "sb", "CFBundlePackageType": "APPL",
+    ]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+      .write(to: app.appendingPathComponent("Contents/Info.plist"))
+    let sb = macOS.appendingPathComponent("sb").path
+    try FileManager.default.copyItem(atPath: "\(Instance.bin)/sb", toPath: sb)
+
+    let r = try runCommand(sb, ["focus", s.id], env: sbd.environment(open.env))
+
+    #expect(r.status == 0, "\(r.stderr)")
+    #expect(
+      open.calls() == [["-a", app.resolvingSymlinksInPath().path, SessionLink.url(for: s.id).absoluteString]])
   }
 }

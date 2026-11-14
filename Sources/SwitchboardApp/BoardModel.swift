@@ -266,6 +266,8 @@ final class BoardModel: ObservableObject {
   private static let focusRefreshLimit = 3
   private var loaded = false
   private var followupsRead = Date.distantPast
+  /// Whether the next refresh reads `followup-ls` and the other lists that it reads every 5 s.
+  var followupsDue: Bool { Date().timeIntervalSince(followupsRead) >= 5 }
   /// sbd reads the usage every few minutes, so the app asks once a minute.
   private var usageRead = Date.distantPast
 
@@ -442,7 +444,7 @@ final class BoardModel: ObservableObject {
 
   func refresh(followups: Bool = false) {
     let client = client
-    let readFollowups = followups || Date().timeIntervalSince(followupsRead) >= 5
+    let readFollowups = followups || followupsDue
     if readFollowups { followupsRead = Date() }
     let readUsage = Date().timeIntervalSince(usageRead) >= 60
     if readUsage { usageRead = Date() }
@@ -901,10 +903,11 @@ final class BoardModel: ObservableObject {
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
   var showWindow: (() -> Void)?
 
-  /// Selects the session as a sidebar click does and brings its window forward. A closed window opens first. A
-  /// session that the app does not list is selected without the sidebar changes.
+  /// Selects the listed session as a sidebar click does and brings its window forward. A closed window opens
+  /// first. A session that the app does not list is left alone.
   func reveal(_ id: String) {
-    if let session = summary(id) { showInSidebar(session) } else { selection = id }
+    guard let session = summary(id) else { return }
+    showInSidebar(session)
     showWindow?()
   }
 
@@ -914,7 +917,7 @@ final class BoardModel: ObservableObject {
   /// Services never hands the app's own link to another copy of the app.
   func openSessionLink(_ url: URL) -> Bool {
     guard url.scheme?.lowercased() == SessionLink.scheme else { return false }
-    if let id = SessionLink.id(from: url), sessionNames.entry(id)?.removed == false { reveal(id) }
+    if let id = SessionLink.id(from: url) { reveal(id) }
     return true
   }
 
@@ -922,21 +925,26 @@ final class BoardModel: ObservableObject {
   func openExternalLink(_ url: URL) {
     guard let id = SessionLink.id(from: url) else {
       actionError = "Switchboard can't open \(url.absoluteString)"
+      // The error banner shows only in the window.
+      showWindow?()
       return
     }
     focus(id)
   }
 
-  /// Shows the session as a sidebar click does, over the search panel and
-  /// Recent Places. A session that no refresh has listed yet, such as one that
-  /// `sb new` just made or any session at a cold launch, is focused when a
-  /// refresh lists it.
+  /// Closes the search panel and Recent Places, then shows the session as a
+  /// sidebar click does. A session that no refresh has listed yet, such as one
+  /// that `sb new` just made or any session at a cold launch, is focused when
+  /// a refresh lists it.
   func focus(_ id: String) {
     showingSearch = false
     showingRecentPlaces = false
     focusWait = nil
     if !settleFocus(id) {
       focusWait = (id, 0, selection)
+      // An unstarted follow-up shows only in `followup-ls`. A refresh reads
+      // that list every 5 s, which can be after the wait gives up.
+      followupsRead = .distantPast
       // A closed window has not started the refreshes that list the session.
       showWindow?()
     }
@@ -949,6 +957,7 @@ final class BoardModel: ObservableObject {
       reveal(id)
     } else if sessionNames.entry(id)?.removed == true {
       actionError = "Session \(id) was removed"
+      showWindow?()
     } else {
       return false
     }

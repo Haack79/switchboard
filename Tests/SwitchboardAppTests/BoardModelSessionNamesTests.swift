@@ -338,20 +338,6 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(model.sessions.contains { $0.id == liveID })
     }
 
-    /// `reveal` shows the session in the sidebar as a click does, so the collapsed Not started section opens.
-    @Test func aLinkToAFollowupThatHasNotStartedOpensItsSection() throws {
-      let model = offlineModel()
-      var followup = unstartedFollowup(liveID)
-      followup.name = liveName
-      model.apply(.success([named(otherID, otherName)]), followups: [followup], removed: nil)
-      try #require(!model.sidebarOrder.contains(liveID))
-
-      _ = model.openSessionLink(SessionLink.url(for: liveID))
-
-      #expect(model.selection == liveID)
-      #expect(model.sidebarOrder.contains(liveID))
-    }
-
     /// The app keeps a link to a session that is gone and does nothing. Launch Services would otherwise hand the
     /// link to whichever build of the app it picks.
     @Test(arguments: [goneID, "sxxxxx"])
@@ -480,11 +466,12 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
     }
 
     @Test(arguments: LinkPath.allCases)
-    func aLiveLinkToAFollowupThatHasNotStartedOpensItsSection(_ path: LinkPath) {
+    func aLiveLinkToAFollowupThatHasNotStartedOpensItsSection(_ path: LinkPath) throws {
       let model = offlineModel()
       var followup = unstartedFollowup(liveID)
       followup.name = liveName
       model.apply(.success([named(otherID, otherName)]), followups: [followup], removed: nil)
+      try #require(!model.sidebarOrder.contains(liveID))
 
       path.open(SessionLink.url(for: liveID), on: model)
 
