@@ -26,13 +26,16 @@ extension MessageField {
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// Sends the trimmed text and the images, and empties the field once sbd accepts them, unless the user
-    /// changed it meanwhile.
-    @MainActor func submit(_ session: String, ref: String? = nil, to model: BoardModel) {
+    /// changed it meanwhile. `then` runs after that.
+    @MainActor func submit(
+      _ session: String, ref: String? = nil, to model: BoardModel, then: (() -> Void)? = nil
+    ) {
       guard !isEmpty else { return }
       let sent = trimmed
       let ids = images.map(\.id)
       model.send(session, sent, images: images.map { ($0.name, $0.data) }, ref: ref) { [weak self] in
         self?.clear(ifStill: sent, images: ids)
+        then?()
       }
     }
 
@@ -42,6 +45,9 @@ extension MessageField {
       images.removeAll { sentImages.contains($0.id) }
       error = nil
     }
+
+    /// Adds dropped files as `add(paths:)` does, and returns the ones it left out.
+    func add(dropped urls: [URL]) -> [URL] { add(paths: urls.map(\.path)).map { URL(fileURLWithPath: $0) } }
 
     /// Adds each image file in order, and sets `error` for each file that is not one.
     /// Returns the paths it left out.

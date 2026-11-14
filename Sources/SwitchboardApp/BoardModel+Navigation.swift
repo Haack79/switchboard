@@ -115,6 +115,44 @@ extension BoardModel {
     if terminalFocus == id { terminalFocus = nil }
   }
 
+  /// The session whose terminal view shows now, where ⇧⌘E reveals the Message Claude field. The Board and a
+  /// pane that shows a chat's messages or an Inbox summary have no terminal view.
+  var messageFieldTarget: SessionSummary? {
+    if visibleView == .board || visibleView == .issues { return nil }
+    guard let target = terminalTarget, target.docket == nil, showsClaudeTerminal(target) else { return nil }
+    if visibleView == .inbox, TriageDetail.pane(for: target, showingTerminal: showingTerminal) != .terminal {
+      return nil
+    }
+    return target
+  }
+
+  /// Shows the Message Claude field under the terminal of `id`, or of `messageFieldTarget`. With `focus`, it also
+  /// puts keyboard focus in the field.
+  func revealMessageField(_ id: String? = nil, focus: Bool = true) {
+    guard let id = id ?? messageFieldTarget?.id else { return }
+    revealedMessageField = id
+    if focus { messageFieldFocus = id }
+  }
+
+  /// Hides the session's Message Claude field and returns keyboard focus to its Claude terminal.
+  func hideMessageField(_ id: String) {
+    forgetMessageField(id)
+    // An error alone keeps the field showing.
+    if let session = allBoard.first(where: { $0.id == id }) { messageDraft(for: session).error = nil }
+    terminalFocus = id
+  }
+
+  /// Clears the reveal and the focus request of the session's Message Claude field while they still name `id`.
+  func forgetMessageField(_ id: String) {
+    if revealedMessageField == id { revealedMessageField = nil }
+    releaseMessageFieldFocus(id)
+  }
+
+  /// Clears the field focus request while it still names `id`.
+  func releaseMessageFieldFocus(_ id: String) {
+    if messageFieldFocus == id { messageFieldFocus = nil }
+  }
+
   /// A chat pane shows its terminal only while the Terminal toggle is on. A request for a hidden terminal would
   /// take focus later, when the user turns the toggle on.
   private func showsClaudeTerminal(_ session: SessionSummary) -> Bool {

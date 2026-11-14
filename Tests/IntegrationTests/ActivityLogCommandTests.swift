@@ -81,6 +81,23 @@ extension Instance {
     #expect(try sbd.activityStatus().events == 3)
   }
 
+  /// The app's terminal wake and its view's own `open` can reach sbd together. sbd checks the claude state on
+  /// its request queue, so the second `open` finds claude starting and launches nothing. A second launch would
+  /// record a second resume or replace the first claude.
+  @Test func twoOpensAtOnceOnAStoppedSessionLaunchClaudeOnce() throws {
+    let sbd = try Instance()
+    let s = try stoppedSession(sbd)
+
+    let opens = [Outcome.detached { try sbd.run("open", s.id) }, Outcome.detached { try sbd.run("open", s.id) }]
+    for open in opens { #expect(open.done.wait(timeout: .now() + 30) == .success) }
+
+    #expect(opens.map { (try? $0.result?.get())?.status } == [0, 0])
+    let started = try sbd.waitFor(s.id, "the resume") { $0.claudePid != nil && $0.live }
+    usleep(2_000_000)
+    #expect(try sbd.get(s.id).claudePid == started.claudePid)
+    #expect(try sbd.triggers(s.id) == ["open"])
+  }
+
   /// A message that a session sends to itself counts as the user's `send`.
   @Test(arguments: [true, false])
   func aMessageFromAnotherSessionResumesWithTheSessionTrigger(fromAnother: Bool) throws {
