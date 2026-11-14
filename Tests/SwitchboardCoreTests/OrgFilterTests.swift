@@ -21,6 +21,7 @@ private func session(
   s.kind = kind
   switch kind {
   case .manager: s.manager = true
+  case .operator: s.manager = true
   case .chat: s.chat = "g1"
   case .work: break
   }

@@ -64,6 +64,19 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    operator [<text>]             open the operator, the one background Manager
+                                  session that follows through on the waits that
+                                  conversations hand it, creating it the first
+                                  time. With text, send it a message
+    operator --log                the operator's last messages
+    operator report [--needs-you] [--session S] <text>
+                                  record a report. Only the operator runs it.
+                                  --needs-you puts it in the Inbox until you
+                                  answer the operator or acknowledge it. S is
+                                  the session that it is about
+    operator reports [--all]      list the operator's reports, oldest first, and
+                                  whether each is open. --all lifts the limit of
+                                  \(Event.defaultLimit)
     get <session>                 show one session
     focus <session>               show the session in the Switchboard app, launching
                                   the app if it isn't running
@@ -91,8 +104,13 @@ let usage = """
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
          [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
+         [--here]
                                   wait on a PR, a deploy, another session, or a
-                                  time. Inside a session, the session is optional
+                                  time. Inside a session, the session is optional.
+                                  A wait that Claude sets in a Manager
+                                  conversation and that resumes goes to the
+                                  operator, unless it reads the conversation's
+                                  own PR. --here keeps it on the conversation
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -100,7 +118,9 @@ let usage = """
                                   can't be reached, and 1 when it is cleared. The
                                   session doesn't resume. The timeout and Ctrl-C
                                   clear the wait
-    wait <session> --clear [--id W]
+    wait [<session>] --clear [--id W]
+                                  clear the waits, and a conversation's waits
+                                  that went to the operator
     wait <session> --resolve <what happened> [--id W]
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
@@ -548,9 +568,10 @@ func printImportable(_ list: ImportList, repo: String? = nil) {
   }
 }
 
-func sessionCommand(_ op: String, _ a: Args, extra: [String: JSON] = [:]) {
+/// Sends `op` for `session`, or for the session that `a` names when `session` is nil, and prints the answer.
+func sessionCommand(_ op: String, _ a: Args, session: String? = nil, extra: [String: JSON] = [:]) {
   var args = extra
-  args["session"] = .string(a.session(op))
+  args["session"] = .string(session ?? a.session(op))
   let result = call(op, args)
   if a.json { printJSON(result) } else { printSession(summary(result)) }
 }
@@ -793,6 +814,8 @@ case "usage":
   usageCommand(a)
 case "manager":
   manager(a)
+case "operator":
+  operatorCommand(a)
 case "get", "show":
   sessionCommand("get", a)
 case "focus":

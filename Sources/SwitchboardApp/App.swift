@@ -56,6 +56,7 @@ struct SwitchboardApp: App {
           .keyboardShortcut("j")
         Button("Open Manager") { model.openManager() }
           .keyboardShortcut("m", modifiers: [.command, .shift])
+        Button("Open Operator") { model.openOperator() }
         Button("Show Inbox") { model.show(.inbox) }
           .keyboardShortcut("1")
         Button("Show Board") { model.show(.board) }

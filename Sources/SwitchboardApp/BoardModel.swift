@@ -371,6 +371,11 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
+  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
+  var operatorSession: SessionSummary? {
+    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  }
+
   /// A state's sessions in the sidebar, each one followed by its children.
   struct SidebarGroup: Identifiable {
     var state: AttentionState
@@ -685,6 +690,13 @@ final class BoardModel: ObservableObject {
   /// selects it. With `new`, it starts a conversation, which its first prompt names.
   func openManager(new: Bool = false) {
     perform("manager", new ? ["new": true] : [:]) { value in
+      if let id = value["id"]?.string { self.selectUnlisted(id) }
+    }
+  }
+
+  /// Selects the operator. sbd creates it when none exists, and resumes a stopped one.
+  func openOperator() {
+    perform("operator", [:]) { value in
       if let id = value["id"]?.string { self.selectUnlisted(id) }
     }
   }
