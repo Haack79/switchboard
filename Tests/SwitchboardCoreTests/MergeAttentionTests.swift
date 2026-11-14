@@ -761,6 +761,16 @@ extension MergeAttentionTests {
       #expect(verdict(try summaryFacts(pr)).callouts.isEmpty)
     }
 
+    @Test func satisfiedCodeOwnersWithAPendingRequestGiveARequestedCallout() throws {
+      let pr = ownedPR(
+        [["@carol"]], requests: ["@carol"], verdicts: [sampleVerdict("carol", "APPROVED", on: samplePRHead)])
+
+      let v = verdict(try summaryFacts(pr))
+
+      #expect(v.callouts.map(\.title) == ["Code owners still requested"])
+      #expect(v.callouts.map { unescaped($0.body) } == ["@carol"])
+    }
+
     @Test func openCodeOwnerRequestGivesARequestedCallout() throws {
       let v = verdict(try summaryFacts(ownedPR(nil, requests: ["@PostHog/team-flags"])))
 

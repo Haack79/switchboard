@@ -127,42 +127,42 @@ extension Attention {
     let prose = facts.currentMergeBrief?.text ?? details?.gist
     let text = [prose, parts.joined(separator: " ")].compactMap { $0 }.map(MarkdownText.escaped)
       .joined(separator: "\n\n")
-    return (text, pauseCallouts(pr))
+    return (text, pauseCallouts(MergeReview(pr), number: pr.number))
   }
 
   /// The warnings for a PR that is otherwise ready: code owners whose
   /// review is still missing, open review threads, and gaps in the test plan.
-  static func pauseCallouts(_ pr: PullRequest) -> [Callout] {
+  static func pauseCallouts(_ review: MergeReview, number: Int) -> [Callout] {
     var callouts: [Callout] = []
-    if let status = CodeOwnerStatus(pr), !status.satisfied {
-      let waiting = status.groups.filter { !$0.approved }.map { $0.owners.joined(separator: " or ") }
+    switch review.codeOwnerGap {
+    case .waiting(let groups):
       callouts.append(
         Callout(
           kind: .warning, title: "Code owner review still required",
-          body: MarkdownText.escaped(waiting.joined(separator: "; "))))
-    } else if let requests = pr.codeOwnerRequests, !requests.isEmpty {
+          body: MarkdownText.escaped(groups.map { $0.joined(separator: " or ") }.joined(separator: "; "))))
+    case .requested(let requests):
       callouts.append(
         Callout(
           kind: .warning, title: "Code owners still requested",
           body: MarkdownText.escaped(requests.joined(separator: ", "))))
+    case nil: break
     }
-    if let d = pr.mergeDetails {
-      let open = d.openThreads
-      let threads = "\(open) open review \(open == 1 ? "thread" : "threads")"
-      if d.threadsRead < d.threads {
+    if let t = review.threads {
+      let threads = "\(t.open) open review \(t.open == 1 ? "thread" : "threads")"
+      if t.read < t.total {
         callouts.append(
           Callout(
-            kind: .warning, title: open == 0 ? "Not every review thread was read" : "At least \(threads)",
-            body: "#\(pr.number) has \(d.threads) review threads, and sbd read \(d.threadsRead)."))
-      } else if open > 0 {
+            kind: .warning, title: t.open == 0 ? "Not every review thread was read" : "At least \(threads)",
+            body: "#\(number) has \(t.total) review threads, and sbd read \(t.read)."))
+      } else if t.open > 0 {
         callouts.append(Callout(kind: .warning, title: threads))
       }
-      if !d.testGaps.isEmpty {
-        callouts.append(
-          Callout(
-            kind: .warning, title: "The test plan has gaps",
-            body: d.testGaps.map { "- " + MarkdownText.escaped($0) }.joined(separator: "\n")))
-      }
+    }
+    if !review.testGaps.isEmpty {
+      callouts.append(
+        Callout(
+          kind: .warning, title: "The test plan has gaps",
+          body: review.testGaps.map { "- " + MarkdownText.escaped($0) }.joined(separator: "\n")))
     }
     return callouts
   }

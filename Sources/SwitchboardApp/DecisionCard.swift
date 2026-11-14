@@ -34,7 +34,7 @@ struct DecisionCard: View {
           if !item.callouts.isEmpty { callouts }
         }
       }
-      if !item.drafts.isEmpty { DraftsSection(session: session, item: item) }
+      DraftsSection(session: session, item: item, drafts: item.drafts)
       // A new item starts with its own open or closed Details.
       CardDetails(session: session, ref: item.ref, details: item.details, callouts: list == nil ? [] : item.callouts)
         .id(item.ref)
