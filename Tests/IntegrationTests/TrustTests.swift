@@ -172,6 +172,17 @@ private func canonicalJSON(_ value: Any) throws -> String {
     #expect(try events(sbd, m.id, "folder-trusted").count == 1)
   }
 
+  @Test func theOperatorStartsWithoutTheTrustDialog() throws {
+    let sbd = try instance()
+
+    let op = try decode(SessionSummary.self, sbd.sb("operator", "--json"))
+
+    let live = try sbd.waitFor(op.id, "the operator's claude") { $0.live }
+    #expect(!live.cards.contains { $0.kind == .trust })
+    #expect(try canonicalConfig(sbd, "A") == seedPlus("A", keys: [real(sbd.home.managerFolder)]))
+    #expect(try events(sbd, op.id, "folder-trusted").count == 1)
+  }
+
   /// The stub's dialog shows in a work session's folder, which also shows
   /// that the dialog is on for the chat and Manager tests.
   @Test func aWorkSessionGetsNoWrite() throws {

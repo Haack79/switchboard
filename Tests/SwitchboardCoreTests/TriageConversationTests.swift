@@ -13,6 +13,9 @@ import Testing
     switch kind {
     case .work: break
     case .manager: s.manager = true
+    case .operator:
+      s.manager = true
+      s.isOperator = true
     case .chat: s.chat = "g1"
     }
     return s
@@ -207,7 +210,7 @@ import Testing
       cards: shape.cards.map(Self.card), openPrompt: shape.openPrompt)
     s.triage = shape.item.map { TriageItem(title: "t", kind: .approval, summary: "", source: $0) }
     s.kind = kind
-    s.manager = kind == .manager ? true : nil
+    s.manager = kind == .manager || kind == .operator ? true : nil
     s.chat = kind == .chat ? "g1" : nil
     return s
   }
@@ -231,6 +234,8 @@ import Testing
       (.manager, "Manager", nil, "Manager"),
       (.manager, "deploy watch", nil, "Manager: deploy watch"),
       (.manager, "deploy watch", "Flags", "Manager: deploy watch"),
+      (.operator, "Operator", nil, "Operator"),
+      (.operator, "Operator", "Flags", "Operator"),
       (.work, "fix-bug", "Flags", "fix-bug"),
       (.work, "fix-bug", nil, "fix-bug"),
     ] as [(SessionKind, String, String?, String)])

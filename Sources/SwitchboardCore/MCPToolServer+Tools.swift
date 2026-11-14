@@ -41,9 +41,11 @@ extension MCPToolServer {
   static let allTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions with their state, reason, PR, waits, and notes. The sessions that need the user come first."),
+      "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."
+    ),
     Tool(
-      "get_session", "Shows one session, with its group's name and description.", ["session": session],
+      "get_session", "Shows one session, with its group's name and description, and its artifacts.",
+      ["session": session],
       required: ["session"]),
     Tool(
       "read_reply", "Reads the session's last reply from its transcript, as Markdown.", ["session": session],
@@ -91,12 +93,12 @@ extension MCPToolServer {
           "Starts claude in plan mode, so it writes a plan and waits for approval before it edits a file."),
         "after": string("For a follow-up, a PR such as pr:123 whose merge moves it to Needs you."),
         "wait": string(
-          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state."
+          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state. In a Manager conversation, the operator resumes instead of you. To be resumed yourself, omit `wait` and call `set_wait` with `here: true`."
         ),
       ], required: ["repository", "branch", "prompt"]),
     Tool(
       "set_wait",
-      "Sets a wait on a session, by default the calling session. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
+      "Sets a wait on a session, by default the calling session. In a Manager conversation, a wait that resumes goes to the operator, and the operator gets the message instead of you. A PR wait stays on the conversation when it has no `target`, which means the session's own PR, or a PR given without its repository. A wait that notifies also stays, and a manual wait notifies by default. Pass `here` to keep any other wait on the conversation. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
       [
         "session": session,
         "kind": string(
@@ -113,6 +115,9 @@ extension MCPToolServer {
         "note": string("What the wait is for."),
         "then": string(
           "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you."),
+        "here": boolean(
+          "In a Manager conversation, keeps the wait on the conversation, so it resumes the conversation and not the operator."
+        ),
       ]),
     Tool(
       "clear_wait",
@@ -126,7 +131,8 @@ extension MCPToolServer {
         "todo": boolean("Adds a to-do. The user must resolve it before the session can be deleted."),
       ], required: ["session", "text"]),
     Tool(
-      "list_groups", "Lists the groups with their descriptions, sessions, and notes, then the sessions in no group."),
+      "list_groups",
+      "Lists the groups with their descriptions, sessions, notes, and artifacts, then the sessions in no group."),
     Tool(
       "add_group", "Adds a group.",
       [
@@ -159,5 +165,13 @@ extension MCPToolServer {
         "text": string("The same text, when you did not save it to a file. Send file or text, not both."),
         "version": string("The version or update time that the Artifact tool showed, if any."),
       ], required: ["plan", "kind"]),
+    Tool(
+      "report",
+      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it.",
+      [
+        "text": string("What happened, or the question for the user, in one line."),
+        "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
+        "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
+      ], required: ["text"]),
   ]
 }

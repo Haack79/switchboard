@@ -52,9 +52,10 @@ extension Service {
       guard let key = args["option"]?.string else { throw APIError("name an option, by number or label") }
       option = try item.option(key)
     }
-    // Claude Code may not approve its own prompt or act on its own PR.
-    if args["insideClaude"]?.bool == true, item.source == .card || option.action.needsClick {
-      throw APIError("choose answers a prompt or acts on a PR for you, so it doesn't run inside Claude Code")
+    // Claude Code may not approve its own prompt, act on its own PR, or answer the operator's report for the user.
+    if args["insideClaude"]?.bool == true, item.source == .card || item.source == .report || option.action.needsClick {
+      throw APIError(
+        "choose answers a prompt or a report, or acts on a PR, for you, so it doesn't run inside Claude Code")
     }
     let session = JSON.string(id)
     // The ref lets `send` record that the user's message answered a rule's item. `send` drops it for a choice
