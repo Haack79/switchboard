@@ -376,6 +376,8 @@ public final class Service {
         return try .success(JSON(encoding: addRepo(request.args)))
       case "manager":
         return managerRequest(request.args)
+      case "operator":
+        return operatorRequest(request.args)
       case "chat":
         return chatRequest(request.args)
       case "chat-log":
@@ -547,6 +549,12 @@ public final class Service {
     case "done":
       let id = try lookup(args)
       let done = args["done"]?.bool ?? true
+      // sbd skips a done session's waits, so the operator's waits would stop without a message.
+      if done, entries[id]?.session.kind == .operator {
+        throw APIError(
+          "the operator can't be marked done, because its waits would stop without a message. "
+            + "To remove it, run: sb rm \(Manager.operatorName)")
+      }
       try update(id) { $0.done = done }
       record(id, done ? "done" : "undone")
       return try JSON(encoding: summary(id))
@@ -646,7 +654,7 @@ public final class Service {
   /// Records a hook event and returns it with what the hook prints, or nil
   /// for an unknown session. A UserPromptSubmit of a Manager or a chat prints
   /// the digest of its children, and the SessionStart of a new Manager
-  /// conversation prints the digest of the whole board. sbd records each
+  /// conversation or the operator prints the digest of the whole board. sbd records each
   /// digest as a `digest` event. A work session's UserPromptSubmit prints
   /// the replies that the user posted from its drafts since it last heard.
   /// `stamp` is set for an event that a host's shim made. Such an event is recorded with its id and its own
@@ -1080,9 +1088,12 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
-  /// The text of a local launch's `--append-system-prompt`, or nil to pass none.
+  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
+  /// comes first, and a blank line separates it from the triage prompt.
   func appendedSystemPrompt(for session: Session) -> String? {
-    config.triage.systemPrompt.isEmpty ? nil : config.triage.systemPrompt
+    let role = session.kind == .operator ? Manager.operatorPrompt : ""
+    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    return text.isEmpty ? nil : text
   }
 
   /// Starts claude in the session's Claude pane. A launch resumes the
@@ -1491,6 +1502,7 @@ public final class Service {
         // The start would otherwise leave its new worktree behind.
         guard !starting.contains(id) else { throw APIError("\(id) is starting") }
         guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
+        try refuseOperatorRemoval(id)
         try checkTodos(id, resolving: resolving)
         let entry = entries[id]!
         return (entry.session, entry.facts.pr, sharedSession(entry.session), mayRunClaude(entry))
@@ -1601,6 +1613,8 @@ public final class Service {
         }
         // The removal closed a host's panes before this, from answers of the host.
         let terminals = session.host == nil ? try site.terminals() : nil
+        // A wait can land on the operator while its panes stop.
+        try refuseOperatorRemoval(session.id)
         do {
           try forgetSession(session.id, resolving: resolving)
         } catch var error as OpenTodoError {

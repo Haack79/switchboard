@@ -1,8 +1,8 @@
 import SwiftUI
 import SwitchboardCore
 
-/// A group chat or a Manager conversation: its last messages and a field that
-/// sends it one. The terminals are behind a toggle.
+/// A group chat, a Manager conversation, or the operator: its last messages
+/// and a field that sends it one. The terminals are behind a toggle.
 struct ChatView: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
@@ -15,11 +15,7 @@ struct ChatView: View {
       if model.showingTerminal {
         SessionView(session: session)
       } else {
-        ChatMessages(
-          log: model.chatLogs[session.id],
-          emptyText: session.kind == .manager
-            ? "No messages yet. Ask the Manager about your sessions."
-            : "No messages yet. Ask the chat about this group's sessions.")
+        ChatMessages(log: model.chatLogs[session.id], emptyText: emptyText)
         Divider()
         // The Inbox leaves out the cards of a chat and a Manager, such as a group message that waits for the user.
         // They show here instead.
@@ -36,6 +32,14 @@ struct ChatView: View {
     // A tool call changes lastActivity, so the log reloads only when the reply or the state changes.
     .task(id: "\(session.lastReply?.count ?? 0)/\(session.state)/\(session.since)") { model.loadChatLog(session.id) }
   }
+
+  private var emptyText: String {
+    switch session.kind {
+    case .manager: "No messages yet. Ask the Manager about your sessions."
+    case .operator: "The operator hasn't run yet. It follows through on waits that your conversations hand it."
+    case .chat, .work: "No messages yet. Ask the chat about this group's sessions."
+    }
+  }
 }
 
 private struct ChatHeader: View {
@@ -47,8 +51,8 @@ private struct ChatHeader: View {
       Text(session.name).fontWeight(.medium).lineLimit(1)
       StateBadge(state: session.state)
       Spacer()
+      if session.kind == .manager || session.kind == .operator { MCPServerMenu(session: session) }
       if session.kind == .manager {
-        MCPServerMenu(session: session)
         Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
           .help("Start a session that this conversation follows")
           .fixedSize()

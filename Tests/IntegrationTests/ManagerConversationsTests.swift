@@ -57,10 +57,13 @@ import Testing
   }
 
   /// The arguments in the session's claude.sh, which holds the latest launch. sh reads the quoting.
+  /// The command follows the comment header and spans several lines when an argument holds a newline.
   func scriptArgs(_ sbd: Instance, _ id: String) throws -> [String] {
     let text = try String(contentsOfFile: "\(sbd.home.sessionFolder(id))/claude.sh", encoding: .utf8)
-    let line = try #require(text.split(separator: "\n").last { !$0.hasPrefix("#") }.map(String.init))
-    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", line])
+    let command = text.split(separator: "\n", omittingEmptySubsequences: false).drop { $0.hasPrefix("#") }
+      .joined(separator: "\n")
+    try #require(!command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "claude.sh has no command")
+    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", command])
     try #require(r.status == 0, "sh could not read claude.sh: \(r.stderr)")
     return r.stdout.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map(String.init)
   }

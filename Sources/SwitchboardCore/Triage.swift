@@ -734,6 +734,7 @@ public enum Triage {
     case .work: s.name
     case .chat: groupName.map { Chat.name(group: $0) } ?? s.name
     case .manager: s.name == Manager.name ? s.name : "Manager: \(s.name)"
+    case .operator: Manager.operatorName
     }
   }
 

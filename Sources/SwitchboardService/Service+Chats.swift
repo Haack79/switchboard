@@ -59,7 +59,8 @@ extension Service {
   /// The `chat-log` request: the last messages of the group's chat, or of
   /// the session that `session` names, oldest first. With `manager`, the
   /// session is a Manager conversation, and the most recent one without
-  /// `session`. It refuses a session that is not a Manager conversation or a
+  /// `session`. With `operator`, it is the operator, which the read does not
+  /// create. It refuses a session that is not a Manager conversation or a
   /// group chat, unless `role` is `assistant`. That read returns only
   /// Claude's messages, which the session's terminal already shows, so it
   /// serves any session. It reads the transcript off the state queue.
@@ -68,7 +69,10 @@ extension Service {
     let (findTranscript, machine) = try queue.sync { () -> (() -> String?, any Machine) in
       let manager = args["manager"]?.bool == true
       let id: String
-      if manager || args["session"] != nil {
+      if args["operator"]?.bool == true {
+        guard let found = operatorID() else { throw APIError("there is no operator. Start it with: sb operator") }
+        id = found
+      } else if manager || args["session"] != nil {
         id = manager ? try managerConversation(args["session"]?.string) : try lookup(args)
         guard let session = entries[id]?.session, assistantOnly || session.kind.showsAsChat else {
           let name = entries[id]?.session.name ?? id

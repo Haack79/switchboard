@@ -28,6 +28,21 @@ public enum Manager {
     return servers.isEmpty ? "switchboard only" : "switchboard, " + servers.joined(separator: ", ")
   }
 
+  /// The fixed name of the operator, which no prompt renames.
+  public static let operatorName = "Operator"
+
+  /// The operator's role. sbd appends it to the system prompt at every launch, so it survives a resume and a
+  /// compaction. The operator also reads the conversations' CLAUDE.md, because it shares their folder.
+  public static let operatorPrompt = """
+    # Operator
+
+    You are the operator: the one background Manager session. The user's Manager conversations hand you their follow-through, such as the cleanup after a session reaches a state, and their standing work, such as loops and queue top-ups.
+
+    - Nobody reads your chat. End each turn with at most one line.
+    - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do.
+    - A loop's `date` waits are yours. Before you re-arm one, run `sb get \(operatorName)` and check that no other wait for that loop is open.
+    """
+
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.
   public static let relaunchPendingText = "Claude restarts with them when its turn ends."
 

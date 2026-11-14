@@ -128,12 +128,14 @@ extension Service {
     return ParentDigest.text(lines, elsewhere: counts)
   }
 
-  /// The digest that a Manager conversation gets when its conversation
-  /// starts, which a SessionStart with `source` startup reports. It is nil
-  /// for every other kind and source. It leaves out every Manager conversation.
+  /// The digest that a Manager conversation or the operator gets when its
+  /// conversation starts, which a SessionStart with `source` startup reports.
+  /// It is nil for every other kind and source. It leaves out every Manager
+  /// conversation and the operator.
   func startDigest(_ id: String, source: String?) -> String? {
-    guard entries[id]?.session.kind == .manager, source == "startup" else { return nil }
-    let all = summaries().filter { $0.id != id && $0.kind != .manager }
+    let isManager = { (kind: SessionKind) in kind == .manager || kind == .operator }
+    guard let kind = entries[id]?.session.kind, isManager(kind), source == "startup" else { return nil }
+    let all = summaries().filter { $0.id != id && !isManager($0.kind) }
     return ParentDigest.startText(all, inbox: Triage.order(all))
   }
 

@@ -59,6 +59,11 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    operator [<text>]             open the operator, the one background Manager
+                                  session that follows through on the waits that
+                                  conversations hand it, creating it the first
+                                  time. With text, send it a message
+    operator --log                the operator's last messages
     get <session>                 show one session
     slash <session>               the commands that the session's claude takes
                                   after /: its skills, its commands, and Claude
@@ -754,6 +759,8 @@ case "usage":
   usageCommand(a)
 case "manager":
   manager(a)
+case "operator":
+  operatorCommand(a)
 case "get", "show":
   sessionCommand("get", a)
 case "open":

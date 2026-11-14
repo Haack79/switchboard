@@ -50,6 +50,68 @@ extension Service {
     }
   }
 
+  /// The `operator` request: sends `text` to the operator, or without text
+  /// opens it. It creates the operator when none exists. The answer is the
+  /// operator's summary, with `delivery` when it took text.
+  func operatorRequest(_ args: JSON) -> Response {
+    do {
+      let text = args["text"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+      let (id, created) = try queue.sync { () -> (String, SessionSummary?) in
+        if let id = operatorID() { return (id, nil) }
+        let id = try ensureOperator()
+        return (id, summary(id))
+      }
+      // An open right after the creation could read the starting claude as stopped and launch it again.
+      if let created, text == nil { return .success(try JSON(encoding: created)) }
+      return try openOrSend(id, text)
+    } catch {
+      return .failure("\(error)")
+    }
+  }
+
+  /// The operator's id. It creates the operator when none exists, with no
+  /// prompt, so claude starts and the idle stop stops it later. The caller
+  /// holds the state queue, so the lookup and the creation are one step.
+  /// The operator loads only the switchboard MCP server, so its launch
+  /// waits for no shared server.
+  func ensureOperator() throws -> String {
+    if let id = operatorID() { return id }
+    try ensureManagerFolder()
+    let folder = home.managerFolder
+    return try create(NewSession(path: folder, name: Manager.operatorName), (folder, nil, nil)) {
+      $0.manager = true
+      $0.isOperator = true
+      $0.mcp = []
+      $0.mcpScoped = true
+    }.id
+  }
+
+  /// The operator's id, or nil when none exists. When the store holds more
+  /// than one, it is the oldest, and sbd logs the others and leaves them as they are.
+  func operatorID() -> String? {
+    let operators = entries.values.map(\.session).filter { $0.kind == .operator }
+      .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
+    guard let oldest = operators.first else { return nil }
+    if operators.count > 1 {
+      let others = operators.dropFirst().map(\.id).joined(separator: ", ")
+      logLine("found more than one operator. Using \(oldest.id), the oldest, and leaving \(others)")
+    }
+    return oldest.id
+  }
+
+  /// Refuses to remove the operator while it has an open wait, because the removal would drop the wait
+  /// without a message.
+  func refuseOperatorRemoval(_ id: String) throws {
+    guard let session = entries[id]?.session, session.kind == .operator else { return }
+    let count = session.waits?.count ?? 0
+    guard count > 0 else { return }
+    let name = Manager.operatorName
+    let (waits, them) = count == 1 ? ("wait", "it") : ("waits", "them")
+    throw APIError(
+      "the operator has \(count) open \(waits), and removing it would drop \(them). "
+        + "Clear \(them) first with: sb wait \(name) --clear. Then run: sb rm \(name)")
+  }
+
   /// Where a relaunch for changed MCP servers stands.
   enum MCPRelaunch {
     /// The change waits for claude to finish its turn.
@@ -137,12 +199,14 @@ extension Service {
     return out
   }
 
-  /// The `manager-mcp` request: shows a conversation's MCP servers, or
+  /// The `manager-mcp` request: shows the MCP servers of a conversation or the operator, or
   /// changes them with `add`, `rm`, `all`, or `none`. A change applies when
   /// claude can take it, as `applyMCPChanges` describes.
   func managerMCP(_ args: JSON) throws -> JSON {
     guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
-    let id = try managerConversation(ref)
+    let id = try resolveRef(
+      ref, "Manager conversation",
+      entries.values.map(\.session).filter { $0.kind == .manager || $0.kind == .operator }.map { ($0.id, $0.name) })
     let add = args["add"]?.array?.compactMap(\.string) ?? []
     let remove = args["rm"]?.array?.compactMap(\.string) ?? []
     let all = args["all"]?.bool == true

@@ -16,4 +16,12 @@ import Testing
 
     #expect(try JSON(encoding: answer)["servers"] == .null)
   }
+
+  @Test func theOperatorIsNamedOperator() {
+    #expect(Manager.operatorName == "Operator")
+  }
+
+  @Test func theOperatorPromptSaysToCheckTheOperatorBeforeItReArmsALoop() {
+    #expect(Manager.operatorPrompt.contains("`sb get \(Manager.operatorName)`"), "\(Manager.operatorPrompt)")
+  }
 }
