@@ -12,12 +12,6 @@ extension Service {
     if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
       throw APIError("\(e.session.name) can't acknowledge itself out of the Inbox")
     }
-    // An ack closes the operator's open reports. Claude Code may not ack them for the user, as with `choose`.
-    if args["insideClaude"]?.bool == true, args["undo"]?.bool != true, e.session.kind == .operator,
-      e.facts.ackClosesReports
-    {
-      throw APIError("an ack closes the operator's reports for you, so it doesn't run inside Claude Code")
-    }
     let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
     if args["undo"]?.bool == true {
       guard shown(id, verdict).acknowledged || verdict.requested else {
@@ -25,6 +19,10 @@ extension Service {
       }
       record(id, "unack")
     } else {
+      // An ack closes the operator's open reports. Claude Code may not ack them for the user, as with `choose`.
+      if args["insideClaude"]?.bool == true, e.session.kind == .operator, e.facts.ackClosesReports {
+        throw APIError("an ack closes the operator's reports for you, so it doesn't run inside Claude Code")
+      }
       try acknowledge(id, verdict)
     }
     return try JSON(encoding: summary(id))

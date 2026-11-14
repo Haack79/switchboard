@@ -8,7 +8,7 @@ import SwitchboardCore
 func acknowledge(_ a: Args) {
   var extra = callerArg
   if a.switches.contains("--undo") { extra["undo"] = true }
-  if ProcessInfo.processInfo.environment["CLAUDECODE"] != nil { extra["insideClaude"] = true }
+  if author == .claude { extra["insideClaude"] = true }
   sessionCommand("ack", a, extra: extra)
 }
 
