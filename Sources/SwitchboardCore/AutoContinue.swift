@@ -35,14 +35,12 @@ public struct UnlimitedBudget: QuotaBudget {
 
 /// What `AutoContinue.blocker` decides from.
 public struct AutoContinueInput {
-  public enum Process: Sendable { case running, starting, stopped }
-
   public var session: Session
   public var facts: SessionFacts
   public var verdict: Verdict
   public var now: Int64
   public var settings = AutoContinueSettings()
-  public var process = Process.running
+  public var process = PromptGuard.Process.running
   /// A message is in flight or queued for the session.
   public var busy = false
   public var onScreen = false
@@ -116,17 +114,13 @@ public enum AutoContinue {
     if input.verdict.state != .canContinue { return "not in Claude can continue" }
     if let label = input.session.kind.label { return label }
     // A continue starts a new turn, which drops the card from `sb summary set`.
-    if !f.cards.isEmpty || f.sessionSummary != nil || f.openPermission != nil || f.openQuestion != nil {
-      return "an open card"
-    }
+    if let card = PromptGuard.openCard(f) ?? (f.sessionSummary != nil ? "an open card" : nil) { return card }
     // A continue would answer the reply while the user answers its decisions.
     if f.decisionList != nil || Triage.item(f, input.verdict, kind: input.session.kind)?.hasDecisionList == true {
       return "decisions to answer"
     }
     if !(input.session.waits ?? []).isEmpty { return "an open wait" }
-    if f.turnRunning { return "a turn is running" }
-    if input.busy { return "a message is on its way" }
-    if input.process == .starting || (input.process == .running && !f.live) { return "claude is starting or stopping" }
+    if let turn = PromptGuard.turn(f, process: input.process, messageWaiting: input.busy) { return turn }
     if input.onScreen { return "on screen" }
     let touched = f.lastSeen(viewed: input.lastViewed)
     let quiet = Int64(s.quietSeconds) * 1000

@@ -317,6 +317,173 @@ private func blocker(_ change: (inout AutoContinueInput) -> Void) -> String? {
   }
 }
 
+extension AutoContinueGuardTests.OpenPrompt {
+  func open(in f: inout SessionFacts, since: Int64) {
+    let request = event("PermissionRequest", since, tool("Bash", ["command": "rm -rf build"]))
+    switch self {
+    case .card:
+      f.cards = [Card(request)]
+    case .deferredCard:
+      var card = Card(request)
+      card.deferred = true
+      f.cards = [card]
+    case .sessionCard:
+      f.sessionSummary = SwitchboardCoreTests.sessionCard
+    case .permission:
+      f.openPermission = ToolCall(tool: "Bash", summary: "`rm -rf build`", since: since)
+    case .question:
+      f.openQuestion = ToolCall(tool: "AskUserQuestion", summary: "Which fruit?", since: since)
+    }
+  }
+}
+
+/// Pins which reason wins when several guards hold at once. The card check,
+/// the decision and wait checks, and the turn checks must keep this order.
+@Suite struct AutoContinueGuardOrderTests {
+  @Test(arguments: AutoContinueGuardTests.OpenPrompt.allCases)
+  func aCardAndARunningTurnReportTheOpenCard(_ open: AutoContinueGuardTests.OpenPrompt) {
+    let reason = blocker {
+      open.open(in: &$0.facts, since: now - hourMs)
+      $0.facts.turnRunning = true
+    }
+
+    #expect(reason == "an open card")
+  }
+
+  @Test(arguments: AutoContinueGuardTests.OpenPrompt.allCases)
+  func aCardAndAMessageOnItsWayReportTheOpenCard(_ open: AutoContinueGuardTests.OpenPrompt) {
+    let reason = blocker {
+      open.open(in: &$0.facts, since: now - hourMs)
+      $0.busy = true
+    }
+
+    #expect(reason == "an open card")
+  }
+
+  @Test(arguments: AutoContinueGuardTests.OpenPrompt.allCases)
+  func aCardAndAnOpenWaitReportTheOpenCard(_ open: AutoContinueGuardTests.OpenPrompt) {
+    let reason = blocker {
+      $0.session = session(wait: "CI on #12")
+      open.open(in: &$0.facts, since: now - hourMs)
+    }
+
+    #expect(reason == "an open card")
+  }
+
+  @Test func anOpenDecisionListAndARunningTurnReportDecisionsToAnswer() {
+    let reason = blocker {
+      $0.facts.apply(decisionsOpened(10, t: now - 2 * hourMs + 2000, ref: "stop:2"))
+      $0.facts.turnRunning = true
+    }
+
+    #expect(reason == "decisions to answer")
+  }
+
+  @Test func aSummaryWithDecisionsAndARunningTurnReportDecisionsToAnswer() throws {
+    let summary = try JSONCoding.convert(decisionSummaryJSON, to: TriageSummary.self)
+
+    let reason = blocker {
+      $0.verdict.source = .reply
+      $0.facts.triage = summary
+      $0.facts.turnRunning = true
+    }
+
+    #expect(reason == "decisions to answer")
+  }
+
+  @Test func anOpenDecisionListAndAMessageOnItsWayReportDecisionsToAnswer() {
+    let reason = blocker {
+      $0.facts.apply(decisionsOpened(10, t: now - 2 * hourMs + 2000, ref: "stop:2"))
+      $0.busy = true
+    }
+
+    #expect(reason == "decisions to answer")
+  }
+
+  @Test func anOpenWaitAndAMessageOnItsWayReportTheOpenWait() {
+    let reason = blocker {
+      $0.session = session(wait: "CI on #12")
+      $0.busy = true
+    }
+
+    #expect(reason == "an open wait")
+  }
+
+  @Test func anOpenWaitAndARunningTurnReportTheOpenWait() {
+    let reason = blocker {
+      $0.session = session(wait: "CI on #12")
+      $0.facts.turnRunning = true
+    }
+
+    #expect(reason == "an open wait")
+  }
+
+  @Test func anOpenWaitAndClaudeStartingReportTheOpenWait() {
+    let reason = blocker {
+      $0.session = session(wait: "CI on #12")
+      $0.process = .starting
+    }
+
+    #expect(reason == "an open wait")
+  }
+
+  @Test func aRunningTurnAndAMessageOnItsWayReportTheRunningTurn() {
+    let reason = blocker {
+      $0.facts.turnRunning = true
+      $0.busy = true
+    }
+
+    #expect(reason == "a turn is running")
+  }
+
+  @Test func aRunningTurnAndClaudeStartingReportTheRunningTurn() {
+    let reason = blocker {
+      $0.facts.turnRunning = true
+      $0.process = .starting
+      $0.facts.live = false
+    }
+
+    #expect(reason == "a turn is running")
+  }
+
+  @Test func aMessageOnItsWayAndClaudeStartingReportTheMessage() {
+    let reason = blocker {
+      $0.busy = true
+      $0.process = .starting
+    }
+
+    #expect(reason == "a message is on its way")
+  }
+
+  @Test func aMessageOnItsWayAndClaudeExitingReportTheMessage() {
+    let reason = blocker {
+      $0.busy = true
+      $0.process = .running
+      $0.facts.live = false
+    }
+
+    #expect(reason == "a message is on its way")
+  }
+
+  @Test func claudeStartingWithNoLiveSessionHoldsItBack() {
+    let reason = blocker {
+      $0.process = .starting
+      $0.facts.live = false
+    }
+
+    #expect(reason == "claude is starting or stopping")
+  }
+
+  @Test func claudeStartingAndOnScreenReportsStarting() {
+    let reason = blocker {
+      $0.process = .starting
+      $0.onScreen = true
+    }
+
+    #expect(reason == "claude is starting or stopping")
+  }
+}
+
 @Suite struct AutoContinueSettingsTests {
   @Test func defaultsSendYesGoAheadAfterTenQuietMinutes() {
     let settings = Config().autoContinue
