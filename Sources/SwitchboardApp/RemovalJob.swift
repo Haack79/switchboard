@@ -158,16 +158,13 @@ private struct RemovalStatusPopover: View {
   }
 }
 
-/// Retry and Keep for a session whose removal failed. The Inbox shows the failure as the session's reason.
+/// Retry and Keep for a session whose removal failed. The header above it shows the failure as the session's reason.
 struct FailedRemovalActions: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
 
   var body: some View {
     HStack(spacing: 8) {
-      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-      Text(session.reason).textSelection(.enabled)
-      Spacer()
       Button("Keep") { model.keepRemoval(session.id) }
         .help("Keep the session in Done")
       Button("Retry") { model.retryRemoval(session.id) }

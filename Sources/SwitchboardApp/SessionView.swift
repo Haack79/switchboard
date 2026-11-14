@@ -27,7 +27,7 @@ struct SessionView: View {
       header
       Divider()
       if session.removal?.state == .failed {
-        FailedRemovalActions(session: session).padding(8)
+        FailedRemovalActions(session: session).padding(8).frame(maxWidth: .infinity, alignment: .leading)
         Divider()
       }
       CardList(cards: session.cards)
