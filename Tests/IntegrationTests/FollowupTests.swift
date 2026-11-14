@@ -178,7 +178,8 @@ final class Outcome<T>: @unchecked Sendable {
     }
 
     for op in ["followup-start", "followup-rm", "rm"] {
-      #expect(failure(sbd, op, ["session": .string(f.id)]).contains("is starting"))
+      let message = failure(sbd, op, ["session": .string(f.id)])
+      #expect(message.contains("\(f.name) (\(f.id)) is starting"), "\(op): \(message)")
     }
     #expect(try sbd.client.call("followup-ls", as: [SessionSummary].self).map(\.state) == [.notStarted])
     #expect(try sbd.client.sessions().isEmpty)
@@ -272,17 +273,9 @@ final class Outcome<T>: @unchecked Sendable {
     #expect(try sbd.client.call("followup-ls", as: [SessionSummary].self).isEmpty)
   }
 
-  @Test func aMergeTriggerFiresWhenThePollerReportsTheMerge() throws {
+  @Test func refusesPrMergedAsAnUnknownRequest() throws {
     let sbd = try Instance()
-    let f = try add(sbd, ["prompt": "Retarget the stack.", "repository": "acme/widgets", "after": "#12"])
-    #expect(f.reason == "acme/widgets · ready when acme/widgets#12 merges")
-    #expect(try sbd.client.call("pr-merged", ["pr": "acme/widgets#13"], as: [SessionSummary].self).isEmpty)
-    let fired = try sbd.client.call(
-      "pr-merged", ["pr": "https://github.com/ACME/widgets/pull/12"], as: [SessionSummary].self)
-    #expect(fired.map(\.id) == [f.id])
-    #expect(fired.first?.reason == "ready to start: acme/widgets#12 merged")
-    #expect(try sbd.client.call("pr-merged", ["pr": "acme/widgets#12"], as: [SessionSummary].self).isEmpty)
-    #expect(try sbd.get(f.id).state == .needsYou)
+    #expect(failure(sbd, "pr-merged", ["pr": "acme/widgets#12"]).contains("unknown request pr-merged"))
   }
 
   @Test func importsOpenItemsOnceAndKeepsThemAcrossARestart() throws {

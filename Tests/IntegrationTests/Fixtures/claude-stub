@@ -11,7 +11,9 @@
 #   mode <name>      switches the permission mode to <name>, as Shift+Tab or
 #                    an approved plan does, and replies "Mode: <name>". The
 #                    turn's hooks report the new mode
-#   slow <n>         runs a Bash tool call of n seconds, which SIGTERM ends
+#   slow <n>         runs a Bash tool call of n seconds, which SIGTERM ends.
+#                    slow held runs one that lasts until $SB_HOME/report
+#                    exists
 #   run <name>       runs sh $SB_HOME/<name>.sh as a Bash tool call, a child
 #                    of the stub, and replies "Ran <name>.". Without that
 #                    file, it replies as to anything else
@@ -563,10 +565,15 @@ answered() {
 
 # call_tool <tool> <input> [input after a pick in the terminal]: runs a call
 # that needs permission, and prints the reply, or nothing when the turn
-# stopped.
+# stopped. Like claude, it writes the call's tool_use line to the transcript
+# before PreToolUse.
 call_tool() {
   local fields
   fields=$(jq -nc --arg t "$1" --argjson i "$2" '{tool_name: $t, tool_input: $i}')
+  mkdir -p "$project"
+  jq -nc --arg t "$1" --argjson i "$2" \
+    '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "c1", name: $t, input: $i}]}}' \
+    >>"$project/$session.jsonl"
   hook PreToolUse "$(jq -c '. + {tool_use_id: "c1"}' <<<"$fields")"
   answered "$1" "$2" "$(dialog "$fields")" "${3:-}"
 }
@@ -697,6 +704,7 @@ turn() {
     n=${p#slow }
     status busy
     step=tool reply="Slept $n s." cmd="sleep $n" marker='"hook_event_name":"PostToolUse"' before="sleep $n & slow_pid=\$!; wait \$slow_pid; slow_pid="
+    [ "$n" = held ] && before="until [ -e '$SB_HOME/report' ]; do sleep 0.05; done & slow_pid=\$!; wait \$slow_pid; slow_pid="
     ;;
   run\ *)
     n=${p#run }

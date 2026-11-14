@@ -7,6 +7,8 @@ let usage = """
   Sessions:
     ls [--org O1,O2] [--local]    list sessions by state, or only those in the
                                   GitHub orgs O1 and O2, or with no GitHub remote
+    ls --removed                  list the sessions that sbd removed, newest
+                                  first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
         [--model M] [--account A] [--group G] [--no-auto] [--plan-mode]
         [--host H]
@@ -53,6 +55,9 @@ let usage = """
                                   prompt names it
     manager ls                    list the conversations, newest activity first
     manager <conv> --log          the conversation's last messages
+    manager <conv> --read         mark the conversation's replies read
+    manager pin|unpin <conv>      pin the conversation to the top of the
+                                  app's Conversations list, or unpin it
     manager mcp <conv> [add <server>… | rm <server>… | --all | --none]
                                   show or change the MCP servers that the
                                   conversation loads besides switchboard. A new
@@ -208,6 +213,8 @@ let usage = """
                                   restarted while sending them and can't tell whether
                                   the session got them
     reply <session>               the session's last reply, as Markdown
+    context <session> [--steps N] Claude's last steps up to the session's Inbox item, with
+                                  N steps before it (5 by default)
     summary set [<session>]       record the session's Inbox card for this turn, as JSON
                                   on stdin. The session defaults to $SB_SESSION_ID
     summary help                  the card's format, for a session to follow
@@ -269,6 +276,7 @@ let usage = """
                                   the group's sessions, starting it the first
                                   time. With text, send it a message
     chat <group> --log            the chat's last messages
+    chat <group> --read           mark the chat's replies read
 
   Plan documents:
     plan attach <doc> (--group G | --session S) [--path P]
@@ -401,7 +409,7 @@ struct Args {
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
-      "--preset", "--label", "--person",
+      "--preset", "--label", "--person", "--steps",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -501,6 +509,7 @@ func printSession(_ s: SessionSummary) {
     "  claude:  \(s.live ? "running, pid \(s.claudePid.map(String.init) ?? "?")" : "stopped")\(s.attached ? ", attached" : "")"
   )
   if let group = s.chat { print("  chat of: group \(group)") }
+  if let activity = s.activity { print("  unread:  \(activity.text)") }
   if let group = s.group {
     let description = s.groupDescription.map { ": \($0)" } ?? ""
     print("  group:   \(s.groupName ?? group) (\(group))\(description)".printable)
@@ -737,6 +746,16 @@ if flagsAfterSession.contains(command), a.positional.count > 1, a.positional[1].
 switch command {
 case "hook":
   hook()
+// A removed session has no org, so `--removed` ignores `--org` and `--local`.
+case "ls" where a.switches.contains("--removed"), "list" where a.switches.contains("--removed"):
+  let result = call("removed-ls")
+  if a.json {
+    printJSON(result)
+  } else {
+    for r in decode(result, as: [RemovedSession].self) {
+      print("\(r.id)  \(r.name)  removed \(ago(r.removed)) ago".printable)
+    }
+  }
 case "ls", "list":
   let result = call("ls")
   var filter = OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ","))
@@ -881,6 +900,8 @@ case "decide":
   decide(a)
 case "reply":
   replyCommand(a)
+case "context":
+  contextCommand(a)
 case "slash":
   slashCommand(a)
 case "summary":

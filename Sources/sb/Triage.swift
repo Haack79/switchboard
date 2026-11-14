@@ -7,7 +7,8 @@ func printTriage(_ s: SessionSummary, position: Int? = nil) {
   func out(_ line: String) { print(line.printable) }
   let number = position.map { "\($0). " } ?? ""
   out("\(number)\(item.title)  [\(item.kind.rawValue)]")
-  out("   \(s.name) (\(s.id)), \(s.repoFolder.map { ($0 as NSString).lastPathComponent + ", " } ?? "")\(ago(s.since))")
+  let folder = s.repoFolder.map { ($0 as NSString).lastPathComponent + ", " } ?? ""
+  out("   \(sessionMention(name: s.name, id: s.id)), \(folder)\(ago(s.since))")
   out("   Summary:")
   if !item.summary.isEmpty { out("      \(oneLine(item.summary, max: 300))") }
   for c in item.callouts {
@@ -108,6 +109,25 @@ func choose(_ a: Args) {
 func replyCommand(_ a: Args) {
   let result = call("reply", ["session": .string(a.session("reply"))])
   if a.json { printJSON(result) } else { print(controlsEscaped(result["reply"]?.string ?? "")) }
+}
+
+/// `sb context <session> [--steps N]` prints Claude's steps that lead up to
+/// the session's current item, oldest first, and marks the item's own step.
+func contextCommand(_ a: Args) {
+  var args: [String: JSON] = ["session": .string(a.session("context"))]
+  if let steps = a.values["--steps"] {
+    guard let n = Int(steps) else { die("--steps needs a whole number") }
+    args["steps"] = .number(Double(n))
+  }
+  let result = call("item-context", args)
+  if a.json { return printJSON(result) }
+  let context = decode(result, as: ItemContext.self)
+  if let caption = context.caption { print("\(caption) The latest steps:") }
+  for (index, step) in context.steps.enumerated() {
+    let line = step.kind == .tool ? "→ \(step.summary ?? "")" : "Claude: \(step.text ?? "")"
+    let mark = index == context.anchorIndex ? "▶ " : ""
+    print(mark + controlsEscaped(line))
+  }
 }
 
 /// The text with each control character but newline and tab shown as an

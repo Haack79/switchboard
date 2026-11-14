@@ -40,6 +40,9 @@ struct SwitchboardApp: App {
         }
         .keyboardShortcut("n", modifiers: [.command, .shift])
         .disabled(model.presentingSheet || newSessionGroup == nil)
+        Button("New Conversation") { model.openManager(new: true) }
+          .keyboardShortcut(NavShortcuts.newConversation)
+          .disabled(model.presentingSheet)
         Button("Import Sessions…") { model.showingImport = true }
           .keyboardShortcut("i", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)
@@ -194,7 +197,8 @@ struct MenuBarContent: View {
       Text("Nothing needs you")
     } else {
       ForEach(model.needsUser) { s in
-        Button("\(model.inboxName(s)): \(s.triage?.title ?? s.reason)") {
+        let title = "\(model.inboxName(s)): \(model.inboxLine(s))"
+        Button(title) {
           model.selection = s.id
           show()
         }

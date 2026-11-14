@@ -526,22 +526,22 @@ extension TriageOperatorTests {
 // MARK: Conversation and chat parity
 
 /// A shape that a conversation, a chat, or a work session can hold without reports.
-struct ParityShape: CustomTestStringConvertible, Sendable {
+struct ReportParityShape: CustomTestStringConvertible, Sendable {
   var name: String
   var events: @Sendable () throws -> [Event]
   var waits: [Wait] = []
   var testDescription: String { name }
 }
 
-let parityShapes: [ParityShape] = [
-  ParityShape(name: "an informational reply", events: { opIdle }),
-  ParityShape(name: "a question reply", events: { [opPrompt(1, "go"), opStop(2, proseQuestion)] }),
-  ParityShape(name: "a permission card", events: { permissionTurn() }),
-  ParityShape(name: "a question card", events: { questionTurn() }),
-  ParityShape(name: "a send card", events: { opIdle + [sendPending()] }),
-  ParityShape(name: "an sb summary set card", events: { opIdle + [try summaryEvent(9, 9, sessionCard)] }),
-  ParityShape(name: "an overdue wait", events: { opIdle }, waits: [overdueWait]),
-  ParityShape(name: "a notify outcome", events: { opIdle + [try opNotified(5)] }),
+let reportParityShapes: [ReportParityShape] = [
+  ReportParityShape(name: "an informational reply", events: { opIdle }),
+  ReportParityShape(name: "a question reply", events: { [opPrompt(1, "go"), opStop(2, proseQuestion)] }),
+  ReportParityShape(name: "a permission card", events: { permissionTurn() }),
+  ReportParityShape(name: "a question card", events: { questionTurn() }),
+  ReportParityShape(name: "a send card", events: { opIdle + [sendPending()] }),
+  ReportParityShape(name: "an sb summary set card", events: { opIdle + [try summaryEvent(9, 9, sessionCard)] }),
+  ReportParityShape(name: "an overdue wait", events: { opIdle }, waits: [overdueWait]),
+  ReportParityShape(name: "a notify outcome", events: { opIdle + [try opNotified(5)] }),
 ]
 
 /// The report events that only the operator records, appended after the shape's own events.
@@ -551,8 +551,8 @@ let strayReports: [Event] = [
 
 extension TriageOperatorTests {
   @Suite struct Parity {
-    @Test(arguments: [SessionKind.manager, .chat, .work], parityShapes)
-    func reportEventsChangeNoOtherKindsVerdict(_ kind: SessionKind, _ shape: ParityShape) throws {
+    @Test(arguments: [SessionKind.manager, .chat, .work], reportParityShapes)
+    func reportEventsChangeNoOtherKindsVerdict(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
       let without = opFacts(try shape.events())
       let with = opFacts(try shape.events() + strayReports)
@@ -560,8 +560,8 @@ extension TriageOperatorTests {
       #expect(opVerdict(s, with) == opVerdict(s, without))
     }
 
-    @Test(arguments: [SessionKind.manager, .chat, .work], parityShapes)
-    func reportEventsChangeNoOtherKindsItem(_ kind: SessionKind, _ shape: ParityShape) throws {
+    @Test(arguments: [SessionKind.manager, .chat, .work], reportParityShapes)
+    func reportEventsChangeNoOtherKindsItem(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
       let without = opFacts(try shape.events())
       let with = opFacts(try shape.events() + strayReports)
@@ -570,8 +570,8 @@ extension TriageOperatorTests {
     }
 
     /// A conversation's and a chat's item is the blocking prompt's item, as before reports existed.
-    @Test(arguments: [SessionKind.manager, .chat], parityShapes)
-    func aConversationsItemIsStillOnlyItsPromptItem(_ kind: SessionKind, _ shape: ParityShape) throws {
+    @Test(arguments: [SessionKind.manager, .chat], reportParityShapes)
+    func aConversationsItemIsStillOnlyItsPromptItem(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
       let f = opFacts(try shape.events() + strayReports)
       let verdict = opVerdict(s, f)
@@ -579,8 +579,8 @@ extension TriageOperatorTests {
       #expect(Triage.itemAndDecisions(f, verdict, kind: kind).item == Triage.promptItem(f, verdict))
     }
 
-    @Test(arguments: parityShapes)
-    func aConversationAndAChatWithTheSameFactsGiveTheSameItem(_ shape: ParityShape) throws {
+    @Test(arguments: reportParityShapes)
+    func aConversationAndAChatWithTheSameFactsGiveTheSameItem(_ shape: ReportParityShape) throws {
       let f = opFacts(try shape.events() + strayReports)
       let conversation = kindSession(.manager, waits: shape.waits)
       let chat = kindSession(.chat, waits: shape.waits)
