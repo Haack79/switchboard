@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import SwitchboardApp
+@testable import SwitchboardCore
 
 @Suite struct SessionLinkTests {
   @Test func urlForAnIdIsTheSchemeAndTheId() {
