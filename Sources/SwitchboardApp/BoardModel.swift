@@ -98,8 +98,12 @@ final class BoardModel: ObservableObject {
   /// The newest events of the sessions whose card details the Inbox showed,
   /// oldest first, by session id.
   @Published var recentEvents: [String: [Event]] = [:]
+  /// The transcript steps that lead up to each session's Inbox item, by session id.
+  @Published var itemContexts: [String: ItemContext] = [:]
   /// Each chat's last messages, by session id, read while its pane shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
+  /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
+  @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
@@ -148,6 +152,8 @@ final class BoardModel: ObservableObject {
   @Published var checkingDrafts: Set<String> = []
   /// sbd's refusal of a draft's last post or check, by reply key.
   @Published var draftErrors: [String: String] = [:]
+  /// Whether the sidebar shows the archived Manager conversations.
+  @Published var showingArchive = false
   /// The sidebar sections that the user collapsed. Follow-ups that haven't
   /// started can number in the hundreds, so their section starts collapsed.
   @Published var collapsed: Set<AttentionState> = [.notStarted]
@@ -235,6 +241,9 @@ final class BoardModel: ObservableObject {
   /// Issue reads and Starts, which wait on GitHub, gh, or git. They run here so the session list and other
   /// actions do not wait behind them.
   let issueWork = DispatchQueue(label: "switchboard.issues", attributes: .concurrent)
+  /// Item-context reads, which can take seconds for a long or remote transcript. They run apart from the poll.
+  /// The queue is serial, so two reads for one session answer in the order the user asked for them.
+  private let contextWork = DispatchQueue(label: "switchboard.context")
   private let worker = DispatchQueue(label: "switchboard.actions")
   /// Merges wait on gh for up to 120 s, and review requests for up to 60 s.
   /// They run apart from other actions and from each other.
@@ -244,6 +253,10 @@ final class BoardModel: ObservableObject {
   /// it can wait for the group's chat to start.
   private let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
   private var timer: Timer?
+  /// Whether Switchboard is the active app. A chat's replies count as read only while it is. Tests replace it.
+  var isAppActive: () -> Bool = { NSApp.isActive }
+  /// The last `chat-read` sent, so each refresh doesn't send it again.
+  var lastChatRead: (session: String, replies: Int)?
   /// Each session as the last refresh listed it.
   private var lastSeen: [String: SessionSummary] = [:]
   /// The session that `create` or `openManager` selected before a refresh
@@ -351,8 +364,8 @@ final class BoardModel: ObservableObject {
     sessions.filter { $0.kind == .manager }.sorted(by: Manager.newestFirst)
   }
 
-  /// The Manager conversation that the toolbar star names while one needs you.
-  var waitingManager: SessionSummary? { managers.first { $0.state == .needsYou } }
+  /// The Manager conversation that the toolbar star names while one waits on the user.
+  var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
   /// A state's sessions in the sidebar, each one followed by its children.
   struct SidebarGroup: Identifiable {
@@ -519,6 +532,7 @@ final class BoardModel: ObservableObject {
       // include the follow-ups, so that change from Not started notifies.
       lastSeen = Dictionary(uniqueKeysWithValues: allBoard.map { ($0.id, $0) })
       loaded = true
+      markSelectedChatRead()
     case .failure(let error):
       let problem = "\(error)"
       if unreachable != problem { unreachable = problem }
@@ -866,7 +880,8 @@ final class BoardModel: ObservableObject {
   /// `sent` runs only when sbd accepted the message. A second send to the
   /// same session does nothing until sbd answers the first. Each image is a
   /// file name and the image's bytes. `ref` names the Inbox item that the
-  /// message answers.
+  /// message answers. A message to a chat shows in the chat at once as a
+  /// pending message, which carries sbd's refusal in place of `actionError`.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
     sent: (() -> Void)? = nil
@@ -875,7 +890,33 @@ final class BoardModel: ObservableObject {
     var args: [String: JSON] = ["session": .string(id), "text": .string(text)]
     if let ref { args["ref"] = .string(ref) }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
-    perform("send", args, then: { _ in sent?() }, finally: { self.sending.remove(id) })
+    let pending =
+      summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
+    if let pending {
+      pendingChat[id, default: []].removeAll(where: \.failed)
+      pendingChat[id, default: []].append(pending)
+    }
+    perform(
+      "send", args,
+      then: { result in
+        if let pending {
+          // `perform` clears `actionError` only for a request without a `failed` handler.
+          self.actionError = nil
+          self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
+        }
+        sent?()
+      },
+      failed: pending.map { pending in { self.setPending(pending.id, in: id, .failed("\($0)")) } },
+      finally: { self.sending.remove(id) })
+  }
+
+  private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
+    guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
+    pendingChat[session]?[i].status = status
+  }
+
+  func dismissPending(_ message: UUID, in session: String) {
+    pendingChat[session]?.removeAll { $0.id == message }
   }
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
@@ -1069,6 +1110,19 @@ final class BoardModel: ObservableObject {
 
   nonisolated static let recentEventCount = 10
 
+  /// Reads the transcript steps that lead up to the session's Inbox item, with `steps` steps before it. A failed
+  /// read stores nothing, so the card's details show the last reply.
+  func loadItemContext(_ session: String, steps: Int) {
+    let send = send
+    contextWork.async {
+      let context = try? JSONCoding.convert(
+        send("item-context", ["session": .string(session), "steps": .number(Double(steps))]), to: ItemContext.self)
+      Task { @MainActor in
+        if let context, self.itemContexts[session] != context { self.itemContexts[session] = context }
+      }
+    }
+  }
+
   /// Reads the session's events of `kind` among the newest that sbd returns by default, off the main thread.
   func events(_ session: String, kind: String) async -> [Event] {
     let client = client
@@ -1087,6 +1141,10 @@ final class BoardModel: ObservableObject {
         // A failed first read shows an empty log, so the pane stops showing that it is loading.
         if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
+        }
+        if let messages, let pending = self.pendingChat[session] {
+          let left = PendingChatMessage.notInLog(pending, log: messages)
+          if left != pending { self.pendingChat[session] = left }
         }
       }
     }

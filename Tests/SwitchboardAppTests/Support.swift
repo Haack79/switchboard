@@ -86,10 +86,10 @@ final class Field {
 }
 
 /// A model whose requests wait until the test signals the semaphore. The
-/// counter counts the requests that reach sbd.
+/// counter counts the requests that reach sbd. The model applies `list` when it is given.
 @MainActor
-func heldModel() -> (BoardModel, DispatchSemaphore, Counter) {
-  let model = offlineModel()
+func heldModel(_ list: [SessionSummary]? = nil) -> (BoardModel, DispatchSemaphore, Counter) {
+  let model = list.map { appliedModel($0) } ?? offlineModel()
   let release = DispatchSemaphore(value: 0)
   let requests = Counter()
   model.send = { _, _ in
@@ -179,6 +179,14 @@ func unstartedFollowup(_ id: String, _ repository: String? = nil) -> SessionSumm
   var s = needsItem(id, state: .notStarted)
   s.cwd = ""
   s.followup = Followup(prompt: "p", repository: repository)
+  return s
+}
+
+/// A docket row, which reviews a PR and runs no claude of its own.
+func docketSession(_ id: String) -> SessionSummary {
+  var s = needsItem(id)
+  s.cwd = ""
+  s.docket = DocketSummary(DocketSession(pullRequest: "o/r#1", url: "https://github.com/o/r/pull/1"), DocketStatus())
   return s
 }
 
