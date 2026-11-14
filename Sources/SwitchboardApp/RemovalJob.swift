@@ -17,7 +17,7 @@ struct RemovalStatus: Equatable {
 
   /// The times at which a session stops being undoable, so the row can drop Undo then.
   func undoDeadlines(now: Int64) -> [Date] {
-    sessions.compactMap(\.removal).filter { $0.startsAfter(now) }.compactMap(\.notBefore).sorted()
+    sessions.compactMap(\.removal).filter { $0.startsAfter(now) }.map(\.notBefore).sorted()
       .map { Date(timeIntervalSince1970: Double($0) / 1000) }
   }
 }

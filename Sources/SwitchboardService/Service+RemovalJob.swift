@@ -11,16 +11,58 @@ extension Service {
     entries[id]?.session.removal?.holdsSession == true ? APIError("\(id) is being deleted") : nil
   }
 
-  /// The ids in `resolving` that a removal phase passes to `checkTodos`. The
-  /// job runs a session's removal while the session's removal is running,
-  /// and `rm` refuses such a session. For the job, it drops the ids whose
-  /// to-dos are no longer open, so a to-do that the user resolved by hand
-  /// does not fail the removal. For `rm`, it returns `resolving`, and
-  /// `checkTodos` refuses an id that names no open to-do. It runs on the
-  /// state queue.
-  func removalResolving(_ id: String, _ resolving: Set<String>) -> Set<String> {
-    guard let session = entries[id]?.session, session.removal?.state == .running else { return resolving }
+  /// The refusal for a request that would change a session whose files `rm` or `cleanup` is removing, or nil.
+  /// It runs on the state queue.
+  func removingRefusal(_ id: String) -> APIError? {
+    removing.contains(id) ? APIError("\(id) is being deleted") : nil
+  }
+
+  /// The refusal for a removal of a session that `followup start` is starting or `merge` is merging, or nil. It
+  /// runs on the state queue.
+  func busyRefusal(_ id: String) -> APIError? {
+    if starting.contains(id) { return APIError("\(id) is starting") }
+    if merging.contains(id) { return APIError("\(id) is merging its PR") }
+    return nil
+  }
+
+  /// Who runs `rm`'s phases on a session: a synchronous `rm`, or the removal job.
+  enum RemovalRunner {
+    case rm
+    case job
+
+    /// The clause, in lower case, that tells the user how to try the removal again.
+    var again: String {
+      switch self {
+      case .rm: "run `\(Service.removalCommand)` again"
+      case .job: "retry the delete"
+      }
+    }
+  }
+
+  /// The ids in `resolving` that a removal phase passes to `checkTodos`. For
+  /// the job, it drops the ids whose to-dos are no longer open, so a to-do
+  /// that the user resolved by hand does not fail the removal. For `rm`, it
+  /// returns `resolving`, and `checkTodos` refuses an id that names no open
+  /// to-do. It runs on the state queue.
+  func removalResolving(_ id: String, _ resolving: Set<String>, for runner: RemovalRunner) -> Set<String> {
+    guard runner == .job, let session = entries[id]?.session else { return resolving }
     return resolving.intersection(session.openTodos.map(\.id))
+  }
+
+  /// Runs `change` on each session in `ids` in one store transaction. `update` changes the entry before it saves,
+  /// so when the store refuses, this puts each entry's session back as it was and throws. It runs on the state
+  /// queue.
+  func updateOrRestore(_ ids: [String], _ change: (String, inout Session) -> Void) throws {
+    guard !ids.isEmpty else { return }
+    let before = ids.map { entries[$0]?.session }
+    do {
+      try store.transaction {
+        for id in ids { try update(id) { change(id, &$0) } }
+      }
+    } catch {
+      for case (let id, let session?) in zip(ids, before) { entries[id]?.session = session }
+      throw error
+    }
   }
 
   /// How long after `rm-queue` the job starts a session, from `removalDelaySeconds`.
@@ -35,27 +77,21 @@ extension Service {
   /// oldest first. `removal-notice-dismiss` deletes the notice `id`.
   func removalRequest(_ op: String, _ args: JSON) throws -> JSON {
     switch op {
-    case "rm-retry", "rm-keep":
-      let id = try lookup(args)
-      if let refusal = removalRefusal(id) { throw refusal }
-      guard entries[id]?.session.removal != nil else { throw APIError("\(id) has no failed removal") }
-      if op == "rm-retry" {
-        guard !removing.contains(id) else { throw APIError("\(id) is being deleted") }
-        guard !starting.contains(id) else { throw APIError("\(id) is starting") }
-        guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
+    case "rm-retry":
+      let id = try failedRemoval(args)
+      if let refusal = removingRefusal(id) ?? busyRefusal(id) { throw refusal }
+      try update(id) {
+        $0.removal?.state = .queued
+        $0.removal?.notBefore = nowMs()
+        $0.removal?.error = nil
       }
-      if op == "rm-keep" {
-        try restoreFromTrash(id)
-        try update(id) { $0.removal = nil }
-      } else {
-        try update(id) {
-          $0.removal?.state = .queued
-          $0.removal?.notBefore = nowMs()
-          $0.removal?.error = nil
-        }
-        removalOrder.append(id)
-        runRemovals()
-      }
+      removalOrder.append(id)
+      runRemovals()
+      return try JSON(encoding: summary(id))
+    case "rm-keep":
+      let id = try failedRemoval(args)
+      try restoreFromTrash(id)
+      try update(id) { $0.removal = nil }
       return try JSON(encoding: summary(id))
     case "rm-cancel":
       return try JSON(encoding: cancelRemovals(args))
@@ -68,17 +104,21 @@ extension Service {
     }
   }
 
+  /// The session that `args` names, or throws unless it has a failed removal. It runs on the state queue.
+  private func failedRemoval(_ args: JSON) throws -> String {
+    let id = try lookup(args)
+    if let refusal = removalRefusal(id) { throw refusal }
+    guard entries[id]?.session.removal != nil else { throw APIError("\(id) has no failed removal") }
+    return id
+  }
+
   /// Clears the queued removal of each session in `sessions`. The job stopped nothing yet, so the session is as
   /// it was before `rm-queue`. It clears a queued removal whose `notBefore` passed too. It refuses each id that
   /// names no session, no removal, or a running or failed removal. A refusal does not stop the other ids. It
   /// runs on the state queue.
   private func cancelRemovals(_ args: JSON) throws -> RemovalCancelled {
-    guard case .array(let list)? = args["sessions"], list.allSatisfy({ $0.string != nil }) else {
-      throw APIError("rm-cancel needs sessions as a list of session ids")
-    }
-    var seen = Set<String>()
     var result = RemovalCancelled(cancelled: [], refused: [])
-    for id in list.compactMap(\.string) where seen.insert(id).inserted {
+    for id in try idList(args, key: "sessions", op: "rm-cancel") {
       guard let session = entries[id]?.session else {
         result.refused.append(.init(id: id, name: id, reason: "no session \(id)"))
         continue
@@ -95,10 +135,8 @@ extension Service {
         continue
       }
       do {
-        try update(id) { $0.removal = nil }
+        try updateOrRestore([id]) { _, s in s.removal = nil }
       } catch {
-        // `update` changes the entry before the store refuses the save.
-        entries[id]?.session.removal = session.removal
         result.refused.append(.init(id: id, name: session.name, reason: "\(error)"))
         continue
       }
@@ -157,8 +195,8 @@ extension Service {
       let id = removalOrder.remove(at: index)
       guard var removal = entries[id]?.session.removal else { continue }
       // `rm-queue` and `rm-retry` refuse a session that `rm` or `cleanup` is removing. This check covers any other path.
-      if removing.contains(id) {
-        failRemoval(id, APIError("\(id) is being deleted"))
+      if let refusal = removingRefusal(id) {
+        failRemoval(id, refusal)
         continue
       }
       removal.state = .running
@@ -193,24 +231,20 @@ extension Service {
   /// that stayed becomes a removal notice, stored as the session is forgotten.
   /// It runs on `removalQueue`.
   private func runRemoval(_ id: String, _ removal: Removal) {
-    let resolving = Set(removal.resolve ?? [])
     do {
       let inTrash = try folderInTrash(id, removal)
       var trash: String?
       _ = try removeAtSite(
         id, worktree: removal.worktree, branch: removal.branch, remoteBranch: removal.remoteBranch,
-        resolving: resolving, ancestry: nil, command: "sb rm --worktree", again: "retry the delete",
-        storesNotice: true
+        resolving: Set(removal.resolve), ancestry: nil, by: .job
       ) { check, checked, site in
         trash = try releaseThroughTrash(check, checked, removal, inTrash: inTrash)
-        guard trash == nil else {
-          return releaseBranches(
-            check.session, repo: checked.repo, branch: checked.branch, supacode: checked.supacode, pr: checked.pr,
-            remoteBranch: check.remoteTarget, at: site)
+        if trash == nil, let repo = checked.repo {
+          try releaseWorktree(check.session, repo: repo, folderGone: check.folderGone, at: site)
         }
-        return try releaseFiles(
+        return releaseBranches(
           check.session, repo: checked.repo, branch: checked.branch, supacode: checked.supacode, pr: checked.pr,
-          folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
+          remoteBranch: check.remoteTarget, at: site)
       }
       if let trash { purge(trash) }
     } catch {

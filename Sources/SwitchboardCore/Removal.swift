@@ -92,7 +92,7 @@ public struct Removal: Codable, Equatable, Sendable {
   /// When `rm-queue` queued the session, in ms since the epoch.
   public var requested: Int64
   /// The time before which the job does not start the session, in ms since the epoch.
-  public var notBefore: Int64?
+  public var notBefore: Int64
   public var worktree: Bool
   public var branch: Bool
   public var remoteBranch: Bool
@@ -103,12 +103,12 @@ public struct Removal: Codable, Equatable, Sendable {
   /// True once the trash check passed and git dropped the worktree's record,
   /// before the branch deletes. A restart then continues without the check,
   /// because the record that the check needs is gone.
-  public var released: Bool?
+  public var released = false
   /// The ids of the session's open to-dos that the removal resolves.
-  public var resolve: [String]?
+  public var resolve: [String]
 
   public init(
-    requested: Int64, notBefore: Int64? = nil, worktree: Bool, branch: Bool, remoteBranch: Bool, resolve: [String]
+    requested: Int64, notBefore: Int64, worktree: Bool, branch: Bool, remoteBranch: Bool, resolve: [String]
   ) {
     self.state = .queued
     self.requested = requested
@@ -119,13 +119,28 @@ public struct Removal: Codable, Equatable, Sendable {
     self.resolve = resolve
   }
 
+  /// Earlier builds of the removal job left out `released` while it was false, and could leave out `notBefore`
+  /// and `resolve`. A store row that fails to decode stops sbd from loading every session.
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    state = try c.decode(State.self, forKey: .state)
+    requested = try c.decode(Int64.self, forKey: .requested)
+    notBefore = try c.decodeIfPresent(Int64.self, forKey: .notBefore) ?? requested
+    worktree = try c.decode(Bool.self, forKey: .worktree)
+    branch = try c.decode(Bool.self, forKey: .branch)
+    remoteBranch = try c.decode(Bool.self, forKey: .remoteBranch)
+    error = try c.decodeIfPresent(String.self, forKey: .error)
+    trash = try c.decodeIfPresent(String.self, forKey: .trash)
+    released = try c.decodeIfPresent(Bool.self, forKey: .released) ?? false
+    resolve = try c.decodeIfPresent([String].self, forKey: .resolve) ?? []
+  }
+
   /// True while the job holds the session: queued or running.
   public var holdsSession: Bool { state != .failed }
 
   /// True while the removal is queued and `now` is before its `notBefore`, so the job does not start it yet and
-  /// `rm-cancel` brings the session back with nothing stopped. A removal that an older sbd queued has no
-  /// `notBefore` and may start at once.
-  public func startsAfter(_ now: Int64) -> Bool { state == .queued && notBefore.map { now < $0 } == true }
+  /// `rm-cancel` brings the session back with nothing stopped.
+  public func startsAfter(_ now: Int64) -> Bool { state == .queued && now < notBefore }
 }
 
 /// A branch or remote branch that a removal kept after it forgot the session,

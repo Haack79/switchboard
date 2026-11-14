@@ -136,5 +136,5 @@ public enum UnixSocket {
     }
   }
 
-  public static func errnoText() -> String { String(cString: strerror(errno)) }
+  public static func errnoText(_ code: Int32 = errno) -> String { String(cString: strerror(code)) }
 }

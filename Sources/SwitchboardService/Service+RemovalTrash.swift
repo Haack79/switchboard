@@ -20,7 +20,7 @@ extension Service {
     let session = check.session
     guard let repo = checked.repo else { return nil }
     if let inTrash {
-      if removal.released != true {
+      if !removal.released {
         try checkTrash(check, checked, inTrash)
         try releaseFromTrash(session, repo: repo, inTrash)
       }
@@ -49,7 +49,7 @@ extension Service {
         "\(session.cwd) exists, and the trash holds a folder of \(id) at \(trash) too. Move one of them away, then retry the delete."
       )
     }
-    if removal.released == true { return trash }
+    if removal.released { return trash }
     let repo = try worktreeRepo(session, at: mac)
     guard try worktreeEntry(repo, holding: session.cwd, at: mac) != nil else {
       throw APIError(
@@ -100,7 +100,7 @@ extension Service {
       }
     }
     if failure == EXDEV { return false }
-    throw APIError("sbd couldn't move \(session.cwd) to the trash at \(trash): \(describe(failure)).")
+    throw APIError("sbd couldn't move \(session.cwd) to the trash at \(trash): \(UnixSocket.errnoText(failure)).")
   }
 
   /// Runs the lossless check that `checkWorktreeIsLossless` makes on the
@@ -121,7 +121,7 @@ extension Service {
       let failure = rename(trash, to: session.cwd)
       guard failure == 0 else {
         throw APIError(
-          "\(error) sbd couldn't move the folder back to \(session.cwd) (\(describe(failure))), so it stays in the trash at \(trash)."
+          "\(error) sbd couldn't move the folder back to \(session.cwd) (\(UnixSocket.errnoText(failure))), so it stays in the trash at \(trash)."
         )
       }
       throw error
@@ -173,7 +173,7 @@ extension Service {
     }
     let failure = rename(trash, to: session.cwd)
     guard failure == 0 else {
-      throw APIError("sbd couldn't move \(trash) back to \(session.cwd): \(describe(failure)).")
+      throw APIError("sbd couldn't move \(trash) back to \(session.cwd): \(UnixSocket.errnoText(failure)).")
     }
   }
 
@@ -182,7 +182,7 @@ extension Service {
   /// purge deletes a trash folder that no session's removal names. It runs
   /// on the state queue.
   func trashRefusal(_ id: String) -> APIError? {
-    guard let removal = entries[id]?.session.removal, removal.released != true, let trash = removal.trash,
+    guard let removal = entries[id]?.session.removal, !removal.released, let trash = removal.trash,
       linkStatus(trash) != nil
     else { return nil }
     return APIError(
@@ -236,5 +236,3 @@ private func isFolder(_ status: stat) -> Bool { status.st_mode & S_IFMT == S_IFD
 private func rename(_ from: String, to: String) -> Int32 {
   renamex_np(from, to, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
 }
-
-private func describe(_ failure: Int32) -> String { String(cString: strerror(failure)) }

@@ -1019,8 +1019,8 @@ enum WaitingCause: String, CaseIterable, Sendable {
       "id": "s1", "name": "test", "cwd": "/tmp/w", "claudeSessionId": "uuid", "created": 0, "started": true,
       "done": .bool(done),
       "removal": [
-        "state": .string(state), "requested": 1, "worktree": true, "branch": false, "remoteBranch": false,
-        "resolve": [], "error": state == "failed" ? .string(message) : .null,
+        "state": .string(state), "requested": 1, "notBefore": 1, "worktree": true, "branch": false,
+        "remoteBranch": false, "released": false, "resolve": [], "error": state == "failed" ? .string(message) : .null,
       ],
     ]
     let s = try JSONCoding.decode(Session.self, from: json.text)

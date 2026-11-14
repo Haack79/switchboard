@@ -211,7 +211,8 @@ extension Service {
   /// and runs nothing for the session. It forgets a session whose claude stopped on record and refuses one whose
   /// claude may still run there, and it refuses a removal of the worktree.
   func removeFromUnlistedHost(
-    _ session: Session, resolving: Set<String>, worktree: Bool, mayRunClaude: Bool, site: any SessionSite
+    _ session: Session, resolving: Set<String>, for runner: RemovalRunner, worktree: Bool, mayRunClaude: Bool,
+    site: any SessionSite
   ) throws -> JSON {
     let host = session.host ?? "its host"
     if worktree { try site.requireReady() }
@@ -229,7 +230,7 @@ extension Service {
       guard let entry = entries[session.id], !self.mayRunClaude(entry) else {
         throw APIError("\(session.id)'s claude may still run on \(host), so sbd can't remove it.")
       }
-      try forgetSession(session.id, resolving: removalResolving(session.id, resolving))
+      try forgetSession(session.id, resolving: removalResolving(session.id, resolving, for: runner))
       try detachPlans { $0.session == session.id }
     }
     return [

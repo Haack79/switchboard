@@ -11,7 +11,7 @@ import Testing
       id: "s1", name: "s", cwd: "/tmp", repo: nil, branch: nil, claudeSessionId: "c1", state: .done, reason: "",
       since: 0, lastActivity: 0, live: true, claudePid: nil, attached: false, lastReply: nil, waits: [], notes: [])
     s.removal = state.map { state in
-      var removal = Removal(requested: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
+      var removal = Removal(requested: 1, notBefore: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
       removal.state = state
       if state == .failed { removal.error = "/tmp has uncommitted files (1)." }
       return removal
@@ -41,8 +41,8 @@ import Testing
       return
     }
     object["removal"] = [
-      "state": .string(state), "requested": 1, "worktree": true, "branch": false, "remoteBranch": false,
-      "resolve": [],
+      "state": .string(state), "requested": 1, "notBefore": 1, "worktree": true, "branch": false,
+      "remoteBranch": false, "released": false, "resolve": [],
     ]
     json = .object(object)
 

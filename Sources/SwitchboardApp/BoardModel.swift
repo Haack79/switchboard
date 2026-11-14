@@ -64,7 +64,8 @@ final class BoardModel: ObservableObject {
   @Published var cleaningUp: Set<String> = []
   /// The Delete All sheet's confirmation, or nil while the sheet doesn't ask.
   @Published var doneRemoval: DoneRemoval?
-  /// The branches that sbd's removal job kept after it forgot their sessions, read with `removal-notices` in each refresh.
+  /// The branches that sbd's removal job kept after it forgot their sessions, read with `removal-notices` in a
+  /// refresh after an `ls` that listed a held session, while a notice shows, and every 5 s.
   @Published var removalNotices: [RemovalNotice] = []
   /// The failed removals whose Retry or Keep is on its way to sbd, and the queued ones whose Undo is.
   @Published var answeringRemovals: Set<String> = []
@@ -435,13 +436,14 @@ final class BoardModel: ObservableObject {
     if readFollowups { followupsRead = Date() }
     let readUsage = Date().timeIntervalSince(usageRead) >= 60
     if readUsage { usageRead = Date() }
+    let readNotices = readFollowups || !removalNotices.isEmpty || allSessions.contains(where: \.isBeingRemoved)
     poller.async {
       let (result, more) = Self.read(
         sessions: client.sessions,
         followups: readFollowups ? { try client.call("followup-ls", as: [SessionSummary].self) } : nil)
       let accounts = readFollowups ? try? client.accounts() : nil
       let groups = try? client.call("group-ls", as: GroupList.self).groups
-      let notices = try? client.call("removal-notices", as: [RemovalNotice].self)
+      let notices = readNotices ? try? client.call("removal-notices", as: [RemovalNotice].self) : nil
       let suggestions = readFollowups ? try? client.call("group-suggest", as: [GroupSuggestion].self) : nil
       let proposals = readFollowups ? try? client.call("plan-proposals", as: [PlanProposal].self) : nil
       let issues = readFollowups ? try? client.call("issues", as: IssueList.self) : nil

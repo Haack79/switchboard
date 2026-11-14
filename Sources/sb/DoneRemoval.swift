@@ -64,16 +64,16 @@ func removeDone(_ a: Args) {
 /// both in the order of `ids`. `failed` is true for a removal that failed,
 /// and false for one that someone cleared while sb waited.
 private func waitForRemovals(_ ids: [String]) -> (gone: [String], stayed: [Stayed]) {
-  var lastAnswer = Date()
+  var retry = UnreachableRetry()
   while true {
     let sessions: [SessionSummary]
     do {
-      sessions = decode(try client.call("ls"), as: [SessionSummary].self)
-      lastAnswer = Date()
-    } catch is SbdUnreachable where Date().timeIntervalSince(lastAnswer) < BlockingWait.unreachableSeconds {
       // launchd may be restarting sbd, and the job resumes after the restart.
-      Thread.sleep(forTimeInterval: 1)
-      continue
+      guard let answer = try retry.attempt(client.sessions) else {
+        Thread.sleep(forTimeInterval: 1)
+        continue
+      }
+      sessions = answer
     } catch {
       die("\(error)")
     }
@@ -126,7 +126,7 @@ private func dismiss(_ notice: RemovalNotice) {
 /// the result still prints after `rm-keep` went out.
 private func removalNotices() -> [RemovalNotice] {
   do {
-    return try JSONCoding.convert(try client.call("removal-notices"), to: [RemovalNotice].self)
+    return try client.call("removal-notices", as: [RemovalNotice].self)
   } catch {
     warn("can't read the removal notices: \(error)")
     return []

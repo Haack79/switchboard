@@ -13,14 +13,13 @@ struct RemovalPR {
   let branch: String
 
   static let breaker = RemovalPR(number: 122953, branch: "haacked/cdp-dlq-breaker-counts-lookups")
+  static let groups = RemovalPR(number: 122179, branch: "posthog/groups-list-two-phase-dedup")
+  static let cohort = RemovalPR(number: 121847, branch: "haacked/cohort-store-stamp-other-topic-marks")
 }
 
 /// An sbd whose poller asks a FakeGitHub, and a PostHog/posthog checkout whose origin is a bare repo in the home
 /// that holds main.
 struct MergedPRRepo {
-  /// The GitHub URL of the repo that the recorded PRs belong to.
-  static let url = "https://github.com/PostHog/posthog.git"
-
   let github: FakeGitHub
   let sbd: Instance
   let repo: String
@@ -29,25 +28,30 @@ struct MergedPRRepo {
   init() throws {
     github = try FakeGitHub()
     sbd = try Instance.withGitHub(github)
-    repo = try Repos.create("\(sbd.home.path)/posthog", origin: Self.url)
+    repo = try Repos.create("\(sbd.home.path)/posthog", origin: Instance.posthogURL)
     origin = "\(sbd.home.path)/origin.git"
     try sbd.git(sbd.home.path, "init", "-q", "--bare", origin)
-    try sbd.git(repo, "config", "url.\(origin).insteadOf", Self.url)
+    try sbd.git(repo, "config", "url.\(origin).insteadOf", Instance.posthogURL)
     try sbd.git(repo, "push", "-q", "origin", "main")
   }
 
-  /// A session in a worktree that sbd made on the PR's branch, after a commit. GitHub reports the PR as merged
-  /// with that commit as its head. The commit is on no remote unless `push` is true.
-  func merged(_ pr: RemovalPR, push: Bool = false) throws -> SessionSummary {
+  /// A session in a worktree that sbd made on the PR's branch, after a commit. GitHub reports the PR in
+  /// `state` with that commit as its head. The commit is on no remote unless `push` is true.
+  func finished(_ pr: RemovalPR, state: String, push: Bool = false) throws -> SessionSummary {
     let s = try sbd.worktreeSession(repo, branch: pr.branch)
     try sbd.commit(s.cwd, "\(pr.number).txt")
     if push { try sbd.git(s.cwd, "push", "-q", "origin", pr.branch) }
     let tip = try sbd.git(s.cwd, "rev-parse", "HEAD")
     github.change(pr.number) {
-      $0["state"] = "MERGED"
+      $0["state"] = .string(state)
       $0["headRefOid"] = .string(tip)
     }
     return s
+  }
+
+  /// `finished` with the PR merged.
+  func merged(_ pr: RemovalPR, push: Bool = false) throws -> SessionSummary {
+    try finished(pr, state: "MERGED", push: push)
   }
 
   /// Polls GitHub and waits until each session is Done.
@@ -78,9 +82,10 @@ extension Instance {
   }
 
   /// Marks the session Done and waits until its state is Done.
-  func markSessionDone(_ id: String) throws {
+  @discardableResult
+  func markSessionDone(_ id: String) throws -> SessionSummary {
     try sb("done", id)
-    try waitFor(id, "Done") { $0.state == .done }
+    return try waitFor(id, "Done") { $0.state == .done }
   }
 
   /// The sessions as `ls` lists them, as raw JSON, so the test reads fields that `SessionSummary` may lack.

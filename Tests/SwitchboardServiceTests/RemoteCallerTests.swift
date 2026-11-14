@@ -1203,7 +1203,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
       service.queue.sync { _ = service.removing.insert("s1") }
 
       #expect { try service.queue.sync { try service.send("s1", "hello", trigger: .send) } } throws: {
-        "\($0)".contains("is being removed")
+        "\($0)".contains("is being deleted")
       }
 
       #expect(!FileManager.default.fileExists(atPath: launcher(facts)))

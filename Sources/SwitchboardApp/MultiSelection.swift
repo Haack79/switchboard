@@ -52,7 +52,7 @@ struct MultiSelectionView: View {
     let sessions = model.multiSelected
     VStack(spacing: 12) {
       Text(DoneRemovalText.selected(sessions.count)).font(.title2.bold())
-      DeleteSelectedButton(count: model.removableSelectionCount)
+      DeleteSelectedButton(count: sessions.filter(\.isRemovableWork).count)
       ScrollView {
         VStack(alignment: .leading, spacing: 6) {
           ForEach(sessions) { session in

@@ -23,14 +23,29 @@ import Testing
     #expect(try JSONCoding.decode(SessionSummary.self, from: JSON.object(fields).text).removal == nil)
   }
 
-  /// Every field that the Decisions name survives the store's JSON, so a restart resumes the removal with the
+  /// A row that an earlier build of the removal job stored without `released`, `notBefore`, or `resolve` still
+  /// loads, because one row that fails to decode stops sbd from loading every session.
+  @Test func aRemovalStoredWithoutTheLaterFieldsLoads() throws {
+    let json: JSON = [
+      "id": "s1", "name": "one", "cwd": "/a", "claudeSessionId": "u1", "created": 5, "started": true, "done": true,
+      "removal": ["state": "failed", "requested": 1000, "worktree": true, "branch": false, "remoteBranch": false],
+    ]
+
+    let removal = try #require(try JSONCoding.decode(Session.self, from: json.text).removal)
+
+    #expect(!removal.released)
+    #expect(removal.notBefore == 1000)
+    #expect(removal.resolve.isEmpty)
+  }
+
+  /// Every field of a removal survives the store's JSON, so a restart resumes the removal with the
   /// arguments, the trash path, and the to-dos that the user confirmed.
   @Test func aRemovalRoundTripsThroughTheStoredJSON() throws {
     let json: JSON = [
       "id": "s1", "name": "one", "cwd": "/a", "claudeSessionId": "u1", "created": 5, "started": true, "done": true,
       "removal": [
         "state": "running", "requested": 1000, "notBefore": 6000, "worktree": true, "branch": true,
-        "remoteBranch": true, "trash": "/sb/trash/s1", "resolve": ["n1", "n2"],
+        "remoteBranch": true, "trash": "/sb/trash/s1", "released": true, "resolve": ["n1", "n2"],
       ],
     ]
     let session = try JSONCoding.decode(Session.self, from: json.text)
@@ -42,6 +57,7 @@ import Testing
     #expect(stored["state"] == "running")
     #expect(stored["requested"] == 1000)
     #expect(stored["trash"] == "/sb/trash/s1")
+    #expect(stored["released"] == true)
     #expect(stored["resolve"] == ["n1", "n2"])
   }
 }

@@ -256,17 +256,6 @@ private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].ma
   ]
   nonisolated static let plan = RemovalPlan(remove: ["w", "k", "d"].map(removalItem), skip: [])
 
-  /// A `send` that records every request, queues every target of `rm-queue`, and answers anything else with `plan`.
-  func recordingSend(_ sent: SentRequests, plan: RemovalPlan = plan)
-    -> @Sendable (String, [String: JSON]) throws
-    -> JSON
-  {
-    { op, args in
-      sent.append(op, args)
-      return op == "rm-queue" ? try queuedEveryTarget(args) : try JSON(encoding: plan)
-    }
-  }
-
   func multiSelected(_ sent: SentRequests, _ list: [SessionSummary] = list, plan: RemovalPlan = plan) -> BoardModel {
     let model = appliedModel(list)
     model.send = recordingSend(sent, plan: plan)
@@ -458,7 +447,8 @@ private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].ma
       .success(
         Self.list.map { s in
           var held = s
-          held.removal = Removal(requested: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
+          held.removal = Removal(
+            requested: 1, notBefore: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
           return held
         }), followups: nil)
 

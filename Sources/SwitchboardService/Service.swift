@@ -1505,8 +1505,7 @@ public final class Service {
     let flags =
       (removesWorktree ? ["--worktree"] : []) + (removesBranch ? ["--delete-branch"] : [])
       + (removesRemoteBranch ? ["--delete-remote-branch"] : [])
-    let command = "sb rm --worktree"
-    let ancestry = removesWorktree ? try caller.ancestry(command: command) : nil
+    let ancestry = removesWorktree ? try caller.ancestry(command: Self.removalCommand) : nil
     do {
       let id: String = try queue.sync {
         let id = try lookup(args)
@@ -1515,17 +1514,17 @@ public final class Service {
         return id
       }
       defer { queue.sync { _ = removing.remove(id) } }
-      let (session, released) = try removeAtSite(
+      let released = try removeAtSite(
         id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
-        resolving: resolving, ancestry: ancestry, command: command, again: "run `\(command)` again"
+        resolving: resolving, ancestry: ancestry, by: .rm
       ) { check, stopped, site in
         try releaseFiles(
           check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
           folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
       }
-      if let kept = released.keptMessage(session.id, remoteBranch: removesRemoteBranch) { throw APIError(kept) }
+      if let kept = released.keptMessage(id, remoteBranch: removesRemoteBranch) { throw APIError(kept) }
       return [
-        "removed": .string(session.id), "worktree_removed": .bool(released.worktree),
+        "removed": .string(id), "worktree_removed": .bool(released.worktree),
         "branch_removed": .bool(released.branch), "remote_branch_removed": .bool(released.remoteBranch),
       ]
     } catch var error as OpenTodoError {
@@ -1538,37 +1537,40 @@ public final class Service {
   /// worktree, and the PR as `provenPR` finds it.
   typealias CheckedRemoval = (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?)
 
+  /// The command whose run inside a session `rm` refuses when the session's worktree would go.
+  static let removalCommand = "sb rm --worktree"
+
   /// Runs `rm`'s phases on the session and returns what `release` removed and kept. A session whose host
   /// config.json no longer lists goes through `removeFromUnlistedHost`, which removes no file. For any other
-  /// session, sbd waits for the session's site, then runs `checkBeforeRemoval`, `stopForRemoval`, and `release`
-  /// in one scope of the site, so on a host every check and git command runs on one connection, and the scope's
-  /// machine refuses each command once one got no answer. `release` gets the scope's site. Then
-  /// `forgetRemoved` forgets the session. With `storesNotice`, `forgetRemoved` also stores a removal notice for a
-  /// branch or remote branch that stayed. It runs off the state queue.
+  /// session, sbd waits for the session's site, then runs `checkBeforeRemoval`, `stopAndCheckAgain`, and
+  /// `release` in one scope of the site, so on a host every check and git command runs on one connection, and the
+  /// scope's machine refuses each command once one got no answer. `release` gets the scope's site. Then
+  /// `forgetRemoved` forgets the session. For the job, `forgetRemoved` also stores a removal notice for a branch or
+  /// remote branch that stayed. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    command: String, again: String, storesNotice: Bool = false,
-    release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
-  ) throws -> (session: Session, released: ReleasedFiles) {
-    let entry = try removalEntry(id, resolving: resolving)
+    by runner: RemovalRunner, release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
+  ) throws -> ReleasedFiles {
+    let entry = try removalEntry(id, resolving: resolving, for: runner)
     let site = self.site(for: entry.session)
     if site is UnlistedSite {
       _ = try removeFromUnlistedHost(
-        entry.session, resolving: resolving, worktree: worktree, mayRunClaude: entry.mayRunClaude, site: site)
-      return (entry.session, ReleasedFiles(worktree: false))
+        entry.session, resolving: resolving, for: runner, worktree: worktree, mayRunClaude: entry.mayRunClaude,
+        site: site)
+      return ReleasedFiles(worktree: false)
     }
     try awaitSite(site)
     let released = try releaseInScope("the removal of \(id)", at: site) { scope in
       let check = try checkBeforeRemoval(
         entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
-      let stopped = try stopForRemoval(
-        check, worktree: worktree, branch: branch, resolving: resolving, ancestry: ancestry, command: command,
-        again: again, scope: scope)
+      let stopped = try stopAndCheckAgain(
+        check, worktree: worktree, branch: branch, resolving: resolving, for: runner, ancestry: ancestry,
+        scope: scope)
       return try release(check, stopped, scope.site)
     }
-    let notice = storesNotice ? released.keptMessage(id, remoteBranch: remoteBranch) : nil
-    try forgetRemoved(entry.session, released, resolving: resolving, notice: notice, at: site)
-    return (entry.session, released)
+    let notice = runner == .job ? released.keptMessage(id, remoteBranch: remoteBranch) : nil
+    try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
+    return released
   }
 
   /// Runs `body` in one scope of the site, as `SessionSite.scoped` says, and returns what `body` released. When
@@ -1606,13 +1608,12 @@ public final class Service {
   /// `rm`'s first phase. It refuses a session that is starting or merging,
   /// or that has an open to-do that `resolving` doesn't name. It runs off the
   /// state queue.
-  func removalEntry(_ id: String, resolving: Set<String>) throws -> RemovalCheck {
+  func removalEntry(_ id: String, resolving: Set<String>, for runner: RemovalRunner) throws -> RemovalCheck {
     try queue.sync {
       guard let entry = entries[id] else { throw APIError("no session \(id)") }
       // The start would otherwise leave its new worktree behind.
-      guard !starting.contains(id) else { throw APIError("\(id) is starting") }
-      guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
-      try checkTodos(id, resolving: removalResolving(id, resolving))
+      if let refusal = busyRefusal(id) { throw refusal }
+      try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
       return RemovalCheck(
         session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
         mayRunClaude: mayRunClaude(entry))
@@ -1647,9 +1648,9 @@ public final class Service {
   /// since the checks, whose record the store can't delete, or whose scope's
   /// check fails. It returns what `checkRemoval` returns when it runs again
   /// after the stop. It runs off the state queue.
-  func stopForRemoval(
-    _ check: RemovalCheck, worktree: Bool, branch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    command: String, again: String, scope: SiteScope
+  func stopAndCheckAgain(
+    _ check: RemovalCheck, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
+    ancestry: Set<Int>?, scope: SiteScope
   ) throws -> CheckedRemoval {
     let session = check.session
     let fresh = try freshSnapshot(of: session)
@@ -1661,15 +1662,16 @@ public final class Service {
       }
       // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
       try store.checkDeletable(
-        session: session.id, resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving)),
+        session: session.id,
+        resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving, for: runner)),
         onHost: session.host)
       install(fresh, of: session)
       try scope.require()
-      if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
+      if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
       try stopForRemoval(session, at: site(for: session))
       return nil
     }
-    if let stop { try finishPaneStop(session, stop, again: again) }
+    if let stop { try finishPaneStop(session, stop, again: runner.again) }
     return try checkRemoval(
       session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone, worktree: worktree,
       branch: branch, at: scope.site)
@@ -1752,12 +1754,12 @@ public final class Service {
   /// plans, and deletes its launcher folder at `site`. It refuses a session
   /// that changed since the checks. A to-do that arrived since the checks
   /// keeps the session, and its error names what `releaseFiles` removed and
-  /// kept. A host's panes closed in `stopForRemoval`, from answers of the host.
+  /// kept. A host's panes closed in `stopAndCheckAgain`, from answers of the host.
   /// It stores `notice` as a removal notice in the same state-queue step that
   /// forgets the session, so a client that sees the session gone can read it.
   func forgetRemoved(
-    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, notice: String? = nil,
-    at site: any SessionSite
+    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, for runner: RemovalRunner,
+    notice: String?, at site: any SessionSite
   ) throws {
     try queue.sync {
       // A follow-up can start between the two steps.
@@ -1782,7 +1784,7 @@ public final class Service {
       }
       let terminals = session.host == nil ? try site.terminals() : nil
       do {
-        try forgetSession(session.id, resolving: removalResolving(session.id, resolving))
+        try forgetSession(session.id, resolving: removalResolving(session.id, resolving, for: runner))
       } catch var error as OpenTodoError {
         error.kept = kept
         error.stayed = stayed
@@ -1815,7 +1817,7 @@ public final class Service {
   func checkRemoval(
     _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
     at site: any SessionSite
-  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?) {
+  ) throws -> CheckedRemoval {
     guard worktree else { return (nil, nil, false, pr) }
     let pr = try provenPR(pr, of: session, in: folderGone ? session.repo ?? session.cwd : session.cwd, at: site)
     let merged = pr?.state == .merged

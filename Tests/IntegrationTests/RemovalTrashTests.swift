@@ -325,7 +325,7 @@ private func isTrashPath(_ path: String, of id: String, in sbd: Instance) -> Boo
     let failed = try sbd.waitForRemoval(a.id, "failed")
     let error = try #require(failed["error"]?.string, Comment(rawValue: failed.text))
     #expect(error.contains(sbd.trashFolder(a.id)), Comment(rawValue: error))
-    #expect(failed["released"] == nil || failed["released"] == .null, Comment(rawValue: failed.text))
+    #expect(failed["released"] == false, Comment(rawValue: failed.text))
     sbd.stopSbd()
     let stray = sbd.trashFolder("stray")
     try FileManager.default.createDirectory(atPath: stray, withIntermediateDirectories: true)

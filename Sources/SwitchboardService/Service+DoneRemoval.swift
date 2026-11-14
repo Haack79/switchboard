@@ -61,15 +61,7 @@ extension Service {
     guard let scope = args["scope"]?.string.flatMap(RemovalScope.init(rawValue:)) else {
       throw APIError("rm-plan needs scope done or work")
     }
-    let targets: [String]?
-    switch args["targets"] {
-    case nil, .null?:
-      targets = nil
-    case .array(let list)? where list.allSatisfy({ $0.string != nil }):
-      targets = list.compactMap(\.string)
-    default:
-      throw APIError("rm-plan needs targets as a list of session ids")
-    }
+    let targets = (args["targets"] ?? .null) == .null ? nil : try idList(args, key: "targets", op: "rm-plan")
     guard targets != nil || scope == .done else { throw APIError("rm-plan with scope work needs targets") }
     return try JSON(encoding: planRemoval(targets, scope: scope, RemovalOptions(args, caller: caller)))
   }
@@ -78,7 +70,9 @@ extension Service {
   /// `RemovalQueued`. It runs `rm-plan`'s checks that read no git: `scope`,
   /// the session's open to-dos, and a caller inside a session whose worktree
   /// would go. It skips a session that is starting or merging, whose files
-  /// `rm` or `cleanup` is removing, or that already has a removal. `resolve` lists the open to-dos that the user
+  /// `rm` or `cleanup` is removing, or that already has a removal. It records
+  /// every queued removal in one store transaction, and a store that refuses
+  /// it skips every target. `resolve` lists the open to-dos that the user
   /// confirmed. Each session takes the ids that name its own open to-dos,
   /// and a session with an open to-do that `resolve` doesn't list is skipped.
   /// The job runs git's checks when it takes the session.
@@ -86,36 +80,33 @@ extension Service {
     guard let scope = args["scope"]?.string.flatMap(RemovalScope.init(rawValue:)) else {
       throw APIError("rm-queue needs scope done or work")
     }
-    guard case .array(let list)? = args["targets"], list.allSatisfy({ $0.string != nil }) else {
-      throw APIError("rm-queue needs targets as a list of session ids")
-    }
+    let targets = try idList(args, key: "targets", op: "rm-queue")
     var options = try RemovalOptions(args, caller: caller)
     options.resolve = try resolveArgument(args)
-    var seen = Set<String>()
-    let targets = list.compactMap(\.string).filter { seen.insert($0).inserted }
     let result: RemovalQueued = queue.sync {
       var result = RemovalQueued(queued: [], skipped: [])
       let now = nowMs()
+      var removals: [String: Removal] = [:]
+      var accepted: [String] = []
       for id in targets {
         switch checkedRemovalTarget(id, scope: scope, options) {
         case .failure(let skipped):
           result.skipped.append(skipped.skip)
         case .success(let t):
-          let removal = Removal(
+          accepted.append(id)
+          removals[id] = Removal(
             requested: now, notBefore: now + removalDelayMs, worktree: t.worktree, branch: t.branch,
             remoteBranch: t.remoteBranch, resolve: t.resolve)
-          do {
-            try update(id) { $0.removal = removal }
-          } catch {
-            // `update` changes the entry before the store refuses the save.
-            entries[id]?.session.removal = nil
-            result.skipped.append(.init(id: id, name: t.session.name, reason: "\(error)"))
-            continue
-          }
-          removalOrder.append(id)
-          result.queued.append(id)
         }
       }
+      do {
+        try updateOrRestore(accepted) { id, s in s.removal = removals[id] }
+      } catch {
+        result.skipped += accepted.map { .init(id: $0, name: entries[$0]?.session.name ?? $0, reason: "\(error)") }
+        return result
+      }
+      result.queued = accepted
+      removalOrder += result.queued
       return result
     }
     if !result.queued.isEmpty { runRemovals() }
@@ -124,13 +115,9 @@ extension Service {
 
   /// Sorts the sessions into those that `rm` would remove and those it
   /// refuses, by running `rm`'s checks. Nil `targets` takes every session
-  /// that `scope` admits. A repeated target is planned once. The checks only
-  /// read git, so they run concurrently.
+  /// that `scope` admits. The checks only read git, so they run concurrently.
   private func planRemoval(_ targets: [String]?, scope: RemovalScope, _ options: RemovalOptions) -> RemovalPlan {
-    var seen = Set<String>()
-    let ids =
-      targets?.filter { seen.insert($0).inserted }
-      ?? queue.sync { summaries().filter { scope.admits($0) }.map(\.id) }
+    let ids = targets ?? queue.sync { summaries().filter { scope.admits($0) }.map(\.id) }
     let outcomes: [Result<RemovalPlan.Item, Skipped>] = concurrentMap(ids) { id in
       switch removalTarget(id, scope: scope, options) {
       case .failure(let skipped):
@@ -138,7 +125,8 @@ extension Service {
       case .success(let t):
         do {
           // `checkRemoval` checks nothing for a removal that keeps the worktree.
-          let checked = t.worktree ? try removalCheck(t) : (repo: nil, branch: nil, supacode: false, pr: t.pr)
+          let checked: CheckedRemoval =
+            t.worktree ? try removalCheck(t) : (repo: nil, branch: nil, supacode: false, pr: t.pr)
           return .success(
             .init(
               id: id, name: t.session.name, pr: t.pr?.number, worktree: t.worktree ? t.session.cwd : nil,
@@ -161,14 +149,13 @@ extension Service {
 
   /// `rm`'s checks of the target's worktree, run at the session's site on one connection after sbd waited for a
   /// host.
-  private func removalCheck(_ t: RemovalTarget) throws -> (
-    repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?
-  ) {
+  private func removalCheck(_ t: RemovalTarget) throws -> CheckedRemoval {
+    let sharedWith = queue.sync { sharedSession(t.session) }
     let site = self.site(for: t.session)
     try awaitSite(site)
     return try site.scoped("the removal check of \(t.session.id)") { scope in
       try checkRemoval(
-        t.session, pr: t.pr, sharedWith: t.sharedWith, folderGone: try folderIsGone(t.session.cwd, at: scope.site),
+        t.session, pr: t.pr, sharedWith: sharedWith, folderGone: try folderIsGone(t.session.cwd, at: scope.site),
         worktree: t.worktree, branch: t.branch, at: scope.site)
     }
   }
@@ -185,14 +172,13 @@ extension Service {
     init(_ args: JSON, caller: Caller) throws {
       worktree = args["worktree"]?.bool == true
       remoteBranch = args["remote_branch"]?.bool == true
-      ancestry = worktree ? try caller.ancestry(command: "sb rm --worktree") : nil
+      ancestry = worktree ? try caller.ancestry(command: Service.removalCommand) : nil
     }
   }
 
   private struct RemovalTarget {
     var session: Session
     var pr: PullRequest?
-    var sharedWith: String?
     var worktree: Bool
     var branch: Bool
     var remoteBranch: Bool
@@ -229,9 +215,7 @@ extension Service {
       return skip(
         s.name, removal.holdsSession ? "\(s.name) is being deleted" : "\(s.name) failed to delete. Retry it or keep it")
     }
-    if starting.contains(id) { return skip(s.name, "\(id) is starting") }
-    if merging.contains(id) { return skip(s.name, "\(id) is merging its PR") }
-    if removing.contains(id) { return skip(s.name, "\(s.name) is being deleted") }
+    if let refusal = busyRefusal(id) ?? removingRefusal(id) { return skip(s.name, "\(refusal)") }
     guard scope.admits(summary(id)) else {
       let reason =
         switch scope {
@@ -249,14 +233,26 @@ extension Service {
       return skip(s.name, (error as? OpenTodoError).map { "\(s.name) has an open to-do: \($0.list)" } ?? "\(error)")
     }
     let removesWorktree = options.worktree && s.repo != nil
-    if removesWorktree, let refusal = insideRefusal(id, options.ancestry, command: "sb rm --worktree") {
+    if removesWorktree, let refusal = insideRefusal(id, options.ancestry, command: Self.removalCommand) {
       return skip(s.name, "\(refusal)")
     }
     let removesBranch = removesWorktree && s.branch != nil && e.facts.pr?.state == .merged
     return .success(
       RemovalTarget(
-        session: s, pr: e.facts.pr, sharedWith: sharedSession(s), worktree: removesWorktree,
+        session: s, pr: e.facts.pr, worktree: removesWorktree,
         branch: removesBranch, remoteBranch: removesBranch && options.remoteBranch, resolve: resolve.sorted()))
+  }
+}
+
+extension Service {
+  /// The session ids in `args[key]`, each once, in the order given. It throws, naming `op`, unless the value is
+  /// a list of strings.
+  func idList(_ args: JSON, key: String, op: String) throws -> [String] {
+    guard let items = args[key]?.array else { throw APIError("\(op) needs \(key) as a list of session ids") }
+    let ids = items.compactMap(\.string)
+    guard ids.count == items.count else { throw APIError("\(op) needs \(key) as a list of session ids") }
+    var seen = Set<String>()
+    return ids.filter { seen.insert($0).inserted }
   }
 }
 

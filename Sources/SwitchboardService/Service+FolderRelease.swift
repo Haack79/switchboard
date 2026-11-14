@@ -82,8 +82,7 @@ extension Service {
     // A process can write to the folder until it exits. `worktree remove` deletes ignored files.
     let site = self.site(for: session)
     if let pid = stop.claudePid, try !waitForExit([pid], seconds: 5, at: site).isEmpty {
-      throw APIError(
-        "\(session.id)'s claude has not exited. \(again.prefix(1).uppercased())\(again.dropFirst()) once it has.")
+      throw APIError("\(session.id)'s claude has not exited. Once it has, \(again).")
     }
     try closePane(session.id, .claude, at: site)
     let deadline = Date().addingTimeInterval(5)

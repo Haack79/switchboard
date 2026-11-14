@@ -70,11 +70,12 @@ extension BoardModel {
     resolving(planRequest(ids, scope: scope), resolve)
   }
 
-  /// The `rm-plan` arguments for the sessions `ids`. `rm-queue` takes the same ones.
-  nonisolated static func planRequest(_ ids: [String], scope: RemovalScope) -> [String: JSON] {
+  /// The `rm-plan` arguments for the sessions `ids`, or for every Done session when `ids` is nil. `rm-queue` takes
+  /// the same ones.
+  nonisolated static func planRequest(_ ids: [String]?, scope: RemovalScope) -> [String: JSON] {
     var args = doneRemovalArgs
     args["scope"] = .string(scope.rawValue)
-    args["targets"] = .array(ids.map(JSON.string))
+    if let ids { args["targets"] = .array(ids.map(JSON.string)) }
     return args
   }
 
@@ -82,31 +83,34 @@ extension BoardModel {
   nonisolated static let hiddenOrgReason = "hidden by the org filter"
   nonisolated static let unlistedReason = "no longer listed"
 
-  /// Why the removal sheet may not remove the session now, or nil when it may.
-  func removalRefusal(_ id: String) -> String? {
-    if removableIDs.contains(id) { return nil }
-    if shownIDs.contains(id) { return Self.unreadOrgReason }
-    return listedBoard.contains { $0.id == id } ? Self.hiddenOrgReason : Self.unlistedReason
+  /// Why the removal sheet may not remove a session now, or nil when it may, as of this call. It reads the
+  /// lists once, so a check of many sessions does not rebuild them for each one.
+  func removalRefusals() -> (String) -> String? {
+    let removable = removableIDs
+    let shown = shownIDs
+    let listed = Set(listedBoard.map(\.id))
+    return { id in
+      if removable.contains(id) { return nil }
+      if shown.contains(id) { return Self.unreadOrgReason }
+      return listed.contains(id) ? Self.hiddenOrgReason : Self.unlistedReason
+    }
   }
 
   /// Asks sbd which Done sessions it would remove and which it would skip.
-  func checkDoneRemoval() { checkRemoval(.done, "rm-done", Self.doneRemovalArgs) }
+  func checkDoneRemoval() { checkRemoval(nil, scope: .done) }
 
   /// Asks sbd which sessions of the multi-selection it would remove, in any state, and which it would skip.
-  func checkSelectionRemoval() {
-    checkRemoval(.work, "rm-plan", Self.planRequest(multiSelected.map(\.id), scope: .work))
-  }
+  func checkSelectionRemoval() { checkRemoval(multiSelected.map(\.id), scope: .work) }
 
-  /// Asks sbd for a plan, then shows it in the removal sheet. The plan
-  /// leaves out the sessions that the org filter hides. Under a filter, a
-  /// shown session whose org sbd hasn't read yet moves from the remove list
-  /// to the skip list.
-  private func checkRemoval(_ scope: RemovalScope, _ op: String, _ args: [String: JSON]) {
+  /// Asks sbd for an `rm-plan` of `ids`, or of every Done session when `ids` is nil, then shows it in the removal
+  /// sheet. The plan leaves out the sessions that the org filter hides. Under a filter, a shown session whose org
+  /// sbd hasn't read yet moves from the remove list to the skip list.
+  private func checkRemoval(_ ids: [String]?, scope: RemovalScope) {
     guard !showingDoneRemoval else { return }
     let checking = DoneRemoval.checking(scope, request: UUID())
     doneRemoval = checking
     perform(
-      op, args,
+      "rm-plan", Self.planRequest(ids, scope: scope),
       then: { value in
         guard self.doneRemoval == checking else { return }
         do {
@@ -120,22 +124,23 @@ extension BoardModel {
           plan.skip += unread.map { .init(id: $0.id, name: $0.name, reason: Self.unreadOrgReason) }
           self.doneRemoval = .confirming(plan, scope: scope)
         } catch {
-          self.actionError = "\(op): \(error)"
+          self.actionError = "rm-plan: \(error)"
         }
       },
       finally: { if self.doneRemoval == checking { self.doneRemoval = nil } })
   }
 
   /// Closes the sheet and hands the plan's sessions to sbd's removal job in one `rm-queue`, off `worker`,
-  /// so the request never waits behind a slow action. The app leaves out a session that `removalRefusal`
+  /// so the request never waits behind a slow action. The app leaves out a session that `removalRefusals`
   /// refuses at that moment, because a filter change after the plan can hide it.
   func removeDone(_ plan: RemovalPlan) {
     guard case .confirming(_, let scope) = doneRemoval else { return }
     doneRemoval = nil
     var targets: [String] = []
     var refused: [RemovalPlan.Skip] = []
+    let refusal = removalRefusals()
     for item in plan.remove {
-      if let reason = removalRefusal(item.id) {
+      if let reason = refusal(item.id) {
         refused.append(.init(id: item.id, name: item.name, reason: reason))
       } else {
         targets.append(item.id)

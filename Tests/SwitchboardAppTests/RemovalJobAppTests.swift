@@ -8,7 +8,7 @@ import Testing
 func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionState = .needsYou) -> SessionSummary {
   var s = needsItem(id, state: state)
   s.removal = removal.map { removal in
-    var value = Removal(requested: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
+    var value = Removal(requested: 1, notBefore: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
     value.state = removal
     if removal == .failed {
       value.error = "/tmp has uncommitted files (1)."
@@ -20,7 +20,7 @@ func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionSta
 }
 
 /// A session whose removal is `state` and does not start before `notBefore`, in ms on sbd's clock.
-func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int64?) -> SessionSummary {
+func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int64) -> SessionSummary {
   var s = removalSession(id, state)
   s.removal?.notBefore = notBefore
   return s
@@ -158,13 +158,12 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
   // MARK: Undo
 
   /// Only a queued session whose `notBefore` is still ahead can come back. A running one already stopped claude,
-  /// a queued one past its `notBefore` may start at any moment, and one with no `notBefore` was queued by an
-  /// older sbd that started it at once.
+  /// and a queued one past its `notBefore` may start at any moment.
   @Test func undoableListsOnlyTheQueuedSessionsBeforeTheirNotBefore() throws {
     let model = appliedModel([
       undoSession("ahead", notBefore: 10_000), undoSession("ahead2", notBefore: 12_000),
       undoSession("running", .running, notBefore: 10_000), undoSession("past", notBefore: 4_000),
-      undoSession("unset", notBefore: nil), undoSession("failed", .failed, notBefore: 10_000),
+      undoSession("failed", .failed, notBefore: 10_000),
     ])
 
     let status = try #require(model.removalStatus)
@@ -294,7 +293,7 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
     #expect(model.actionError?.contains("a is being deleted") == true, "\(model.actionError ?? "nil")")
   }
 
-  /// The plan's stage 9 decision: a cancelled session returns to the lists unselected.
+  /// A cancelled session returns to the lists unselected.
   @Test func aSessionThatUndoBringsBackReturnsToTheListsUnselected() {
     let model = appliedModel([removalSession("a", nil), removalSession("b", nil)])
     model.selection = "a"

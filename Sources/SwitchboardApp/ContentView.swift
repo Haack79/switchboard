@@ -206,6 +206,7 @@ struct Sidebar: View {
   var body: some View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
+    let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
     List(selection: model.sidebarSelection) {
       if !model.managers.isEmpty {
         Section {
@@ -213,7 +214,7 @@ struct Sidebar: View {
             SessionRow(session: manager, activeAccount: activeAccount, hoverCard: model.hoverCard)
               .clickAnchor(manager.id)
               .tag(manager.id)
-              .contextMenu { DeleteSelectedMenuItem(id: manager.id) }
+              .contextMenu { DeleteSelectedMenuItem(id: manager.id, count: removableSelection) }
           }
         } header: {
           HStack {
@@ -245,7 +246,7 @@ struct Sidebar: View {
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
-              DeleteSelectedMenuItem(id: row.id)
+              DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -282,7 +283,7 @@ struct Sidebar: View {
     }
     .onKeyPress(keys: [.delete]) { press in
       guard press.modifiers.intersection([.command, .option, .control, .shift]) == .command,
-        model.showsMultiSelection, model.removableSelectionCount > 0, !model.showingDoneRemoval
+        model.showsMultiSelection, removableSelection > 0, !model.showingDoneRemoval
       else { return .ignored }
       model.checkSelectionRemoval()
       return .handled
@@ -382,14 +383,15 @@ struct Sidebar: View {
   }
 }
 
-/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing.
+/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
+/// `removableSelectionCount`, which the sidebar reads once for every row.
 struct DeleteSelectedMenuItem: View {
   @EnvironmentObject var model: BoardModel
   let id: String
+  let count: Int
 
   var body: some View {
     if model.showsMultiSelection, model.multiSelection.contains(id) {
-      let count = model.removableSelectionCount
       Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
         model.checkSelectionRemoval()
       }

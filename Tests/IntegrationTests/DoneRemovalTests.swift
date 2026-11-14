@@ -2,63 +2,13 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// The GitHub URL of the repo that the recorded PRs belong to.
-private let posthog = "https://github.com/PostHog/posthog.git"
-
-/// A recorded PR in PostHog/posthog and its head branch.
-private struct RecordedPR {
-  let number: Int
-  let branch: String
-
-  static let breaker = RecordedPR(number: 122953, branch: "haacked/cdp-dlq-breaker-counts-lookups")
-  static let groups = RecordedPR(number: 122179, branch: "posthog/groups-list-two-phase-dedup")
-  static let cohort = RecordedPR(number: 121847, branch: "haacked/cohort-store-stamp-other-topic-marks")
-}
-
-/// An sbd whose poller asks a FakeGitHub, and a PostHog/posthog checkout whose origin is a bare repo in
-/// the home that holds main.
-private struct Setup {
-  let github: FakeGitHub
-  let sbd: Instance
-  let repo: String
-  let origin: String
-
-  init() throws {
-    github = try FakeGitHub()
-    sbd = try Instance.withGitHub(github)
-    repo = try Repos.create("\(sbd.home.path)/posthog", origin: posthog)
-    origin = "\(sbd.home.path)/origin.git"
-    try sbd.git(sbd.home.path, "init", "-q", "--bare", origin)
-    try sbd.git(repo, "config", "url.\(origin).insteadOf", posthog)
-    try sbd.git(repo, "push", "-q", "origin", "main")
-  }
-
-  /// A session in a worktree that sbd made on the PR's branch, after a commit. GitHub reports the PR in
-  /// `state` with that commit as its head. The commit is on no remote unless `push` is true.
-  func finished(_ pr: RecordedPR, state: String, push: Bool = false) throws -> SessionSummary {
-    let s = try sbd.worktreeSession(repo, branch: pr.branch)
-    try sbd.commit(s.cwd, "\(pr.number).txt")
-    if push { try sbd.git(s.cwd, "push", "-q", "origin", pr.branch) }
-    let tip = try sbd.git(s.cwd, "rev-parse", "HEAD")
-    github.change(pr.number) {
-      $0["state"] = .string(state)
-      $0["headRefOid"] = .string(tip)
-    }
-    return s
-  }
-
-  /// Polls GitHub and waits until each session is Done.
-  func pollUntilDone(_ sessions: SessionSummary...) throws {
-    try sbd.poll(all: true)
-    for s in sessions { try sbd.waitFor(s.id, "Done") { $0.state == .done } }
-  }
-}
-
-extension Setup {
+extension MergedPRRepo {
   /// A Done session whose folder had the PR's branch checked out, then made the merged PR's head on
   /// `<branch>-v2` and pushed it. With `sessionOnV2`, sbd makes the worktree on `-v2`, so the session's own
   /// branch is `-v2`. Otherwise sbd makes it on the PR's branch, and the folder switches to `-v2`.
-  func doneOnV2(_ pr: RecordedPR, sessionOnV2: Bool) throws -> (session: SessionSummary, v2: String, tip: String) {
+  fileprivate func doneOnV2(_ pr: RemovalPR, sessionOnV2: Bool) throws -> (
+    session: SessionSummary, v2: String, tip: String
+  ) {
     let v2 = "\(pr.branch)-v2"
     let s: SessionSummary
     if sessionOnV2 {
@@ -86,19 +36,6 @@ extension Instance {
   fileprivate func rmDone(_ flags: String..., env: [String: String] = [:]) throws -> CommandResult {
     try run(["rm", "--done"] + flags, env: env)
   }
-
-  /// Marks the session Done and waits until its state is Done.
-  @discardableResult
-  fileprivate func markDone(_ id: String) throws -> SessionSummary {
-    try sb("done", id)
-    return try waitFor(id, "Done") { $0.state == .done }
-  }
-
-  fileprivate func branchExists(_ repo: String, _ name: String) throws -> Bool {
-    try runCommand("/usr/bin/git", ["-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/\(name)"]).status == 0
-  }
-
-  fileprivate func sessionIds() throws -> Set<String> { Set(try client.sessions().map(\.id)) }
 
   /// The `rm-done` preview.
   fileprivate func planDoneRemoval(worktree: Bool = true, remoteBranch: Bool = false) throws -> JSON {
@@ -210,7 +147,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   // MARK: Removal
 
   @Test func removesMergedDoneSessionsWithTheirWorktreesAndBranches() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let a = try s.finished(.breaker, state: "MERGED")
     let b = try s.finished(.groups, state: "MERGED")
     try s.pollUntilDone(a, b)
@@ -224,12 +161,12 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try s.sbd.client.sessions().isEmpty)
     #expect(!FileManager.default.fileExists(atPath: a.cwd))
     #expect(!FileManager.default.fileExists(atPath: b.cwd))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.groups.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.groups.branch))
   }
 
   @Test func resultDecodesAsADoneRemovalResult() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let a = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(a)
 
@@ -241,12 +178,12 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func skipsUnpushedCommitsOfAClosedPRAndUncommittedFiles() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let unpushed = try s.finished(.cohort, state: "CLOSED")
     let dirty = try s.sbd.worktreeSession(s.repo, branch: "haacked/dirty")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
     try s.pollUntilDone(unpushed)
-    try s.sbd.markDone(dirty.id)
+    try s.sbd.markSessionDone(dirty.id)
 
     let result = try parse(try s.sbd.rmDone("--worktree", "--yes", "--json"))
 
@@ -255,10 +192,10 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(unpushedReason.contains("not on a pushed branch"), Comment(rawValue: unpushedReason))
     let dirtyReason = try #require(skip(result["skipped"], dirty.id)?["reason"]?.string)
     #expect(dirtyReason.contains("uncommitted"), Comment(rawValue: dirtyReason))
-    #expect(try s.sbd.sessionIds() == [unpushed.id, dirty.id])
+    #expect(try s.sbd.listedIds() == [unpushed.id, dirty.id])
     #expect(FileManager.default.fileExists(atPath: unpushed.cwd))
     #expect(FileManager.default.fileExists(atPath: "\(dirty.cwd)/notes.txt"))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.cohort.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.cohort.branch))
   }
 
   /// A merged PR that the transcript linked from another repo makes the
@@ -269,7 +206,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     (nil as String?, "has no merged PR"), ("haacked/no-pr-yet", "has commits that are not in its merged PR"),
   ])
   func skipsADoneSessionWhoseMergedPRIsFromAnotherRepo(_ head: String?, _ refusal: String) throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let foreign = try s.sbd.worktreeSession(s.repo, branch: "haacked/no-pr-yet")
     try s.sbd.commit(foreign.cwd, "unpushed.txt")
     let tip = try s.sbd.git(foreign.cwd, "rev-parse", "HEAD")
@@ -292,21 +229,21 @@ private func parse(_ r: CommandResult) throws -> JSON {
   /// The folder made the merged PR's head on `-v2`, so the session is Done. The PR merged its own
   /// branch, not `-v2`, so removal keeps both branches.
   @Test func keepsTheBranchesOfADoneSessionWhoseMergedPRUsesAnEarlierBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let (session, v2, tip) = try s.doneOnV2(.breaker, sessionOnV2: false)
-    let original = try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RecordedPR.breaker.branch)")
+    let original = try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RemovalPR.breaker.branch)")
 
     let result = try parse(try s.sbd.rmDone("--worktree", "--yes", "--json"))
 
     #expect(removed(result).isEmpty, Comment(rawValue: result.text))
     #expect(skip(result["skipped"], session.id) != nil, Comment(rawValue: result.text))
     #expect(FileManager.default.fileExists(atPath: session.cwd))
-    #expect(try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RecordedPR.breaker.branch)") == original)
+    #expect(try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RemovalPR.breaker.branch)") == original)
     #expect(try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(v2)") == tip)
   }
 
   @Test func skipsADoneSessionOnV2WhoseMergedPRUsesAnotherBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let (session, v2, tip) = try s.doneOnV2(.breaker, sessionOnV2: true)
 
     let result = try parse(try s.sbd.rmDone("--worktree", "--yes", "--json"))
@@ -319,7 +256,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func cleanupRefusesADoneSessionOnV2WhoseMergedPRUsesAnotherBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let (session, v2, tip) = try s.doneOnV2(.breaker, sessionOnV2: true)
 
     let r = try s.sbd.run(["cleanup", session.id, "--json"])
@@ -335,8 +272,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let locked = try sbd.worktreeSession(repo, branch: "haacked/locked")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(locked.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(locked.id)
+    try sbd.markSessionDone(clean.id)
     try sbd.git(repo, "worktree", "lock", "--reason", "Supacode", locked.cwd)
 
     let result = try parse(try sbd.rmDone("--worktree", "--yes", "--json"))
@@ -349,7 +286,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func keepsTheBranchOfAClosedPRAndDeletesTheBranchOfAMergedPR() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let closed = try s.finished(.cohort, state: "CLOSED", push: true)
     let merged = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(closed, merged)
@@ -361,8 +298,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try s.sbd.client.sessions().isEmpty)
     #expect(!FileManager.default.fileExists(atPath: closed.cwd))
     #expect(try !s.sbd.git(s.repo, "worktree", "list", "--porcelain").contains(closed.cwd))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.cohort.branch))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.cohort.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
   }
 
   @Test func leavesSessionsThatAreNotDone() throws {
@@ -370,7 +307,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let done = try sbd.worktreeSession(repo, branch: "haacked/done")
     let active = try sbd.worktreeSession(repo, branch: "haacked/active")
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(done.id)
     #expect(try sbd.get(active.id).state != .done)
 
     let result = try parse(try sbd.rmDone("--worktree", "--yes", "--json"))
@@ -379,11 +316,11 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(skip(result["skipped"], active.id) == nil)
     #expect(try sbd.intact(active))
     #expect(try sbd.get(active.id).live)
-    #expect(try sbd.branchExists(repo, "haacked/active"))
+    #expect(try sbd.localBranch(repo, "haacked/active"))
   }
 
   @Test func withoutWorktreeRemovesOnlyTheSessions() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(merged)
 
@@ -393,45 +330,45 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(removed(try parse(r)) == [merged.id])
     #expect(try s.sbd.client.sessions().isEmpty)
     #expect(FileManager.default.fileExists(atPath: merged.cwd))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
   }
 
   @Test func deleteRemoteBranchDeletesTheRemoteBranchOfAMergedPR() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
-    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
 
     let r = try s.sbd.rmDone("--worktree", "--delete-remote-branch", "--yes", "--json")
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
     #expect(removed(try parse(r)) == [merged.id])
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
-    #expect(try !s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try !s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
   }
 
   @Test func withoutDeleteRemoteBranchKeepsTheRemoteBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
 
     let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
-    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
   }
 
   /// The remote branch moved after the merge, so `rm` removes the session and keeps the remote branch.
   @Test func reportsARemovalThatKeptTheRemoteBranchAsRemovedAndPartial() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
     let other = "\(s.sbd.home.path)/other"
     try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
-    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "checkout", "-q", RemovalPR.breaker.branch)
     try s.sbd.commit(other, "later.txt")
-    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "push", "-q", "origin", RemovalPR.breaker.branch)
 
     let r = try s.sbd.rmDone("--worktree", "--delete-remote-branch", "--yes", "--json")
 
@@ -442,7 +379,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(reason.contains("kept the remote branch"), Comment(rawValue: reason))
     #expect(skip(result["skipped"], merged.id) == nil)
     #expect(try s.sbd.client.sessions().isEmpty)
-    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
   }
 
   // MARK: Every rm check skips the session
@@ -453,7 +390,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let done = try sbd.worktreeSession(repo, branch: "haacked/shared")
     let other = try sbd.worktreeSession(repo, branch: "haacked/shared")
     #expect(other.cwd == done.cwd)
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(done.id)
 
     let result = try parse(try sbd.rmDone("--worktree", "--yes", "--json"))
 
@@ -465,25 +402,25 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func skipsAMergedBranchWithACommitAfterTheMerge() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(merged)
     try s.sbd.commit(merged.cwd, "later.txt")
-    try s.sbd.markDone(merged.id)
+    try s.sbd.markSessionDone(merged.id)
 
     let result = try parse(try s.sbd.rmDone("--worktree", "--yes", "--json"))
 
     let reason = try #require(skip(result["skipped"], merged.id)?["reason"]?.string)
     #expect(reason.contains("not in its merged PR"), Comment(rawValue: reason))
     #expect(try s.sbd.intact(merged))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
   }
 
   @Test func skipsAFolderThatIsNoLongerAWorktreeOfTheRepo() throws {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/replaced")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
     try sbd.git(repo, "worktree", "remove", "--force", s.cwd)
     try FileManager.default.createDirectory(atPath: s.cwd, withIntermediateDirectories: true)
     let keep = "\(s.cwd)/mine.txt"
@@ -494,7 +431,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let reason = try #require(skip(result["skipped"], s.id)?["reason"]?.string)
     #expect(reason.contains("is not a worktree of"), Comment(rawValue: reason))
     #expect(FileManager.default.fileExists(atPath: keep))
-    #expect(try sbd.sessionIds() == [s.id])
+    #expect(try sbd.listedIds() == [s.id])
   }
 
   /// sbd didn't make the main checkout, so neither the preview nor the removal may delete it.
@@ -503,7 +440,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.client.call("new", ["path": .string(repo), "prompt": "hello"], as: SessionSummary.self)
     try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "Done: hello" }
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
 
     let plan = try sbd.planDoneRemoval()
     let result = try parse(try sbd.rmDone("--worktree", "--yes", "--json"))
@@ -522,9 +459,9 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let followup = try add(sbd, ["prompt": "Check the rollout.", "repository": "acme/widgets"])
     let done = try sbd.new(prompt: "hello", name: "done")
     try sbd.waitFor(done.id, "the first reply") { $0.lastReply == "Done: hello" }
-    try sbd.markDone(manager.id)
-    try sbd.markDone(followup.id)
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(manager.id)
+    try sbd.markSessionDone(followup.id)
+    try sbd.markSessionDone(done.id)
 
     let plan = try sbd.planDoneRemoval()
 
@@ -537,8 +474,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let manager = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("manager", "--json"))
     let followup = try add(sbd, ["prompt": "Check the rollout.", "repository": "acme/widgets"])
-    try sbd.markDone(manager.id)
-    try sbd.markDone(followup.id)
+    try sbd.markSessionDone(manager.id)
+    try sbd.markSessionDone(followup.id)
 
     let result = try sbd.removeDone([manager.id, followup.id])
 
@@ -577,7 +514,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
 
     #expect(try sbd.intact(waiting))
     #expect(try sbd.get(waiting.id).live)
-    #expect(try sbd.branchExists(repo, "haacked/waiting"))
+    #expect(try sbd.localBranch(repo, "haacked/waiting"))
   }
 
   /// A multi-select delete is not limited to Done.
@@ -585,7 +522,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let done = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(done.id)
 
     let plan = try sbd.planRemoval([done.id], scope: "work")
 
@@ -596,7 +533,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   @Test func rmPlanForWorkSkipsTheManagerMarkedDone() throws {
     let sbd = try Instance()
     let manager = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("manager", "--json"))
-    try sbd.markDone(manager.id)
+    try sbd.markSessionDone(manager.id)
 
     let plan = try sbd.planRemoval([manager.id], scope: "work")
 
@@ -652,7 +589,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let waiting = try sbd.waitingSession(repo, branch: "haacked/waiting")
     let done = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(done.id)
 
     let plan = try sbd.planRemoval([waiting.id, done.id], scope: "done")
 
@@ -723,7 +660,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let done = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(done.id)
+    try sbd.markSessionDone(done.id)
 
     let plan = try sbd.planRemoval([], scope: "done")
 
@@ -748,7 +685,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   /// one with an open to-do fail rm's checks, and a session outside Done and the Manager marked Done stay out.
   @Test(arguments: [(true, true), (true, false), (false, true), (false, false)])
   func rmPlanForDoneWithoutTargetsMatchesRmDonesPreview(worktree: Bool, remoteBranch: Bool) throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     let dirty = try s.sbd.worktreeSession(s.repo, branch: "haacked/dirty")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
@@ -757,9 +694,9 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let active = try s.sbd.worktreeSession(s.repo, branch: "haacked/active")
     let manager = try JSONCoding.decode(SessionSummary.self, from: s.sbd.sb("manager", "--json"))
     try s.pollUntilDone(merged)
-    try s.sbd.markDone(dirty.id)
-    try s.sbd.markDone(held.id)
-    try s.sbd.markDone(manager.id)
+    try s.sbd.markSessionDone(dirty.id)
+    try s.sbd.markSessionDone(held.id)
+    try s.sbd.markSessionDone(manager.id)
     #expect(try s.sbd.get(active.id).state != .done)
 
     let preview = try s.sbd.planDoneRemoval(worktree: worktree, remoteBranch: remoteBranch)
@@ -781,7 +718,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
 
     let r = try sbd.rmDone("--worktree", env: ["CLAUDECODE": "1"])
 
@@ -796,7 +733,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
 
     let r = try sbd.rmDone("--worktree")
 
@@ -810,8 +747,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let named = try sbd.worktreeSession(repo, branch: "haacked/named")
     let other = try sbd.worktreeSession(repo, branch: "haacked/other")
-    try sbd.markDone(named.id)
-    try sbd.markDone(other.id)
+    try sbd.markSessionDone(named.id)
+    try sbd.markSessionDone(other.id)
 
     let r = try sbd.run(["rm", named.id, "--done", "--worktree", "--yes"])
 
@@ -822,12 +759,12 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func jsonWithoutYesPrintsThePreviewAndRemovesNothing() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED")
     let dirty = try s.sbd.worktreeSession(s.repo, branch: "haacked/dirty")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
     try s.pollUntilDone(merged)
-    try s.sbd.markDone(dirty.id)
+    try s.sbd.markSessionDone(dirty.id)
 
     let r = try s.sbd.rmDone("--worktree", "--json")
 
@@ -839,13 +776,13 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(skip(plan["skip"], dirty.id)?["reason"]?.string?.contains("uncommitted") == true)
     #expect(try s.sbd.intact(merged))
     #expect(try s.sbd.intact(dirty))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
   }
 
   // MARK: The preview
 
   @Test func previewDescribesWhatEachRemovalDeletes() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     let closed = try s.finished(.cohort, state: "CLOSED", push: true)
     try s.pollUntilDone(merged, closed)
@@ -854,19 +791,19 @@ private func parse(_ r: CommandResult) throws -> JSON {
 
     let m = try #require(item(plan, merged.id))
     #expect(m["name"]?.string == merged.name)
-    #expect(m["pr"]?.int == RecordedPR.breaker.number)
+    #expect(m["pr"]?.int == RemovalPR.breaker.number)
     #expect(m["worktree"]?.string == merged.cwd)
-    #expect(m["branch"]?.string == RecordedPR.breaker.branch)
+    #expect(m["branch"]?.string == RemovalPR.breaker.branch)
     #expect(m["remoteBranch"] == .bool(true))
     let c = try #require(item(plan, closed.id))
-    #expect(c["pr"]?.int == RecordedPR.cohort.number)
+    #expect(c["pr"]?.int == RemovalPR.cohort.number)
     #expect(c["worktree"]?.string == closed.cwd)
     #expect(isNull(c["branch"]))
     #expect(c["remoteBranch"] == .bool(false))
   }
 
   @Test func previewOffersTheRemoteBranchOnlyWhenAsked() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
 
@@ -876,7 +813,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func previewWithoutWorktreeListsNoWorktreeOrBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
 
@@ -889,7 +826,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   }
 
   @Test func previewDecodesAsADoneRemovalPlan() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
 
@@ -904,12 +841,12 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
 
     _ = try sbd.planDoneRemoval()
 
     #expect(try sbd.intact(s))
-    #expect(try sbd.branchExists(repo, "haacked/done"))
+    #expect(try sbd.localBranch(repo, "haacked/done"))
   }
 
   // MARK: The confirmed op
@@ -919,8 +856,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let left = try sbd.worktreeSession(repo, branch: "haacked/left")
     let stays = try sbd.worktreeSession(repo, branch: "haacked/stays")
-    try sbd.markDone(left.id)
-    try sbd.markDone(stays.id)
+    try sbd.markSessionDone(left.id)
+    try sbd.markSessionDone(stays.id)
     #expect(planned(try sbd.planDoneRemoval()) == [left.id, stays.id])
     try sbd.sb("undone", left.id)
     try sbd.waitFor(left.id, "not Done") { $0.state != .done }
@@ -940,8 +877,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let failing = try sbd.worktreeSession(repo, branch: "haacked/failing")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(failing.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(failing.id)
+    try sbd.markSessionDone(clean.id)
     #expect(planned(try sbd.planDoneRemoval()) == [failing.id, clean.id])
     try "x".write(toFile: "\(failing.cwd)/notes.txt", atomically: true, encoding: .utf8)
 
@@ -951,14 +888,14 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(reason.contains("uncommitted"), Comment(rawValue: reason))
     #expect(removed(result) == [clean.id])
     #expect(FileManager.default.fileExists(atPath: "\(failing.cwd)/notes.txt"))
-    #expect(try sbd.sessionIds() == [failing.id])
+    #expect(try sbd.listedIds() == [failing.id])
   }
 
   @Test func confirmedRemovalSkipsATargetThatNamesNoSession() throws {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/done")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
 
     let result = try sbd.removeDone(["snope1", s.id])
 
@@ -973,8 +910,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
     let active = try sbd.worktreeSession(repo, branch: "haacked/active")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
-    try sbd.markDone(clean.id)
-    try sbd.markDone(dirty.id)
+    try sbd.markSessionDone(clean.id)
+    try sbd.markSessionDone(dirty.id)
     let targets = [clean.id, dirty.id, active.id]
 
     let result = try sbd.removeDone(targets)
@@ -993,8 +930,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let held = try sbd.worktreeSession(repo, branch: "haacked/held")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(held.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(held.id)
+    try sbd.markSessionDone(clean.id)
     let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
 
     let plan = try sbd.planDoneRemoval(worktree: worktree)
@@ -1013,8 +950,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let held = try sbd.worktreeSession(repo, branch: "haacked/held")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(held.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(held.id)
+    try sbd.markSessionDone(clean.id)
     #expect(planned(try sbd.planDoneRemoval(worktree: worktree)) == [held.id, clean.id])
     let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
 
@@ -1035,7 +972,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
   /// sb runs below a's shell pane, so removing a's worktree would stop sb's own parents. The preview skips a with
   /// rm's refusal, and the confirmed run removes b and leaves a and its claude running.
   @Test func rmDoneSkipsTheCallersOwnSession() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let a = try s.finished(.breaker, state: "MERGED")
     let b = try s.finished(.groups, state: "MERGED")
     // The shell pane starts before a is Done, so it can't change a's state.
@@ -1062,12 +999,12 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(removed(result) == [b.id])
     let reason = try #require(skip(result["skipped"], a.id)?["reason"]?.string, Comment(rawValue: result.text))
     #expect(reason.contains(refusal), Comment(rawValue: reason))
-    #expect(try s.sbd.sessionIds() == [a.id])
+    #expect(try s.sbd.listedIds() == [a.id])
     #expect(FileManager.default.fileExists(atPath: a.cwd))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
     #expect(Processes.exists(claude), "sbd ended a's claude")
     #expect(!FileManager.default.fileExists(atPath: b.cwd))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.groups.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.groups.branch))
   }
 
   /// sb sends only the preview's `remove` as targets, so a perl client in a's shell pane sends the confirmed op
@@ -1078,7 +1015,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let a = try sbd.worktreeSession(repo, branch: "haacked/inside")
     let terminals = try sbd.client.terminals(a.id)
     let claude = try #require(try sbd.waitFor(a.id, "claude's pid") { $0.claudePid != nil }.claudePid)
-    try sbd.markDone(a.id)
+    try sbd.markSessionDone(a.id)
     // A tick installs a snapshot that holds the shell pane's pid, so `doneTarget` skips a before `rm` runs.
     try sbd.advanceClock(1)
     let request: JSON = [
@@ -1103,7 +1040,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let reason = try #require(skip(result["skipped"], a.id)?["reason"]?.string, Comment(rawValue: result.text))
     #expect(reason.contains(insideRefusal("sb rm --worktree", a.id)), Comment(rawValue: reason))
     #expect(try sbd.intact(a))
-    #expect(try sbd.branchExists(repo, "haacked/inside"))
+    #expect(try sbd.localBranch(repo, "haacked/inside"))
     #expect(Processes.exists(claude), "sbd ended a's claude")
   }
 
@@ -1118,7 +1055,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
     let a = try sbd.worktreeSession(repo, branch: "haacked/a")
     let b = try sbd.worktreeSession(repo, branch: "haacked/b")
-    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    for s in [dirty, a, b] { try sbd.markSessionDone(s.id) }
     sbd.hold(holdRemoval)
     defer { try? sbd.release(holdRemoval) }
 
@@ -1147,7 +1084,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
     let a = try sbd.worktreeSession(repo, branch: "haacked/a")
     let b = try sbd.worktreeSession(repo, branch: "haacked/b")
-    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    for s in [dirty, a, b] { try sbd.markSessionDone(s.id) }
     sbd.hold(holdRemoval)
     defer { try? sbd.release(holdRemoval) }
 
@@ -1164,7 +1101,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let skipLine = try #require(
       lines.first { $0.hasPrefix("  skipped \(dirty.id)  \(dirty.name): ") }, Comment(rawValue: r.stdout))
     #expect(skipLine.contains("uncommitted"), Comment(rawValue: skipLine))
-    #expect(try sbd.sessionIds() == [dirty.id])
+    #expect(try sbd.listedIds() == [dirty.id])
     #expect(try sbd.removalState(dirty.id) == nil, "sb rm --done did not keep the session whose removal failed")
   }
 
@@ -1175,7 +1112,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let a = try sbd.worktreeSession(repo, branch: "haacked/a")
     let b = try sbd.worktreeSession(repo, branch: "haacked/b")
-    for s in [a, b] { try sbd.markDone(s.id) }
+    for s in [a, b] { try sbd.markSessionDone(s.id) }
 
     let command = sbd.startRmDone("--worktree", "--yes", "--json")
     try sbd.waitFor("the removal job to queue a and b", timeout: 30) {
@@ -1202,14 +1139,14 @@ private func parse(_ r: CommandResult) throws -> JSON {
   /// a removal notice. The command reports that notice as a partial removal, as `rm` reported its error before.
   @Test(arguments: [true, false])
   func reportsARemovalNoticeFromTheJobAsPartial(json: Bool) throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
     let other = "\(s.sbd.home.path)/other"
     try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
-    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "checkout", "-q", RemovalPR.breaker.branch)
     try s.sbd.commit(other, "later.txt")
-    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "push", "-q", "origin", RemovalPR.breaker.branch)
     s.sbd.hold(holdRemoval)
     defer { try? s.sbd.release(holdRemoval) }
 
@@ -1234,26 +1171,26 @@ private func parse(_ r: CommandResult) throws -> JSON {
       #expect(partial.contains("kept the remote branch"), Comment(rawValue: partial))
     }
     #expect(try s.sbd.client.sessions().isEmpty)
-    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
     #expect(try s.sbd.noticeSessions().isEmpty, "sb rm --done did not dismiss the notice it reported")
   }
 
   /// A notice stays until someone dismisses it, so a notice from an earlier removal is still listed when the command
   /// runs. Only the notices about the command's own sessions are its partial removals.
   @Test func aRemovalNoticeFromAnEarlierRemovalIsNotReportedAsPartial() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let earlier = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(earlier)
     let other = "\(s.sbd.home.path)/other"
     try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
-    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "checkout", "-q", RemovalPR.breaker.branch)
     try s.sbd.commit(other, "later.txt")
-    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    try s.sbd.git(other, "push", "-q", "origin", RemovalPR.breaker.branch)
     #expect(queued(try s.sbd.queueRemoval([earlier.id], remoteBranch: true)) == [earlier.id])
     try s.sbd.waitUntilGone(earlier.id)
     try s.sbd.waitFor("the earlier removal's notice") { try s.sbd.noticeSessions().contains(earlier.id) }
     let plain = try s.sbd.worktreeSession(s.repo, branch: "haacked/plain")
-    try s.sbd.markDone(plain.id)
+    try s.sbd.markSessionDone(plain.id)
 
     let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
 
@@ -1275,7 +1212,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let a = try sbd.worktreeSession(repo, branch: "haacked/a")
     let b = try sbd.worktreeSession(repo, branch: "haacked/b")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
-    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    for s in [dirty, a, b] { try sbd.markSessionDone(s.id) }
     sbd.hold(holdRemoval)
     defer { try? sbd.release(holdRemoval) }
 
@@ -1305,7 +1242,7 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let a = try sbd.worktreeSession(repo, branch: "haacked/a")
     let b = try sbd.worktreeSession(repo, branch: "haacked/b")
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
-    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    for s in [dirty, a, b] { try sbd.markSessionDone(s.id) }
     sbd.hold(holdRemoval)
     defer { try? sbd.release(holdRemoval) }
 
@@ -1336,8 +1273,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let held = try sbd.worktreeSession(repo, branch: "haacked/held")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(held.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(held.id)
+    try sbd.markSessionDone(clean.id)
     let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
 
     let r = try sbd.rmDone("--worktree", "--yes", "--json")
@@ -1359,8 +1296,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     let repo = try sbd.repoWithOrigin()
     let held = try sbd.worktreeSession(repo, branch: "haacked/held")
     let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
-    try sbd.markDone(held.id)
-    try sbd.markDone(clean.id)
+    try sbd.markSessionDone(held.id)
+    try sbd.markSessionDone(clean.id)
     sbd.hold(holdRemoval)
     defer { try? sbd.release(holdRemoval) }
 
@@ -1389,7 +1326,7 @@ private func calls(_ log: String) -> [String] {
 
 @Suite(.blocking(timeLimit: .seconds(120))) struct SupacodeLockTests {
   @Test func deleteAllRemovesAWorktreeThatSupacodeLockedThroughSupacode() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let kept = try s.finished(.breaker, state: "MERGED")
     let inMain = try s.finished(.groups, state: "MERGED")
     // origin/main contains the second branch's tip, as after a merge commit. The first is like a squash merge.
@@ -1403,7 +1340,7 @@ private func calls(_ log: String) -> [String] {
     let plan = try s.sbd.planDoneRemoval()
     #expect(planned(plan) == [kept.id, inMain.id], Comment(rawValue: plan.text))
     #expect(isNull(item(plan, kept.id)?["branch"]))
-    #expect(item(plan, inMain.id)?["branch"]?.string == RecordedPR.groups.branch)
+    #expect(item(plan, inMain.id)?["branch"]?.string == RemovalPR.groups.branch)
 
     let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
 
@@ -1412,8 +1349,8 @@ private func calls(_ log: String) -> [String] {
     #expect(try s.sbd.client.sessions().isEmpty)
     #expect(!FileManager.default.fileExists(atPath: kept.cwd))
     #expect(!FileManager.default.fileExists(atPath: inMain.cwd))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
-    #expect(try !s.sbd.branchExists(s.repo, RecordedPR.groups.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try !s.sbd.localBranch(s.repo, RemovalPR.groups.branch))
     let made = calls(log)
     #expect(made.count == 2, Comment(rawValue: made.joined(separator: "\n")))
     for call in made {
@@ -1427,7 +1364,7 @@ private func calls(_ log: String) -> [String] {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/locked")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
     _ = try sbd.useSupacodeStub(failing: true)
     try sbd.lockForSupacode(repo, s.cwd)
 
@@ -1443,7 +1380,7 @@ private func calls(_ log: String) -> [String] {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/locked")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
     _ = try sbd.useSupacodeStub(removes: false)
     try sbd.lockForSupacode(repo, s.cwd)
 
@@ -1458,7 +1395,7 @@ private func calls(_ log: String) -> [String] {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/locked")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
     try sbd.restart(setting: "supacode", to: .string("\(sbd.home.path)/no-such-supacode"))
     try sbd.lockForSupacode(repo, s.cwd)
 
@@ -1473,7 +1410,7 @@ private func calls(_ log: String) -> [String] {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo, branch: "haacked/dirty")
-    try sbd.markDone(s.id)
+    try sbd.markSessionDone(s.id)
     let log = try sbd.useSupacodeStub()
     try sbd.lockForSupacode(repo, s.cwd)
     try "draft".write(toFile: "\(s.cwd)/draft.txt", atomically: true, encoding: .utf8)
@@ -1487,7 +1424,7 @@ private func calls(_ log: String) -> [String] {
   }
 
   @Test func cleanupRefusesAWorktreeThatSupacodeLockedWhenItsMergedPRIsFromAnotherRepo() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let session = try s.sbd.worktreeSession(s.repo, branch: "haacked/no-pr-yet")
     try s.sbd.link(session, "haacked/review-code", 189)
     s.github.change(189) { $0["state"] = "MERGED" }
@@ -1504,7 +1441,7 @@ private func calls(_ log: String) -> [String] {
   }
 
   @Test func rmDoneSkipsAWorktreeThatSupacodeLockedWhenItsMergedPRIsFromAnotherRepo() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let session = try s.sbd.worktreeSession(s.repo, branch: "haacked/no-pr-yet")
     try s.sbd.link(session, "haacked/review-code", 189)
     s.github.change(189) { $0["state"] = "MERGED" }
@@ -1522,7 +1459,7 @@ private func calls(_ log: String) -> [String] {
   }
 
   @Test func cleanupRemovesAWorktreeThatSupacodeLockedAndKeepsTheSession() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let session = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(session)
     let log = try s.sbd.useSupacodeStub()
@@ -1535,22 +1472,22 @@ private func calls(_ log: String) -> [String] {
     #expect(try s.sbd.client.sessions().map(\.id) == [session.id])
     #expect(calls(log).count == 1)
     // origin/main doesn't contain the branch's tip, so the branch stays.
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
     let kept = try s.sbd.waitFor(session.id, "the kept branch in the reason") {
-      $0.reason.contains("kept \(RecordedPR.breaker.branch)")
+      $0.reason.contains("kept \(RemovalPR.breaker.branch)")
     }
     #expect(kept.state == .done)
   }
 
   /// Supacode deletes the branch with the worktree, and the commit after the merge is only on that branch.
   @Test func keepsABranchWithACommitAfterTheMergeThatSupacodeDeleted() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED")
     try s.pollUntilDone(merged)
     try s.sbd.commit(merged.cwd, "later.txt")
-    try s.sbd.markDone(merged.id)
+    try s.sbd.markSessionDone(merged.id)
     let tip = try s.sbd.git(merged.cwd, "rev-parse", "HEAD")
-    try s.sbd.git(s.repo, "config", "branch.\(RecordedPR.breaker.branch).remote", "origin")
+    try s.sbd.git(s.repo, "config", "branch.\(RemovalPR.breaker.branch).remote", "origin")
     _ = try s.sbd.useSupacodeStub()
     try s.sbd.lockForSupacode(s.repo, merged.cwd)
 
@@ -1558,13 +1495,13 @@ private func calls(_ log: String) -> [String] {
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
     #expect(removed(try parse(r)) == [merged.id], Comment(rawValue: r.stdout))
-    #expect(try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RecordedPR.breaker.branch)") == tip)
-    #expect(try s.sbd.git(s.repo, "config", "branch.\(RecordedPR.breaker.branch).remote") == "origin")
+    #expect(try s.sbd.git(s.repo, "rev-parse", "refs/heads/\(RemovalPR.breaker.branch)") == tip)
+    #expect(try s.sbd.git(s.repo, "config", "branch.\(RemovalPR.breaker.branch).remote") == "origin")
   }
 
   /// The plan keeps the squash-merged branch, so the remote branch stays too.
   @Test func keepsTheRemoteBranchOfABranchThatTheSupacodePathKeeps() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(merged)
     _ = try s.sbd.useSupacodeStub()
@@ -1577,12 +1514,12 @@ private func calls(_ log: String) -> [String] {
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
     #expect(removed(try parse(r)) == [merged.id], Comment(rawValue: r.stdout))
-    #expect(try s.sbd.branchExists(s.repo, RecordedPR.breaker.branch))
-    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
   }
 
   @Test func cleanupRefusesAWorktreeThatSupacodeLockedWhenItsMergedPRUsesAnotherBranch() throws {
-    let s = try Setup()
+    let s = try MergedPRRepo()
     let (session, v2, tip) = try s.doneOnV2(.breaker, sessionOnV2: true)
     let log = try s.sbd.useSupacodeStub()
     try s.sbd.lockForSupacode(s.repo, session.cwd)

@@ -115,6 +115,14 @@ func queuedEveryTarget(_ args: [String: JSON]) throws -> JSON {
   try JSON(encoding: RemovalQueued(queued: args["targets"]?.array?.compactMap(\.string) ?? [], skipped: []))
 }
 
+/// A `send` that records every request, queues every target of `rm-queue`, and answers anything else with `plan`.
+func recordingSend(_ sent: SentRequests, plan: RemovalPlan) -> @Sendable (String, [String: JSON]) throws -> JSON {
+  { op, args in
+    sent.append(op, args)
+    return op == "rm-queue" ? try queuedEveryTarget(args) : try JSON(encoding: plan)
+  }
+}
+
 func removalItem(_ id: String) -> RemovalPlan.Item {
   .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
 }
@@ -348,14 +356,6 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     return model
   }
 
-  /// A `send` that records every request, queues every target of `rm-queue`, and answers anything else with `plan`.
-  func recordingSend(_ sent: SentRequests, plan: RemovalPlan) -> @Sendable (String, [String: JSON]) throws -> JSON {
-    { op, args in
-      sent.append(op, args)
-      return op == "rm-queue" ? try queuedEveryTarget(args) : try JSON(encoding: plan)
-    }
-  }
-
   /// Confirms `plan` and returns the targets of every `rm-queue` that Delete N sent.
   func confirm(_ model: BoardModel, _ plan: RemovalPlan, _ sent: SentRequests) async -> [String] {
     model.doneRemoval = .confirming(plan, scope: .done)
@@ -487,7 +487,8 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     #expect(shown == plan)
     let targets = await confirm(model, shown, sent)
 
-    #expect(sent.value.first?.args == BoardModel.doneRemovalArgs)
+    #expect(sent.value.first?.op == "rm-plan")
+    #expect(sent.value.first?.args == BoardModel.planRequest(nil, scope: .done))
     #expect(sent.queues.count == 1)
     #expect(targets == ["ph", "hk", "lo", "un"])
   }
