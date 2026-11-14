@@ -118,8 +118,12 @@ public func findExecutable(_ name: String) -> String? {
 /// in a build folder and in the app bundle. It follows a symlink to this
 /// program first, such as ~/.local/bin/sb.
 public func siblingExecutable(_ name: String) -> String {
-  let me = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
-  return me.deletingLastPathComponent().appendingPathComponent(name).path
+  ownExecutable().deletingLastPathComponent().appendingPathComponent(name).path
+}
+
+/// This program's file, after following a symlink to it such as ~/.local/bin/sb.
+public func ownExecutable() -> URL {
+  (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
 }
 
 public enum Processes {

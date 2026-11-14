@@ -161,6 +161,7 @@ public struct MCPToolServer: Sendable {
       }
       var request = try JSON(encoding: wait).object ?? [:]
       request["session"] = try sessionOrCaller(args, scoped)
+      if let here = args["here"]?.bool { request["here"] = .bool(here) }
       return try client.call("wait", request)
     case "clear_wait":
       var request = pick(args, ["wait"])
@@ -191,6 +192,10 @@ public struct MCPToolServer: Sendable {
       return try client.call("group-suggest", pick(args, ["accept"]))
     case "plan_artifact":
       return try planArtifact(args, scoped)
+    case "report":
+      var request = pick(args, ["text", "needsYou", "session"])
+      if let caller { request["caller"] = .string(caller) }
+      return try client.call("operator-report", request)
     default:
       throw APIError("no tool \(name)")
     }

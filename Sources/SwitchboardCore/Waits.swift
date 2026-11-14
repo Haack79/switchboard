@@ -44,6 +44,9 @@ public struct Wait: Codable, Equatable, Sendable {
       case .date, .manual: ["until"]
       }
     }
+
+    /// What a wait of this kind does when it resolves, unless the request says otherwise.
+    var defaultThen: Then { self == .manual ? .notify : .resume }
   }
 
   /// What happens when the wait resolves.
@@ -132,6 +135,17 @@ public struct Wait: Codable, Equatable, Sendable {
   /// Needs you. It is nil for a `date` wait, for a manual wait, whose `until`
   /// serves instead, and for a wait that sbd has not stamped yet.
   public var recheck: Int64?
+  /// The Manager conversation that set the wait, when sbd stored it on the operator instead.
+  public var handedFrom: SessionTarget?
+
+  /// Whether the wait's resolution reads the session that holds it. A PR kind with no repository reads
+  /// that session's own repository. A `ci` wait on it reads the session's checked-out branch.
+  var readsWaiter: Bool {
+    switch kind {
+    case .session, .date, .manual: false
+    case .ci, .review, .botReview, .approval, .queue, .merge, .deploy: pr?.repository == nil
+    }
+  }
 
   /// The time after which a review or a queue change counts.
   public var countsAfter: Int64 { since ?? created }
@@ -217,6 +231,7 @@ public struct Wait: Codable, Equatable, Sendable {
   /// The message that resumes the session when the wait resolves with `resume`.
   public func message(outcome: String) -> String {
     var text = "Switchboard: " + Wait.sentence(outcomeLine(outcome))
+    if let handedFrom { text += " For Manager conversation \"\(handedFrom.name)\"." }
     if kind != .manual, let note { text += " Your note: " + Wait.sentence(note) }
     return text
   }
@@ -461,11 +476,15 @@ extension Attention {
   /// its recheck time, naming each overdue wait. Otherwise Waiting while the
   /// session has an open wait.
   static func waitVerdict(_ session: Session, _ facts: SessionFacts, now: Int64) -> Verdict? {
-    if let outcome = facts.waitOutcome { return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info) }
+    if let outcome = facts.waitOutcome {
+      return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info, byWaitRule: true)
+    }
     guard let waits = session.waits, !waits.isEmpty else { return nil }
     let overdue = waits.filter { $0.isOverdue(now: now) }
     if !overdue.isEmpty {
-      return Verdict(state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info)
+      return Verdict(
+        state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info,
+        byWaitRule: true)
     }
     return Verdict(state: .waiting, reason: oneLine(waits.map(\.line).joined(separator: "; ")))
   }

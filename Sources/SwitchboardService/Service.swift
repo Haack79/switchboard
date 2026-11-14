@@ -381,6 +381,8 @@ public final class Service {
         return try .success(JSON(encoding: addRepo(request.args)))
       case "manager":
         return managerRequest(request.args)
+      case "operator":
+        return operatorRequest(request.args)
       case "chat":
         return chatRequest(request.args)
       case "chat-log":
@@ -457,7 +459,7 @@ public final class Service {
   /// on the state queue.
   func prepared(_ request: Request, _ body: () throws -> JSON) throws -> JSON {
     let hostRead = try readHost(for: request)
-    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try lookup(request.args) }) {
+    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try messaged(request) }) {
       settle(id)
     }
     if Service.waitsForMCP.contains(request.op) { awaitMCPServers(for: request) }
@@ -481,6 +483,14 @@ public final class Service {
       if let hostRead { install(hostRead.snapshot, onHost: hostRead.host) }
       return try body()
     }
+  }
+
+  /// The session whose claude `request` can message: the session it names, or
+  /// the operator for a `resolve-wait` of a wait that a conversation handed it.
+  private func messaged(_ request: Request) throws -> String {
+    let id = try lookup(request.args)
+    guard request.op == "resolve-wait" else { return id }
+    return try openWait(id, request.args["wait"]?.string).holder
   }
 
   /// For a request that acts on a session on a host: waits for the host, then reads its panes and processes.
@@ -533,15 +543,18 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
-      // A sender that sbd no longer knows, or the session itself, goes unrecorded.
-      let from = (try? lookup(["session": args["from"] ?? .null])).flatMap { $0 == id ? nil : $0 }
+      // The `sent` event names a session that messages itself as the sender, so the message doesn't count as
+      // the user's and close the operator's reports. Its launch trigger stays `send`. A sender that sbd no
+      // longer knows goes unrecorded.
+      let sender = try? lookup(["session": args["from"] ?? .null])
       // A message from another session, such as the Manager, doesn't hold the session for the user.
       let fromSession = args["from"] != nil || args["insideClaude"]?.bool == true
       // claude's prompt shows an attached image as `[Image #n]` after the text, so the request keeps the text alone.
       let typed = (Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text)
         .trimmingCharacters(in: .whitespacesAndNewlines)
       let request = fromSession ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
-      let delivery = try send(id, text, trigger: from == nil ? .send : .session, from: from)
+      let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
+      let delivery = try send(id, text, trigger: trigger, from: sender)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       return ["delivery": .string(delivery.rawValue)]
     case "dependency-resolved":
@@ -557,6 +570,12 @@ public final class Service {
     case "done":
       let id = try lookup(args)
       let done = args["done"]?.bool ?? true
+      // sbd skips a done session's waits, so the operator's waits would stop without a message.
+      if done, entries[id]?.session.kind == .operator {
+        throw APIError(
+          "the operator can't be marked done, because its waits would stop without a message. "
+            + "To remove it, run: sb rm \(Manager.operatorName)")
+      }
       try update(id) { $0.done = done }
       record(id, done ? "done" : "undone")
       return try JSON(encoding: summary(id))
@@ -574,6 +593,10 @@ public final class Service {
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "operator-report":
+      return try operatorReport(args)
+    case "operator-reports":
+      return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
     case "rename":
@@ -660,7 +683,7 @@ public final class Service {
   /// Records a hook event and returns it with what the hook prints, or nil
   /// for an unknown session. A UserPromptSubmit of a Manager or a chat prints
   /// the digest of its children, and the SessionStart of a new Manager
-  /// conversation prints the digest of the whole board. sbd records each
+  /// conversation or the operator prints the digest of the whole board. sbd records each
   /// digest as a `digest` event. A work session's UserPromptSubmit prints
   /// the replies that the user posted from its drafts since it last heard.
   /// `stamp` is set for an event that a host's shim made. Such an event is recorded with its id and its own
@@ -1113,6 +1136,14 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
+  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
+  /// comes first. A blank line separates it from the triage prompt.
+  func appendedSystemPrompt(for session: Session) -> String? {
+    let role = session.kind == .operator ? Manager.operatorPrompt : ""
+    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    return text.isEmpty ? nil : text
+  }
+
   /// Starts claude in the session's Claude pane. A launch resumes the
   /// conversation when its transcript exists, and starts it otherwise.
   /// `prompt` becomes the first prompt. The pane runs only claude, so the pane
@@ -1144,8 +1175,8 @@ public final class Service {
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
     if let mode { args += ["--permission-mode", mode] }
-    if local, !config.triage.systemPrompt.isEmpty {
-      args += ["--append-system-prompt", config.triage.systemPrompt]
+    if local, let system = appendedSystemPrompt(for: session) {
+      args += ["--append-system-prompt", system]
     }
     // `--` keeps a prompt that starts with a dash from reading as an option.
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
@@ -1519,6 +1550,8 @@ public final class Service {
         // The start would otherwise leave its new worktree behind.
         guard !starting.contains(id) else { throw APIError("\(mention(id)) is starting") }
         guard !merging.contains(id) else { throw APIError("\(mention(id)) is merging its PR") }
+        // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
+        try refuseOperatorRemoval(id)
         try checkTodos(id, resolving: resolving)
         let entry = entries[id]!
         return (entry.session, entry.facts.pr, sharedSession(entry.session), mayRunClaude(entry))

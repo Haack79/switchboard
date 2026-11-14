@@ -69,6 +69,8 @@ public enum TranscriptAnchor: Equatable, Sendable {
       return reply.isEmpty ? .unanchored : .reply(reply)
     case .rule:
       return openPrompt(item, facts) ?? .unanchored
+    case .report:
+      return .unanchored
     }
   }
 

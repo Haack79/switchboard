@@ -57,10 +57,13 @@ import Testing
   }
 
   /// The arguments in the session's claude.sh, which holds the latest launch. sh reads the quoting.
+  /// The command follows the comment header and spans several lines when an argument holds a newline.
   func scriptArgs(_ sbd: Instance, _ id: String) throws -> [String] {
     let text = try String(contentsOfFile: "\(sbd.home.sessionFolder(id))/claude.sh", encoding: .utf8)
-    let line = try #require(text.split(separator: "\n").last { !$0.hasPrefix("#") }.map(String.init))
-    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", line])
+    let command = text.split(separator: "\n", omittingEmptySubsequences: false).drop { $0.hasPrefix("#") }
+      .joined(separator: "\n")
+    try #require(!command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "claude.sh has no command")
+    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", command])
     try #require(r.status == 0, "sh could not read claude.sh: \(r.stderr)")
     return r.stdout.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map(String.init)
   }
@@ -1055,7 +1058,8 @@ import Testing
     #expect(spawn["inputSchema"]?["properties"]?["wait"] != nil)
   }
 
-  @Test func spawnWithWaitDoneSetsASessionWaitOnTheCaller() throws {
+  /// A conversation hands the wait to the operator (`OperatorHandoffTests`).
+  @Test func spawnWithWaitDoneSetsASessionWaitThatTheOperatorHoldsForTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
@@ -1064,35 +1068,39 @@ import Testing
 
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
 
-    let waits = try sbd.get(c.id).waits
-    #expect(waits.count == 1)
-    let wait = try #require(waits.first)
+    #expect(try sbd.get(c.id).waits.isEmpty)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    #expect(op.waits.count == 1)
+    let wait = try #require(op.waits.first)
     #expect(wait.kind == .session)
     #expect(wait.session?.id == kid.id)
     #expect(wait.state == .done)
+    #expect(wait.handedFrom?.id == c.id)
     #expect(try sbd.get(kid.id).waits.isEmpty)
   }
 
-  @Test func theChildReachingDoneResumesTheCallerOnce() throws {
+  @Test func theChildReachingDoneResumesTheOperatorOnceAndNotTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
     var args = try spawnArgs(sbd, "kid")
     args["wait"] = "done"
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
-    try #require(try sbd.get(c.id).waits.count == 1)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    try #require(op.waits.count == 1)
     try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply == "Done: hello" }
 
     try sbd.sb("done", kid.id)
 
-    let resumed = try sbd.waitFor(c.id, "the resumed turn", timeout: 30) {
-      $0.lastReply == "Done: Switchboard: kid to reach Done: it did."
+    let resumed = try sbd.waitFor(op.id, "the operator's resumed turn", timeout: 30) {
+      $0.lastReply == "Done: Switchboard: kid to reach Done: it did. For Manager conversation \"\(c.name)\"."
     }
     #expect(resumed.waits.isEmpty)
     try sbd.sb("undone", kid.id)
     try sbd.sb("done", kid.id)
     Thread.sleep(forTimeInterval: 1)
-    #expect(try sbd.sbdMessages(c.id).count == 1)
+    #expect(try sbd.sbdMessages(op.id).count == 1)
+    #expect(try sbd.sbdMessages(c.id).isEmpty)
   }
 
   @Test func spawnWithoutWaitSetsNoWait() throws {
