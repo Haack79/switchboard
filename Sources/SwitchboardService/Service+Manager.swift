@@ -236,27 +236,28 @@ extension Service {
   }
 
   /// The `manager-mcp` request: shows the MCP servers of a conversation or the operator, or
-  /// changes them with `add`, `rm`, `all`, or `none`. A change applies when
-  /// claude can take it, as `applyMCPChanges` describes.
+  /// changes them with `add`, `rm`, `all`, or `none`.
   func managerMCP(_ args: JSON) throws -> JSON {
     guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
     let id = try resolveRef(
       ref, "Manager conversation",
       entries.values.map(\.session).filter(\.kind.runsInManagerFolder).map { ($0.id, $0.name) })
-    let add = args["add"]?.array?.compactMap(\.string) ?? []
-    let remove = args["rm"]?.array?.compactMap(\.string) ?? []
-    let all = args["all"]?.bool == true
-    let none = args["none"]?.bool == true
+    return try JSON(
+      encoding: changeMCPServers(
+        id, add: args["add"]?.array?.compactMap(\.string) ?? [], remove: args["rm"]?.array?.compactMap(\.string) ?? [],
+        all: args["all"]?.bool == true, none: args["none"]?.bool == true))
+  }
+
+  /// Changes a session's MCP servers by at most one of `add`, `remove`, `all`, and `none`, and answers with the
+  /// list after the change. A change applies when claude can take it, as `applyMCPChanges` describes.
+  func changeMCPServers(_ id: String, add: [String], remove: [String], all: Bool, none: Bool) throws
+    -> ManagerMCPAnswer
+  {
     let changes = [!add.isEmpty, !remove.isEmpty, all, none].filter { $0 }.count
     if changes > 1 { throw APIError("pass one of add, rm, --all, and --none") }
     let available = availableMCPServers(id)
     let unknown = add.filter { available[$0] == nil }
-    if !unknown.isEmpty {
-      let known = available.keys.sorted()
-      throw APIError(
-        "no MCP server named \(unknown.joined(separator: ", ")). "
-          + (known.isEmpty ? "No config lists a server." : "The servers are: \(known.joined(separator: ", "))."))
-    }
+    if !unknown.isEmpty { throw unknownMCPServers(unknown, available: available) }
     let current = entries[id]!.session.mcp
     if current == nil, !add.isEmpty || !remove.isEmpty {
       throw APIError("\(entries[id]!.session.name) loads every server. Run --none first, then add the ones it needs")
@@ -273,10 +274,17 @@ extension Service {
       applyMCPChanges(now: nowMs())
     }
     let session = entries[id]!.session
-    return try JSON(
-      encoding: ManagerMCPAnswer(
-        session: id, name: session.name, servers: session.mcp, available: available.keys.sorted(),
-        pending: entries[id]?.mcpRelaunch != nil))
+    return ManagerMCPAnswer(
+      session: id, name: session.name, servers: session.mcp, available: available.keys.sorted(),
+      pending: entries[id]?.mcpRelaunch != nil)
+  }
+
+  /// The refusal of server names that no config holds, which names the servers that exist.
+  func unknownMCPServers(_ unknown: [String], available: [String: JSON]) -> APIError {
+    let known = available.keys.sorted()
+    return APIError(
+      "no MCP server named \(unknown.joined(separator: ", ")). "
+        + (known.isEmpty ? "No config lists a server." : "The servers are: \(known.joined(separator: ", "))."))
   }
 
   /// Relaunches each claude whose MCP servers changed while it ran, once it

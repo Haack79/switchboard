@@ -547,19 +547,19 @@ public enum Triage {
   }
 
   static func cardItem(_ card: Card) -> TriageItem {
-    if let message = card.send {
+    switch card.kind {
+    case .send:
       return TriageItem(
         title: title(card.reason), kind: .approval,
-        summary: "Claude asks to send \(message.summary). Nothing is sent until you send it.",
+        summary: "Claude asks to send \(card.summary). Nothing is sent until you send it.",
         options: [
           TriageOption(label: "Send", action: .allow),
           TriageOption(label: "Cancel", action: .deny),
         ], source: .card,
         details: TriageDetails(
-          openByDefault: true, toolInput: .init(tool: card.tool, text: message.text),
-          targets: message.targets.map { sessionMention(name: $0.name, id: $0.id) }))
-    }
-    if card.kind == .trust {
+          openByDefault: true, toolInput: .init(tool: card.tool, text: card.send?.text ?? ""),
+          targets: (card.send?.targets ?? []).map { sessionMention(name: $0.name, id: $0.id) }))
+    case .trust:
       return TriageItem(
         title: title(card.reason), kind: .approval,
         summary:
@@ -568,8 +568,7 @@ public enum Triage {
           TriageOption(label: "Trust", action: .allow, recommended: true),
           TriageOption(label: "Exit", action: .deny),
         ], source: .card)
-    }
-    if card.kind == .permission {
+    case .permission:
       return TriageItem(
         title: title(card.reason), kind: .approval, summary: permissionSummary(card),
         options: [
@@ -582,16 +581,17 @@ public enum Triage {
         source: .card,
         details: TriageDetails(
           openByDefault: !summaryShowsCall(card), toolInput: .init(tool: card.tool, text: card.details)))
+    case .question:
+      // Several questions take more than a click or a set of ticks.
+      let only = card.questions.count == 1 ? card.questions.first : nil
+      let options = (only?.options ?? []).map {
+        TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
+      }
+      return TriageItem(
+        title: title(card.reason), kind: .question,
+        summary: card.questions.map(\.question).joined(separator: " "), options: options,
+        multiSelect: only?.multiSelect ?? false, source: .card)
     }
-    // Several questions take more than a click or a set of ticks.
-    let only = card.questions.count == 1 ? card.questions.first : nil
-    let options = (only?.options ?? []).map {
-      TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
-    }
-    return TriageItem(
-      title: title(card.reason), kind: .question,
-      summary: card.questions.map(\.question).joined(separator: " "), options: options,
-      multiSelect: only?.multiSelect ?? false, source: .card)
   }
 
   static func ruleItem(_ verdict: Verdict) -> TriageItem {
