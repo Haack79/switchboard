@@ -165,6 +165,14 @@ public enum SessionKind: String, Codable, Sendable {
     }
   }
 
+  /// Whether sbd starts a session of this kind in the Manager folder: a Manager conversation or the operator.
+  public var runsInManagerFolder: Bool {
+    switch self {
+    case .work, .chat: false
+    case .manager, .operator: true
+    }
+  }
+
   /// How a message names a session of this kind, or nil for a work session.
   public var label: String? {
     switch self {

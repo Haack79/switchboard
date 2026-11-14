@@ -85,7 +85,8 @@ extension Service {
   }
 
   /// The one function that deletes a session record. It refuses unless
-  /// `resolving` names exactly the session's open to-dos. It records each of
+  /// `resolving` names exactly the session's open to-dos, and it refuses the
+  /// operator while it has an open wait or report. It records each of
   /// them in `resolved_todos` in the same transaction as the delete. A
   /// failed delete leaves them open. The same transaction records the
   /// session's name in `removed_sessions`, and `removedNames` gets it only
@@ -94,6 +95,7 @@ extension Service {
   /// remove its leftover lines. It runs on the state queue.
   func forgetSession(_ id: String, resolving: Set<String>) throws {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
+    try refuseOperatorRemoval(id)
     // Only a merged PR leaves marks. Other removals skip the summary.
     let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil
     try store.delete(

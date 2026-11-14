@@ -566,9 +566,10 @@ func printImportable(_ list: ImportList, repo: String? = nil) {
   }
 }
 
-func sessionCommand(_ op: String, _ a: Args, extra: [String: JSON] = [:]) {
+/// Sends `op` for `session`, or for the session that `a` names when `session` is nil, and prints the answer.
+func sessionCommand(_ op: String, _ a: Args, session: String? = nil, extra: [String: JSON] = [:]) {
   var args = extra
-  args["session"] = .string(a.session(op))
+  args["session"] = .string(session ?? a.session(op))
   let result = call(op, args)
   if a.json { printJSON(result) } else { printSession(summary(result)) }
 }

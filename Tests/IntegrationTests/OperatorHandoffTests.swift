@@ -17,8 +17,7 @@ import Testing
 
   func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try JSONCoding.decode(type, from: text) }
 
-  /// The environment of a command that Claude runs inside the session.
-  func inside(_ id: String) -> [String: String] { ["SB_SESSION_ID": id, "CLAUDECODE": "1"] }
+  func inside(_ id: String) -> [String: String] { conversationHelpers.inside(id) }
 
   /// A conversation with a fixed name whose first turn has ended.
   func conversation(_ sbd: Instance, _ name: String = conversationName) throws -> SessionSummary {
@@ -39,11 +38,6 @@ import Testing
   /// Runs `sb wait --json` inside the session, as its Claude would, and returns sbd's answer.
   func waitInside(_ sbd: Instance, _ s: SessionSummary, _ args: [String]) throws -> SessionSummary {
     try decode(SessionSummary.self, sbd.sb(["wait", "--json"] + args, env: inside(s.id)))
-  }
-
-  /// The messages that sbd sent the session after `mark`.
-  func sbdMessages(_ sbd: Instance, _ id: String, after mark: Int64) throws -> [Event] {
-    try sbd.events(id, after: mark).filter { $0.kind == "sent" && $0.data["by"]?.string == "sbd" }
   }
 
   /// The event of `kind` that sbd recorded for the wait, on the session.
@@ -106,7 +100,7 @@ import Testing
     let text = messages.first?.data["text"]?.string ?? ""
     #expect(text.contains(#""\#(c.name)""#), "\(text)")
     #expect(text.hasSuffix("Your note: remove its worktree."), "\(text)")
-    #expect(try sbdMessages(sbd, c.id, after: mark).isEmpty)
+    #expect(try sbd.sbdMessages(c.id, after: mark).isEmpty)
     #expect(try sbd.get(c.id).waits.isEmpty)
   }
 
@@ -124,7 +118,7 @@ import Testing
     Thread.sleep(forTimeInterval: 1)
 
     #expect(try sbd.sbdMessages(op.id).count == 1)
-    #expect(try sbdMessages(sbd, c.id, after: mark).isEmpty)
+    #expect(try sbd.sbdMessages(c.id, after: mark).isEmpty)
   }
 
   @Test func spawnWithWaitFromAConversationKeepsTheParentAndPutsTheWaitOnTheOperator() throws {
@@ -233,7 +227,7 @@ import Testing
     }
     try digest.flip(sbd, kid)
     Thread.sleep(forTimeInterval: 1)
-    #expect(try sbdMessages(sbd, c.id, after: mark).count == 1)
+    #expect(try sbd.sbdMessages(c.id, after: mark).count == 1)
     #expect(try operators(sbd).isEmpty)
   }
 
@@ -311,7 +305,7 @@ import Testing
     #expect(e.kind == "wait-resolved")
     #expect(e.session == c.id)
     #expect(e.data["outcome"]?.string == "the time came")
-    #expect(try sbdMessages(sbd, c.id, after: mark).isEmpty)
+    #expect(try sbd.sbdMessages(c.id, after: mark).isEmpty)
     #expect(try operators(sbd).isEmpty)
   }
 
@@ -398,7 +392,7 @@ import Testing
         #": the time came. For Manager conversation "\#(c.name)". Your note: check the dashboard."#) == true,
       "\(resumed.lastReply ?? "")")
     #expect(resumed.waits.isEmpty)
-    #expect(try sbdMessages(sbd, c.id, after: mark).isEmpty)
+    #expect(try sbd.sbdMessages(c.id, after: mark).isEmpty)
   }
 
   // MARK: The session that the wait names (Risk 1)
@@ -703,7 +697,7 @@ import Testing
     let event = try #require(try waitEvent(sbd, h.op.id, "wait-resolved", wait: target))
     #expect(event.data["from"]?.string == h.a.id, "\(event.data.text)")
     #expect(event.data["outcome"]?.string == "the dashboard is green")
-    #expect(try sbdMessages(sbd, h.a.id, after: mark).isEmpty)
+    #expect(try sbd.sbdMessages(h.a.id, after: mark).isEmpty)
     #expect(try sbd.get(h.a.id).waits.isEmpty)
   }
 

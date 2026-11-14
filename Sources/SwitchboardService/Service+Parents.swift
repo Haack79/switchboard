@@ -133,9 +133,8 @@ extension Service {
   /// It is nil for every other kind and source. It leaves out every Manager
   /// conversation and the operator.
   func startDigest(_ id: String, source: String?) -> String? {
-    let isManager = { (kind: SessionKind) in kind == .manager || kind == .operator }
-    guard let kind = entries[id]?.session.kind, isManager(kind), source == "startup" else { return nil }
-    let all = summaries().filter { $0.id != id && !isManager($0.kind) }
+    guard entries[id]?.session.kind.runsInManagerFolder == true, source == "startup" else { return nil }
+    let all = summaries().filter { $0.id != id && !$0.kind.runsInManagerFolder }
     return ParentDigest.startText(all, inbox: Triage.order(all))
   }
 

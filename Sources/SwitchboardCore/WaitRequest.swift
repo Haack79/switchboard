@@ -83,15 +83,12 @@ public struct WaitRequest: Codable, Equatable, Sendable {
   }
 }
 
-/// Whether sbd stores the wait that `request` describes on the operator instead of `namedSession`.
+/// Whether sbd stores `wait` on the operator instead of `namedSession`, the session that the request named.
 /// It does when the wait resolves the same way there and only the recipient of the message changes:
-/// the named session is a Manager conversation, Claude set the wait, it resumes, `here` is not set, and
-/// its resolution reads nothing of the waiter. sbd also keeps a `session` wait whose target is the
-/// operator, which this function can't see.
-public func handsOff(_ request: WaitRequest, namedSession: Session, here: Bool) -> Bool {
-  guard namedSession.kind == .manager, !here, request.by == Author.claude.rawValue,
-    let kind = Wait.Kind(rawValue: request.kind ?? Wait.Kind.manual.rawValue)
-  else { return false }
-  guard (request.then.flatMap(Wait.Then.init(rawValue:)) ?? kind.defaultThen) == .resume else { return false }
-  return !kind.readsWaiter(pr: request.target.flatMap(Wait.PullRequest.init(parsing:)))
+/// the named session is a Manager conversation, Claude set the wait, it resumes, `here` is not set, its
+/// resolution reads nothing of the waiter, and it is not a `session` wait on the operator, whose id is
+/// `operatorID`.
+public func handsOff(_ wait: Wait, namedSession: Session, here: Bool, operatorID: String?) -> Bool {
+  namedSession.kind == .manager && !here && wait.by == .claude && wait.then == .resume && !wait.readsWaiter
+    && (wait.session.map { $0.id != operatorID } ?? true)
 }

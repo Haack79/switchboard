@@ -70,7 +70,7 @@ extension Triage {
     if !facts.openReports.isEmpty { return reportItem(facts.openReports) }
     guard verdict.byWaitRule else { return nil }
     var item = ruleItem(verdict)
-    item.ref = "rule:\(item.title)"
+    item.ref = Triage.ruleRef(item.title)
     return item
   }
 

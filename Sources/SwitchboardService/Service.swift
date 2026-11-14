@@ -1133,7 +1133,7 @@ public final class Service {
   }
 
   /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
-  /// comes first, and a blank line separates it from the triage prompt.
+  /// comes first. A blank line separates it from the triage prompt.
   func appendedSystemPrompt(for session: Session) -> String? {
     let role = session.kind == .operator ? Manager.operatorPrompt : ""
     let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -1546,6 +1546,7 @@ public final class Service {
         // The start would otherwise leave its new worktree behind.
         guard !starting.contains(id) else { throw APIError("\(mention(id)) is starting") }
         guard !merging.contains(id) else { throw APIError("\(mention(id)) is merging its PR") }
+        // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
         try refuseOperatorRemoval(id)
         try checkTodos(id, resolving: resolving)
         let entry = entries[id]!
@@ -1658,8 +1659,6 @@ public final class Service {
         }
         // The removal closed a host's panes before this, from answers of the host.
         let terminals = session.host == nil ? try site.terminals() : nil
-        // A wait can land on the operator while its panes stop.
-        try refuseOperatorRemoval(session.id)
         do {
           try forgetSession(session.id, resolving: resolving)
         } catch var error as OpenTodoError {

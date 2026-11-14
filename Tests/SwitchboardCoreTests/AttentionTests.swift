@@ -1013,7 +1013,7 @@ enum WaitingCause: String, CaseIterable, Sendable {
 extension TriageOperatorTests {
   @Suite struct ReportVerdicts {
     func verdict(_ events: [Event], waits: [Wait] = []) -> Verdict {
-      Attention.evaluate(operatorSession(waits: waits), opFacts(events), now: 1000)
+      Attention.evaluate(operatorSession(waits: waits), facts(events), now: 1000)
     }
 
     @Test func anOpenReportPutsTheOperatorInNeedsYouWithItsText() {
@@ -1052,8 +1052,8 @@ extension TriageOperatorTests {
         switch self {
         case .openWait, .overdueWait, .informationalReply: opIdle
         case .notifyOutcome: opIdle + [try opNotified(5)]
-        case .questionReply: [opPrompt(1, "go"), opStop(2, proseQuestion)]
-        case .offerReply: [opPrompt(1, "go"), opStop(2, "I removed the worktree. Want me to top up the queue?")]
+        case .questionReply: [opPrompt(1, "go"), stop(2, 2, proseQuestion)]
+        case .offerReply: [opPrompt(1, "go"), stop(2, 2, "I removed the worktree. Want me to top up the queue?")]
         case .noPrompt: []
         }
       }
@@ -1095,13 +1095,13 @@ extension TriageOperatorTests {
       #expect(v.reason == overdueWait.overdueLine)
     }
 
-    /// Only the operator has a report verdict. The same facts on another kind give the verdict they gave before.
+    /// Only the operator has a report verdict. Another kind gives the same verdict with or without the reports.
     @Test(arguments: [SessionKind.work, .manager, .chat]) func anotherKindIgnoresReports(_ kind: SessionKind) {
       let events = opIdle + [opReport(10, "Merge it?")]
 
-      let v = Attention.evaluate(kindSession(kind), opFacts(events), now: 1000)
+      let v = Attention.evaluate(kindSession(kind), facts(events), now: 1000)
 
-      #expect(v == Attention.evaluate(kindSession(kind), opFacts(opIdle), now: 1000))
+      #expect(v == Attention.evaluate(kindSession(kind), facts(opIdle), now: 1000))
       #expect(v.reason != "Merge it?")
     }
   }

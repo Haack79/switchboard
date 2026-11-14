@@ -51,7 +51,7 @@ private struct ChatHeader: View {
       Text(session.name).fontWeight(.medium).lineLimit(1)
       StateBadge(state: session.state)
       Spacer()
-      if session.kind == .manager || session.kind == .operator { MCPServerMenu(session: session) }
+      if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
       if session.kind == .manager {
         Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
           .help("Start a session that this conversation follows")

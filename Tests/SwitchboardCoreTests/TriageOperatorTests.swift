@@ -47,12 +47,8 @@ func opPrompt(_ id: Int64, _ text: String) -> Event {
   Event(id: id, session: "s1", t: id, kind: "UserPromptSubmit", data: ["prompt": .string(text)])
 }
 
-func opStop(_ id: Int64, _ reply: String) -> Event {
-  Event(id: id, session: "s1", t: id, kind: "Stop", data: ["last_assistant_message": .string(reply)])
-}
-
 /// A turn that the message started and that ended with the stub's reply.
-func opTurn(_ id: Int64, _ text: String) -> [Event] { [opPrompt(id, text), opStop(id + 1, "Done: \(text)")] }
+func opTurn(_ id: Int64, _ text: String) -> [Event] { [opPrompt(id, text), stop(id + 1, id + 1, "Done: \(text)")] }
 
 /// The operator's first turn, which ended with an informational reply.
 let opIdle: [Event] = opTurn(1, "hello")
@@ -91,17 +87,7 @@ func kindSession(_ kind: SessionKind, waits: [Wait] = [], done: Bool = false) ->
 
 func operatorSession(waits: [Wait] = []) -> Session { kindSession(.operator, waits: waits) }
 
-func opFacts(_ events: [Event]) -> SessionFacts {
-  var f = SessionFacts()
-  for e in events { f.apply(e) }
-  return f
-}
-
 func opVerdict(_ s: Session, _ f: SessionFacts) -> Verdict { Attention.evaluate(s, f, now: opNow) }
-
-func opItem(_ s: Session, _ f: SessionFacts) -> TriageItem? {
-  Triage.itemAndDecisions(f, opVerdict(s, f), kind: s.kind).item
-}
 
 /// The session as sbd lists it: its waits, cards, open prompt, verdict, and the item that sbd builds.
 func opSummary(_ s: Session, _ f: SessionFacts) -> SessionSummary {
@@ -146,7 +132,7 @@ extension TriageOperatorTests {
 extension TriageOperatorTests {
   @Suite struct ReportFold {
     @Test func aNeedsYouReportIsOpen() {
-      let f = opFacts(opIdle + [opReport(10, "PR #12 is green. Merge it?", about: "k1")])
+      let f = facts(opIdle + [opReport(10, "PR #12 is green. Merge it?", about: "k1")])
 
       #expect(f.openReports.map(\.text) == ["PR #12 is green. Merge it?"])
       #expect(f.openReports.map(\.about) == ["k1"])
@@ -154,94 +140,94 @@ extension TriageOperatorTests {
     }
 
     @Test func anOpenReportKeepsItsEventsIdAndTime() {
-      let f = opFacts(opIdle + [opReport(10, "Merge it?", t: 77)])
+      let f = facts(opIdle + [opReport(10, "Merge it?", t: 77)])
 
       #expect(f.openReports.map(\.id) == [10])
       #expect(f.openReports.map(\.t) == [77])
     }
 
     @Test func aReportWithoutAboutHasNoAbout() {
-      let f = opFacts(opIdle + [opReport(10, "Merge it?")])
+      let f = facts(opIdle + [opReport(10, "Merge it?")])
 
       #expect(f.openReports.map(\.about) == [nil])
     }
 
     @Test func aReportWithoutNeedsYouIsNotOpen() {
-      let f = opFacts(opIdle + [opReport(10, "Removed the kid's worktree.", needsYou: false)])
+      let f = facts(opIdle + [opReport(10, "Removed the kid's worktree.", needsYou: false)])
 
       #expect(f.openReports.isEmpty)
     }
 
     @Test func reportsStayOpenInTheOrderTheyWereRecorded() {
-      let f = opFacts(opIdle + [opReport(10, "a"), opReport(11, "b"), opReport(12, "c")])
+      let f = facts(opIdle + [opReport(10, "a"), opReport(11, "b"), opReport(12, "c")])
 
       #expect(f.openReports.map(\.text) == ["a", "b", "c"])
     }
 
     @Test func aMessageThatSbdSentClosesNothing() {
       let text = "Switchboard: kid to reach Done: it did."
-      let f = opFacts(opIdle + [opReport(10, "Merge it?"), opSbdSent(11, text)] + opTurn(12, text))
+      let f = facts(opIdle + [opReport(10, "Merge it?"), opSbdSent(11, text)] + opTurn(12, text))
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
     }
 
     @Test func aMessageFromAnotherSessionClosesNothing() {
       let text = "Keep 10 sessions on the queue."
-      let f = opFacts(opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text))
+      let f = facts(opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text))
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
     }
 
     @Test func aMessageThatTheUserWroteClosesTheEarlierReports() {
-      let f = opFacts(opIdle + [opReport(10, "a"), opReport(11, "b"), opUserSent(12, "yes")])
+      let f = facts(opIdle + [opReport(10, "a"), opReport(11, "b"), opUserSent(12, "yes")])
 
       #expect(f.openReports.isEmpty)
     }
 
     @Test func aReportAfterTheUsersMessageStaysOpen() {
-      let f = opFacts(opIdle + [opReport(10, "a"), opUserSent(11, "yes"), opReport(12, "b")])
+      let f = facts(opIdle + [opReport(10, "a"), opUserSent(11, "yes"), opReport(12, "b")])
 
       #expect(f.openReports.map(\.text) == ["b"])
     }
 
     /// The fold reads the `sent` event, so a prompt that no `sent` event names closes nothing.
     @Test func aPromptWithoutASentEventClosesNothing() {
-      let f = opFacts(opIdle + [opReport(10, "Merge it?")] + opTurn(11, "yes"))
+      let f = facts(opIdle + [opReport(10, "Merge it?")] + opTurn(11, "yes"))
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
     }
 
     @Test func anAckClosesOnlyTheReportsRecordedBeforeIt() {
-      let f = opFacts(opIdle + [opReport(10, "a"), opReport(11, "b"), opAck(12), opReport(13, "c")])
+      let f = facts(opIdle + [opReport(10, "a"), opReport(11, "b"), opAck(12), opReport(13, "c")])
 
       #expect(f.openReports.map(\.text) == ["c"])
     }
 
     /// The Inbox shows a blocking prompt instead of the reports, so its acknowledgment closes none.
     @Test func anAckWhileAPromptBlocksClosesNothing() {
-      let f = opFacts([opReport(0, "Merge it?", t: 0)] + permissionTurn() + [opAck(50)])
+      let f = facts([opReport(0, "Merge it?", t: 0)] + permissionTurn() + [opAck(50)])
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
     }
 
     /// A report whose text repeats an acknowledged reason is a new item.
     @Test func aReportAfterAnAckIsNotHeldByThatAck() throws {
-      let f = opFacts(opIdle + [opReport(10, "Merge it?"), opAck(11, reason: "Merge it?"), opReport(12, "Merge it?")])
+      let f = facts(opIdle + [opReport(10, "Merge it?"), opAck(11, reason: "Merge it?"), opReport(12, "Merge it?")])
       let verdict = Attention.shown(opVerdict(operatorSession(), f), f, now: opNow, acknowledgedMs: 3_600_000)
 
       #expect(verdict.state == .needsYou)
-      #expect(try #require(opItem(operatorSession(), f)).source == .report)
+      #expect(try #require(item(f, session: operatorSession())).source == .report)
     }
 
     /// "Before" is the log's order, so events recorded in the same millisecond still close in order.
     @Test func anAckInTheSameMillisecondClosesOnlyTheReportBeforeIt() {
-      let f = opFacts(opIdle + [opReport(10, "a", t: 50), opAck(11, t: 50), opReport(12, "b", t: 50)])
+      let f = facts(opIdle + [opReport(10, "a", t: 50), opAck(11, t: 50), opReport(12, "b", t: 50)])
 
       #expect(f.openReports.map(\.text) == ["b"])
     }
 
     @Test func aUsersMessageInTheSameMillisecondClosesOnlyTheReportBeforeIt() {
-      let f = opFacts(opIdle + [opReport(10, "a", t: 50), opUserSent(11, "yes", t: 50), opReport(12, "b", t: 50)])
+      let f = facts(opIdle + [opReport(10, "a", t: 50), opUserSent(11, "yes", t: 50), opReport(12, "b", t: 50)])
 
       #expect(f.openReports.map(\.text) == ["b"])
     }
@@ -249,8 +235,8 @@ extension TriageOperatorTests {
     @Test func aReplayOfTheSameEventsGivesTheSameOpenReports() {
       let events = opIdle + [opReport(10, "a"), opAck(11), opReport(12, "b"), opSbdSent(13, "x"), opReport(14, "c")]
 
-      #expect(opFacts(events).openReports == opFacts(events).openReports)
-      #expect(opFacts(events).openReports.map(\.text) == ["b", "c"])
+      #expect(facts(events).openReports == facts(events).openReports)
+      #expect(facts(events).openReports.map(\.text) == ["b", "c"])
     }
   }
 }
@@ -260,67 +246,67 @@ extension TriageOperatorTests {
 extension TriageOperatorTests {
   @Suite struct ReportItem {
     @Test func anOpenReportGivesAReportItem() throws {
-      let f = opFacts(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
+      let f = facts(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
 
-      let item = try #require(opItem(operatorSession(), f))
+      let report = try #require(item(f, session: operatorSession()))
 
-      #expect(item.source == .report)
+      #expect(report.source == .report)
     }
 
     @Test func theReportItemHasAReplyOption() throws {
-      let f = opFacts(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
+      let f = facts(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
 
-      let item = try #require(opItem(operatorSession(), f))
+      let report = try #require(item(f, session: operatorSession()))
 
-      #expect(item.options.contains { $0.action == .reply }, "\(item.options)")
+      #expect(report.options.contains { $0.action == .reply }, "\(report.options)")
     }
 
     @Test func theReportItemListsEveryOpenReportUpToTheSummaryLines() throws {
       let texts = ["PR alpha is green.", "PR bravo is green.", "PR charlie is green."]
       try #require(texts.count == TriageCard.summaryLines)
-      let f = opFacts(opIdle + texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) })
+      let f = facts(opIdle + texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) })
 
-      let item = try #require(opItem(operatorSession(), f))
+      let report = try #require(item(f, session: operatorSession()))
 
-      for text in texts { #expect(item.summary.contains(text), "\(item.summary)") }
+      for text in texts { #expect(report.summary.contains(text), "\(report.summary)") }
     }
 
     @Test func theReportItemCountsTheReportsPastTheSummaryLines() throws {
       let texts = [
         "PR alpha is green.", "PR bravo is green.", "PR charlie is green.", "PR delta is green.", "PR echo.",
       ]
-      let f = opFacts(opIdle + texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) })
+      let f = facts(opIdle + texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) })
 
-      let item = try #require(opItem(operatorSession(), f))
+      let report = try #require(item(f, session: operatorSession()))
 
-      let listed = texts.filter { item.summary.contains($0) }
-      #expect(listed.count == TriageCard.summaryLines, "\(item.summary)")
-      #expect(item.summary.contains("\(texts.count - TriageCard.summaryLines) more"), "\(item.summary)")
+      let listed = texts.filter { report.summary.contains($0) }
+      #expect(listed.count == TriageCard.summaryLines, "\(report.summary)")
+      #expect(report.summary.contains("\(texts.count - TriageCard.summaryLines) more"), "\(report.summary)")
     }
 
     @Test func theReportItemLeavesOutAClosedReport() throws {
-      let f = opFacts(opIdle + [opReport(10, "PR alpha is green."), opAck(11), opReport(12, "PR bravo is green.")])
+      let f = facts(opIdle + [opReport(10, "PR alpha is green."), opAck(11), opReport(12, "PR bravo is green.")])
 
-      let item = try #require(opItem(operatorSession(), f))
+      let report = try #require(item(f, session: operatorSession()))
 
-      #expect(item.summary.contains("PR bravo is green."), "\(item.summary)")
-      #expect(!item.summary.contains("PR alpha is green."), "\(item.summary)")
+      #expect(report.summary.contains("PR bravo is green."), "\(report.summary)")
+      #expect(!report.summary.contains("PR alpha is green."), "\(report.summary)")
     }
 
     /// `choose` refuses a ref that is no longer the session's, so a new report must change the ref.
     @Test func aNewReportChangesTheItemsRef() throws {
-      let one = opFacts(opIdle + [opReport(10, "a")])
-      let two = opFacts(opIdle + [opReport(10, "a"), opReport(11, "b")])
+      let one = facts(opIdle + [opReport(10, "a")])
+      let two = facts(opIdle + [opReport(10, "a"), opReport(11, "b")])
 
-      let first = try #require(opItem(operatorSession(), one))
-      let second = try #require(opItem(operatorSession(), two))
+      let first = try #require(item(one, session: operatorSession()))
+      let second = try #require(item(two, session: operatorSession()))
 
       #expect(!first.ref.isEmpty)
       #expect(first.ref != second.ref)
     }
 
     @Test func theOperatorsItemHasNoDecisionList() {
-      let f = opFacts(opIdle + [opReport(10, "a")])
+      let f = facts(opIdle + [opReport(10, "a")])
 
       let built = Triage.itemAndDecisions(f, opVerdict(operatorSession(), f), kind: .operator)
 
@@ -344,10 +330,10 @@ struct OperatorShape: CustomTestStringConvertible, Sendable {
 let operatorShapes: [OperatorShape] = [
   OperatorShape(
     name: "a reply that reads as a question, with no report",
-    events: { [opPrompt(1, "go"), opStop(2, proseQuestion)] }, item: nil),
+    events: { [opPrompt(1, "go"), stop(2, 2, proseQuestion)] }, item: nil),
   OperatorShape(
     name: "a reply that offers a next step, with no report",
-    events: { [opPrompt(1, "go"), opStop(2, "I removed the worktree. Want me to top up the queue?")] }, item: nil),
+    events: { [opPrompt(1, "go"), stop(2, 2, "I removed the worktree. Want me to top up the queue?")] }, item: nil),
   OperatorShape(name: "an informational reply, with no report", events: { opIdle }, item: nil),
   OperatorShape(
     name: "an sb summary set card, with no report", events: { opIdle + [try summaryEvent(9, 9, sessionCard)] },
@@ -416,16 +402,16 @@ extension TriageOperatorTests {
   @Suite struct Shapes {
     @Test(arguments: operatorShapes) func theOperatorsItemComesFromTheShape(_ shape: OperatorShape) throws {
       let s = operatorSession(waits: shape.waits)
-      let f = opFacts(try shape.events())
+      let f = facts(try shape.events())
 
-      let item = opItem(s, f)
+      let built = item(f, session: s)
 
-      #expect(item?.source == shape.item, "\(item.map { "\($0.source): \($0.title)" } ?? "no item")")
+      #expect(built?.source == shape.item, "\(built.map { "\($0.source): \($0.title)" } ?? "no item")")
     }
 
     /// sbd's `summary(_:)` builds the item, and the app's `inInbox` must give the same answer.
     @Test(arguments: operatorShapes) func inInboxAgreesWithTheItemThatSbdBuilds(_ shape: OperatorShape) throws {
-      let s = opSummary(operatorSession(waits: shape.waits), opFacts(try shape.events()))
+      let s = opSummary(operatorSession(waits: shape.waits), facts(try shape.events()))
 
       #expect(Triage.inInbox(s) == (shape.item != nil))
       #expect(Triage.needsYou(s) == (shape.item != nil))
@@ -433,7 +419,7 @@ extension TriageOperatorTests {
     }
 
     @Test func aQuestionLikeReplyLeavesTheOperatorInNeedsYouWithNoItem() {
-      let f = opFacts([opPrompt(1, "go"), opStop(2, proseQuestion)])
+      let f = facts([opPrompt(1, "go"), stop(2, 2, proseQuestion)])
       let s = opSummary(operatorSession(), f)
 
       #expect(s.state == .needsYou)
@@ -442,7 +428,7 @@ extension TriageOperatorTests {
     }
 
     @Test func anSbSummarySetCardGivesTheOperatorNoItem() throws {
-      let f = opFacts(opIdle + [try summaryEvent(9, 9, sessionCard)])
+      let f = facts(opIdle + [try summaryEvent(9, 9, sessionCard)])
       try #require(f.sessionSummary != nil)
       let s = opSummary(operatorSession(), f)
 
@@ -452,7 +438,7 @@ extension TriageOperatorTests {
 
     /// Without a report, the operator matches a conversation on every shape that it shares with one.
     @Test(arguments: inboxShapes) func withoutAReportTheOperatorMatchesAConversation(_ shape: InboxShape) throws {
-      let s = opSummary(kindSession(.operator, done: shape.done), opFacts(try shape.events()))
+      let s = opSummary(kindSession(.operator, done: shape.done), facts(try shape.events()))
 
       #expect((s.triage != nil) == shape.conversation)
       #expect(Triage.inInbox(s) == shape.conversation)
@@ -535,7 +521,7 @@ struct ReportParityShape: CustomTestStringConvertible, Sendable {
 
 let reportParityShapes: [ReportParityShape] = [
   ReportParityShape(name: "an informational reply", events: { opIdle }),
-  ReportParityShape(name: "a question reply", events: { [opPrompt(1, "go"), opStop(2, proseQuestion)] }),
+  ReportParityShape(name: "a question reply", events: { [opPrompt(1, "go"), stop(2, 2, proseQuestion)] }),
   ReportParityShape(name: "a permission card", events: { permissionTurn() }),
   ReportParityShape(name: "a question card", events: { questionTurn() }),
   ReportParityShape(name: "a send card", events: { opIdle + [sendPending()] }),
@@ -554,8 +540,8 @@ extension TriageOperatorTests {
     @Test(arguments: [SessionKind.manager, .chat, .work], reportParityShapes)
     func reportEventsChangeNoOtherKindsVerdict(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
-      let without = opFacts(try shape.events())
-      let with = opFacts(try shape.events() + strayReports)
+      let without = facts(try shape.events())
+      let with = facts(try shape.events() + strayReports)
 
       #expect(opVerdict(s, with) == opVerdict(s, without))
     }
@@ -563,17 +549,17 @@ extension TriageOperatorTests {
     @Test(arguments: [SessionKind.manager, .chat, .work], reportParityShapes)
     func reportEventsChangeNoOtherKindsItem(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
-      let without = opFacts(try shape.events())
-      let with = opFacts(try shape.events() + strayReports)
+      let without = facts(try shape.events())
+      let with = facts(try shape.events() + strayReports)
 
-      #expect(opItem(s, with) == opItem(s, without))
+      #expect(item(with, session: s) == item(without, session: s))
     }
 
-    /// A conversation's and a chat's item is the blocking prompt's item, as before reports existed.
+    /// A conversation's and a chat's item is only its blocking prompt's item.
     @Test(arguments: [SessionKind.manager, .chat], reportParityShapes)
     func aConversationsItemIsStillOnlyItsPromptItem(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
-      let f = opFacts(try shape.events() + strayReports)
+      let f = facts(try shape.events() + strayReports)
       let verdict = opVerdict(s, f)
 
       #expect(Triage.itemAndDecisions(f, verdict, kind: kind).item == Triage.promptItem(f, verdict))
@@ -581,11 +567,11 @@ extension TriageOperatorTests {
 
     @Test(arguments: reportParityShapes)
     func aConversationAndAChatWithTheSameFactsGiveTheSameItem(_ shape: ReportParityShape) throws {
-      let f = opFacts(try shape.events() + strayReports)
+      let f = facts(try shape.events() + strayReports)
       let conversation = kindSession(.manager, waits: shape.waits)
       let chat = kindSession(.chat, waits: shape.waits)
 
-      #expect(opItem(conversation, f) == opItem(chat, f))
+      #expect(item(f, session: conversation) == item(f, session: chat))
       #expect(Triage.inInbox(opSummary(conversation, f)) == Triage.inInbox(opSummary(chat, f)))
     }
   }

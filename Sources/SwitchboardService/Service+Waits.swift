@@ -13,7 +13,7 @@ extension Service {
     let id = try lookup(args)
     switch op {
     case "wait":
-      return try JSON(encoding: summary(setWait(args, waiter: id).waiter))
+      return try JSON(encoding: summary(setWait(args, waiter: id)))
     case "clear-wait":
       let cleared = try clearWaits(id, args["wait"]?.string)
       var answer = try JSON(encoding: summary(id)).object ?? [:]
@@ -32,13 +32,12 @@ extension Service {
   }
 
   /// Builds the wait that `args` describe for the session `named`, and stores
-  /// it. When `handsOff` allows it and the wait doesn't target the operator,
-  /// the operator holds the wait instead, and `handedFrom` names `named`. The
-  /// first such wait creates the operator. `here` in `args` keeps the wait on
-  /// `named`. It records the `wait` event on the session that holds the wait,
-  /// with `from` for a handed-off wait, and returns that session and the wait.
-  /// The caller holds the state queue.
-  func setWait(_ args: JSON, waiter named: String) throws -> (waiter: String, wait: Wait) {
+  /// it. When `handsOff` allows it, the operator holds the wait instead, and
+  /// `handedFrom` names `named`. The first such wait creates the operator.
+  /// `here` in `args` keeps the wait on `named`. It records the `wait` event
+  /// on the session that holds the wait, with `from` for a handed-off wait,
+  /// and returns the id of that session. The caller holds the state queue.
+  func setWait(_ args: JSON, waiter named: String) throws -> String {
     let session = entries[named]!.session
     try refuseNotStarted(session)
     let request = try JSONCoding.convert(args, to: WaitRequest.self)
@@ -51,10 +50,9 @@ extension Service {
       wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
     }
     var waiter = named
-    if handsOff(request, namedSession: session, here: args["here"]?.bool == true),
-      wait.session.map({ $0.id != operatorID() }) ?? true
-    {
-      waiter = try ensureOperator()
+    let op = operatorID()
+    if handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op) {
+      waiter = try op ?? ensureOperator()
       wait.handedFrom = Wait.SessionTarget(id: named, name: session.name)
     }
     let open = entries[waiter]!.session.waits ?? []
@@ -62,7 +60,7 @@ extension Service {
     wait = config.recheck.stamped(wait)
     try update(waiter) { $0.waits = open + [wait] }
     record(waiter, "wait", try waitEventData(wait))
-    return (waiter, wait)
+    return waiter
   }
 
   /// The data of a `wait` or `wait-resolved` event, with `from` naming the
@@ -84,20 +82,17 @@ extension Service {
   /// Clears the waits of `id` and the waits that it handed off, or only the
   /// one that `waitId` names. It returns the ids it cleared.
   private func clearWaits(_ id: String, _ waitId: String?) throws -> [String] {
-    let own = entries[id]?.session.waits ?? []
-    let handed = handedOff(from: id)
-    var clearOwn = own.map(\.id)
-    var clearHanded = handed?.waits.map(\.id) ?? []
     if let waitId {
-      guard clearOwn.contains(waitId) || clearHanded.contains(waitId) else {
-        throw APIError("\(id) has no wait \(waitId)")
-      }
-      clearOwn = clearOwn.filter { $0 == waitId }
-      clearHanded = clearOwn.isEmpty ? [waitId] : []
+      let (holder, wait) = try openWait(id, waitId)
+      try drop([wait.id], from: holder, handedFrom: holder == id ? nil : id)
+      return [wait.id]
     }
-    try drop(clearOwn, from: id, handedFrom: nil)
-    if let handed { try drop(clearHanded, from: handed.holder, handedFrom: id) }
-    return clearOwn + clearHanded
+    let own = (entries[id]?.session.waits ?? []).map(\.id)
+    try drop(own, from: id, handedFrom: nil)
+    guard let handed = handedOff(from: id) else { return own }
+    let ids = handed.waits.map(\.id)
+    try drop(ids, from: handed.holder, handedFrom: id)
+    return own + ids
   }
 
   /// Removes the waits `ids` from `holder` and records `wait-cleared`.

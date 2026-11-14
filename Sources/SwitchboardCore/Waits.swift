@@ -47,16 +47,6 @@ public struct Wait: Codable, Equatable, Sendable {
 
     /// What a wait of this kind does when it resolves, unless the request says otherwise.
     var defaultThen: Then { self == .manual ? .notify : .resume }
-
-    /// Whether a wait of this kind on `pr` reads the session that holds it. A PR kind with no
-    /// repository reads that session's own repository, and a `ci` wait on it reads the session's
-    /// checked-out branch.
-    func readsWaiter(pr: PullRequest?) -> Bool {
-      switch self {
-      case .session, .date, .manual: false
-      case .ci, .review, .botReview, .approval, .queue, .merge, .deploy: pr?.repository == nil
-      }
-    }
   }
 
   /// What happens when the wait resolves.
@@ -158,8 +148,14 @@ public struct Wait: Codable, Equatable, Sendable {
   /// The Manager conversation that set the wait, when sbd stored it on the operator instead.
   public var handedFrom: SessionTarget?
 
-  /// Whether the wait's resolution reads the session that holds it.
-  var readsWaiter: Bool { kind.readsWaiter(pr: pr) }
+  /// Whether the wait's resolution reads the session that holds it. A PR kind with no repository reads
+  /// that session's own repository. A `ci` wait on it reads the session's checked-out branch.
+  var readsWaiter: Bool {
+    switch kind {
+    case .session, .date, .manual: false
+    case .ci, .review, .botReview, .approval, .queue, .merge, .deploy: pr?.repository == nil
+    }
+  }
 
   /// The time after which a review or a queue change counts.
   public var countsAfter: Int64 { since ?? created }

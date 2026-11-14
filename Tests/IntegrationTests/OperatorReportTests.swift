@@ -15,8 +15,7 @@ import Testing
 
   func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try JSONCoding.decode(type, from: text) }
 
-  /// The environment of a command that Claude runs inside the session.
-  func inside(_ id: String) -> [String: String] { ["SB_SESSION_ID": id, "CLAUDECODE": "1"] }
+  func inside(_ id: String) -> [String: String] { conversationHelpers.inside(id) }
 
   func idleOperator(_ sbd: Instance) throws -> SessionSummary { try operatorHelpers.idleOperator(sbd) }
 
@@ -115,7 +114,7 @@ import Testing
     try sbd.waitFor(op.id, "the operator's turn for the wait", timeout: 30) {
       $0.lastReply?.hasPrefix("Done: Switchboard:") == true
     }
-    #expect(try sbd.events(op.id, after: mark).contains { $0.kind == "sent" && $0.data["by"]?.string == "sbd" })
+    #expect(try !sbd.sbdMessages(op.id, after: mark).isEmpty)
     #expect(try inboxItem(sbd, op)?.source == .report)
   }
 

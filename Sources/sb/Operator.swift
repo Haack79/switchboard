@@ -21,8 +21,9 @@ func operatorCommand(_ a: Args) {
 private func operatorReport(_ a: Args) {
   let text = a.positional.dropFirst().joined(separator: " ")
   if text.isEmpty { die("operator report needs text") }
-  var args: [String: JSON] = ["text": .string(text), "needsYou": .bool(a.switches.contains("--needs-you"))]
-  if let caller = ProcessInfo.processInfo.environment["SB_SESSION_ID"] { args["caller"] = .string(caller) }
+  var args = callerArg
+  args["text"] = .string(text)
+  args["needsYou"] = .bool(a.switches.contains("--needs-you"))
   if let about = a.values["--session"] { args["session"] = .string(about) }
   let result = call("operator-report", args)
   if a.json { return printJSON(result) }

@@ -37,14 +37,15 @@ extension Service {
     }
   }
 
-  /// A new conversation loads only the switchboard MCP server. Without a
-  /// name, it takes the first line of `prompt`, or `Manager.untitled` until
-  /// its first prompt names it.
-  private func createManager(name: String?, prompt: String?) throws -> SessionSummary {
+  /// A new conversation, or the operator with `isOperator`, loads only the
+  /// switchboard MCP server. Without a name, it takes the first line of
+  /// `prompt`, or `Manager.untitled` until its first prompt names it.
+  private func createManager(name: String?, prompt: String?, isOperator: Bool = false) throws -> SessionSummary {
     let folder = home.managerFolder
     let named = name ?? prompt.map(Manager.name(fromPrompt:)) ?? Manager.untitled
     return try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
       $0.manager = true
+      if isOperator { $0.isOperator = true }
       $0.mcp = []
       $0.mcpScoped = true
     }
@@ -79,17 +80,11 @@ extension Service {
   func ensureOperator() throws -> String {
     if let id = operatorID() { return id }
     try ensureManagerFolder()
-    let folder = home.managerFolder
-    return try create(NewSession(path: folder, name: Manager.operatorName), (folder, nil, nil)) {
-      $0.manager = true
-      $0.isOperator = true
-      $0.mcp = []
-      $0.mcpScoped = true
-    }.id
+    return try createManager(name: Manager.operatorName, prompt: nil, isOperator: true).id
   }
 
   /// The operator's id, or nil when none exists. When the store holds more
-  /// than one, it is the oldest, and sbd logs the others and leaves them as they are.
+  /// than one, it is the oldest. sbd logs the others and leaves them as they are.
   func operatorID() -> String? {
     let operators = entries.values.map(\.session).filter { $0.kind == .operator }
       .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
@@ -247,7 +242,7 @@ extension Service {
     guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
     let id = try resolveRef(
       ref, "Manager conversation",
-      entries.values.map(\.session).filter { $0.kind == .manager || $0.kind == .operator }.map { ($0.id, $0.name) })
+      entries.values.map(\.session).filter(\.kind.runsInManagerFolder).map { ($0.id, $0.name) })
     let add = args["add"]?.array?.compactMap(\.string) ?? []
     let remove = args["rm"]?.array?.compactMap(\.string) ?? []
     let all = args["all"]?.bool == true

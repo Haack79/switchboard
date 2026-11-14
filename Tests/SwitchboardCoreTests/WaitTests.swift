@@ -1048,21 +1048,7 @@ extension WaitResolution {
 
 // MARK: Handing a conversation's wait to the operator
 
-/// A session of the kind, built the way sbd stores it.
-func namedSession(_ kind: SessionKind) -> Session {
-  var s = Session(id: "c1", name: "Plan the cache fix", cwd: "/tmp/manager", claudeSessionId: "uuid", created: 0)
-  switch kind {
-  case .work: break
-  case .manager: s.manager = true
-  case .chat: s.chat = "g1"
-  case .operator:
-    s.manager = true
-    s.isOperator = true
-  }
-  return s
-}
-
-let handoffConversation = namedSession(.manager)
+let handoffConversation = kindSession(.manager)
 let cacheFix = Wait.SessionTarget(id: "c1", name: "Plan the cache fix")
 
 /// A request that Claude in a conversation sends for a wait of the kind, with no `then`.
@@ -1071,6 +1057,14 @@ func byClaude(_ kind: Wait.Kind, target: String? = nil) -> WaitRequest {
   if let target { r.target = target }
   r.by = Author.claude.rawValue
   return r
+}
+
+/// Whether sbd hands off the wait that `request` builds, when the request names `named` and no operator exists
+/// unless `operatorID` names one.
+func handsOffRequest(
+  _ request: WaitRequest, named: Session = handoffConversation, here: Bool = false, operatorID: String? = nil
+) throws -> Bool {
+  handsOff(try buildWait(request), namedSession: named, here: here, operatorID: operatorID)
 }
 
 /// PR targets that name no repository, so the wait reads the waiter's own repository.
@@ -1088,111 +1082,111 @@ let qualifiedTargets = [
   // The row that hands off. Each test below changes one input of it.
 
   @Test(arguments: [Wait.Kind.session, .date])
-  func claudesResumeWaitOnAConversationThatReadsNothingOfTheWaiterHandsOff(_ kind: Wait.Kind) {
-    #expect(handsOff(byClaude(kind), namedSession: handoffConversation, here: false))
+  func claudesResumeWaitOnAConversationThatReadsNothingOfTheWaiterHandsOff(_ kind: Wait.Kind) throws {
+    #expect(try handsOffRequest(byClaude(kind)))
   }
 
   // Named-session kind (a)
 
   @Test(arguments: [SessionKind.work, .chat, .operator])
-  func aWaitNamedOnASessionThatIsNotAConversationStays(_ kind: SessionKind) {
-    #expect(!handsOff(byClaude(.date), namedSession: namedSession(kind), here: false))
+  func aWaitNamedOnASessionThatIsNotAConversationStays(_ kind: SessionKind) throws {
+    #expect(try !handsOffRequest(byClaude(.date), named: kindSession(kind)))
   }
 
   // then (b)
 
   @Test(arguments: [Wait.Then.notify, .caller])
-  func aWaitThatDoesNotResumeStays(_ then: Wait.Then) {
+  func aWaitThatDoesNotResumeStays(_ then: Wait.Then) throws {
     var r = byClaude(.session)
     r.then = then.rawValue
 
-    #expect(!handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try !handsOffRequest(r))
   }
 
   @Test(arguments: [Wait.Kind.session, .date])
-  func anExplicitResumeHandsOff(_ kind: Wait.Kind) {
+  func anExplicitResumeHandsOff(_ kind: Wait.Kind) throws {
     var r = byClaude(kind)
     r.then = Wait.Then.resume.rawValue
 
-    #expect(handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try handsOffRequest(r))
   }
 
   /// A manual wait notifies unless the request says otherwise.
-  @Test func aManualWaitWithTheDefaultThenStays() {
+  @Test func aManualWaitWithTheDefaultThenStays() throws {
     var r = byClaude(.manual)
     r.note = "ask Alex"
 
-    #expect(!handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try !handsOffRequest(r))
   }
 
   /// A request with no kind is a manual wait, so it notifies too.
-  @Test func aRequestWithNoKindStays() {
+  @Test func aRequestWithNoKindStays() throws {
     let r = WaitRequest(note: "ask Alex", by: Author.claude.rawValue)
 
-    #expect(!handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try !handsOffRequest(r))
   }
 
-  @Test func aManualWaitThatResumesHandsOff() {
+  @Test func aManualWaitThatResumesHandsOff() throws {
     var r = byClaude(.manual)
     r.note = "ask Alex"
     r.until = "2h"
     r.then = Wait.Then.resume.rawValue
 
-    #expect(handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try handsOffRequest(r))
   }
 
   // by (c)
 
   @Test(arguments: [Author.you.rawValue, nil] as [String?])
-  func aWaitThatTheUserSetStays(_ by: String?) {
+  func aWaitThatTheUserSetStays(_ by: String?) throws {
     var r = byClaude(.session)
     r.by = by
 
-    #expect(!handsOff(r, namedSession: handoffConversation, here: false))
+    #expect(try !handsOffRequest(r))
   }
 
   // here (d)
 
   @Test(arguments: [Wait.Kind.session, .date])
-  func hereKeepsTheWaitOnTheConversation(_ kind: Wait.Kind) {
-    #expect(!handsOff(byClaude(kind), namedSession: handoffConversation, here: true))
+  func hereKeepsTheWaitOnTheConversation(_ kind: Wait.Kind) throws {
+    #expect(try !handsOffRequest(byClaude(kind), here: true))
   }
 
   // What the wait reads (e)
 
   @Test(arguments: prKinds)
-  func aPRWaitWithNoTargetStays(_ kind: Wait.Kind) {
-    #expect(!handsOff(byClaude(kind), namedSession: handoffConversation, here: false))
+  func aPRWaitWithNoTargetStays(_ kind: Wait.Kind) throws {
+    #expect(try !handsOffRequest(byClaude(kind)))
   }
 
   @Test(arguments: prKinds, bareTargets)
-  func aPRWaitOnABarePRNumberStays(_ kind: Wait.Kind, _ target: String) {
-    #expect(!handsOff(byClaude(kind, target: target), namedSession: handoffConversation, here: false))
+  func aPRWaitOnABarePRNumberStays(_ kind: Wait.Kind, _ target: String) throws {
+    #expect(try !handsOffRequest(byClaude(kind, target: target)))
   }
 
   @Test(arguments: prKinds, qualifiedTargets)
-  func aPRWaitOnAPRThatNamesItsRepositoryHandsOff(_ kind: Wait.Kind, _ target: String) {
-    #expect(handsOff(byClaude(kind, target: target), namedSession: handoffConversation, here: false))
+  func aPRWaitOnAPRThatNamesItsRepositoryHandsOff(_ kind: Wait.Kind, _ target: String) throws {
+    #expect(try handsOffRequest(byClaude(kind, target: target)))
   }
 
-  /// Parity: the request-level rule agrees with the built wait's `readsWaiter`
-  /// for every target form that sbd accepts.
-  @Test(arguments: prKinds, [nil] + bareTargets + qualifiedTargets)
-  func handsOffAgreesWithTheBuiltWaitsReadsWaiter(_ kind: Wait.Kind, _ target: String?) throws {
-    let r = byClaude(kind, target: target)
+  // A session wait on the operator
 
-    let wait = try buildWait(r)
-
-    #expect(handsOff(r, namedSession: handoffConversation, here: false) == !wait.readsWaiter)
+  @Test func aSessionWaitOnTheOperatorStays() throws {
+    #expect(try !handsOffRequest(byClaude(.session), operatorID: flagCache.id))
   }
 
   @Test(arguments: [Wait.Kind.session, .date])
-  func aRequestThatFailsEveryConditionStays(_ kind: Wait.Kind) {
+  func aWaitThatDoesNotTargetAnExistingOperatorHandsOff(_ kind: Wait.Kind) throws {
+    #expect(try handsOffRequest(byClaude(kind), operatorID: "op1"))
+  }
+
+  @Test(arguments: [Wait.Kind.session, .date])
+  func aRequestThatFailsEveryConditionStays(_ kind: Wait.Kind) throws {
     var r = byClaude(kind)
     r.by = Author.you.rawValue
     r.then = Wait.Then.notify.rawValue
 
-    #expect(!handsOff(r, namedSession: namedSession(.work), here: true))
+    #expect(try !handsOffRequest(r, named: kindSession(.work), here: true))
   }
 }
 

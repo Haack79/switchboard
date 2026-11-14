@@ -31,12 +31,10 @@ func waitCommand(_ a: Args) {
   let session = a.positional.first ?? ProcessInfo.processInfo.environment["SB_SESSION_ID"]
   if clearing {
     guard let session else { die("wait needs a session") }
-    var args: [String: JSON] = ["session": .string(session)]
-    if let id = a.values["--id"] { args["wait"] = .string(id) }
-    if let resolve { args["outcome"] = .string(resolve) }
-    let result = call(resolve == nil ? "clear-wait" : "resolve-wait", args)
-    if a.json { printJSON(result) } else { printSession(summary(result)) }
-    return
+    var extra: [String: JSON] = [:]
+    if let id = a.values["--id"] { extra["wait"] = .string(id) }
+    if let resolve { extra["outcome"] = .string(resolve) }
+    return sessionCommand(resolve == nil ? "clear-wait" : "resolve-wait", a, session: session, extra: extra)
   }
   var args: [String: JSON] = [:]
   for (flag, key) in waitFlags {
