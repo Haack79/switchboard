@@ -458,6 +458,8 @@ public struct Verdict: Equatable, Sendable {
   /// True for the Ready to merge verdict, the only one that asks the user to
   /// merge or enqueue the PR. Its summary says what the PR does.
   public var summarizesPR = false
+  /// The "Before you merge" panel. Only the Ready to merge verdict has one.
+  public var review: MergeReview?
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }

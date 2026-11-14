@@ -17,7 +17,7 @@ extension Instance {
 }
 
 /// The ready-to-merge card says what the PR does, its size, approvals, and
-/// checks, and what should give the user pause.
+/// checks. Its review rows say what should give the user pause.
 @Suite(.blocking(timeLimit: .seconds(180))) struct MergeSummaryTests {
   static let body = """
     ## Problem
@@ -79,10 +79,11 @@ extension Instance {
     #expect(detailsReads(github) == 1)
     #expect(text == "\(Self.gist)\n4 files, +315 -208. Approved by stamphog. Checks passed.")
     #expect(!text.contains("is ready to merge"))
-    let callouts = try #require(summary["callouts"]?.array)
-    #expect(callouts.map { $0["title"]?.string } == ["1 open review thread", "The test plan has gaps"])
-    let gaps = try #require(callouts[1]["body"]?.string).replacingOccurrences(of: "\\", with: "")
-    #expect(gaps == "- Not run: the database-backed suites.\n- Tested by hand")
+    #expect(summary["callouts"] == [])
+    let review = try #require(try sbd.getJSON(s.id)["triage"]?["message"]?["review"])
+    #expect(review["amber"] == ["threads", "testPlan"])
+    #expect(review["threads"]?["open"]?.int == 1)
+    #expect(review["testGaps"] == ["Not run: the database-backed suites.", "Tested by hand"])
     #expect(sbd.briefCalls().isEmpty)
   }
 
@@ -121,8 +122,9 @@ extension Instance {
 
     // The re-read without thread comments finds the open thread, so a third read fetches its comments.
     #expect(detailsReads(github) == 3)
-    let callouts = try #require(try sbd.mergeSummary(s.id)["callouts"]?.array)
-    #expect(callouts.first?["title"]?.string == "1 open review thread")
+    let review = try #require(try sbd.getJSON(s.id)["triage"]?["message"]?["review"])
+    #expect(review["threads"]?["open"]?.int == 1)
+    #expect(review["amber"]?.array?.contains("threads") == true)
   }
 
   @Test func briefThatTheHourlyLimitSkippedRunsOnceTheHourPasses() throws {

@@ -81,22 +81,27 @@ extension SessionFacts {
 extension Attention {
   /// The Ready to merge verdict for a PR that has no merge blocker. The
   /// caller checks `mergeBlocker` first. A repository whose merge method sbd
-  /// can't tell gets no Merge or Enqueue option.
+  /// can't tell gets no Merge or Enqueue option. A row of the review that
+  /// needs a look demotes the merge option to "anyway", which no key runs.
   static func readyToMerge(_ pr: PullRequest, _ facts: SessionFacts) -> Verdict {
     let method = facts.mergeMethod
+    let review = MergeReview(pr)
     var reason = "#\(pr.number) is ready to merge\(approvedBy(pr))"
     var options = [TriageOption(label: "Acknowledge", action: .dismiss)]
     if method == .unknown {
       reason += "; can't tell how \(pr.repo) merges, so merge it on GitHub"
-    } else {
+    } else if review.amber.isEmpty {
       options.insert(TriageOption(label: "\(method.verb) #\(pr.number)", action: .merge, recommended: true), at: 0)
+    } else {
+      options.insert(
+        TriageOption(
+          label: "\(method.verb) #\(pr.number) anyway", detail: "#\(pr.number) has open review items", action: .merge),
+        at: 0)
     }
-    let merge = mergeSummary(facts)
     return Verdict(
       state: .readyToMerge, reason: oneLine(reason, max: 200), kind: .approval, options: options,
-      callouts: (facts.mergeError.map { [Callout(kind: .warning, title: "The last merge failed", body: $0)] } ?? [])
-        + merge.callouts,
-      summary: merge.text, summarizesPR: true)
+      callouts: facts.mergeError.map { [Callout(kind: .warning, title: "The last merge failed", body: $0)] } ?? [],
+      summary: mergeSummary(facts), summarizesPR: true, review: review)
   }
 
   /// Whether the session's PR is at a merge decision: the rule for its open
@@ -106,14 +111,13 @@ extension Attention {
     openPR(facts)?.summarizesPR == true
   }
 
-  /// The merge card's Summary and the callouts that should give the user
-  /// pause. The Summary says what the PR does, from the model's brief at the
-  /// PR's head or else the description's gist, then the PR's size, approvals,
-  /// and checks. Only Ready to merge builds it, so the PR's checks passed.
-  /// Text from the PR is escaped, because the card draws the Summary as
-  /// Markdown and anyone who can open a PR wrote it.
-  static func mergeSummary(_ facts: SessionFacts) -> (text: String, callouts: [Callout]) {
-    guard let pr = facts.pr else { return ("", []) }
+  /// The merge card's Summary. It says what the PR does, from the model's
+  /// brief at the PR's head or else the description's gist, then the PR's
+  /// size, approvals, and checks. Only Ready to merge builds it, so the PR's
+  /// checks passed. Text from the PR is escaped, because the card draws the
+  /// Summary as Markdown and anyone who can open a PR wrote it.
+  static func mergeSummary(_ facts: SessionFacts) -> String {
+    guard let pr = facts.pr else { return "" }
     let details = pr.mergeDetails
     var parts: [String] = []
     if let d = details {
@@ -125,45 +129,7 @@ extension Attention {
       parts.append("sbd can't tell how \(pr.repo) merges, so merge it on GitHub.")
     }
     let prose = facts.currentMergeBrief?.text ?? details?.gist
-    let text = [prose, parts.joined(separator: " ")].compactMap { $0 }.map(MarkdownText.escaped)
+    return [prose, parts.joined(separator: " ")].compactMap { $0 }.map(MarkdownText.escaped)
       .joined(separator: "\n\n")
-    return (text, pauseCallouts(MergeReview(pr), number: pr.number))
-  }
-
-  /// The warnings for a PR that is otherwise ready: code owners whose
-  /// review is still missing, open review threads, and gaps in the test plan.
-  static func pauseCallouts(_ review: MergeReview, number: Int) -> [Callout] {
-    var callouts: [Callout] = []
-    switch review.codeOwnerGap {
-    case .waiting(let groups):
-      callouts.append(
-        Callout(
-          kind: .warning, title: "Code owner review still required",
-          body: MarkdownText.escaped(groups.map { $0.joined(separator: " or ") }.joined(separator: "; "))))
-    case .requested(let requests):
-      callouts.append(
-        Callout(
-          kind: .warning, title: "Code owners still requested",
-          body: MarkdownText.escaped(requests.joined(separator: ", "))))
-    case nil: break
-    }
-    if let t = review.threads {
-      let threads = "\(t.open) open review \(t.open == 1 ? "thread" : "threads")"
-      if t.read < t.total {
-        callouts.append(
-          Callout(
-            kind: .warning, title: t.open == 0 ? "Not every review thread was read" : "At least \(threads)",
-            body: "#\(number) has \(t.total) review threads, and sbd read \(t.read)."))
-      } else if t.open > 0 {
-        callouts.append(Callout(kind: .warning, title: threads))
-      }
-    }
-    if !review.testGaps.isEmpty {
-      callouts.append(
-        Callout(
-          kind: .warning, title: "The test plan has gaps",
-          body: review.testGaps.map { "- " + MarkdownText.escaped($0) }.joined(separator: "\n")))
-    }
-    return callouts
   }
 }

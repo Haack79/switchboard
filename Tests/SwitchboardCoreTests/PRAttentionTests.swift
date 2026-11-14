@@ -292,23 +292,29 @@ private let readTheReply = Verdict(state: .needsYou, reason: "read its last repl
   }
 
   @Test(arguments: [
-    ([sampleVerdict("stamphog", "APPROVED")], "#42 is ready to merge, approved by stamphog"),
     (
-      [sampleVerdict("alice", "APPROVED"), sampleVerdict("bob", "APPROVED")],
-      "#42 is ready to merge, approved by alice and bob"
+      [sampleVerdict("stamphog", "APPROVED", on: samplePRHead)], "#42 is ready to merge, approved by stamphog",
+      "Enqueue #42"
     ),
-    ([], "#42 is ready to merge"),
+    (
+      [sampleVerdict("alice", "APPROVED", on: samplePRHead), sampleVerdict("bob", "APPROVED", on: samplePRHead)],
+      "#42 is ready to merge, approved by alice and bob", "Enqueue #42"
+    ),
+    // GitHub approved, but sbd read no approver. The approval row is then amber.
+    ([], "#42 is ready to merge", "Enqueue #42 anyway"),
   ])
-  func approvedPRThatTrunkManagesIsEnqueued(_ verdicts: [Review], _ reason: String) throws {
+  func approvedPRThatTrunkManagesIsEnqueued(_ verdicts: [Review], _ reason: String, _ label: String) throws {
     let comments = [
       PRComment(id: "IC_gh", author: "github-actions[bot]", createdAt: "2026-10-24T00:00:00Z"), trunkComment(),
     ]
-    let f = try prFacts(samplePR(reviewDecision: .approved, verdicts: verdicts, checks: "SUCCESS"), comments: comments)
+    var pr = samplePR(reviewDecision: .approved, verdicts: verdicts, checks: "SUCCESS")
+    pr.mergeDetails = MergeDetails()
+    let f = try prFacts(pr, comments: comments)
 
     let v = Attention.evaluate(session(), f, now: Self.now)
 
     #expect(v == Verdict(state: .readyToMerge, reason: reason))
-    #expect(v.options.first?.label == "Enqueue #42")
+    #expect(v.options.first?.label == label)
   }
 
   @Test func approvedPRWhoseQueueStatusDidNotLoadNeedsAQueueCheck() throws {
@@ -335,9 +341,11 @@ private let readTheReply = Verdict(state: .needsYou, reason: "read its last repl
       PRComment(
         id: "IC_dp", author: "deployment-status-posthog[bot]", createdAt: "2026-10-24T00:00:00Z", body: "deployed"),
     ]
-    var pr = samplePR(reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED")], checks: "SUCCESS")
+    var pr = samplePR(
+      reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED", on: samplePRHead)], checks: "SUCCESS")
     pr.trunkConfig = false
     pr.mergeQueue = false
+    pr.mergeDetails = MergeDetails()
     let f = try prFacts(pr, comments: comments)
 
     let v = Attention.evaluate(session(), f, now: Self.now)
