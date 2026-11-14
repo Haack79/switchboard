@@ -113,8 +113,9 @@ public enum AutoContinue {
     let s = input.settings
     if input.verdict.state != .canContinue { return "not in Claude can continue" }
     if let label = input.session.kind.label { return label }
+    if let card = PromptGuard.openCard(f) { return card }
     // A continue starts a new turn, which drops the card from `sb summary set`.
-    if let card = PromptGuard.openCard(f) ?? (f.sessionSummary != nil ? "an open card" : nil) { return card }
+    if f.sessionSummary != nil { return "an open card" }
     // A continue would answer the reply while the user answers its decisions.
     if f.decisionList != nil || Triage.item(f, input.verdict, kind: input.session.kind)?.hasDecisionList == true {
       return "decisions to answer"

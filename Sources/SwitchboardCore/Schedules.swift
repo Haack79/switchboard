@@ -108,7 +108,7 @@ public struct Schedule: Codable, Equatable, Sendable {
   /// An interval in the largest unit that divides it evenly, such as `30m`, `1h`, or `90s`.
   public static func intervalText(_ ms: Int64) -> String {
     let seconds = ms / 1000
-    for (unit, size) in [("w", Int64(604_800)), ("d", 86_400), ("h", 3600), ("m", 60)]
+    for (unit, size) in Wait.units.sorted(by: { $0.value > $1.value })
     where seconds % size == 0 && seconds >= size {
       return "\(seconds / size)\(unit)"
     }

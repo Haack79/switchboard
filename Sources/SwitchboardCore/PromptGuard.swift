@@ -7,8 +7,9 @@ public enum PromptGuard {
   public enum Process: Sendable { case running, starting, stopped }
 
   /// Returns "an open card" when the session shows a card, a permission
-  /// prompt, or a question. A new prompt starts a new turn, which buries the
-  /// card. The card from `sb summary set` does not count.
+  /// prompt, or a question. A new prompt starts a turn, and sbd then removes
+  /// the card. After a deferred question, Claude goes on without the user's
+  /// answer. The card from `sb summary set` does not count.
   public static func openCard(_ f: SessionFacts) -> String? {
     if !f.cards.isEmpty || f.openPermission != nil || f.openQuestion != nil { return "an open card" }
     return nil

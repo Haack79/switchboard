@@ -42,6 +42,10 @@ import Testing
     #expect(Manager.operatorPrompt.contains("`sb get \(Manager.operatorName)`"), "\(Manager.operatorPrompt)")
   }
 
+  @Test func theOperatorPromptSaysToKeepALoopAsASchedule() {
+    #expect(Manager.operatorPrompt.contains("`sb schedule \(Manager.operatorName) "), "\(Manager.operatorPrompt)")
+  }
+
   @Test func theOperatorPromptSaysToReportWithTheReportToolAndNeedsYou() {
     #expect(Manager.operatorPrompt.contains("`report`"), "\(Manager.operatorPrompt)")
     #expect(Manager.operatorPrompt.contains("`needsYou`"), "\(Manager.operatorPrompt)")

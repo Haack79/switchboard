@@ -150,6 +150,23 @@ import Testing
     #expect(try scheduleRan(sbd, s.id).count == 1)
   }
 
+  /// sbd visits sessions in id order, so the busy session has the lower id and comes first.
+  @Test func aBusySessionDoesNotHoldBackAnotherSessionsSchedule() throws {
+    let sbd = try Instance()
+    let pair = [try sbd.idleSession(name: "a"), try sbd.idleSession(name: "b")].sorted { $0.id < $1.id }
+    let (busy, free) = (pair[0], pair[1])
+    let held = try schedule(sbd, busy.id, "tick busy")
+    let other = try schedule(sbd, free.id, "tick free")
+    try sbd.sb("send", busy.id, "slow held")
+    try waitForPrompt(sbd, busy.id, "slow held")
+    try sbd.waitFor(busy.id, "the held turn") { $0.state == .working }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    #expect(try waitForRun(sbd, free.id, other.id).outcome == .pasted)
+    #expect(try current(sbd, busy.id, held.id)?.last == nil)
+  }
+
   /// `resolveDueWaits` runs before the schedules in the tick. The wait's message is in flight when the schedule
   /// comes due, so the schedule runs after that message's turn.
   @Test func aWaitDueOnTheSameTickGoesFirst() throws {

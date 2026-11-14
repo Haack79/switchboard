@@ -11,7 +11,13 @@ extension Service {
   func scheduleRequest(_ op: String, _ args: JSON) throws -> JSON {
     switch op {
     case "schedule":
-      let id = try lookup(args)
+      let id: String
+      do {
+        id = try lookup(args)
+      } catch where args["group"] == nil && args["session"]?.string == Manager.operatorName {
+        // The Manager guide schedules loops on the operator by name, so an unscoped request creates it as `sb wait` does.
+        id = try ensureOperator()
+      }
       try requireInScope(id, args: args)
       let session = entries[id]!.session
       try refuseNotStarted(session)
@@ -29,12 +35,14 @@ extension Service {
       return try JSON(encoding: scheduleRow(id, schedule))
     case "schedules":
       let only = try args["session"].map { _ in try lookup(args) }
-      let rows = try entries.values.map(\.session)
+      let sessions = try entries.values.map(\.session)
         .filter { s in only == nil || only == s.id }
         .filter { try inScope($0.id, args: args) }
-        .flatMap { s in (s.schedules ?? []).map { scheduleRow(s.id, $0) } }
-        .sorted { ($0.schedule.next, $0.schedule.id) < ($1.schedule.next, $1.schedule.id) }
-      return try JSON(encoding: rows)
+      let rows: [ScheduleRow] = sessions.flatMap { s in (s.schedules ?? []).map { scheduleRow(s.id, $0) } }
+      func order(_ r: ScheduleRow) -> (Int, Int64, String) {
+        (r.schedule.paused == true ? 1 : 0, r.schedule.next, r.schedule.id)
+      }
+      return try JSON(encoding: rows.sorted { order($0) < order($1) })
     case "remove-schedule":
       let (id, schedule) = try ownedSchedule(args)
       try update(id) { s in

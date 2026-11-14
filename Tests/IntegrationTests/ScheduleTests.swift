@@ -48,6 +48,17 @@ import Testing
     #expect(r.schedule.last == nil)
   }
 
+  /// The Manager guide schedules loops on the operator by name before any wait has created it.
+  @Test func schedulingTheOperatorByNameCreatesIt() throws {
+    let sbd = try Instance()
+
+    let r = try schedule(sbd, Manager.operatorName)
+
+    let op = try #require(try sbd.client.call("ls", as: [SessionSummary].self).first { $0.kind == .operator })
+    #expect(r.session == op.id)
+    #expect(try sbd.get(op.id).schedules == [r.schedule])
+  }
+
   @Test func getLsAndScheduleLsShowTheSameSchedule() throws {
     let sbd = try Instance()
     let s = try sbd.new()
@@ -470,10 +481,10 @@ import Testing
   @Test func aScopedListOfAnotherGroupsSessionHasNoRows() throws {
     let s = try scoped()
 
-    let listed = try? s.sbd.client.call(
+    let listed = try s.sbd.client.call(
       "schedules", s.args(["session": .string(s.b.session)]), as: [ScheduleRow].self)
 
-    #expect(listed?.isEmpty ?? true)
+    #expect(listed.isEmpty)
   }
 
   @Test func aScopedRequestActsOnAMembersSchedule() throws {

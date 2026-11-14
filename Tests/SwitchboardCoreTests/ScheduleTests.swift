@@ -442,7 +442,7 @@ extension ScheduleTests {
       #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "an open card")
     }
 
-    /// A deferred question's turn has ended. A new prompt would bury its card.
+    /// A deferred question's turn has ended. A new prompt would start a turn without the user's answer.
     @Test func aDeferredCardWithNoTurnHolds() {
       var f = idleFacts()
       AutoContinueGuardTests.OpenPrompt.deferredCard.open(in: &f, since: now - minute)
