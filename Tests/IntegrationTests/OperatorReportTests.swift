@@ -566,6 +566,20 @@ import Testing
     #expect(try inboxItem(sbd, op)?.source == .report)
   }
 
+  @Test func sbAckInsideClaudeOfTheOperatorsBlockingPromptIsAcceptedAndLeavesTheReportOpen() throws {
+    let sbd = try Instance()
+    let c = try conversationHelpers.idleConversation(sbd, name: "Queue work", "hello")
+    let op = try idleOperator(sbd)
+    try sbd.sb("operator", "perm touch x")
+    try sbd.waitFor(op.id, "the permission card") { !$0.cards.isEmpty }
+    try reported(sbd, op)
+
+    let r = try sbd.run(["ack", "Operator"], env: inside(c.id))
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    #expect(try reports(sbd).map { $0["open"]?.bool } == [true])
+  }
+
   @Test func rmOnTheOperatorSucceedsAfterTheUserAnswers() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)
