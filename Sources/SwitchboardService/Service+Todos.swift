@@ -84,6 +84,16 @@ extension Service {
     }
   }
 
+  /// What deleting the session writes. Both `forgetSession` and the `rm`
+  /// path's `checkDeletable` get it here, so the check runs the statements
+  /// that the delete runs. It throws as `checkTodos` does. It runs on the
+  /// state queue.
+  func removal(_ id: String, resolving: Set<String>) throws -> SessionRemoval {
+    let todos = try checkTodos(id, resolving: resolving)
+    guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
+    return SessionRemoval(id: id, name: session.name, todos: todos, host: session.host)
+  }
+
   /// The one function that deletes a session record. It refuses unless
   /// `resolving` names exactly the session's open to-dos. It records each of
   /// them in `resolved_todos` in the same transaction as the delete. A
@@ -96,8 +106,7 @@ extension Service {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     // Only a merged PR leaves marks. Other removals skip the summary.
     let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil
-    try store.delete(
-      session: id, name: session.name, resolving: checkTodos(id, resolving: resolving), onHost: session.host)
+    try store.delete(session: removal(id, resolving: resolving))
     removedNames[id] = session.name
     if let removed { markAddressedIssues(removed) }
     entries[id] = nil
