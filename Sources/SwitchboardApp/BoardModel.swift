@@ -258,8 +258,16 @@ final class BoardModel: ObservableObject {
   /// The session that `create` or `openManager` selected before a refresh
   /// listed it.
   private(set) var pendingSelection: String?
+  /// The session that `focus` named before a refresh listed it, the successful
+  /// refreshes that have not listed it, and the selection when it started. It
+  /// waits for `focusRefreshLimit` refreshes. Selecting another session ends it.
+  private var focusWait: (id: String, misses: Int, selection: String?)?
+  var pendingFocus: String? { focusWait?.id }
+  private static let focusRefreshLimit = 3
   private var loaded = false
   private var followupsRead = Date.distantPast
+  /// Whether the next refresh reads `followup-ls` and the other lists that it reads every 5 s.
+  var followupsDue: Bool { Date().timeIntervalSince(followupsRead) >= 5 }
   /// sbd reads the usage every few minutes, so the app asks once a minute.
   private var usageRead = Date.distantPast
 
@@ -436,7 +444,7 @@ final class BoardModel: ObservableObject {
 
   func refresh(followups: Bool = false) {
     let client = client
-    let readFollowups = followups || Date().timeIntervalSince(followupsRead) >= 5
+    let readFollowups = followups || followupsDue
     if readFollowups { followupsRead = Date() }
     let readUsage = Date().timeIntervalSince(usageRead) >= 60
     if readUsage { usageRead = Date() }
@@ -523,6 +531,7 @@ final class BoardModel: ObservableObject {
       // A selected session that is hidden here therefore had no known org until this refresh.
       if let id = selection { showOrg(of: id) }
       if let id = pendingSelection, allBoard.contains(where: { $0.id == id }) { pendingSelection = nil }
+      resolvePendingFocus()
       clearHiddenSelectionAndUpdateBadge()
       // A follow-up that fires appears in `ls` as Needs you. The last seen sessions
       // include the follow-ups, so that change from Not started notifies.
@@ -894,19 +903,78 @@ final class BoardModel: ObservableObject {
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
   var showWindow: (() -> Void)?
 
-  /// Selects the session and brings its window forward, opening the window first when it is closed.
+  /// Selects the listed session as a sidebar click does and brings its window forward. A closed window opens
+  /// first. A session that the app does not list is left alone.
   func reveal(_ id: String) {
-    selection = id
+    guard let session = summary(id) else { return }
+    showInSidebar(session)
     showWindow?()
   }
 
-  /// Reveals the session that a session link names, and returns whether the
-  /// URL is a session link. A link to a session that is gone does nothing,
-  /// because the system cannot open the scheme either.
+  /// Reveals the session that an in-app session link names. It returns
+  /// whether the URL has the app's scheme. A link to a session that is gone
+  /// does nothing. Every `switchboard:` URL counts as handled, so that Launch
+  /// Services never hands the app's own link to another copy of the app.
   func openSessionLink(_ url: URL) -> Bool {
-    guard let id = SessionLink.id(from: url) else { return false }
-    if sessionNames.entry(id)?.removed == false { reveal(id) }
+    guard url.scheme?.lowercased() == SessionLink.scheme else { return false }
+    if let id = SessionLink.id(from: url) { reveal(id) }
     return true
+  }
+
+  /// Focuses the session that a URL from another app or from `sb focus` names.
+  func openExternalLink(_ url: URL) {
+    guard let id = SessionLink.id(from: url) else {
+      actionError = "Switchboard can't open \(url.absoluteString)"
+      // The error banner shows only in the window.
+      showWindow?()
+      return
+    }
+    focus(id)
+  }
+
+  /// Closes the search panel and Recent Places, then shows the session as a
+  /// sidebar click does. A session that no refresh has listed yet, such as one
+  /// that `sb new` just made or any session at a cold launch, is focused when
+  /// a refresh lists it.
+  func focus(_ id: String) {
+    showingSearch = false
+    showingRecentPlaces = false
+    focusWait = nil
+    if !settleFocus(id) {
+      focusWait = (id, 0, selection)
+      // An unstarted follow-up shows only in `followup-ls`. A refresh reads
+      // that list every 5 s, which can be after the wait gives up.
+      followupsRead = .distantPast
+      // A closed window has not started the refreshes that list the session.
+      showWindow?()
+    }
+  }
+
+  /// Reveals the session when a refresh lists it, or reports a removed one.
+  /// It returns false while the session can still appear.
+  private func settleFocus(_ id: String) -> Bool {
+    if summary(id) != nil {
+      reveal(id)
+    } else if sessionNames.entry(id)?.removed == true {
+      actionError = "Session \(id) was removed"
+      showWindow?()
+    } else {
+      return false
+    }
+    return true
+  }
+
+  private func resolvePendingFocus() {
+    guard let wait = focusWait else { return }
+    focusWait = nil
+    // The user picked another session while the focus waited.
+    if selection != nil && selection != wait.selection { return }
+    if settleFocus(wait.id) { return }
+    if wait.misses + 1 >= Self.focusRefreshLimit {
+      actionError = "Switchboard has no session \(wait.id)"
+    } else {
+      focusWait = (wait.id, wait.misses + 1, wait.selection)
+    }
   }
 
   /// Answers a card: allow, deny with an optional message, or one answer per

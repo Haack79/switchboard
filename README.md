@@ -56,6 +56,7 @@ sb ls
 sb send <session> "Yes, push it."
 sb send <session> --image ~/Desktop/shot.png "What is wrong on this page?"
 sb attach <session>          # this terminal shows the Claude pane; --shell for the shell
+sb focus <session>           # shows the session in the app, launching the app if needed
 sb shell <session> --close     # ends the shell pane; --open starts it again
 sb wait <session> Alex said he would reply tomorrow
 sb wait <session> --kind date --until 2h --note "check the dashboard"
@@ -108,6 +109,8 @@ sb draft check <session> 1   # read the comment that draft 1 replies to again, o
 ```
 
 A session is an id, a unique id prefix, or a unique name. `sb send` pastes into a live idle session, queues the message while a turn runs, and resumes a stopped session with the message as its first prompt. The paste also submits anything you typed but didn't send in that session's Claude terminal.
+
+`sb focus` brings the app to the front, launching it if it isn't running, and selects the session as a sidebar click does. A `switchboard://session/<id>` link does the same from any app, and `sb focus` opens that link. The link takes a full id only. An id the app doesn't list yet, such as a session that `sb new` just made, is selected when a refresh lists it, and after three refreshes that don't, the error banner says the app has no such session.
 
 A message that `sbd` accepted survives a restart of `sbd`, even a crash. `sbd` refuses a message whose `sent` event it can't store. It records `pasting` just before each paste starts and `delivered` once it succeeds, and it starts no paste whose `pasting` it can't store, trying again a second later. A message whose paste had not started goes out again after the restart, without waiting for the session's next hook. A message whose paste started without a `delivered` may or may not have reached Claude, so `sbd` never pastes it again on its own. It looks in the session's transcript for a user message with that text that Claude wrote after the paste started. When it finds one, it records `delivered`. Otherwise it records `delivery_unknown` and leaves the message to you. `sb events <session>` shows these events.
 

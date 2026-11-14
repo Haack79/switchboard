@@ -92,7 +92,7 @@ extension InlineTextTests {
     @Test func aLiveNameLinksToTheSessionURL() throws {
       let result = render(plain: "Ask \(liveID) to rebase.")
 
-      #expect(try links(in: result.text, of: liveName) == [URL(string: "switchboard-session:\(liveID)")])
+      #expect(try links(in: result.text, of: liveName) == [URL(string: "switchboard://session/\(liveID)")])
     }
 
     @Test func aLiveNameLinksToTheURLThatSessionLinkMakes() throws {
