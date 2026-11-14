@@ -27,6 +27,8 @@ extension GitHubPoller {
     var runs: [String: (id: Int, url: String)] = [:]
     /// The environments that each target's last check decided, by target id.
     var progress: [String: [DeployEnvironment: EnvironmentDeploy]] = [:]
+    /// When the poller first saw each deploy edge's target, by target id.
+    var firstSeen: [String: Int64] = [:]
   }
 
   /// A merged PR whose deploy of a service the poller checks.
@@ -40,7 +42,8 @@ extension GitHubPoller {
     var since: Int64
   }
 
-  /// The open deploy waits that name a service and whose PR merged.
+  /// The open deploy waits that name a service and whose PR merged. The
+  /// deploy edges that name one are in `edgeDeployTargets`.
   func deployTargets(_ interest: Interest) -> [DeployTarget] {
     interest.waits.compactMap { session, wait in
       guard wait.kind == .deploy, let service = wait.service, let id = prId(of: wait, session: session.id),
@@ -62,6 +65,7 @@ extension GitHubPoller {
     let ids = Set(targets.map(\.id))
     deploys.files = deploys.files.filter { services.contains($0.key) }
     deploys.progress = deploys.progress.filter { ids.contains($0.key) }
+    deploys.firstSeen = deploys.firstSeen.filter { ids.contains($0.key) }
     if targets.isEmpty {
       deploys.ancestry = [:]
       deploys.chartsCommits = [:]

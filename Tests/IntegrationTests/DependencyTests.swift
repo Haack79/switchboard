@@ -43,6 +43,33 @@ private func body(_ github: FakeGitHub, _ text: String) {
   github.change(122896) { $0["body"] = .string(text) }
 }
 
+/// A repository whose deploys no deploy comment shows. Its #20992 is recorded.
+private let docs = "PostHog/posthog.com"
+private let docsLabel = "PostHog/posthog.com#20992"
+private let devSync = "Dev: Deploy with ArgoCD (feature-flags) / Dev: ArgoCD Sync"
+
+/// Merges `number` with the merge commit that the feature-flags routes compare.
+private func merge(_ github: FakeGitHub, _ number: Int) {
+  github.change(number) {
+    $0["state"] = "MERGED"
+    $0["mergedAt"] = "2026-10-23T22:00:00Z"
+    $0["mergeCommit"] = ["oid": .string(DeployPollerTests.merge)]
+  }
+}
+
+/// A service check can run in the poll after the one that reads the edge's
+/// PR, so the tests poll once more before they look.
+private func pollEdges(_ sbd: Instance) throws {
+  try sbd.pollTwice()
+  try sbd.poll(all: true)
+}
+
+private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
+  try sbd.advanceClock(DeployPollerTests.deployMs)
+  try sbd.poll(all: true)
+  try sbd.poll(all: true)
+}
+
 @Suite(.blocking(timeLimit: .seconds(120))) struct DependencyTests {
   @Test func bodyEdgesShowInGetAndLs() throws {
     let github = try FakeGitHub()
@@ -419,6 +446,217 @@ private func body(_ github: FakeGitHub, _ text: String) {
     #expect(after.state == .needsYou)
     #expect(after.reason == "decide what replaces #122953, which closed unmerged")
     #expect(try sbd.sb("get", s.id).contains("  depends: #122953 closed\n"))
+    sleep(1)
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+  }
+
+  // MARK: Deploy edges that name a service or environments
+
+  @Test func serviceEdgeInAnotherRepoResolvesFromTheStateFileAndResumesTheSession() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    try deploys.serveFeatureFlags(
+      github, jobs: try deploys.flagsJobs([DeployPollerTests.prodEUSync: ("in_progress", nil)]), repository: docs)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed to dev and prod, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+    try pollEdges(sbd)
+    #expect(
+      try sbd.edges(s.id) == [
+        Dependency(
+          via: .body, repo: docs, number: 20992, deploy: true, state: .merged, deployed: false,
+          service: "feature-flags", environments: [.dev, .prodUS, .prodEU])
+      ])
+    #expect(try sbd.get(s.id).state == .readyForReview)
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+
+    github.route(DeployPollerTests.jobsPath, try deploys.flagsJobs())
+    try pollAfterTheDeployInterval(sbd)
+
+    try sbd.waitFor("the resume message") { try !sbd.messagesFromSbd(s.id).isEmpty }
+    #expect(
+      try sbd.messagesFromSbd(s.id) == [
+        "Switchboard: \(docsLabel) deployed to dev, prod-us, and prod-eu, so #122896 no longer waits on it."
+      ])
+  }
+
+  @Test func edgeThatNamesDevHoldsWhileOnlyProdDeployed() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    try deploys.serveFeatureFlags(
+      github, jobs: try deploys.flagsJobs([devSync: ("in_progress", nil)]), repository: docs)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed to dev, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    let edge = try #require(try sbd.edges(s.id)?.first)
+    #expect(edge.deployed == false)
+    #expect(edge.problem == nil)
+    let held = try sbd.get(s.id)
+    #expect(held.state == .readyForReview)
+    #expect(held.reason.contains("waits on the deploy of \(docsLabel)"))
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+
+    github.route(DeployPollerTests.jobsPath, try deploys.flagsJobs())
+    try pollAfterTheDeployInterval(sbd)
+
+    try sbd.waitFor("the resume message") { try !sbd.messagesFromSbd(s.id).isEmpty }
+    #expect(
+      try sbd.messagesFromSbd(s.id) == ["Switchboard: \(docsLabel) deployed to dev, so #122896 no longer waits on it."])
+  }
+
+  /// The control for the dev edge: with the same jobs, an edge that names no
+  /// environments waits only on both prod regions.
+  @Test func edgeThatNamesNoEnvironmentsResolvesWhileDevStillDeploys() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    try deploys.serveFeatureFlags(
+      github, jobs: try deploys.flagsJobs([devSync: ("in_progress", nil)]), repository: docs)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    #expect(try sbd.edges(s.id)?.first?.deployed == true)
+    #expect(try sbd.get(s.id).reason == readTheReply)
+  }
+
+  /// #122179's deploy comment says Deployed everywhere. It describes the main
+  /// posthog app, so it can't resolve an edge that names feature-flags.
+  @Test func serviceEdgeOnAPostHogPRIgnoresTheDeployComment() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 122179)
+    try deploys.serveFeatureFlags(
+      github, jobs: try deploys.flagsJobs([DeployPollerTests.prodEUSync: ("in_progress", nil)]))
+    body(github, "Depends on #122179 (deployed, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    #expect(try sbd.edges(s.id)?.first?.deployed == false)
+    #expect(try sbd.get(s.id).reason.contains("waits on the deploy of #122179"))
+  }
+
+  /// Each case sets up a service whose deploy of #20992 can't finish as the
+  /// line names it.
+  @Test(arguments: ["another repository", "no state file", "failed sync", "merge off the deployed branch"])
+  func serviceEdgeThatCantResolveNeedsYou(_ problem: String) throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    var service = "feature-flags"
+    switch problem {
+    case "another repository":
+      service = "duckgres"
+      github.route(
+        "repos/PostHog/charts/contents/state/duckgres.yaml", contentType: "text/plain; charset=utf-8",
+        try deployResponse("state-duckgres.yaml"))
+    case "no state file":
+      service = "no-such-service"
+    case "failed sync":
+      try deploys.serveFeatureFlags(
+        github, jobs: try deploys.flagsJobs([DeployPollerTests.prodEUSync: ("completed", "failure")]),
+        repository: docs)
+    default:
+      try deploys.serveFeatureFlags(github, jobs: try deploys.flagsJobs(), repository: docs)
+      github.route(
+        "repos/\(docs)/compare/\(DeployPollerTests.flagsCommit)...\(DeployPollerTests.merge)",
+        #"{"status":"diverged","ahead_by":2,"behind_by":5,"files":[]}"#)
+    }
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed, service: \(service))")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    let edge = try #require(try sbd.edges(s.id)?.first)
+    let reason = try #require(edge.problem)
+    #expect(edge.deployed != true)
+    let after = try sbd.get(s.id)
+    #expect(after.state == .needsYou)
+    #expect(after.reason == oneLine("\(docsLabel) can't resolve: \(reason)"))
+    sleep(1)
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+  }
+
+  @Test func serviceFromAnotherRepositoryNamesThatRepository() throws {
+    let github = try FakeGitHub()
+    merge(github, 20992)
+    github.route(
+      "repos/PostHog/charts/contents/state/duckgres.yaml", contentType: "text/plain; charset=utf-8",
+      try deployResponse("state-duckgres.yaml"))
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed, service: duckgres)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    #expect(try sbd.edges(s.id)?.first?.problem?.contains("PostHog/duckgres") == true)
+    let after = try sbd.get(s.id)
+    #expect(after.state == .needsYou)
+    #expect(after.reason.hasPrefix("\(docsLabel) can't resolve: "))
+  }
+
+  @Test func deployEdgeInAnotherRepoWithNoServiceNeedsYou() throws {
+    let github = try FakeGitHub()
+    merge(github, 20992)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    let edge = try #require(try sbd.edges(s.id)?.first)
+    #expect(edge.problem != nil)
+    #expect(edge.deployed != true)
+    let after = try sbd.get(s.id)
+    #expect(after.state == .needsYou)
+    #expect(after.reason.hasPrefix("\(docsLabel) can't resolve: "))
+    sleep(1)
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+  }
+
+  /// The problem is about the deploy, so it waits until the PR merged.
+  @Test func openDeployEdgeInAnotherRepoWithNoServiceWaitsOnTheMerge() throws {
+    let github = try FakeGitHub()
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    #expect(try sbd.edges(s.id)?.first?.problem == nil)
+    let after = try sbd.get(s.id)
+    #expect(after.state == .readyForReview)
+    #expect(after.reason.hasSuffix("; waits on \(docsLabel)"))
+  }
+
+  @Test func serviceEdgeStaysDeployedAfterTheStateFileGoes() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    try deploys.serveFeatureFlags(github, jobs: try deploys.flagsJobs(), repository: docs)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+    try pollEdges(sbd)
+    #expect(try sbd.edges(s.id)?.first?.deployed == true)
+
+    github.route(DeployPollerTests.statePath, status: 404, #"{"message":"Not Found"}"#)
+    try pollAfterTheDeployInterval(sbd)
+
+    let edge = try #require(try sbd.edges(s.id)?.first)
+    #expect(edge.deployed == true)
+    #expect(edge.problem == nil)
+    #expect(try sbd.get(s.id).reason == readTheReply)
     sleep(1)
     #expect(try sbd.messagesFromSbd(s.id).isEmpty)
   }

@@ -138,7 +138,7 @@ extension GitHubPoller {
       return nil
     }
     let stage = PlanStage(read.pr.state)
-    return stage == .merged && deployedToProd(read.comments) ? .deployed : stage
+    return stage == .merged && deployed(read.comments) ? .deployed : stage
   }
 
   // MARK: Writes

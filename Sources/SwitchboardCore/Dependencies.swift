@@ -7,11 +7,21 @@ public struct PRRef: Codable, Equatable, Hashable, Sendable {
   public var number: Int
   /// True when the PR must be deployed, not only merged.
   public var deploy: Bool
+  /// The PostHog/charts service whose state file shows the deploy, for a
+  /// deploy ref whose line names one.
+  public var service: String?
+  /// The environments that the deploy must reach, for a deploy ref whose
+  /// line names them. nil means both prod regions.
+  public var environments: [DeployEnvironment]?
 
-  public init(repo: String, number: Int, deploy: Bool = false) {
+  public init(
+    repo: String, number: Int, deploy: Bool = false, service: String? = nil, environments: [DeployEnvironment]? = nil
+  ) {
     self.repo = repo
     self.number = number
     self.deploy = deploy
+    self.service = service
+    self.environments = environments
   }
 
   public func same(repo other: String, number n: Int) -> Bool {
@@ -39,15 +49,23 @@ public struct Dependency: Codable, Equatable, Sendable {
   public var deploy: Bool
   /// nil until the poller reads the PR.
   public var state: PRState?
-  /// Whether the deploy comment shows the PR deployed in both prod regions.
-  /// nil for an edge that needs no deploy, or whose PR has not merged.
+  /// Whether the PR reached every environment in `deployEnvironments`. nil
+  /// for an edge that needs no deploy, or whose PR has not merged.
   public var deployed: Bool?
   /// The session whose PR this is.
   public var session: String?
+  /// The PostHog/charts service whose state file decides the deploy.
+  public var service: String?
+  /// The environments that the deploy must reach. nil means both prod regions.
+  public var environments: [DeployEnvironment]?
+  /// Why the deploy can't resolve as the `Depends on` line names it, such as
+  /// a service that deploys from another repository. The edge still holds.
+  public var problem: String?
 
   public init(
     via: Via, repo: String, number: Int, base: String? = nil, deploy: Bool = false, state: PRState? = nil,
-    deployed: Bool? = nil, session: String? = nil
+    deployed: Bool? = nil, session: String? = nil, service: String? = nil, environments: [DeployEnvironment]? = nil,
+    problem: String? = nil
   ) {
     self.via = via
     self.repo = repo
@@ -57,7 +75,19 @@ public struct Dependency: Codable, Equatable, Sendable {
     self.state = state
     self.deployed = deployed
     self.session = session
+    self.service = service
+    self.environments = environments
+    self.problem = problem
   }
+
+  /// The edge that a body ref makes.
+  public init(ref: PRRef, session: String? = nil) {
+    self.init(
+      via: .body, repo: ref.repo, number: ref.number, deploy: ref.deploy, session: session, service: ref.service,
+      environments: ref.environments)
+  }
+
+  public var deployEnvironments: [DeployEnvironment] { environments ?? DeployEnvironment.prod }
 
   public var resolved: Bool { state == .merged && (!deploy || deployed == true) }
   public var closed: Bool { state == .closed }
@@ -73,15 +103,25 @@ public struct Dependency: Codable, Equatable, Sendable {
     Wait.PullRequest(repository: Dependencies.sameRepo(self.repo, repo) ? nil : self.repo, number: number).text
   }
 
-  /// "waits on #N" while the PR is open, and "waits on the deploy of #N" once it merged.
+  /// "waits on #N" while the PR is open, and "waits on the deploy of #N" once
+  /// it merged. A line that named the environments names them too.
   func waitLine(from repo: String) -> String {
-    state == .merged ? "waits on the deploy of \(label(from: repo))" : "waits on \(label(from: repo))"
+    guard state == .merged else { return "waits on \(label(from: repo))" }
+    return "waits on the deploy of \(label(from: repo))\(environmentsSuffix)"
   }
+
+  /// "prod" for both prod regions by default, and otherwise each environment,
+  /// as "dev, prod-us, and prod-eu".
+  public var environmentsText: String { environments.map { englishList($0.map(\.rawValue)) } ?? "prod" }
+
+  /// " to <environments>" when the `Depends on` line named them, and empty otherwise.
+  public var environmentsSuffix: String { environments == nil ? "" : " to \(environmentsText)" }
 }
 
 extension DeployComment {
-  /// Whether the comment shows the PR deployed in both prod regions.
-  public var deployedToProd: Bool { [.prodUS, .prodEU].allSatisfy { state(in: $0) == .deployed } }
+  public func deployed(to environments: [DeployEnvironment]) -> Bool {
+    environments.allSatisfy { state(in: $0) == .deployed }
+  }
 }
 
 public enum Dependencies {
@@ -96,10 +136,22 @@ public enum Dependencies {
   static let prRef = try! NSRegularExpression(
     pattern: #"https?://github\.com/[\w.-]+/[\w.-]+/pull/[0-9]+|(?:[\w.-]+/[\w.-]+)?#[0-9]+"#)
 
+  /// `service: <name>` on a deploy line.
+  static let serviceName = try! NSRegularExpression(
+    pattern: #"\bservice:\s*([A-Za-z0-9][\w.-]*)"#, options: [.caseInsensitive])
+  /// `deploy… to <environments>` on a deploy line, with the environments
+  /// joined by commas, `and`, or `&`.
+  static let environmentList = try! NSRegularExpression(
+    pattern:
+      #"\bdeploy\w*\s+to\s+((?:prod-us|prod-eu|prod|dev)\b(?:\s*(?:,|&|\band\b)\s*(?:prod-us|prod-eu|prod|dev)\b)*)"#,
+    options: [.caseInsensitive])
+
   /// The PRs that the body's `Depends on` lines name, in order and without
   /// repeats. `#N` names a PR in `repo`. A line that mentions a deploy makes
-  /// each of its PRs a deploy ref. A repeat keeps the first ref, and becomes
-  /// a deploy ref when any of its lines is one.
+  /// each of its PRs a deploy ref, with the line's `service:` and `deploy…
+  /// to` environments. A repeat keeps the first ref and its first service,
+  /// takes the union of the environments, and becomes a deploy ref when any
+  /// of its lines is one.
   public static func refs(inBody body: String, repo: String) -> [PRRef] {
     guard body.range(of: "depends on", options: .caseInsensitive) != nil else { return [] }
     var refs: [PRRef] = []
@@ -108,18 +160,45 @@ public enum Dependencies {
       let whole = NSRange(text.startIndex..., in: text)
       guard dependsOnLine.firstMatch(in: text, range: whole) != nil else { continue }
       let deploy = text.range(of: "deploy", options: .caseInsensitive) != nil
+      let service = deploy ? capture(serviceName, in: text) : nil
+      let environments = deploy ? capture(environmentList, in: text).map(environments(in:)) : nil
       for match in prRef.matches(in: text, range: whole) {
         guard let range = Range(match.range, in: text), let pr = Wait.PullRequest(parsing: String(text[range])) else {
           continue
         }
-        let found = PRRef(repo: pr.repository ?? repo, number: pr.number, deploy: deploy)
+        let found = PRRef(
+          repo: pr.repository ?? repo, number: pr.number, deploy: deploy, service: service, environments: environments)
         if let i = refs.firstIndex(where: { $0.same(repo: found.repo, number: found.number) }) {
-          refs[i].deploy = refs[i].deploy || deploy
+          if deploy {
+            refs[i].service = refs[i].service ?? service
+            refs[i].environments = refs[i].deploy ? union(refs[i].environments, environments) : environments
+            refs[i].deploy = true
+          }
         } else {
           refs.append(found)
         }
       }
     }
     return refs
+  }
+
+  private static func capture(_ regex: NSRegularExpression, in text: String) -> String? {
+    guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+      let range = Range(match.range(at: 1), in: text)
+    else { return nil }
+    return String(text[range])
+  }
+
+  /// The environments of a list that `environmentList` matched.
+  private static func environments(in list: String) -> [DeployEnvironment] {
+    let names = list.lowercased().split(whereSeparator: { ",& ".contains($0) }).filter { $0 != "and" }
+    return DeployEnvironment.ordered(names.flatMap { DeployEnvironment.named(String($0)) ?? [] })
+  }
+
+  /// Both lists' environments. A nil list means both prod regions, so a union
+  /// with nil names them too.
+  private static func union(_ a: [DeployEnvironment]?, _ b: [DeployEnvironment]?) -> [DeployEnvironment]? {
+    if a == nil, b == nil { return nil }
+    return DeployEnvironment.ordered((a ?? DeployEnvironment.prod) + (b ?? DeployEnvironment.prod))
   }
 }

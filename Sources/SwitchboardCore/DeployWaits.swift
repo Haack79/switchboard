@@ -77,7 +77,7 @@ extension Wait {
     if Dependencies.sameRepo(pr.repo, Wait.posthogRepository) {
       let comment = comments.lazy.filter { $0.author == DeployComment.author }
         .compactMap { $0.body.flatMap(DeployComment.parse) }.last
-      guard let comment, deployEnvironments.allSatisfy({ comment.state(in: $0) == .deployed }) else { return nil }
+      guard let comment, comment.deployed(to: deployEnvironments) else { return nil }
       return deployedOutcome
     }
     if Dependencies.sameRepo(pr.repo, Wait.chartsRepository) {
