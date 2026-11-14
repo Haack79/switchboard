@@ -118,12 +118,14 @@ let usage = """
                                   It refuses a session with an open to-do unless a
                                   --resolve names each one, which resolves them all.
                                   --resolve doesn't run inside Claude
-    rm --done [--worktree [--delete-remote-branch]] [--yes]
+    rm --done [--worktree [--delete-remote-branch]] [--yes] [--no-wait]
                                   remove every Done session the same way, after listing
                                   them and the ones whose checks fail, which it skips.
                                   --worktree also deletes each branch whose PR merged.
-                                  Without a terminal or inside Claude, it needs --yes.
-                                  With --json and without --yes, it removes nothing
+                                  sbd's removal job deletes them one at a time, and sb
+                                  waits for it. --no-wait prints what the job queued and
+                                  returns. Without a terminal or inside Claude, it needs
+                                  --yes. With --json and without --yes, it removes nothing
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits
                                   after the merge, a running turn, and a folder sbd didn't make.

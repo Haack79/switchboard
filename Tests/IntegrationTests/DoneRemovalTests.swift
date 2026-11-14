@@ -137,6 +137,48 @@ extension Instance {
       ["worktree": .bool(worktree), "confirmed": true, "targets": .array(targets.map(JSON.string))],
       timeout: 300)
   }
+
+  /// Starts `sb rm --done` with the flags on a thread of its own, so the test can read sbd while the command waits.
+  fileprivate func startRmDone(_ flags: String...) -> Outcome<CommandResult> {
+    let args = ["rm", "--done"] + flags
+    return Outcome.detached { try self.run(args) }
+  }
+
+  /// Waits until sbd's removal job holds every session in `ids`, with one of them running and the rest queued, and
+  /// returns each session's removal state. The worker holds the running one at the `hold-removal` gate. A command
+  /// that removes each session itself never records a removal and ends first, so this throws with its output.
+  @discardableResult
+  fileprivate func waitForJob(_ ids: [String], while command: Outcome<CommandResult>) throws -> [String: String] {
+    var states: [String: String] = [:]
+    try waitFor("the removal job to hold \(ids.joined(separator: ", "))", timeout: 30) {
+      if let ended = command.result {
+        let output = (try? ended.get()).map { "status \($0.status)\nstdout: \($0.stdout)\nstderr: \($0.stderr)" }
+        throw TestError(
+          description: "sb rm --done ended before the removal job held its sessions: \(output ?? "\(ended)")")
+      }
+      states = [:]
+      for s in try listedSessions() {
+        guard let id = s["id"]?.string, ids.contains(id), let state = s["removal"]?["state"]?.string else { continue }
+        states[id] = state
+      }
+      return states.count == ids.count && states.values.filter { $0 == "running" }.count == 1
+        && states.values.allSatisfy { $0 == "running" || $0 == "queued" }
+    }
+    return states
+  }
+
+  /// Waits for the command to exit and returns its result.
+  fileprivate func finish(_ command: Outcome<CommandResult>, timeout: Double = 60) throws -> CommandResult {
+    guard command.done.wait(timeout: .now() + timeout) == .success else {
+      throw TestError(description: "sb rm --done did not exit within \(timeout) s after the job was released")
+    }
+    return try #require(command.result).get()
+  }
+
+  /// The `removal-notices` op's list.
+  fileprivate func noticeSessions() throws -> [String] {
+    try #require(try client.call("removal-notices").array).compactMap { $0["session"]?.string }
+  }
 }
 
 /// The ids in the result's `removed`.
@@ -1063,6 +1105,249 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try sbd.intact(a))
     #expect(try sbd.branchExists(repo, "haacked/inside"))
     #expect(Processes.exists(claude), "sbd ended a's claude")
+  }
+
+  // MARK: The removal job
+
+  /// The CLI hands every planned session to sbd's removal job in one `rm-queue`, so while the worker holds the
+  /// first one, the others are already queued and the command still waits. The uncommitted file appears after the
+  /// plan, so only the job's own checks find it, and the command reports that failure as skipped.
+  @Test func waitsForTheJobAndReportsWhatItRemovedAndWhatFailedAsJSON() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--json")
+    try sbd.waitForJob([dirty.id, a.id, b.id], while: command)
+    #expect(command.result == nil, "sb rm --done returned while the job still held its sessions")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    try sbd.release(holdRemoval)
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(Set(result.removed) == [a.id, b.id], Comment(rawValue: r.stdout))
+    let reason = try #require(result.skipped.first { $0.id == dirty.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains("uncommitted"), Comment(rawValue: reason))
+    #expect(result.partial.isEmpty, Comment(rawValue: r.stdout))
+    #expect(!FileManager.default.fileExists(atPath: a.cwd))
+    #expect(!FileManager.default.fileExists(atPath: b.cwd))
+    #expect(try sbd.intact(dirty))
+    #expect(try sbd.removalState(dirty.id) == nil, "sb rm --done did not keep the session whose removal failed")
+  }
+
+  @Test func waitsForTheJobAndReportsWhatItRemovedAndWhatFailedAsText() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes")
+    try sbd.waitForJob([dirty.id, a.id, b.id], while: command)
+    #expect(command.result == nil, "sb rm --done returned while the job still held its sessions")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    try sbd.release(holdRemoval)
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let lines = r.stdout.split(separator: "\n").map(String.init)
+    #expect(lines.first == "removed 2, skipped 1", Comment(rawValue: r.stdout))
+    let skipLine = try #require(
+      lines.first { $0.hasPrefix("  skipped \(dirty.id)  \(dirty.name): ") }, Comment(rawValue: r.stdout))
+    #expect(skipLine.contains("uncommitted"), Comment(rawValue: skipLine))
+    #expect(try sbd.sessionIds() == [dirty.id])
+    #expect(try sbd.removalState(dirty.id) == nil, "sb rm --done did not keep the session whose removal failed")
+  }
+
+  /// The remote branch moved after the merge, so the job forgets the session, keeps the remote branch, and records
+  /// a removal notice. The command reports that notice as a partial removal, as `rm` reported its error before.
+  @Test(arguments: [true, false])
+  func reportsARemovalNoticeFromTheJobAsPartial(json: Bool) throws {
+    let s = try Setup()
+    let merged = try s.finished(.breaker, state: "MERGED", push: true)
+    try s.pollUntilDone(merged)
+    let other = "\(s.sbd.home.path)/other"
+    try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
+    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.commit(other, "later.txt")
+    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    s.sbd.hold(holdRemoval)
+    defer { try? s.sbd.release(holdRemoval) }
+
+    let flags = ["--worktree", "--delete-remote-branch", "--yes"] + (json ? ["--json"] : [])
+    let command = Outcome.detached { try s.sbd.run(["rm", "--done"] + flags) }
+    try s.sbd.waitForJob([merged.id], while: command)
+    try s.sbd.release(holdRemoval)
+    let r = try s.sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    if json {
+      let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+      #expect(result.removed == [merged.id], Comment(rawValue: r.stdout))
+      let reason = try #require(result.partial.first { $0.id == merged.id }?.reason, Comment(rawValue: r.stdout))
+      #expect(reason.contains("kept the remote branch"), Comment(rawValue: reason))
+      #expect(result.skipped.isEmpty, Comment(rawValue: r.stdout))
+    } else {
+      let lines = r.stdout.split(separator: "\n").map(String.init)
+      #expect(lines.first == "removed 1, skipped 0", Comment(rawValue: r.stdout))
+      let partial = try #require(
+        lines.first { $0.hasPrefix("  \(merged.id)  \(merged.name): ") }, Comment(rawValue: r.stdout))
+      #expect(partial.contains("kept the remote branch"), Comment(rawValue: partial))
+    }
+    #expect(try s.sbd.client.sessions().isEmpty)
+    #expect(try s.sbd.branchExists(s.origin, RecordedPR.breaker.branch))
+    #expect(try s.sbd.noticeSessions().isEmpty, "sb rm --done did not dismiss the notice it reported")
+  }
+
+  /// A notice stays until someone dismisses it, so a notice from an earlier removal is still listed when the command
+  /// runs. Only the notices about the command's own sessions are its partial removals.
+  @Test func aRemovalNoticeFromAnEarlierRemovalIsNotReportedAsPartial() throws {
+    let s = try Setup()
+    let earlier = try s.finished(.breaker, state: "MERGED", push: true)
+    try s.pollUntilDone(earlier)
+    let other = "\(s.sbd.home.path)/other"
+    try s.sbd.git(s.sbd.home.path, "clone", "-q", s.origin, other)
+    try s.sbd.git(other, "checkout", "-q", RecordedPR.breaker.branch)
+    try s.sbd.commit(other, "later.txt")
+    try s.sbd.git(other, "push", "-q", "origin", RecordedPR.breaker.branch)
+    #expect(queued(try s.sbd.queueRemoval([earlier.id], remoteBranch: true)) == [earlier.id])
+    try s.sbd.waitUntilGone(earlier.id)
+    try s.sbd.waitFor("the earlier removal's notice") { try s.sbd.noticeSessions().contains(earlier.id) }
+    let plain = try s.sbd.worktreeSession(s.repo, branch: "haacked/plain")
+    try s.sbd.markDone(plain.id)
+
+    let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(result.removed == [plain.id], Comment(rawValue: r.stdout))
+    #expect(result.partial.isEmpty, Comment(rawValue: r.stdout))
+    #expect(try s.sbd.noticeSessions() == [earlier.id], "sb rm --done dismissed a notice it did not report")
+  }
+
+  // MARK: --no-wait
+
+  /// The dirty session fails the plan's checks, so the command never queues it and lists it with the sessions that
+  /// `rm-queue` skipped.
+  @Test func noWaitPrintsTheQueuedIdsAsJSONAndReturnsWhileTheJobHoldsThem() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--no-wait", "--json")
+    let returned = command.done.wait(timeout: .now() + 20) == .success
+
+    #expect(returned, "sb rm --done --no-wait waited for the job")
+    let r = try #require(try command.result?.get())
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalQueued.self, from: r.stdout)
+    #expect(Set(result.queued) == [a.id, b.id], Comment(rawValue: r.stdout))
+    let reason = try #require(result.skipped.first { $0.id == dirty.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains("uncommitted"), Comment(rawValue: reason))
+    for s in [a, b] {
+      let state = try sbd.removalState(s.id)
+      #expect(state == "queued" || state == "running", "\(s.id)'s removal is \(state ?? "missing")")
+    }
+    try sbd.release(holdRemoval)
+    try sbd.waitUntilGone(a.id, b.id)
+    #expect(try sbd.intact(dirty))
+  }
+
+  @Test func noWaitPrintsTheQueuedIdsAsTextAndReturnsWhileTheJobHoldsThem() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    for s in [dirty, a, b] { try sbd.markDone(s.id) }
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--no-wait")
+    let returned = command.done.wait(timeout: .now() + 20) == .success
+
+    #expect(returned, "sb rm --done --no-wait waited for the job")
+    let r = try #require(try command.result?.get())
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let lines = r.stdout.split(separator: "\n").map(String.init)
+    #expect(lines.first == "queued 2, skipped 1", Comment(rawValue: r.stdout))
+    for s in [a, b] {
+      #expect(lines.contains { $0.hasPrefix("  \(s.id)  \(s.name)") }, Comment(rawValue: r.stdout))
+    }
+    let skipLine = try #require(
+      lines.first { $0.hasPrefix("  skipped \(dirty.id)  \(dirty.name): ") }, Comment(rawValue: r.stdout))
+    #expect(skipLine.contains("uncommitted"), Comment(rawValue: skipLine))
+    #expect(try sbd.removalState(a.id) != nil)
+    #expect(try sbd.removalState(b.id) != nil)
+  }
+
+  // MARK: To-dos through the job
+
+  /// The plan names no to-do for the command to resolve, so a Done session with an open to-do is skipped and its
+  /// to-do stays open.
+  @Test func skipsADoneSessionWithAnOpenToDoAndLeavesTheToDoOpen() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let held = try sbd.worktreeSession(repo, branch: "haacked/held")
+    let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
+    try sbd.markDone(held.id)
+    try sbd.markDone(clean.id)
+    let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
+
+    let r = try sbd.rmDone("--worktree", "--yes", "--json")
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(result.removed == [clean.id], Comment(rawValue: r.stdout))
+    let reason = try #require(result.skipped.first { $0.id == held.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains("has an open to-do: \(todo.id)"), Comment(rawValue: reason))
+    #expect(try sbd.intact(held))
+    #expect(try sbd.isOpenTodo(held.id, todo.id))
+    #expect(try sbd.resolvedTodos().isEmpty)
+  }
+
+  /// The to-do arrives after the command queued the session, so the job's own to-do check keeps the session, and
+  /// the command reports that failure as skipped.
+  @Test func aToDoAddedWhileTheJobHoldsTheSessionKeepsItAndIsReportedAsSkipped() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let held = try sbd.worktreeSession(repo, branch: "haacked/held")
+    let clean = try sbd.worktreeSession(repo, branch: "haacked/clean")
+    try sbd.markDone(held.id)
+    try sbd.markDone(clean.id)
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--json")
+    try sbd.waitForJob([held.id, clean.id], while: command)
+    let todo = try sbd.addTodo(held.id, "tell Alex in #flags that the fix shipped")
+    try sbd.release(holdRemoval)
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(result.removed == [clean.id], Comment(rawValue: r.stdout))
+    let reason = try #require(result.skipped.first { $0.id == held.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains(todo.id), Comment(rawValue: reason))
+    #expect(try sbd.intact(held))
+    #expect(try sbd.isOpenTodo(held.id, todo.id))
+    #expect(try sbd.resolvedTodos().isEmpty)
   }
 }
 

@@ -1537,10 +1537,12 @@ public final class Service {
   /// session, sbd waits for the session's site, then runs `checkBeforeRemoval`, `stopForRemoval`, and `release`
   /// in one scope of the site, so on a host every check and git command runs on one connection, and the scope's
   /// machine refuses each command once one got no answer. `release` gets the scope's site. Then
-  /// `forgetRemoved` forgets the session. It runs off the state queue.
+  /// `forgetRemoved` forgets the session. With `storesNotice`, `forgetRemoved` also stores a removal notice for a
+  /// branch or remote branch that stayed. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    command: String, again: String, release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
+    command: String, again: String, storesNotice: Bool = false,
+    release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
   ) throws -> (session: Session, released: ReleasedFiles) {
     let entry = try removalEntry(id, resolving: resolving)
     let site = self.site(for: entry.session)
@@ -1558,7 +1560,8 @@ public final class Service {
         again: again, scope: scope)
       return try release(check, stopped, scope.site)
     }
-    try forgetRemoved(entry.session, released, resolving: resolving, at: site)
+    let notice = storesNotice ? released.keptMessage(id, remoteBranch: remoteBranch) : nil
+    try forgetRemoved(entry.session, released, resolving: resolving, notice: notice, at: site)
     return (entry.session, released)
   }
 
@@ -1744,8 +1747,11 @@ public final class Service {
   /// that changed since the checks. A to-do that arrived since the checks
   /// keeps the session, and its error names what `releaseFiles` removed and
   /// kept. A host's panes closed in `stopForRemoval`, from answers of the host.
+  /// It stores `notice` as a removal notice in the same state-queue step that
+  /// forgets the session, so a client that sees the session gone can read it.
   func forgetRemoved(
-    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, at site: any SessionSite
+    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, notice: String? = nil,
+    at site: any SessionSite
   ) throws {
     try queue.sync {
       // A follow-up can start between the two steps.
@@ -1777,6 +1783,14 @@ public final class Service {
         throw error
       } catch let error where !removed.isEmpty {
         throw APIError("\(kept): \(error)\(stayed)")
+      }
+      if let notice {
+        logLine(notice)
+        do {
+          try store.addRemovalNotice(session: session.id, name: session.name, message: notice)
+        } catch {
+          logLine("can't record the removal notice for \(session.id): \(error)")
+        }
       }
       terminals?.kill(paneName(session.id, .claude))
       terminals?.kill(paneName(session.id, .shell))

@@ -119,16 +119,17 @@ extension Service {
   /// and a to-do that is open and not in `resolve` fails the removal. A
   /// failure before the session is forgotten records the removal as failed
   /// with `rm`'s message, and the session stays. A branch or remote branch
-  /// that stayed after the session was forgotten becomes a removal notice. It
-  /// runs on `removalQueue`.
+  /// that stayed becomes a removal notice, stored as the session is forgotten.
+  /// It runs on `removalQueue`.
   private func runRemoval(_ id: String, _ removal: Removal) {
     let resolving = Set(removal.resolve ?? [])
     do {
       let inTrash = try folderInTrash(id, removal)
       var trash: String?
-      let (session, released) = try removeAtSite(
+      _ = try removeAtSite(
         id, worktree: removal.worktree, branch: removal.branch, remoteBranch: removal.remoteBranch,
-        resolving: resolving, ancestry: nil, command: "sb rm --worktree", again: "retry the delete"
+        resolving: resolving, ancestry: nil, command: "sb rm --worktree", again: "retry the delete",
+        storesNotice: true
       ) { check, checked, site in
         trash = try releaseThroughTrash(check, checked, removal, inTrash: inTrash)
         guard trash == nil else {
@@ -141,16 +142,6 @@ extension Service {
           folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
       }
       if let trash { purge(trash) }
-      if let kept = released.keptMessage(id, remoteBranch: removal.remoteBranch) {
-        logLine(kept)
-        queue.sync {
-          do {
-            try store.addRemovalNotice(session: id, name: session.name, message: kept)
-          } catch {
-            logLine("can't record the removal notice for \(id): \(error)")
-          }
-        }
-      }
     } catch {
       queue.sync { failRemoval(id, error) }
     }
