@@ -68,12 +68,13 @@ struct SessionView: View {
       HSplitView {
         VStack(spacing: 0) {
           paneLabel("Claude") {
-            Button("Message") { model.revealMessageField(session.id) }
-              .help("Show a field that sends Claude a message, with images dropped on it or pasted into it (⇧⌘E)")
             if session.shellClosed == true {
               Button("Open Shell") { model.setShellOpen(session.id, true) }
                 .help("Start a shell in the session's folder beside the Claude terminal")
             }
+            // Open Shell comes first, so it keeps the place that `ShellSelfTest.labelPoint` clicks.
+            Button("Message") { model.revealMessageField(session.id) }
+              .help("Show a field that sends Claude a message, with images dropped on it or pasted into it (⇧⌘E)")
           }
           TerminalPane(
             command: terminals.attachCommand(.claude), takesFocus: model.terminalFocus == session.id,
