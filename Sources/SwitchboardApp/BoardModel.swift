@@ -100,6 +100,8 @@ final class BoardModel: ObservableObject {
   @Published var recentEvents: [String: [Event]] = [:]
   /// Each chat's last messages, by session id, read while its pane shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
+  /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
+  @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
@@ -845,7 +847,8 @@ final class BoardModel: ObservableObject {
   /// `sent` runs only when sbd accepted the message. A second send to the
   /// same session does nothing until sbd answers the first. Each image is a
   /// file name and the image's bytes. `ref` names the Inbox item that the
-  /// message answers.
+  /// message answers. A message to a chat shows in the chat at once as a
+  /// pending message, which carries sbd's refusal in place of `actionError`.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
     sent: (() -> Void)? = nil
@@ -854,7 +857,31 @@ final class BoardModel: ObservableObject {
     var args: [String: JSON] = ["session": .string(id), "text": .string(text)]
     if let ref { args["ref"] = .string(ref) }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
-    perform("send", args, then: { _ in sent?() }, finally: { self.sending.remove(id) })
+    let pending =
+      summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
+    if let pending {
+      pendingChat[id, default: []].removeAll(where: \.failed)
+      pendingChat[id, default: []].append(pending)
+    }
+    perform(
+      "send", args,
+      then: { result in
+        if let pending {
+          self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
+        }
+        sent?()
+      },
+      failed: pending.map { pending in { self.setPending(pending.id, in: id, .failed("\($0)")) } },
+      finally: { self.sending.remove(id) })
+  }
+
+  private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
+    guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
+    pendingChat[session]![i].status = status
+  }
+
+  func dismissPending(_ message: UUID, in session: String) {
+    pendingChat[session]?.removeAll { $0.id == message }
   }
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
@@ -1066,6 +1093,10 @@ final class BoardModel: ObservableObject {
         // A failed first read shows an empty log, so the pane stops showing that it is loading.
         if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
+        }
+        if let messages, let pending = self.pendingChat[session] {
+          let unanswered = PendingChatMessage.unanswered(pending, log: messages)
+          if unanswered != pending { self.pendingChat[session] = unanswered }
         }
       }
     }
