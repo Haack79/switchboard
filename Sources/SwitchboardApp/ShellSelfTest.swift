@@ -137,9 +137,15 @@ enum ShellSelfTest {
     guard let anchor = ClickAnchorView.find(name, in: root) ?? scrollIntoView(name, in: root) else {
       return "no \(name)"
     }
+    // A row near the edge of the sidebar can be built but partly hidden under another view.
+    anchor.scrollToVisible(anchor.bounds)
+    root.layoutSubtreeIfNeeded()
     let frame = anchor.convert(anchor.bounds, to: nil)
     let point = NSPoint(x: frame.minX + clickInset, y: frame.midY)
     guard let hit = (root.superview ?? root).hitTest(point) else { return "nothing at \(name)" }
+    if let row = enclosingRow(of: anchor), !hit.isDescendant(of: row) {
+      return "\(type(of: hit)) covers \(name)"
+    }
     guard TerminalSelfTest.click(at: point, in: window, modifiers: modifiers, on: throughWindow ? nil : hit) else {
       return "no event"
     }
@@ -161,6 +167,12 @@ enum ShellSelfTest {
       }
     }
     return nil
+  }
+
+  private static func enclosingRow(of view: NSView) -> NSTableRowView? {
+    var next = view.superview
+    while let v = next, !(v is NSTableRowView) { next = v.superview }
+    return next as? NSTableRowView
   }
 
   private static func tables(in view: NSView) -> [NSTableView] {
