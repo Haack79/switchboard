@@ -14,6 +14,7 @@ extension BoardModel {
     case nil: return .sidebar
     case .inbox: return .inbox
     case .board: return .board
+    case .issues: return .issues
     }
   }
 
@@ -50,6 +51,8 @@ extension BoardModel {
       if let next = ListStep.step(boardGrid.readingOrder, from: currentBoardCard, by: step, wrap: true) {
         boardFocus = next
       }
+    case .issues:
+      moveIssue(by: step)
     }
     requestListFocus()
   }
@@ -65,6 +68,7 @@ extension BoardModel {
     case .board:
       let id = currentBoardCard
       return board.first { $0.id == id }
+    case .issues: return nil
     }
   }
 
@@ -80,15 +84,21 @@ extension BoardModel {
     terminalFocus = target.id
   }
 
+  /// Shows the current Inbox item's terminal in the Inbox's right pane and puts keyboard focus in it.
+  func openInboxTerminal() {
+    showingTerminal = true
+    focusTerminal()
+  }
+
   /// Clears the terminal focus request while it still names `id`.
   func releaseTerminalFocus(_ id: String) {
     if terminalFocus == id { terminalFocus = nil }
   }
 
-  /// A chat shows its terminal only while the Terminal toggle is on. A request for a hidden terminal would
+  /// A chat pane shows its terminal only while the Terminal toggle is on. A request for a hidden terminal would
   /// take focus later, when the user turns the toggle on.
   private func showsClaudeTerminal(_ session: SessionSummary) -> Bool {
-    session.hasTerminals && !session.waitsToStart && (session.kind != .chat || showingTerminal)
+    session.hasTerminals && !session.waitsToStart && (!session.kind.showsAsChat || showingTerminal)
   }
 }
 

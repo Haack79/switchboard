@@ -31,9 +31,15 @@ struct SwitchboardApp: App {
       CommandGroup(after: .newItem) {
         // A sheet blocks the window's buttons but not the menu bar. Without
         // the check, a menu command opens a second sheet over the first.
-        Button("New Session…") { model.showingNew = true }
+        Button("New Session…") { model.openNewSession() }
           .keyboardShortcut("n")
           .disabled(model.presentingSheet)
+        let newSessionGroup = model.newSessionGroup
+        Button(newSessionGroup.map { "New Session in \($0.name)…" } ?? "New Session in Group…") {
+          model.openNewSession(group: newSessionGroup?.id)
+        }
+        .keyboardShortcut("n", modifiers: [.command, .shift])
+        .disabled(model.presentingSheet || newSessionGroup == nil)
         Button("Import Sessions…") { model.showingImport = true }
           .keyboardShortcut("i", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)
@@ -51,6 +57,8 @@ struct SwitchboardApp: App {
           .keyboardShortcut("1")
         Button("Show Board") { model.show(.board) }
           .keyboardShortcut("2")
+        Button("Show Issues") { model.show(.issues) }
+          .keyboardShortcut("3")
         Button("Filter by Org…") { model.showingOrgFilter.toggle() }
           .keyboardShortcut("o", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)
@@ -185,7 +193,7 @@ struct MenuBarContent: View {
       Text("Nothing needs you")
     } else {
       ForEach(model.needsUser) { s in
-        Button("\(s.name): \(s.reason)") {
+        Button("\(model.inboxName(s)): \(s.triage?.title ?? s.reason)") {
           model.selection = s.id
           show()
         }

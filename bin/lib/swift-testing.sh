@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Sets `args` to the flags that swift needs to find Swift Testing in the
-# active developer directory. bin/test and bin/test-gui source it.
+# active developer directory, and defines build_tests and list_tests.
+# bin/test, bin/test-gui, and CI source it.
 #
 # The Command Line Tools' build system can leave out the folder that holds
 # Swift Testing's macro plugin. SwiftPM's native build system, the default
@@ -10,6 +11,10 @@
 # lib_TestingInterop.dylib, which the Command Line Tools keep in
 # <dev>/Library/Developer/usr/lib. The rpaths in Testing.framework do not
 # reach that folder.
+
+# Scripts and tests source this file from other folders, so the path to
+# swiftpm is absolute.
+swiftpm="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/swiftpm"
 
 # xcode-select -p reads DEVELOPER_DIR. It resolves an Xcode app path to the
 # app's Contents/Developer folder, as swift does.
@@ -34,4 +39,14 @@ require_swift_testing() {
   echo "The developer directory $dev has no Testing.framework." >&2
   echo "Install one of them, then select it with xcode-select -s or DEVELOPER_DIR." >&2
   exit 1
+}
+
+build_tests() {
+  "$swiftpm" build --build-tests ${args[@]+"${args[@]}"}
+}
+
+# Prints one line per test, such as SwitchboardCoreTests.FooTests/bar(), from
+# the last build.
+list_tests() {
+  swift test list --skip-build | grep /
 }

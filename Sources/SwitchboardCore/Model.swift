@@ -93,12 +93,21 @@ public struct Session: Codable, Equatable, Sendable {
   /// keeps it. Otherwise sbd passes no permission mode, and Claude's settings
   /// choose one. Nil in a session that an older sbd stored.
   public var autoMode: Bool?
+  /// True when the session started in plan mode. `PermissionMode.forLaunch`
+  /// reads it on every launch. It stays set after the plan is approved.
+  public var planMode: Bool?
+  /// True when the session must start in manual mode, as for an issue that someone outside the team wrote.
+  /// `PermissionMode.forLaunch` then passes manual mode, which wins over `claudeArgs` and Claude's own settings,
+  /// until claude reports another mode.
+  public var manualMode: Bool?
   /// True after the shell pane's shell exited or the user closed the pane.
   /// sbd then starts no shell for the session until the user opens one.
   public var shellClosed: Bool?
   /// Set by `sb issue`. It replaces the issues that sbd finds in the PR body
   /// and the branch name.
   public var issue: IssueRef?
+  /// The name of the remote host that the session runs on, as config.json lists it. Nil means this Mac.
+  public var host: String?
   /// The MCP servers that a Manager conversation loads besides switchboard,
   /// by name. Nil launches claude with the full setup, as for every other
   /// session. An empty list loads only switchboard.
@@ -130,7 +139,7 @@ public struct Session: Codable, Equatable, Sendable {
 }
 
 /// What a session is for. Only a work session belongs to a group, gets a
-/// triage item, or has a worktree and a PR.
+/// triage item for each turn, or has a worktree and a PR.
 public enum SessionKind: String, Codable, Sendable {
   case work
   case manager
@@ -138,6 +147,16 @@ public enum SessionKind: String, Codable, Sendable {
 
   public init(manager: Bool?, chat: String?) {
     self = manager == true ? .manager : chat != nil ? .chat : .work
+  }
+
+  /// Whether the app shows a session of this kind as a chat. `chat-log`
+  /// reads only these kinds, because a work session's transcript can hold
+  /// what its user never meant to show in the chat pane.
+  public var showsAsChat: Bool {
+    switch self {
+    case .work: false
+    case .manager, .chat: true
+    }
   }
 
   /// How a message names a session of this kind, or nil for a work session.
@@ -148,6 +167,24 @@ public enum SessionKind: String, Codable, Sendable {
     case .chat: "a group chat"
     }
   }
+
+  /// Which of the session's items may reach the Inbox, the badge, the menu
+  /// bar, a notification, or Next Needing You.
+  public var inboxItems: InboxItems {
+    switch self {
+    case .work: .all
+    case .manager, .chat: .blockingPrompts
+    }
+  }
+}
+
+public enum InboxItems: Sendable {
+  case all
+  /// Only a prompt that stops the conversation until the user answers it.
+  /// The conversation's replies and group messages repeat or name the
+  /// sessions it manages, and those sessions have their own items. A reply
+  /// waits on the user's next message, which the chat pane takes.
+  case blockingPrompts
 }
 
 /// One entry in the event log: a hook payload, or something sbd did.
@@ -264,6 +301,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// True when the user acknowledged the session's Inbox item, which moves
   /// it to Waiting until its reason changes or a new turn starts.
   public var acknowledged: Bool?
+  /// True while the session's start of claude waits behind the live cap.
+  public var queued: Bool?
   /// Claude Code's permission mode, such as `default` or `auto`, or nil when
   /// no hook has reported it since claude started.
   public var permissionMode: String?
@@ -277,6 +316,10 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// shows. nil when no source names one, for every session that has no
   /// `board`, and for a follow-up that hasn't started.
   public var issues: [SessionIssue]?
+  /// The remote host that the session runs on, or nil for this Mac.
+  public var host: String?
+  /// The state of the host's link, or nil for a session on this Mac and for a host that has no link.
+  public var link: LinkState?
   /// The session's place in sbd's removal job, or nil when no removal is
   /// queued, running, or failed.
   public var removal: Removal?
@@ -316,12 +359,15 @@ public struct Terminals: Codable, Equatable, Sendable {
   public var socket: String
   public var claude: String
   public var shell: String
+  /// The remote host that holds the tmux server and its socket. Nil means this Mac.
+  public var host: String?
 
-  public init(tmux: String, socket: String, claude: String, shell: String) {
+  public init(tmux: String, socket: String, claude: String, shell: String, host: String? = nil) {
     self.tmux = tmux
     self.socket = socket
     self.claude = claude
     self.shell = shell
+    self.host = host
   }
 
   /// The command that attaches a terminal to one of the two panes.

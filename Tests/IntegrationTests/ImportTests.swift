@@ -255,7 +255,7 @@ private func reasons(_ result: ImportResult) -> [String: String] {
     #expect(try sbd.sb("send", s.id, "run them") == "resumed\n")
     try sbd.waitFor(s.id, "the resumed turn's reply") { $0.lastReply == "Done: run them" }
     let resume = try #require(sbd.stubCalls().last { !$0.args.hasPrefix("agents") })
-    #expect(resume.args == "--resume \(id) --settings \(sbd.home.claudeSettings) -- run them")
+    #expect(resume.args == "--resume \(id) --settings \(sbd.home.claudeSettings(s.id)) -- run them")
     #expect(resume.account == sbd.account("A"))
   }
 
@@ -287,7 +287,7 @@ private func reasons(_ result: ImportResult) -> [String: String] {
     #expect(try sbd.sb("send", s.id, "begin") == "resumed\n")
     try sbd.waitFor(s.id, "the first turn's reply") { $0.lastReply == "Done: begin" }
     let start = try #require(sbd.stubCalls().last { !$0.args.hasPrefix("agents") })
-    #expect(start.args == "--session-id \(id) --settings \(sbd.home.claudeSettings) -- begin")
+    #expect(start.args == "--session-id \(id) --settings \(sbd.home.claudeSettings(s.id)) -- begin")
   }
 
   @Test func anImportedSessionStartsInAutoModeWhenTheSettingIsOn() throws {
@@ -584,7 +584,8 @@ private func reasons(_ result: ImportResult) -> [String: String] {
     #expect(listed.count == 3 && listed.allSatisfy { !$0.running && $0.status == nil })
     let result = try sbd.client.importSessions(pids.map { "p\($0)" }, stop: pids.map { "p\($0)" })
     #expect(result.refused.isEmpty && result.imported.count == 3)
-    #expect(try sbd.client.call("ping") != nil)
+    #expect(Processes.exists(sbd.sbdPid))
+    _ = try sbd.client.call("ping")
   }
 
   @Test func stopImportsASessionThatTwoAccountsListWithOnePid() throws {
@@ -1051,7 +1052,7 @@ private func reasons(_ result: ImportResult) -> [String: String] {
     let tree = try sbd.addWorktree(try sbd.makeRepo("switchboard"), "haacked/one")
     let id = newId()
     try sbd.writeAgents("A", [agent(id, cwd: tree, name: "board-one", job: "00000001")])
-    try sbd.client.importSessions([id])
+    _ = try sbd.client.importSessions([id])
 
     let r = try sbd.run("import", "--repo", "switchboard")
 

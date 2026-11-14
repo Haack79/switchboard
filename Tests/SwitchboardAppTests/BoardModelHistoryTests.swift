@@ -75,6 +75,21 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
     #expect(model.history.current == model.location)
   }
 
+  @Test func backFromIssuesReturnsToTheBoardAndForwardReturnsToIssues() {
+    let model = threeSessions()
+    model.show(.board)
+    model.show(.issues)
+    #expect(model.history.current == at(.issues))
+    #expect(model.label(for: at(.issues)) == "Issues")
+
+    model.goBack()
+    #expect(model.mainView == .board)
+
+    model.goForward()
+    #expect(model.mainView == .issues)
+    #expect(model.history.current == model.location)
+  }
+
   /// `openFromBoard` calls `show(.inbox)` and then writes `inboxFocus`. The nested batches record once.
   @Test func aBoardCardForAnInboxItemAddsOneInboxEntry() {
     let model = threeSessions()
@@ -315,6 +330,63 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
 
     #expect(model.selection == "c")
     #expect(!model.showingTerminal)
+    #expect(model.history.current == model.location)
+  }
+
+  @Test func theTerminalToggleOnAManagerAddsAnEntry() {
+    let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+    model.selection = "m"
+    let before = model.history.entries.count
+
+    model.showingTerminal = true
+
+    #expect(model.history.entries.count == before + 1)
+    #expect(model.history.current == at(.session("m"), terminal: true))
+    #expect(model.history.current == model.location)
+  }
+
+  @Test func backRestoresAManagersPreviousTerminalFlag() {
+    let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+    model.selection = "m"
+    model.showingTerminal = true
+
+    model.goBack()
+
+    #expect(model.selection == "m")
+    #expect(!model.showingTerminal)
+    #expect(model.history.current == model.location)
+  }
+
+  /// The flag changes while the work session shows, so only the Manager's entry can turn it back on.
+  @Test func forwardFromAWorkSessionToAManagerRestoresTheManagersTerminalFlag() throws {
+    let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+    model.selection = "a"
+    model.showingTerminal = true
+    model.selection = "m"
+    model.goBack()
+    try #require(model.selection == "a")
+    model.showingTerminal = false
+
+    model.goForward()
+
+    #expect(model.selection == "m")
+    #expect(model.showingTerminal)
+    #expect(model.history.current == at(.session("m"), terminal: true))
+    #expect(model.history.current == model.location)
+  }
+
+  /// The flag changes while the work session shows, so only the Manager's entry can turn it back off.
+  @Test func backFromAWorkSessionToAManagerRestoresTheManagersTerminalFlagOff() {
+    let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+    model.selection = "m"
+    model.selection = "a"
+    model.showingTerminal = true
+
+    model.goBack()
+
+    #expect(model.selection == "m")
+    #expect(!model.showingTerminal)
+    #expect(model.history.current == at(.session("m")))
     #expect(model.history.current == model.location)
   }
 
@@ -646,7 +718,7 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
   enum HistoryShape: String, CaseIterable, Sendable {
     case launch, cursorAtTheEnd, cursorInTheMiddle, removedBehind, removedAhead, equalBehindAfterASession,
       equalBehindWithNothingElse, aXaWithXRemoved, filterHiddenBehind, filterShowsItAgain, removedInboxItemBehind,
-      chatTerminalBehind, unlistedSelection
+      chatTerminalBehind, managerTerminalBehind, removedManagerTerminalBehind, unlistedSelection
 
     var canGoBack: Bool {
       switch self {
@@ -751,6 +823,19 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
         let model = appliedModel([needsItem("a"), chatItem("c", group: "g1")])
         model.selection = "c"
         model.showingTerminal = true
+        return model
+      case .managerTerminalBehind:
+        let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+        model.selection = "m"
+        model.showingTerminal = true
+        return model
+      case .removedManagerTerminalBehind:
+        // Back from a skips both of the removed Manager's entries and lands on the launch entry.
+        let model = appliedModel([needsItem("a"), needsItem("m", manager: true)])
+        model.selection = "m"
+        model.showingTerminal = true
+        model.selection = "a"
+        model.apply(.success([needsItem("a")]), followups: nil)
         return model
       case .unlistedSelection:
         let model = threeSessions()

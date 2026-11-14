@@ -15,19 +15,20 @@ extension Service {
   /// check in the trash moves the folder back to `cwd` and throws. It runs
   /// on `removalQueue`.
   func releaseThroughTrash(
-    _ session: Session, _ removal: Removal, inTrash: String?, repo: String?, supacode: Bool, check: RemovalCheck
+    _ check: RemovalCheck, _ checked: CheckedRemoval, _ removal: Removal, inTrash: String?
   ) throws -> String? {
-    guard let repo else { return nil }
+    let session = check.session
+    guard let repo = checked.repo else { return nil }
     if let inTrash {
       if removal.released != true {
-        try checkTrash(session, inTrash, check)
+        try checkTrash(check, checked, inTrash)
         try releaseFromTrash(session, repo: repo, inTrash)
       }
       return inTrash
     }
-    guard !check.folderGone, !supacode, let trash = trashFolder(for: session), try moveToTrash(session, trash)
+    guard !check.folderGone, !checked.supacode, let trash = trashFolder(for: session), try moveToTrash(session, trash)
     else { return nil }
-    try checkTrash(session, trash, check)
+    try checkTrash(check, checked, trash)
     try releaseFromTrash(session, repo: repo, trash)
     return trash
   }
@@ -37,10 +38,11 @@ extension Service {
   /// not in the trash. It throws, and leaves the folder, when a folder is
   /// at `cwd` too, or when the removal has not recorded `released` and git
   /// no longer lists the worktree, because then nothing shows that the
-  /// folder is safe to delete. It runs off the state queue.
+  /// folder is safe to delete. A session on a host never has a folder in the
+  /// trash, because `trashFolder` gives it none. It runs off the state queue.
   func folderInTrash(_ id: String, _ removal: Removal) throws -> String? {
     guard let trash = removal.trash, linkStatus(trash) != nil,
-      let session = queue.sync(execute: { entries[id]?.session })
+      let session = queue.sync(execute: { entries[id]?.session }), session.host == nil
     else { return nil }
     guard linkStatus(session.cwd) == nil else {
       throw APIError(
@@ -48,8 +50,8 @@ extension Service {
       )
     }
     if removal.released == true { return trash }
-    let repo = try worktreeRepo(session)
-    guard try worktreeEntry(repo, at: session.cwd, on: machine(for: session)) != nil else {
+    let repo = try worktreeRepo(session, at: mac)
+    guard try worktreeEntry(repo, holding: session.cwd, at: mac) != nil else {
       throw APIError(
         "git no longer lists \(session.cwd) as a worktree of \(repo), so sbd can't show that its folder in the trash is safe to delete. The folder stays at \(trash)."
       )
@@ -59,13 +61,13 @@ extension Service {
 
   /// The path that the session's worktree folder can move to with a rename,
   /// or nil when the job deletes the worktree in place. That is when the
-  /// session runs on another machine, `cwd` is not an absolute path to a
+  /// session runs on a remote host, `cwd` is not an absolute path to a
   /// folder (a symlink's rename would move only the link), the id can't name
   /// a folder, or the trash is on another volume, where a move copies the
   /// files. It creates the trash folder.
   func trashFolder(for session: Session) -> String? {
     let id = session.id
-    guard machine(for: session) is LocalMachine, session.cwd.hasPrefix("/"), !id.isEmpty, !id.contains("/"),
+    guard session.host == nil, session.cwd.hasPrefix("/"), !id.isEmpty, !id.contains("/"),
       id != ".", id != "..", let folder = linkStatus(session.cwd), isFolder(folder)
     else { return nil }
     try? FileManager.default.createDirectory(
@@ -106,13 +108,14 @@ extension Service {
   /// that git lists at `cwd`. A failure moves the folder back to `cwd` and
   /// throws. When the move back fails too, the folder stays in the trash and
   /// the error says so.
-  private func checkTrash(_ session: Session, _ trash: String, _ check: RemovalCheck) throws {
+  private func checkTrash(_ check: RemovalCheck, _ checked: CheckedRemoval, _ trash: String) throws {
+    let session = check.session
     waitAtGate("hold-removal-trash")
     do {
       try requireTrashHoldsWorktree(session, trash)
       let (_, supacode) = try checkWorktreeIsLossless(
-        session, mergedPR: check.pr?.state == .merged, sharedWith: check.sharedWith, onlyBuildOutputIgnored: false,
-        in: trash)
+        session, mergedPR: checked.pr?.state == .merged, sharedWith: check.sharedWith, onlyBuildOutputIgnored: false,
+        in: trash, at: mac)
       if supacode { throw APIError("Supacode locked \(session.cwd) while it was being removed.") }
     } catch {
       let failure = rename(trash, to: session.cwd)
@@ -130,11 +133,10 @@ extension Service {
   /// the same worktree.
   private func requireTrashHoldsWorktree(_ session: Session, _ trash: String) throws {
     guard let status = linkStatus(trash), isFolder(status) else { throw APIError("\(trash) is not a folder.") }
-    let machine = self.machine(for: session)
-    let admin = try gitOutput(trash, ["rev-parse", "--absolute-git-dir"], on: machine)
+    let admin = try gitOutput(trash, ["rev-parse", "--absolute-git-dir"], at: mac)
     // `worktree.useRelativePaths` writes the path relative to the admin folder.
-    guard let gitdir = machine.text("\(admin)/gitdir")?.trimmingCharacters(in: .whitespacesAndNewlines),
-      samePath(
+    guard let gitdir = mac.machine.text("\(admin)/gitdir")?.trimmingCharacters(in: .whitespacesAndNewlines),
+      try mac.samePath(
         URL(fileURLWithPath: gitdir, relativeTo: URL(fileURLWithPath: admin, isDirectory: true)).path,
         "\(session.cwd)/.git")
     else {
@@ -151,7 +153,7 @@ extension Service {
         "\(session.cwd) appeared while the worktree's folder was in the trash at \(trash). Move one of them away, then retry the delete."
       )
     }
-    try releaseWorktree(session, repo: repo, folderGone: true)
+    try releaseWorktree(session, repo: repo, folderGone: true, at: mac)
     try queue.sync { try update(session.id) { $0.removal?.released = true } }
     waitAtGate("hold-removal-released")
   }

@@ -5,38 +5,6 @@ import Testing
 
 @testable import SwitchboardApp
 
-/// A work session in its own folder whose remotes sbd has read, or not read when `read` is nil.
-func orgSession(
-  _ id: String, _ repository: String?, read: Bool? = true, state: AttentionState = .working, group: String? = nil
-) -> SessionSummary {
-  var s = needsItem(id, state: state)
-  s.cwd = "/r/\(id)"
-  s.repo = "/r/\(id)"
-  s.repository = repository
-  s.repositoryRead = read
-  s.group = group
-  return s
-}
-
-/// A follow-up that has not started.
-func unstartedFollowup(_ id: String, _ repository: String?) -> SessionSummary {
-  var s = needsItem(id, state: .notStarted)
-  s.cwd = ""
-  s.followup = Followup(prompt: "p", repository: repository)
-  return s
-}
-
-/// A model like `offlineModel`, built with an org filter and an optional store for it.
-@MainActor
-func orgFilterModel(_ filter: OrgFilter = OrgFilter(), store: UserDefaults? = nil) -> BoardModel {
-  _ = NSApplication.shared
-  return BoardModel(
-    client: Client(home: Home(path: NSTemporaryDirectory() + "no-sbd-" + UUID().uuidString)), orgFilterStore: store,
-    orgFilter: filter)
-}
-
-let posthogOnly = OrgFilter(keys: ["posthog"])
-
 /// A filter and the ids of `BoardModelOrgFilterTests.list` and `.followups` that it shows.
 struct FilterShape: Sendable, CustomTestStringConvertible {
   var filter: OrgFilter
@@ -60,7 +28,7 @@ let everyFilterShape = [
 @MainActor
 @Suite struct BoardModelOrgFilterTests {
   /// Two PostHog sessions, a haacked one, a Local one, one that sbd has not read, the Manager, and a chat.
-  static let list = [
+  nonisolated static let list = [
     orgSession("ph1", "PostHog/posthog", state: .needsYou),
     orgSession("ph2", "PostHog/posthog-js"),
     orgSession("hk", "haacked/switchboard", state: .needsYou),
@@ -69,7 +37,9 @@ let everyFilterShape = [
     needsItem("m", manager: true),
     chatItem("c", group: "g1"),
   ]
-  static let followups = [unstartedFollowup("fph", "PostHog/posthog"), unstartedFollowup("fhk", "haacked/x")]
+  nonisolated static let followups = [
+    unstartedFollowup("fph", "PostHog/posthog"), unstartedFollowup("fhk", "haacked/x"),
+  ]
   static let hidden: Set<String> = ["hk", "lo", "fhk"]
 
   func model(
@@ -438,19 +408,23 @@ let everyFilterShape = [
     #expect(filtered == all)
   }
 
-  // MARK: Drafts
+  /// A chat has no org. Its card shows under every filter and counts in no org's row.
+  @Test(arguments: everyFilterShape)
+  func aChatCardShowsAndCountsUnderAnOrgFilter(_ shape: FilterShape) throws {
+    let withChatCard = model(shape.filter, Self.list + [try chatCard("cc", group: "g2")])
+    let withoutChatCard = model(shape.filter)
 
-  func card(_ id: Int64, _ session: String) throws -> Card {
-    let json: JSON = [
-      "id": .number(Double(id)), "session": .string(session), "kind": "permission", "tool": "Bash", "summary": "`ls`",
-      "input": [:], "questions": [], "since": 0, "deferred": false, "hookClosed": false,
-    ]
-    return try JSONCoding.convert(json, to: Card.self)
+    #expect(withChatCard.needsUser.map(\.id).contains("cc"))
+    #expect(withChatCard.triage.map(\.id).contains("cc"))
+    #expect(withChatCard.orgEntries == withoutChatCard.orgEntries)
+    #expect(withChatCard.hiddenNeedingYou == withoutChatCard.hiddenNeedingYou)
   }
+
+  // MARK: Drafts
 
   func withCard(_ s: SessionSummary, _ id: Int64) throws -> SessionSummary {
     var s = s
-    s.cards = [try card(id, s.id)]
+    s.cards = [try permissionCard(id, session: s.id)]
     return s
   }
 

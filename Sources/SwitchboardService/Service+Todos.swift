@@ -86,11 +86,18 @@ extension Service {
   /// `resolving` names exactly the session's open to-dos. It records each of
   /// them in `resolved_todos` in the same transaction as the delete. A
   /// failed delete leaves them open. It refuses a session whose worktree
-  /// sits in the trash unchecked, as `trashRefusal` says. It runs on the state queue.
+  /// sits in the trash unchecked, as `trashRefusal` says. For a session on a
+  /// host, the same transaction records it in `removed_host_sessions`, so the
+  /// spool cut may remove its leftover lines. It runs on the state queue.
   func forgetSession(_ id: String, resolving: Set<String>) throws {
     if let refusal = trashRefusal(id) { throw refusal }
-    try store.delete(session: id, resolving: checkTodos(id, resolving: resolving))
+    // Only a merged PR leaves marks. Other removals skip the summary.
+    let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil
+    try store.delete(session: id, resolving: checkTodos(id, resolving: resolving), onHost: entries[id]?.session.host)
+    if let removed { markAddressedIssues(removed) }
     entries[id] = nil
+    slashListings[id] = nil
+    hostEvents[id] = nil
     pruneDeclinedSuggestions()
   }
 

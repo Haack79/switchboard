@@ -16,6 +16,8 @@ let pr1204 = Wait.PullRequest(number: 1204)
 let posthog1204 = Wait.PullRequest(repository: "PostHog/posthog", number: 1204)
 let flagCache = Wait.SessionTarget(id: "k3x9p", name: "flag-cache")
 let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue, .merge, .deploy]
+/// The kinds that count only what happened after a time, which `since` can move earlier.
+let sinceKinds: Set<Wait.Kind> = [.review, .botReview, .queue]
 
 func epochMs(
   _ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0, _ second: Int = 0, zone: TimeZone
@@ -68,12 +70,12 @@ func minimalRequest(_ kind: Wait.Kind) -> WaitRequest {
 }
 
 enum WaitField: CaseIterable {
-  case target, who, environment, service, state, until
+  case target, who, environment, service, state, until, since
 }
 
 let kindsThatUse: [WaitField: Set<Wait.Kind>] = [
   .target: Set(prKinds + [.session]), .who: [.review, .botReview, .approval], .environment: [.deploy],
-  .service: [.deploy], .state: [.session], .until: [.date, .manual],
+  .service: [.deploy], .state: [.session], .until: [.date, .manual], .since: sinceKinds,
 ]
 let kindFields = Wait.Kind.allCases.flatMap { kind in WaitField.allCases.map { (kind, $0) } }
 let usedFields = kindFields.filter { kindsThatUse[$0.1]!.contains($0.0) }
@@ -89,6 +91,7 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
   case .service: r.service = "feature-flags"
   case .state: r.state = "waiting"
   case .until: r.until = "2h"
+  case .since: r.since = "2030-06-15T11:00:00Z"
   }
   return r
 }
@@ -250,6 +253,16 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
     #expect(Wait.parseTime(text, now: fixedNow) == fixedNow + Int64(seconds) * 1000)
   }
 
+  @Test(arguments: [("90s", 90), ("1w", 604_800)])
+  func durationMsIsTheLengthAlone(_ text: String, _ seconds: Int) {
+    #expect(Wait.durationMs(text) == Int64(seconds) * 1000)
+  }
+
+  @Test(arguments: ["", "2", " 2h", "2026-10-26", "9223372036854775807s"])
+  func durationMsRefusesWhatIsNotADuration(_ text: String) {
+    #expect(Wait.durationMs(text) == nil)
+  }
+
   @Test(arguments: [utc, losAngeles, kolkata])
   func dateIsMidnightInTheZone(_ zone: TimeZone) {
     #expect(Wait.parseTime("2026-10-26", now: fixedNow, zone: zone) == epochMs(2026, 10, 26, zone: zone))
@@ -276,7 +289,7 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
 
   @Test(arguments: [
     "", "soon", "2h30m", "12x", "-2h", "h", "2026-13-01", "2026-02-30", "2026-10-26T25:00", "2026-10-26T09:60",
-    "99999999999999999w", "9223372036854775807s",
+    "99999999999999999w", "9223372036854775807s", "9223372036854775s",
   ])
   func refusesWhatIsNotATime(_ text: String) {
     #expect(Wait.parseTime(text, now: fixedNow, zone: utc) == nil)
@@ -335,7 +348,7 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
     #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? state : nil }) == "it did")
   }
 
-  @Test(arguments: AttentionState.allCases.filter { $0 != .done })
+  @Test(arguments: AttentionState.allCases.filter { $0 != .done && $0 != .stale })
   func sessionWaitStaysOpenInAnotherState(_ other: AttentionState) {
     let wait = waitOn(.session, session: flagCache, state: .done)
     #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? other : nil }) == nil)
@@ -561,6 +574,81 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
   }
 }
 
+@Suite struct WaitSince {
+  func since(_ kind: Wait.Kind, _ text: String, now: Int64 = fixedNow) throws -> Wait {
+    var r = minimalRequest(kind)
+    r.since = text
+    return try buildWait(r, now: now)
+  }
+
+  @Test(arguments: Array(sinceKinds))
+  func sinceIsStoredAsMilliseconds(_ kind: Wait.Kind) throws {
+    #expect(try since(kind, "2030-06-15T11:00:00Z").since == epochMs(2030, 6, 15, 11, 0, zone: utc))
+  }
+
+  @Test(arguments: Array(sinceKinds))
+  func sinceDoesNotChangeCreated(_ kind: Wait.Kind) throws {
+    #expect(try since(kind, "2030-06-15T11:00:00Z").created == fixedNow)
+  }
+
+  @Test(arguments: Wait.Kind.allCases)
+  func noSinceStoresNone(_ kind: Wait.Kind) throws {
+    #expect(try buildWait(minimalRequest(kind)).since == nil)
+  }
+
+  @Test(
+    arguments: Array(sinceKinds),
+    ["2030-06-15T11:59:59Z", "2030-06-14", "2030-06-14T09:00", "2030-06-15T13:00:00+02:00"])
+  func sinceParsesLikeParseTime(_ kind: Wait.Kind, _ text: String) throws {
+    let parsed = try #require(Wait.parseTime(text, now: fixedNow))
+    #expect(try since(kind, text).since == parsed)
+  }
+
+  @Test(arguments: Array(sinceKinds))
+  func sinceAtNowIsTaken(_ kind: Wait.Kind) throws {
+    #expect(try since(kind, "2030-06-15T12:00:00Z").since == fixedNow)
+  }
+
+  @Test(arguments: Array(sinceKinds), ["2030-06-15T12:00:01Z", "2031-01-01", "1h", "90s", "2030-06-15T12:00:00-01:00"])
+  func sinceInTheFutureThrows(_ kind: Wait.Kind, _ text: String) {
+    #expect(throws: APIError.self) { try since(kind, text) }
+  }
+
+  @Test(arguments: Array(sinceKinds))
+  func sinceIsMeasuredFromTheGivenNowNotTheClock(_ kind: Wait.Kind) {
+    #expect(throws: APIError.self) {
+      try since(kind, "2010-01-01T00:00:00Z", now: epochMs(2000, 1, 1, zone: utc))
+    }
+  }
+
+  @Test(arguments: Array(sinceKinds), ["yesterday", "", "2030-13-01"])
+  func sinceThatDoesNotParseThrows(_ kind: Wait.Kind, _ text: String) {
+    #expect(throws: APIError.self) { try since(kind, text) }
+  }
+
+  @Test(arguments: Wait.Kind.allCases.filter { !sinceKinds.contains($0) })
+  func otherKindsRefuseAPastSince(_ kind: Wait.Kind) {
+    #expect(throws: APIError.self) { try since(kind, "2030-06-15T11:00:00Z") }
+  }
+
+  @Test(arguments: Array(sinceKinds))
+  func sinceSurvivesTheJSONRoundTrip(_ kind: Wait.Kind) throws {
+    let wait = try since(kind, "2030-06-15T11:00:00Z")
+    #expect(try JSONCoding.convert(JSON(encoding: wait), to: Wait.self) == wait)
+  }
+}
+
+@Suite struct CallerWaitRequests {
+  @Test(arguments: Wait.Kind.allCases)
+  func thenCallerMakesAWaitWhoseCallerReportsTheOutcome(_ kind: Wait.Kind) throws {
+    var r = minimalRequest(kind)
+    r.then = "caller"
+    let wait = try buildWait(r)
+    #expect(wait.then == .caller)
+    #expect(try JSONCoding.convert(JSON(encoding: wait), to: Wait.self) == wait)
+  }
+}
+
 @Suite struct ShortIds {
   static let alphabet = Set("abcdefghijkmnpqrstuvwxyz23456789")
 
@@ -617,6 +705,18 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
   ])
   func anotherAgentsMessageLeavesTheOutcome(_ prompt: String) throws {
     let f = try afterNotify([event("UserPromptSubmit", 3, ["prompt": .string(prompt)])])
+    #expect(f.waitOutcome == "CI on #1204: the checks passed")
+  }
+
+  @Test(arguments: [Wait.Kind.ci, .manual])
+  func callerResolutionRecordsNoOutcome(_ kind: Wait.Kind) throws {
+    let caller = waitOn(kind, pr: kind == .ci ? pr1204 : nil, then: .caller)
+    #expect(facts([try resolved(caller, "it happened", 1)]).waitOutcome == nil)
+  }
+
+  @Test func callerResolutionLeavesAnEarlierOutcome() throws {
+    let caller = waitOn(.botReview, pr: pr1204, then: .caller)
+    let f = try afterNotify([resolved(caller, "greptile-apps reviewed", 3)])
     #expect(f.waitOutcome == "CI on #1204: the checks passed")
   }
 
@@ -723,5 +823,225 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
     let f = try afterNotify()
     #expect(
       Attention.evaluate(withWaits([review], done: true), f, now: 3) == Verdict(state: .done, reason: "marked done"))
+  }
+}
+
+private let minuteMs: Int64 = 60_000
+private let hourMs: Int64 = 60 * minuteMs
+private let pr1 = Wait.PullRequest(number: 1)
+private let pr2 = Wait.PullRequest(number: 2)
+/// The kinds whose recheck time moves the session to Needs you while the wait stays open.
+private let overdueKinds: [Wait.Kind] = prKinds + [.session]
+
+/// The wait with its recheck time `ms` after it was set.
+private func stamped(_ wait: Wait, after ms: Int64) -> Wait {
+  var w = wait
+  w.recheck = w.created + ms
+  return w
+}
+
+/// A wait goes overdue at its recheck time and not before.
+@Suite struct WaitOverdue {
+  static let recheck: Int64 = 5000
+
+  @Test(arguments: overdueKinds)
+  func waitIsNotOverdueAMillisecondBeforeItsRecheck(_ kind: Wait.Kind) {
+    #expect(!stamped(waitOn(kind, pr: pr1204), after: Self.recheck).isOverdue(now: Self.recheck - 1))
+  }
+
+  @Test(arguments: overdueKinds)
+  func waitIsOverdueAtItsRecheck(_ kind: Wait.Kind) {
+    #expect(stamped(waitOn(kind, pr: pr1204), after: Self.recheck).isOverdue(now: Self.recheck))
+  }
+
+  @Test(arguments: overdueKinds)
+  func waitWithoutARecheckIsNeverOverdue(_ kind: Wait.Kind) {
+    #expect(!waitOn(kind, pr: pr1204).isOverdue(now: farFuture))
+  }
+
+  /// A date wait and a manual wait resolve at `until`. Neither goes overdue.
+  @Test(arguments: [
+    RecheckSettings().stamped(waitOn(.date, until: 9000)), RecheckSettings().stamped(waitOn(.manual, until: 9000)),
+    RecheckSettings().stamped(waitOn(.manual, note: "ask Alex")),
+  ])
+  func timedWaitIsNeverOverdue(_ wait: Wait) {
+    #expect(!wait.isOverdue(now: farFuture))
+  }
+}
+
+extension WaitResolution {
+  /// `RecheckSettings.stamped` gives a manual wait without `until` one a day after it was set.
+  @Test func stampedManualWaitResolvesADayAfterItWasSet() {
+    let wait = RecheckSettings().stamped(waitOn(.manual, note: "ask Alex"))
+    let due = wait.created + Attention.dayMs
+
+    #expect(wait.resolution(now: due - 1, stateOf: { _ in nil }) == nil)
+    #expect(wait.resolution(now: due, stateOf: { _ in nil }) == "time to recheck")
+  }
+
+  /// The wait stays open past its recheck time, and the session goes to Needs you instead.
+  @Test(arguments: prKinds)
+  func pollerKindStaysOpenPastItsRecheck(_ kind: Wait.Kind) {
+    let wait = stamped(waitOn(kind, pr: pr1204), after: 5000)
+
+    #expect(wait.resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+  }
+
+  @Test func sessionWaitStaysOpenPastItsRecheckWhileTheTargetWorks() {
+    let wait = stamped(waitOn(.session, session: flagCache, state: .done), after: 5000)
+
+    #expect(wait.resolution(now: farFuture, stateOf: { $0 == "k3x9p" ? .working : nil }) == nil)
+  }
+}
+
+/// A `session` wait ends when its target can't reach the wanted state on its own.
+@Suite struct SessionWaitTargets {
+  func resolution(wanting state: AttentionState, target: AttentionState?, now: Int64 = 1) -> String? {
+    waitOn(.session, session: flagCache, state: state)
+      .resolution(now: now, stateOf: { $0 == flagCache.id ? target : nil })
+  }
+
+  @Test(arguments: AttentionState.allCases.filter { $0 != .done })
+  func targetInDoneEndsAWaitForAnotherState(_ wanted: AttentionState) {
+    #expect(resolution(wanting: wanted, target: .done) == "it reached Done first")
+  }
+
+  @Test(arguments: AttentionState.allCases.filter { $0 != .stale })
+  func targetInStaleEndsAWaitForAnotherState(_ wanted: AttentionState) {
+    #expect(resolution(wanting: wanted, target: .stale) == "it went stale")
+  }
+
+  @Test(arguments: [AttentionState.done, .stale])
+  func targetThatReachesTheWantedStateDidIt(_ state: AttentionState) {
+    #expect(resolution(wanting: state, target: state) == "it did")
+  }
+
+  /// The real outcome wins over the terminal states and over a recheck time that passed.
+  @Test(arguments: [AttentionState.done, .stale])
+  func realOutcomeWinsPastTheRecheck(_ state: AttentionState) {
+    let wait = stamped(waitOn(.session, session: flagCache, state: state), after: 5000)
+
+    #expect(wait.resolution(now: farFuture, stateOf: { _ in state }) == "it did")
+  }
+
+  @Test func targetRemovedEndsTheWait() {
+    #expect(resolution(wanting: .readyForReview, target: nil) == "it was removed")
+  }
+
+  /// Not started, and Needs you with its claude stopped, can still move on.
+  @Test(
+    arguments: [AttentionState.notStarted, .needsYou, .canContinue, .readyToMerge, .waiting, .working],
+    [AttentionState.done, .readyForReview])
+  func targetThatCanStillMoveKeepsTheWaitOpen(_ target: AttentionState, _ wanted: AttentionState) {
+    #expect(resolution(wanting: wanted, target: target, now: farFuture) == nil)
+  }
+
+  @Test func onlyTheTargetsOwnStateCounts() {
+    let wait = waitOn(.session, session: flagCache, state: .readyForReview)
+
+    #expect(wait.resolution(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done }) == nil)
+  }
+}
+
+/// An open wait past its recheck time moves the session
+/// to Needs you and names the wait.
+@Suite struct OverdueWaitAttention {
+  let idle = facts([
+    event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+  ])
+  let review = stamped(waitOn(.review, pr: pr1204, who: "alex"), after: Attention.dayMs)
+  let ci = stamped(waitOn(.ci, pr: pr1), after: 2 * hourMs)
+  let merge = stamped(waitOn(.merge, pr: pr2), after: Attention.dayMs)
+
+  @Test func overdueWaitNeedsYouAndNamesTheWait() {
+    let v = Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs)
+
+    #expect(v == Verdict(state: .needsYou, reason: "a review from alex on #1204: still open after 1 d"))
+  }
+
+  @Test func overdueWaitIsAnInfoItem() {
+    #expect(Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs).kind == .info)
+  }
+
+  @Test func waitAMillisecondBeforeItsRecheckIsWaitingWithItsLine() {
+    let v = Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs - 1)
+
+    #expect(v == Verdict(state: .waiting, reason: "a review from alex on #1204"))
+  }
+
+  @Test func oneOverdueWaitAndOneOpenWaitNameOnlyTheOverdueOne() {
+    let v = Attention.evaluate(withWaits([merge, ci]), idle, now: 2 * hourMs)
+
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h"))
+  }
+
+  @Test func twoOverdueWaitsAreJoinedInTheirOrder() {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
+
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h; #2 to merge: still open after 1 d"))
+  }
+
+  @Test(arguments: [
+    (59 * minuteMs, "59 min"), (60 * minuteMs, "1 h"), (90 * minuteMs, "1 h"), (2 * hourMs, "2 h"),
+    (24 * hourMs, "1 d"), (25 * hourMs, "1 d"), (3 * Attention.dayMs, "3 d"),
+  ])
+  func ageIsTheLargestWholeUnit(_ ms: Int64, _ age: String) {
+    let wait = stamped(waitOn(.ci, pr: pr1), after: ms)
+
+    #expect(Attention.evaluate(withWaits([wait]), idle, now: ms).reason == "CI on #1: still open after \(age)")
+  }
+
+  /// The age is the recheck time less the time the wait was set, so an
+  /// acknowledgment of the reason keeps matching.
+  @Test(arguments: [Int64(0), 1, hourMs, Attention.dayMs, Attention.staleAfterMs])
+  func reasonStaysTheSameAsTimePasses(_ later: Int64) {
+    let at = Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs)
+
+    #expect(Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs + later) == at)
+  }
+
+  @Test func overdueWaitOutlastsTheStaleRule() {
+    let v = Attention.evaluate(withWaits([review]), idle, now: Attention.staleAfterMs + 10)
+
+    #expect(v.state == .needsYou)
+  }
+
+  @Test func waitWithoutARecheckStaysWaitingForever() {
+    let legacy = waitOn(.review, pr: pr1204, who: "alex")
+
+    #expect(Attention.evaluate(withWaits([legacy]), idle, now: farFuture).state == .waiting)
+  }
+
+  @Test func notifyOutcomeWinsOverAnOverdueWait() throws {
+    let notified = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+      try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2),
+    ])
+
+    let v = Attention.evaluate(withWaits([review]), notified, now: Attention.dayMs)
+
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1204: the checks passed"))
+  }
+
+  @Test func doneWinsOverAnOverdueWait() {
+    let v = Attention.evaluate(withWaits([review], done: true), idle, now: Attention.dayMs)
+
+    #expect(v == Verdict(state: .done, reason: "marked done"))
+  }
+
+  @Test func openPermissionPromptWinsOverAnOverdueWait() {
+    let f = facts(promptTurn(touchCall, touch))
+
+    #expect(Attention.evaluate(withWaits([review]), f, now: Attention.dayMs).reason == "approve `touch x`")
+  }
+
+  /// `finishedPR` reads `waitVerdict`, so an overdue deploy wait still blocks Done.
+  @Test func overdueDeployWaitOnAMergedPRNeedsYouNotDone() throws {
+    let deploy = stamped(waitOn(.deploy, pr: pr1204, environment: "prod"), after: 4 * hourMs)
+    let f = try prFacts(samplePR(state: .merged), dirty: 0)
+
+    let v = Attention.evaluate(withWaits([deploy]), f, now: 4 * hourMs)
+
+    #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4 h"))
   }
 }

@@ -79,7 +79,8 @@ extension Service {
     case .done:
       return Request(op: "done", args: ["session": session])
     case .allow, .deny, .allowAutoMode, .answer:
-      guard item.source == .card, let card = entries[id]!.facts.cards.first else {
+      // A conversation's item can name a card behind a send card.
+      guard item.source == .card, let card = entries[id]!.facts.cards.first(where: { $0.ref == item.ref }) else {
         throw APIError("\(name) has no prompt to answer")
       }
       var answer: [String: JSON] = ["session": session, "card": .number(Double(card.id))]
@@ -87,7 +88,7 @@ extension Service {
       case .answer: answer["answers"] = [.string(option.message ?? option.label)]
       case .allowAutoMode:
         answer["behavior"] = "allow"
-        answer["autoMode"] = true
+        answer[AllowExtra.autoMode.argument] = true
       default: answer["behavior"] = .string(option.action.rawValue)
       }
       return Request(op: "answer", args: .object(answer))
@@ -100,7 +101,7 @@ extension Service {
     let (id, findTranscript, machine, hooked) = try queue.sync {
       () -> (String, () -> String?, any Machine, String?) in
       let id = try lookup(args)
-      return (id, transcriptFinder(id), self.machine(of: id), entries[id]!.facts.lastReply)
+      return (id, transcriptFinder(id), try site(of: id).machine, entries[id]!.facts.lastReply)
     }
     let text = findTranscript().flatMap { Transcript.tail($0, on: machine).lastReply }
     guard let reply = text ?? hooked else { throw APIError("\(id) has no reply yet") }
@@ -111,10 +112,12 @@ extension Service {
   /// transcript, so that the file checks and the folder search run off the queue.
   func transcriptFinder(_ id: String) -> () -> String? {
     let e = entries[id]!
-    let account = paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? ClaudeAccount.defaultFolder
     let session = e.session
+    let account =
+      session.host == nil
+      ? (paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? ClaudeAccount.defaultFolder) : transcriptAccount(session)
     let known = e.facts.transcriptPath
-    let machine = self.machine(for: session)
+    let machine = site(for: session).machine
     return {
       if let known, machine.exists(known) { return known }
       return session.started
@@ -148,7 +151,7 @@ extension Service {
       return
     }
     let session = summary(id)
-    guard Triage.mayHaveItem(session) else { return }
+    guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)
     let env = headlessEnv(session: id, account: config.triage.account)

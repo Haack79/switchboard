@@ -6,12 +6,13 @@ struct NavLocation: Hashable {
     /// The Inbox with its current item.
     case inbox(String?)
     case board
+    case issues
     case session(String)
   }
 
   var place: Place
-  /// Whether the place shows the session's terminal instead of its overview. Only the Inbox and a chat
-  /// have a Terminal toggle, so it is false everywhere else.
+  /// Whether the place shows the session's terminal instead of its overview. Only the Inbox, a chat,
+  /// and a Manager conversation have a Terminal toggle. It is false everywhere else.
   var terminal: Bool
 }
 
@@ -27,10 +28,14 @@ extension BoardModel {
   /// What the window shows now.
   var location: NavLocation {
     if let selection {
-      return NavLocation(place: .session(selection), terminal: showingTerminal && summary(selection)?.chat != nil)
+      return NavLocation(
+        place: .session(selection), terminal: showingTerminal && summary(selection)?.kind.showsAsChat == true)
     }
-    if mainView == .board { return NavLocation(place: .board, terminal: false) }
-    return NavLocation(place: .inbox(currentInboxItem), terminal: showingTerminal)
+    switch mainView {
+    case .board: return NavLocation(place: .board, terminal: false)
+    case .issues: return NavLocation(place: .issues, terminal: false)
+    case .inbox: return NavLocation(place: .inbox(currentInboxItem), terminal: showingTerminal)
+    }
   }
 
   /// The session or follow-up `id`, whatever the org filter says.
@@ -39,14 +44,14 @@ extension BoardModel {
   /// Maps a location to the place it shows now, or nil when its session is removed or the org filter hides
   /// it. A hidden session counts as unavailable, because selecting it would widen the filter.
   func resolver() -> (NavLocation) -> NavLocation? {
-    let shown = Dictionary(board.map { ($0.id, $0.chat != nil) }, uniquingKeysWith: { a, _ in a })
+    let shown = Dictionary(board.map { ($0.id, $0.kind.showsAsChat) }, uniquingKeysWith: { a, _ in a })
     let pending = pendingSelection
     let inbox = Set(sessions.map(\.id))
     let first = triage.first?.id
     return { location in
       switch location.place {
-      case .board:
-        return NavLocation(place: .board, terminal: false)
+      case .board, .issues:
+        return NavLocation(place: location.place, terminal: false)
       case .inbox(let item):
         let current = item.flatMap { inbox.contains($0) ? $0 : nil } ?? first
         return NavLocation(place: .inbox(current), terminal: location.terminal)
@@ -114,7 +119,7 @@ extension BoardModel {
     switch location.place {
     case .session(let id):
       selection = id
-      if summary(id)?.chat != nil { showingTerminal = location.terminal }
+      if summary(id)?.kind.showsAsChat == true { showingTerminal = location.terminal }
     case .inbox(let item):
       show(.inbox)
       inboxFocus = item
@@ -122,6 +127,8 @@ extension BoardModel {
       inboxJumps += 1
     case .board:
       show(.board)
+    case .issues:
+      show(.issues)
     }
   }
 
@@ -131,6 +138,7 @@ extension BoardModel {
     let text: String
     switch location.place {
     case .board: text = "Board"
+    case .issues: text = "Issues"
     case .inbox(let item): text = name(item).map { "Inbox: \($0)" } ?? "Inbox"
     case .session(let id): text = name(id) ?? id
     }

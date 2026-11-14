@@ -87,6 +87,8 @@ extension MCPToolServer {
         "model": string("The model to run, such as sonnet or opus."),
         "account": string("The Claude account, by name or folder."),
         "followup": boolean("Adds a follow-up instead of starting the session."),
+        "planMode": boolean(
+          "Starts claude in plan mode, so it writes a plan and waits for approval before it edits a file."),
         "after": string("For a follow-up, a PR such as pr:123 whose merge moves it to Needs you."),
         "wait": string(
           "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state."
@@ -105,6 +107,9 @@ extension MCPToolServer {
         "service": string("The service, for kind deploy."),
         "state": string("The state to wait for, for kind session. Default done."),
         "until": string("A duration such as 2h, or a date or time such as 2026-10-26 or 2026-10-26T09:00."),
+        "since": string(
+          "For kinds review, bot-review, and queue, a past time after which a review or a change in Trunk's queue counts. Default: when the wait is set."
+        ),
         "note": string("What the wait is for."),
         "then": string(
           "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you."),

@@ -37,12 +37,6 @@ private func pr(
   return pr
 }
 
-private func bodyIssue(_ number: Int, _ repo: String = posthog) -> SessionIssue {
-  SessionIssue(repo: repo, number: number, via: .body, url: "https://github.com/\(repo)/issues/\(number)")
-}
-
-private let branchIssue = SessionIssue(repo: nil, number: 123, via: .branch, url: nil)
-
 private func summary(_ text: String) -> TriageItem {
   TriageItem(title: "Pick one", kind: .decision, summary: text, source: .summary)
 }
@@ -794,35 +788,6 @@ private func everything() -> SessionSummary {
       #expect(c.title == "update-docs")
       #expect(c.details == [])
       #expect(c.summary == "Manual")
-    }
-  }
-
-  @Suite struct Ago {
-    @Test(arguments: [
-      (Int64(0), "0s"),
-      (59 * second, "59s"),
-      (60 * second, "1m"),
-      (3599 * second, "59m"),
-      (3600 * second, "1h"),
-      (86399 * second, "23h"),
-      (86400 * second, "1d"),
-      (10 * day, "10d"),
-    ])
-    func bandBoundaries(_ elapsed: Int64, _ text: String) {
-      #expect(ago(now - elapsed, now: now) == text)
-    }
-
-    @Test func partialSecondsRoundDown() {
-      #expect(ago(now - 59_999, now: now) == "59s")
-    }
-
-    @Test(arguments: [Int64(1), second, day])
-    func futureTimestampClampsToZeroSeconds(_ ahead: Int64) {
-      #expect(ago(now + ahead, now: now) == "0s")
-    }
-
-    @Test func defaultNowReadsTheClock() {
-      #expect(ago(nowMs() - 2 * hour - 30 * minute) == "2h")
     }
   }
 }

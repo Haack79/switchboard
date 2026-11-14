@@ -121,7 +121,8 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
     @Test func nextFromTheLastRowWrapsToTheFirst() throws {
       let model = model()
       let order = model.sidebarOrder
-      model.selection = try #require(order.last)
+      let last = try #require(order.last)
+      model.selection = last
 
       model.selectAdjacentSession(by: 1)
 
@@ -131,7 +132,8 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
     @Test func previousFromTheFirstRowWrapsToTheLast() throws {
       let model = model()
       let order = model.sidebarOrder
-      model.selection = try #require(order.first)
+      let first = try #require(order.first)
+      model.selection = first
 
       model.selectAdjacentSession(by: -1)
 
@@ -169,8 +171,8 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.selection == "x")
     }
 
-    @Test(arguments: [1, -1], [MainView.inbox, .board])
-    func withNoSessionsTheInboxAndBoardStayEmpty(step: Int, view: MainView) {
+    @Test(arguments: [1, -1], [MainView.inbox, .board, .issues])
+    func withNoSessionsEachMainViewStaysEmpty(step: Int, view: MainView) {
       let model = offlineModel()
       model.show(view)
 
@@ -442,7 +444,7 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.listFocusTarget == .sidebar)
     }
 
-    @Test(arguments: [(MainView.inbox, ListFocus.inbox), (.board, .board)])
+    @Test(arguments: [(MainView.inbox, ListFocus.inbox), (.board, .board), (.issues, .issues)])
     func noSelectionTargetsTheMainView(_ view: MainView, _ target: ListFocus) {
       let model = appliedModel([needsItem("a")])
       model.show(view)
@@ -556,6 +558,29 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.terminalFocus == "c")
     }
 
+    /// A Manager conversation shows its terminal only while the Terminal toggle is on, as a chat does.
+    @Test(arguments: Place.allCases)
+    func aManagerWithTheTerminalToggleOffRefuses(_ place: Place) throws {
+      let model = try model(needsItem("m", manager: true), at: place)
+      model.showingTerminal = false
+      let before = Snapshot(model)
+
+      model.focusTerminal()
+
+      #expect(!model.canFocusTerminal)
+      #expect(Snapshot(model) == before)
+    }
+
+    @Test func aSelectedManagerWithTheTerminalToggleOnGetsTheTerminalFocus() throws {
+      let model = try model(needsItem("m", manager: true), at: .selection)
+      model.showingTerminal = true
+
+      model.focusTerminal()
+
+      #expect(model.canFocusTerminal)
+      #expect(model.terminalFocus == "m")
+    }
+
     @Test func aSelectedSessionGetsTheTerminalFocus() throws {
       let model = try model(needsItem("a"), at: .selection)
 
@@ -612,6 +637,30 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
 
       #expect(model.selection == "other")
       #expect(model.terminalFocus == "other")
+    }
+
+    /// The Inbox's Open Terminal button shows the item's terminal in the
+    /// Inbox's right pane and gives it the keys.
+    @Test(arguments: [Place.inboxTerminalOff, .inboxTerminalOn])
+    func openInboxTerminalShowsAndFocusesTheCurrentItemsTerminal(_ place: Place) throws {
+      let model = try model(needsItem("a"), at: place)
+
+      model.openInboxTerminal()
+
+      #expect(model.showingTerminal)
+      #expect(model.terminalFocus == "a")
+    }
+
+    /// With the Terminal toggle off, `focusTerminal` alone would select the
+    /// item and leave the Inbox.
+    @Test func openInboxTerminalStaysInTheInbox() throws {
+      let model = try model(needsItem("a"), at: .inboxTerminalOff)
+
+      model.openInboxTerminal()
+
+      #expect(model.selection == nil)
+      #expect(model.visibleView == .inbox)
+      #expect(model.currentInboxItem == "a")
     }
 
     @Test(arguments: Place.allCases)

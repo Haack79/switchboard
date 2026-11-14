@@ -153,6 +153,8 @@ public struct MCPToolServer: Sendable {
       return try spawn(args, scoped)
     case "set_wait":
       var wait = try JSONCoding.convert(args, to: WaitRequest.self)
+      // Only a blocked `sb wait --block` reads a caller wait's outcome.
+      if wait.then == Wait.Then.caller.rawValue { throw APIError("then is resume or notify, not caller") }
       wait.by = Author.claude.rawValue
       if wait.kind == Wait.Kind.session.rawValue, let target = wait.target {
         wait.target = try sessionID(target, scoped).string
@@ -304,7 +306,8 @@ public struct MCPToolServer: Sendable {
   /// A scoped server puts the new session in its group.
   private func spawn(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
     var request = pick(
-      args, ["repository", "branch", "prompt", "base", "name", "model", "account", "followup", "after", "wait"])
+      args,
+      ["repository", "branch", "prompt", "base", "name", "model", "account", "followup", "planMode", "after", "wait"])
     if let repo = args["repository"]?.string { request["repository"] = .string(repo.repositoryArgument) }
     if let caller { request["parent"] = .string(caller) }
     if let scoped { request["group"] = .string(scoped.group.id) }

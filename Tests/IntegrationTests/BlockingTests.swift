@@ -1,21 +1,20 @@
 import Foundation
 import Testing
+import os
 
 /// These tests call the trait's scope directly, with slots of their own, so
 /// they never wait behind the integration tests.
 @Suite struct BlockingTests {
-  final class Running: @unchecked Sendable {
-    private let lock = NSLock()
-    private var now = 0
-    private var most = 0
-    var peak: Int { lock.withLock { most } }
+  final class Running: Sendable {
+    private let counts = OSAllocatedUnfairLock(initialState: (now: 0, most: 0))
+    var peak: Int { counts.withLock { $0.most } }
     func enter() {
-      lock.withLock {
-        now += 1
-        most = max(most, now)
+      counts.withLock {
+        $0.now += 1
+        $0.most = max($0.most, $0.now)
       }
     }
-    func leave() { lock.withLock { now -= 1 } }
+    func leave() { counts.withLock { $0.now -= 1 } }
   }
 
   struct Thrown: Error {}
@@ -89,5 +88,27 @@ import Testing
   @Test func letsTheBodyStartSbdOnlyWhileItHoldsASlot() async throws {
     withKnownIssue { Blocking.requireSlot() }
     try await scope(Blocking(slots: Slots(width: 1))) { Blocking.requireSlot() }
+  }
+
+  /// Each row holds the environment, the processor count, and the width. The clamp to one less than the processor
+  /// count keeps the last thread of the pool free of integration tests.
+  static let widthRows: [([String: String], Int, Int)] = {
+    let unset: [([String: String], Int, Int)] = [([:], 3, 2), ([:], 5, 4), ([:], 18, 4), ([:], 64, 4)]
+    let valid: [([String: String], Int, Int)] = [("1", 1), ("2", 2), ("10", 10), ("17", 17), ("18", 17), ("100", 17)]
+      .map { (["SB_TEST_SLOTS": $0], 18, $1) }
+    let invalid: [([String: String], Int, Int)] = ["0", "-1", "x", "", " 2", "2.5", "two"]
+      .map { (["SB_TEST_SLOTS": $0], 18, 4) }
+    let fewProcessors: [([String: String], Int, Int)] = [1, 2].flatMap { processors in
+      ([nil, "1", "2", "4", "0", "x"] as [String?]).map { value in
+        (value.map { ["SB_TEST_SLOTS": $0] } ?? [:], processors, 1)
+      }
+    }
+    let otherNames: [([String: String], Int, Int)] = [(["SB_TEST_SLOT": "2", "SB_SLOTS": "2"], 18, 4)]
+    return unset + valid + invalid + fewProcessors + otherNames
+  }()
+
+  @Test(arguments: widthRows)
+  func slotsWidthFollowsTheVariableAndTheProcessorCount(environment: [String: String], processors: Int, width: Int) {
+    #expect(Slots.width(environment: environment, processors: processors) == width)
   }
 }

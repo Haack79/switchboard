@@ -48,7 +48,11 @@ extension Service {
       throw APIError("\(repository) isn't a repository. Use owner/name")
     }
     if repository == nil, let cwd = args["cwd"]?.string {
-      (repository, sourceBranch) = gitContext(cwd)
+      // The folder is the one that the session that adds the follow-up runs in.
+      let parent: (any SessionSite)? = queue.sync {
+        args["parent"]?.string.flatMap { try? lookup(["session": .string($0)]) }.flatMap { try? site(of: $0) }
+      }
+      (repository, sourceBranch) = gitContext(cwd, at: parent ?? mac)
     }
     let now = nowMs()
     let trigger = try makeTrigger(on: args["on"]?.string, after: args["after"]?.string, repository, now: now)
@@ -59,7 +63,7 @@ extension Service {
       try insertFollowup(
         followup, title: args["title"]?.string, branch: args["branch"]?.string, model: args["model"]?.string,
         parent: args["parent"]?.string, group: args["group"]?.string, account: args["account"]?.string,
-        autoMode: args["autoMode"]?.bool)
+        autoMode: args["autoMode"]?.bool, planMode: args["planMode"]?.bool, manualMode: args["manualMode"]?.bool)
     }
   }
 
@@ -67,7 +71,8 @@ extension Service {
   /// that sbd resolves. It runs on the state queue.
   func insertFollowup(
     _ followup: Followup, title: String? = nil, branch: String? = nil, model: String? = nil, parent ref: String? = nil,
-    group: String? = nil, account: String? = nil, autoMode: Bool? = nil
+    group: String? = nil, account: String? = nil, autoMode: Bool? = nil, planMode: Bool? = nil,
+    manualMode: Bool? = nil
   ) throws -> SessionSummary {
     let parent = try ref.map { try lookup(["session": .string($0)]) }
     var session = Session(
@@ -80,7 +85,7 @@ extension Service {
     // takes the active account when it starts.
     session.claudeConfigDir = try accountForNew(named: account, parent: parent, for: session)
     session.followup = followup
-    session.autoMode = autoMode ?? config.autoMode
+    session.setStartModes(auto: autoMode, plan: planMode, manual: manualMode, defaultAuto: config.autoMode)
     try save(session)
     return summary(session.id)
   }
@@ -93,15 +98,15 @@ extension Service {
 
   /// The repository and branch of a folder: the `owner/name` of its
   /// `upstream` remote, else its `origin` remote, on github.com.
-  private func gitContext(_ cwd: String) -> (String?, String?) {
-    guard let repository = githubRepository(cwd) else { return (nil, nil) }
-    let branch = try? gitOutput(cwd, ["branch", "--show-current"])
+  private func gitContext(_ cwd: String, at site: any SessionSite) -> (String?, String?) {
+    guard let repository = githubRepository(cwd, at: site) else { return (nil, nil) }
+    let branch = try? gitOutput(cwd, ["branch", "--show-current"], at: site)
     return (repository, branch?.isEmpty == false ? branch : nil)
   }
 
   /// The `owner/name` of the folder's `upstream` remote, else its `origin` remote, on github.com.
-  func githubRepository(_ cwd: String) -> String? {
-    ["upstream", "origin"].lazy.compactMap({ try? self.gitOutput(cwd, ["remote", "get-url", $0]) })
+  func githubRepository(_ cwd: String, at site: any SessionSite) -> String? {
+    ["upstream", "origin"].lazy.compactMap({ try? self.gitOutput(cwd, ["remote", "get-url", $0], at: site) })
       .compactMap(Followup.repository(remote:)).first
   }
 
@@ -155,11 +160,11 @@ extension Service {
       guard branch != config.branchPrefix else {
         throw APIError("can't make a branch name from \"\(session.name)\". Pass --branch")
       }
-      guard !branchExists(repo, branch) else {
+      guard !branchExists(repo, branch, at: mac) else {
         throw APIError("branch \(branch) exists in \(repo). Pass --branch to use it or to name another")
       }
     }
-    let folder = try prepareFolder(NewSession(path: repo, branch: branch, base: args["base"]?.string))
+    let folder = try prepareFolder(NewSession(path: repo, branch: branch, base: args["base"]?.string), at: mac)
     rememberRepo(folder.cwd, used: nowMs())
     awaitMCPServers()
     return try queue.sync {
@@ -173,7 +178,7 @@ extension Service {
         s.followup?.started = nowMs()
       }
       record(session.id, "followup-started", ["cwd": .string(folder.cwd), "branch": .string(branch)])
-      try launch(session.id, prompt: session.followup?.prompt)
+      try launch(session.id, prompt: session.followup?.prompt, trigger: .followup)
       return summary(session.id)
     }
   }
@@ -206,17 +211,17 @@ extension Service {
       guard hasRemote(path, for: repository) else {
         throw APIError("\(path) has no remote on github.com for \(repository)")
       }
-      return try gitOutput(path, ["rev-parse", "--show-toplevel"])
+      return try gitOutput(path, ["rev-parse", "--show-toplevel"], at: mac)
     }
     if let configured { throw APIError("repos sets \(repository) to \(configured), which isn't a folder") }
     throw APIError(
-      "can't find a checkout of \(repository) under \(config.repoRoots.joined(separator: ", ")). \(hint), or add it to repos in \(home.config)"
+      "\(Followup.missingCheckout) \(repository) under \(config.repoRoots.joined(separator: ", ")). \(hint), or add it to repos in \(home.config)"
     )
   }
 
   /// Whether the folder has a remote on github.com for `owner/name`.
   func hasRemote(_ path: String, for repository: String) -> Bool {
-    ((try? gitOutput(path, ["remote", "-v"])) ?? "").split(separator: "\n").contains { line in
+    ((try? gitOutput(path, ["remote", "-v"], at: mac)) ?? "").split(separator: "\n").contains { line in
       line.split(whereSeparator: \.isWhitespace).dropFirst().first
         .flatMap { Followup.repository(remote: String($0)) }?.lowercased() == repository.lowercased()
     }

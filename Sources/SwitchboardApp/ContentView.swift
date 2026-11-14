@@ -44,14 +44,6 @@ struct StateBadge: View {
   }
 }
 
-func ago(_ ms: Int64, now: Int64 = nowMs()) -> String {
-  let s = max(0, (now - ms) / 1000)
-  if s < 60 { return "\(s)s" }
-  if s < 3600 { return "\(s / 60)m" }
-  if s < 86400 { return "\(s / 3600)h" }
-  return "\(s / 86400)d"
-}
-
 struct ContentView: View {
   static let windowMinWidth: CGFloat = 900
   static let sidebarMinWidth: CGFloat = 240
@@ -97,27 +89,21 @@ struct ContentView: View {
           ServiceBanner(problem: problem)
         }
         if let error = model.actionError {
-          HStack {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text(error).lineLimit(2).textSelection(.enabled)
-            Spacer()
-            Button("Dismiss") { model.actionError = nil }
-          }
-          .padding(8)
-          .background(.orange.opacity(0.12))
+          WarningBanner(error) { Button("Dismiss") { model.actionError = nil } }
         }
         if let s = model.selected, let f = s.followup, f.started == nil {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
-        } else if let s = model.selected, let group = s.chat {
-          ChatView(session: s, group: group).id(s.id)
+        } else if let s = model.selected, s.kind.showsAsChat {
+          ChatView(session: s).id(s.id)
         } else if let s = model.selected {
           SessionView(session: s).id(s.id)
         } else {
           switch model.mainView {
           case .inbox: InboxView()
           case .board: BoardView()
+          case .issues: IssuesView()
           }
         }
       }
@@ -138,10 +124,11 @@ struct ContentView: View {
         Picker("View", selection: viewChoice) {
           Text("Inbox (\(model.triage.count))").tag(MainView?.some(.inbox))
           Text("Board").tag(MainView?.some(.board))
+          Text("Issues (\(model.issueCount))").tag(MainView?.some(.issues))
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .help("Show the Inbox (⌘1) or the Board (⌘2)")
+        .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
       ToolbarItem(placement: .navigation) { OrgFilterMenu() }
       ToolbarItem { ManagerButton() }
@@ -156,13 +143,14 @@ struct ContentView: View {
       }
       ToolbarItem {
         Button {
-          model.showingNew = true
+          model.openNewSession()
         } label: {
           Label("New Session", systemImage: "plus")
         }
         .help("Start a session (⌘N)")
       }
     }
+    .removingToolbarTitle()
     .confirmationDialog(
       "Delete \(model.confirmingDelete?.name ?? "this session")?", isPresented: isConfirmingDelete,
       presenting: model.confirmingDelete.map { ($0, TodoDeletion($0)) }
@@ -171,8 +159,8 @@ struct ContentView: View {
     } message: { session, todos in
       Text(todos.message(before: BoardModel.deletePlan(session).message))
     }
-    .sheet(isPresented: $model.showingNew) {
-      NewSessionView().environmentObject(model)
+    .sheet(item: $model.newSession) {
+      NewSessionView(request: $0).environmentObject(model)
     }
     .sheet(isPresented: $model.showingImport) {
       ImportView().environmentObject(model)
@@ -183,6 +171,36 @@ struct ContentView: View {
     .sheet(isPresented: isShowingDoneRemoval) {
       DoneRemovalSheet().environmentObject(model)
     }
+  }
+}
+
+/// An orange strip across the pane with a warning and an optional button at its end.
+struct WarningBanner<Action: View>: View {
+  let text: String
+  @ViewBuilder let action: () -> Action
+
+  init(_ text: String, @ViewBuilder action: @escaping () -> Action = { EmptyView() }) {
+    self.text = text
+    self.action = action
+  }
+
+  var body: some View {
+    HStack {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+      Text(text).lineLimit(2).textSelection(.enabled)
+      Spacer()
+      action()
+    }
+    .padding(8)
+    .background(.orange.opacity(0.12))
+  }
+}
+
+extension View {
+  /// The window title takes about 190 pt of the toolbar. Without it, a 1024 pt wide window shows the
+  /// three-segment picker and more of the toolbar's buttons before the overflow menu. macOS 14 keeps the title.
+  @ViewBuilder func removingToolbarTitle() -> some View {
+    if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
   }
 }
 
@@ -227,6 +245,11 @@ struct Sidebar: View {
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              if row.session.queued == true {
+                Button("Start Now") { model.startNow(row.id) }
+                  .disabled(model.startingNow.contains(row.id))
+                  .help(BoardModel.startNowHelp)
+              }
               if CleanupOffer.canCleanUp(row.session) {
                 Button("Clean Up: Delete the Worktree and Branch…") { model.confirmingCleanup = row.id }
                   .disabled(model.cleaningUp.contains(row.id))
@@ -317,7 +340,7 @@ struct Sidebar: View {
       if model.sidebarIsEmpty {
         VStack(spacing: 8) {
           Text("No sessions").font(.headline)
-          Button("Start a Session…") { model.showingNew = true }
+          Button("Start a Session…") { model.openNewSession() }
           Button("Import Sessions…") { model.showingImport = true }
         }
       }
@@ -529,7 +552,7 @@ struct BoardView: View {
       VStack(spacing: 12) {
         Image(systemName: "square.grid.3x3").font(.system(size: 40)).foregroundStyle(.secondary)
         Text("Start a session to see it here").foregroundStyle(.secondary)
-        Button("New Session…") { model.showingNew = true }
+        Button("New Session…") { model.openNewSession() }
         Button("New Group") { model.startNewGroup() }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -663,7 +686,21 @@ private struct LaneLabel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(title).fontWeight(.semibold).lineLimit(2)
+      HStack(alignment: .firstTextBaseline, spacing: 4) {
+        Text(title).fontWeight(.semibold).lineLimit(2).layoutPriority(1)
+        if let group {
+          Button {
+            model.openNewSession(group: group.id)
+          } label: {
+            Image(systemName: "plus")
+          }
+          .buttonStyle(.borderless)
+          .disabled(model.presentingSheet)
+          .help("Start a session in \(group.name)")
+          .accessibilityLabel("New session in \(group.name)")
+          .accessibilityIdentifier("board-new-session-\(group.id)")
+        }
+      }
       if let group {
         GroupDescriptionView(group: group)
         GroupAccountMenu(group: group)

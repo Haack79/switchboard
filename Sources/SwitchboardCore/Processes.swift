@@ -12,13 +12,33 @@ public struct CommandResult: Sendable {
   }
 }
 
+extension String {
+  /// Whether the text holds a NUL byte, which a program's argument or
+  /// environment value can't carry.
+  public var hasNul: Bool { utf8.contains(0) }
+}
+
+extension CommandResult {
+  /// The trimmed error text, else the exit status.
+  public var problem: String {
+    let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.isEmpty ? "exit status \(status)" : text
+  }
+}
+
 /// Runs a program and waits for it. `env` replaces the environment when set.
-/// With `timeout`, the program gets SIGTERM after that many seconds.
+/// With `timeout`, the program gets SIGTERM after that many seconds. An
+/// argument or environment value with a NUL throws.
 @discardableResult
 public func runCommand(
   _ executable: String, _ args: [String], env: [String: String]? = nil, input: Data? = nil, timeout: Double? = nil,
   cwd: String? = nil
 ) throws -> CommandResult {
+  // Process raises an Objective-C exception for a NUL. Swift can't catch it, so it would end the program.
+  if ([executable] + args + (env.map { Array($0.keys) + Array($0.values) } ?? [])).contains(where: \.hasNul) {
+    throw APIError(
+      "\((executable as NSString).lastPathComponent) can't run with a NUL character in its arguments or environment")
+  }
   let p = Process()
   p.executableURL = URL(fileURLWithPath: executable)
   p.arguments = args
@@ -102,28 +122,7 @@ public func siblingExecutable(_ name: String) -> String {
   return me.deletingLastPathComponent().appendingPathComponent(name).path
 }
 
-/// A process from `ps`.
-public struct ProcessRow: Sendable {
-  public var pid: Int
-  public var ppid: Int
-  public var pgid: Int
-  public var command: String
-}
-
 public enum Processes {
-  /// Every process on the machine, grouped by parent pid.
-  public static func byParent(on machine: any Machine = LocalMachine()) -> [Int: [ProcessRow]] {
-    guard let r = try? machine.run("/bin/ps", ["-axo", "pid=,ppid=,pgid=,command="]) else { return [:] }
-    let rows = r.stdout.split(separator: "\n").compactMap { line -> ProcessRow? in
-      let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-      guard parts.count >= 3, let pid = Int(parts[0]), let ppid = Int(parts[1]), let pgid = Int(parts[2]) else {
-        return nil
-      }
-      return ProcessRow(pid: pid, ppid: ppid, pgid: pgid, command: parts.count > 3 ? String(parts[3]) : "")
-    }
-    return Dictionary(grouping: rows, by: \.ppid)
-  }
-
   /// Whether the number can name one process. A pid below 1 names a process
   /// group, and a pid above `Int32.max` names no process.
   public static func isValidPid(_ pid: Int) -> Bool { pid >= 1 && pid <= Int(Int32.max) }
@@ -151,11 +150,17 @@ public enum Processes {
 
   /// The parent pid from sysctl, which reads processes of every user, as `ps` does.
   private static func parent(of pid: Int) -> Int? {
+    info(of: pid_t(pid)).map { Int($0.kp_eproc.e_ppid) }
+  }
+
+  /// The process's entry in the kernel's process table, which `sysctl` reads for every user's process. It is nil when
+  /// no process has the pid.
+  static func info(of pid: pid_t) -> kinfo_proc? {
     var info = kinfo_proc()
     var size = MemoryLayout<kinfo_proc>.stride
-    var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, Int32(pid)]
+    var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
     guard sysctl(&name, UInt32(name.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
-    return Int(info.kp_eproc.e_ppid)
+    return info
   }
 
   /// Waits up to `seconds` for every pid to exit. Returns the pids that still exist.

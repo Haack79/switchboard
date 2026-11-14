@@ -224,16 +224,54 @@ public struct TranscriptTail: Equatable, Sendable {
   }
 }
 
+/// The names of the folders in <account>/projects. Claude doesn't document
+/// the rule. This copy comes from claude 2.1.322. Its tests use folder names
+/// that claude created.
+public enum ClaudeFolder {
+  private static let maxLength = 200
+
+  /// The folder that Claude names after `path`. Claude counts UTF-16 units,
+  /// because it runs in JavaScript. It replaces each unit other than an ASCII
+  /// letter or digit with "-". It cuts a longer name to 200 units and appends
+  /// "-" and a hash of the whole path. It reads the path in NFC, as claude
+  /// does, so a decomposed accent gives the same name as a precomposed one.
+  public static func name(_ path: String) -> String {
+    let units = Array(path.precomposedStringWithCanonicalMapping.utf16)
+    let dash = UInt16(UInt8(ascii: "-"))
+    let name = String(decoding: units.map { isLetterOrDigit($0) ? $0 : dash }.prefix(maxLength), as: UTF16.self)
+    guard units.count > maxLength else { return name }
+    return "\(name)-\(String(javaHash(units).magnitude, radix: 36))"
+  }
+
+  /// The auto-memory folder of the repository or folder at `base`. It keeps `~/` for claude to expand on the
+  /// machine where it runs.
+  public static func memoryDirectory(_ base: String) -> String { "~/.claude/projects/\(name(base))/memory" }
+
+  /// Whether `transcript` sits in the folder that `name` gives for `cwd` or for its real path. claude
+  /// names the folder of a conversation that it starts after the cwd it starts in.
+  public static func holds(_ transcript: String, startedIn cwd: String, realPath: String?) -> Bool {
+    let folder = ((transcript as NSString).deletingLastPathComponent as NSString).lastPathComponent
+    return [cwd, realPath].compactMap { $0 }.contains { name($0) == folder }
+  }
+
+  private static func isLetterOrDigit(_ unit: UInt16) -> Bool {
+    (0x30...0x39).contains(unit) || (0x41...0x5A).contains(unit) || (0x61...0x7A).contains(unit)
+  }
+
+  /// Java's String.hashCode, with 32-bit wrapping.
+  private static func javaHash(_ units: [UInt16]) -> Int32 {
+    units.reduce(Int32(0)) { $0 &* 31 &+ Int32($1) }
+  }
+}
+
 public enum Transcript {
   /// The transcript of a session: <account>/projects/<folder>/<id>.jsonl.
-  /// Claude names the folder after the session's cwd, with each character
-  /// other than an ASCII letter or digit replaced by "-". Claude shortens a
-  /// long path in a way that this doesn't reproduce. A symlink can also change
-  /// the cwd. So when that folder lacks the transcript, this looks in every
-  /// folder in <account>/projects.
+  /// Claude names the folder after the session's cwd, as `ClaudeFolder.name`
+  /// does. A symlink can change the cwd. So when that folder lacks the
+  /// transcript, this looks in every folder in <account>/projects.
   /// The account, the cwd, and the transcript are on `machine`.
   public static func find(
-    _ sessionId: String, account: String, cwd: String, on machine: any Machine = LocalMachine()
+    _ sessionId: String, account: String, cwd: String, on machine: any Machine
   ) -> String? {
     find(sessionId, account: account, cwd: cwd, on: machine, folders: machine.list)
   }
@@ -243,26 +281,25 @@ public enum Transcript {
   /// <account>/projects and returns folder names, not paths. It runs only
   /// when the cwd's folder lacks the transcript.
   public static func find(
-    _ sessionId: String, account: String, cwd: String, on machine: any Machine = LocalMachine(),
+    _ sessionId: String, account: String, cwd: String, on machine: any Machine,
     folders: (String) -> [String]
   ) -> String? {
     let projects = "\(account)/projects"
-    let folder = String(cwd.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-    let named = "\(projects)/\(folder)/\(sessionId).jsonl"
+    let named = "\(projects)/\(ClaudeFolder.name(cwd))/\(sessionId).jsonl"
     if machine.exists(named) { return named }
     return folders(projects).map { "\(projects)/\($0)/\(sessionId).jsonl" }.first(
       where: machine.exists)
   }
 
   /// Reads the transcript from the end, because transcripts reach 24 MB.
-  public static func tail(_ path: String, on machine: any Machine = LocalMachine()) -> TranscriptTail {
+  public static func tail(_ path: String, on machine: any Machine) -> TranscriptTail {
     var tail = TranscriptTail()
     eachLineFromEnd(path, on: machine) { fold($0, into: &tail) }
     return tail
   }
 
   /// The main conversation's last `limit` messages that have text, oldest first.
-  public static func messages(_ path: String, limit: Int, on machine: any Machine = LocalMachine()) -> [ChatMessage] {
+  public static func messages(_ path: String, limit: Int, on machine: any Machine) -> [ChatMessage] {
     var messages: [ChatMessage] = []
     eachLineFromEnd(path, on: machine) { line in
       if let message = message(line) { messages.append(message) }
@@ -275,7 +312,7 @@ public enum Transcript {
   /// at byte `offset` or later. It is false when the file is shorter than
   /// `offset`, because then it is not the file that `offset` measured.
   public static func hasUserMessage(
-    _ path: String, holding text: String, from offset: UInt64, on machine: any Machine = LocalMachine()
+    _ path: String, holding text: String, from offset: UInt64, on machine: any Machine
   ) -> Bool {
     guard let data = machine.read(path, from: offset, count: nil) else { return false }
     let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -287,9 +324,14 @@ public enum Transcript {
 
   /// Calls `body` with each non-empty line, last line first, until it returns
   /// true. Each read is twice the size of the one before, up to 4 MB, so a
-  /// long line costs few reads.
-  static func eachLineFromEnd(_ path: String, on machine: any Machine = LocalMachine(), _ body: (Data) -> Bool) {
-    guard var offset = machine.size(path) else { return }
+  /// long line costs few reads. With `end`, it reads only the bytes before `end`.
+  /// It returns false when a read of the machine failed before `body` returned
+  /// true or the walk reached the start of the file.
+  @discardableResult
+  static func eachLineFromEnd(
+    _ path: String, before end: UInt64? = nil, on machine: any Machine, _ body: (Data) -> Bool
+  ) -> Bool {
+    guard var offset = end ?? machine.size(path) else { return false }
     var size: UInt64 = 1 << 16
     // The start of the chunk after the current one, up to its first newline.
     // It ends a line that starts in the current chunk. It is empty when that
@@ -299,13 +341,14 @@ public enum Transcript {
       let count = min(size, offset)
       offset -= count
       size = min(size * 2, 1 << 22)
-      guard let chunk = machine.read(path, from: offset, count: Int(count)) else { return }
+      guard let chunk = machine.read(path, from: offset, count: Int(count)) else { return false }
       var lines = (chunk + rest).split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
       rest = offset > 0 ? Data(lines.removeFirst()) : Data()
       for line in lines.reversed() where !line.isEmpty {
-        if body(Data(line)) { return }
+        if body(Data(line)) { return true }
       }
     }
+    return true
   }
 
   /// Folds one line into the tail, and returns true at the last reply. The
@@ -355,7 +398,8 @@ public enum Transcript {
   }()
   private static let whole = ISO8601DateFormatter()
 
-  static func milliseconds(_ timestamp: String) -> Int64? {
+  /// The time in ms of an ISO 8601 timestamp, with or without fractional seconds.
+  public static func milliseconds(_ timestamp: String) -> Int64? {
     (fractional.date(from: timestamp) ?? whole.date(from: timestamp)).map {
       Int64(($0.timeIntervalSince1970 * 1000).rounded())
     }

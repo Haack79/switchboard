@@ -9,9 +9,9 @@ public final class Service {
   public let home: Home
   let config: Config
   let store: Store
-  let host: TerminalHost
+  /// This Mac's site. Sessionless work, such as the shared MCP servers and import, runs here.
+  let mac: MacSite
   let sbPath: String
-  let git: String
   let queue = DispatchQueue(label: "sbd.state")
   /// Each paste waits 300 ms before its Enter, so pastes run here, in order.
   let pasteQueue = DispatchQueue(label: "sbd.paste")
@@ -42,16 +42,17 @@ public final class Service {
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
-    /// The time that the idle wait counts from.
-    var idleSince: Int64 { max(facts.lastActivity, lastJobSeen) }
     /// The branch that sbd shows: the folder's checked-out branch once the poller reads one.
     /// Cleanup and branch deletion read `session.branch` instead.
     var branch: String? { facts.branch ?? session.branch }
     /// How many events `facts` includes.
     var events = 0
     var turnProbe = TurnProbe()
-    /// When the tick last saw a terminal on the Claude pane.
-    var lastOnScreen: Int64 = 0
+    /// When the tick last saw a terminal on the Claude pane, or the user last opened the session.
+    var lastViewed: Int64 = 0
+    /// When the user last opened the session, with `open` or `live-next`. The
+    /// live cap never stops the session that the user opened last.
+    var lastOpened: Int64 = 0
     /// The Stop event of the last turn whose summary this sbd started or
     /// skipped. A turn gets one attempt per run of sbd, so a restart retries
     /// a summary that failed.
@@ -63,13 +64,22 @@ public final class Service {
     var mergeBriefSkipped = false
     /// When a start of claude queued behind the live cap.
     var queuedSince: Int64?
+    /// What caused the queued start. It is set and cleared with `queuedSince`.
+    var queuedTrigger: LaunchTrigger?
+    /// When the user opened the stopped session, which starts it ahead of
+    /// every queued start. A start of claude clears it.
+    var jumpedAt: Int64?
     /// Set when a running claude's MCP servers changed. `applyMCPChanges`
     /// relaunches claude once it can take the change.
     var mcpRelaunch: MCPRelaunch?
 
-    /// Whether a message is queued for the session or on its way.
+    /// Whether a message is queued for the session or on its way. A launch's
+    /// prompt stays on its way until SessionStart, for up to `startingMs`.
     func messageWaiting(now: Int64) -> Bool {
-      !pending.isEmpty || inFlight.map { now - $0 < Service.inFlightMs } == true
+      guard pending.isEmpty else { return true }
+      guard let sent = inFlight else { return false }
+      let starting = !facts.startedSinceLaunch && now - (facts.lastLaunch ?? 0) < Service.startingMs
+      return starting || now - sent < Service.inFlightMs
     }
 
     var dialogs = DialogWatch()
@@ -85,6 +95,13 @@ public final class Service {
 
   /// How long a message counts as in flight without its UserPromptSubmit.
   static let inFlightMs: Int64 = 10_000
+  /// How long a running claude with no SessionStart may run before the tick
+  /// counts it as live, because its hook may have failed.
+  static let unreportedMs: Int64 = 10_000
+  /// How long after its launch a claude with no SessionStart may still be
+  /// starting. The tick counts it as live after `unreportedMs`, but a slow
+  /// start has not read its launch's prompt yet.
+  static let startingMs: Int64 = 60_000
   /// How long sbd keeps a lookup that found no repo before it reads the folder again.
   static let checkoutRetryMs: Int64 = 60_000
 
@@ -93,39 +110,99 @@ public final class Service {
   var starting: Set<String> = []
   /// The sessions whose PR `merge` is merging.
   var merging: Set<String> = []
+  /// The sessions whose files `rm` or `cleanup` is removing. Nothing launches them, because sbd closes no pane
+  /// on a host after it forgets the session. `rm-queue` skips them.
+  var removing: Set<String> = []
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
+  /// The drafts whose reply target a gh read is resolving, or whose unknown
+  /// post a gh read is looking for, each as its session id and its
+  /// `DraftReplies.key`.
+  var resolvingDrafts: Set<String> = []
+  /// The drafts that `draft-post` is posting, keyed as `resolvingDrafts` is.
+  var postingDrafts: Set<String> = []
+  /// The unknown posts that the tick doesn't look for, keyed as
+  /// `resolvingDrafts` is: those that it already looked for in this run,
+  /// and those that this run posted.
+  var checkedUnknown: Set<String> = []
+  /// gh's login, which the look for an unknown post's reply reads.
+  var ghLogin: String?
   /// The sessions whose decision list `decision-submit` is sending.
   var submittingDecisions: Set<String> = []
   /// The sessions that the removal job takes next, in order.
   var removalOrder: [String] = []
-  /// The sessions whose files `rm` or `cleanup` is removing. `rm-queue` skips them.
-  var removing: Set<String> = []
-  var snapshot = Snapshot()
   /// The main checkout of each session folder that a lookup read, or nil for
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
   /// can become a repo. sbd reads such a folder again after `checkoutRetryMs`.
-  var checkouts: [String: (path: String?, readMs: Int64)] = [:]
+  var checkouts: [SitePath: (path: String?, readMs: Int64)] = [:]
   /// The folders whose checkout a lookup off the queue is reading.
-  var checkoutLookups: Set<String> = []
+  var checkoutLookups: Set<SitePath> = []
+  /// The main checkout that names the auto-memory folder of each local session folder in a git repo, or nil
+  /// for a folder in a bare repo. A folder stays in its repo, so sbd keeps the answer. A folder outside git can
+  /// become a repo, so sbd doesn't keep it.
+  var memoryCheckouts: [String: String?] = [:]
   /// The owner/name that the origin remote of each checkout names on GitHub,
   /// or nil when it names none, with the time of the lookup. sbd reads a
   /// checkout without one again after `checkoutRetryMs`.
-  var repositories: [String: (repository: String?, readMs: Int64)] = [:]
+  var repositories: [SitePath: (repository: String?, readMs: Int64)] = [:]
   /// The checkouts whose origin a lookup off the queue is reading.
-  var repositoryLookups: Set<String> = []
+  var repositoryLookups: Set<SitePath> = []
+  /// Each session's folded skill listing and the transcript it was read
+  /// from, so that a later `slash-commands` request reads only new lines.
+  var slashListings: [String: (path: String, state: SkillListing.State)] = [:]
   /// The PermissionRequest hooks that wait for an answer, by card id.
   var held: [Int64: HeldRequest] = [:]
+  /// The hook events of each session on a host that wait for their turn in id order, by session id.
+  var hostEvents: [String: HostEventBuffer] = [:]
+  /// The order window of each new buffer in `hostEvents`. Only tests change it.
+  var hostEventWindowMs = HostEventOrder.windowMs
+  /// When sbd last pruned the recorded ids of the hosts' events.
+  var hostEventsPruned: Int64 = 0
   let triageJobs: OperationQueue = {
     let jobs = OperationQueue()
     jobs.name = "sbd.triage"
     jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
+  /// Runs the gh reads of draft reply targets.
+  let ghJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.gh"
+    jobs.maxConcurrentOperationCount = 2
+    return jobs
+  }()
   var mcp: [SharedServer] = []
   /// The ssh link of each remote host that has one, by host name.
   let hostLinks: [String: HostLink]
+  /// The site of each remote host that has a link, by host name.
+  let remoteSites: [String: RemoteSite]
+  /// The last answered snapshot of each host. A session reads it only on the connection that answered it.
+  var remoteSnapshots: [String: Snapshot] = [:]
+  /// When sbd last started or killed a pane on each host. An older snapshot can't replace the host's.
+  var remotePaneChanges: [String: Int64] = [:]
+  /// The hosts whose reconcile or snapshot read runs off the state queue.
+  var siteReads: Set<String> = []
+  /// One serial queue per host. A host's reconcile runs on it, so one runs at a time.
+  let hostQueues: [String: DispatchQueue]
+  /// The connection of each host on which a reconcile finished. A session on a host reads `.unknown` on any
+  /// other connection.
+  var reconciledOn: [String: Int] = [:]
+  /// The connection on which each host's last reconcile failed, and when. The tick waits
+  /// `reconcileRetryMs` before it tries again on that connection.
+  var reconcileFailures: [String: (connection: Int, at: Int64)] = [:]
+  /// For each host whose spool a reconcile of this sbd read: the lowest recorded id whose line may still be in
+  /// the spool, or nil when no recorded line may be. The shim spools every hook, so each id that sbd records
+  /// after the read lowers it.
+  var spoolFloors: [String: HostEventID?] = [:]
+  /// For each host whose spool a reconcile reads now: the lowest id recorded since the read began, or nil when
+  /// sbd recorded none. The read may not hold the lines of these ids.
+  var spoolReadFloors: [String: HostEventID?] = [:]
+  /// When the spool of each reconciled host was last cut, by the reconcile or the tick.
+  var spoolCutAt: [String: Int64] = [:]
+  /// The messages of each session on a host whose paste may have reached claude before sbd stopped. The
+  /// reconcile settles them from the transcript on the host.
+  var unsettled: [String: [String]] = [:]
   /// The Claude sessions that `claude agents` listed, by Claude session id.
   var remembered: [String: ClaudeSession] = [:]
   var github: GitHubPoller?
@@ -137,8 +214,19 @@ public final class Service {
   var parentNotices = ParentNotices()
   /// Whether `sb autocontinue on` is in force.
   var autoContinueOn = false
+  /// Whether `sb activity on` is in force.
+  var activityOn = false
+  /// When sbd last deleted activity rows past their retention.
+  var activityPruned: Int64 = 0
+  /// True once a SessionStart showed that claude names its project folders in a way `ClaudeFolder.name` doesn't
+  /// reproduce. Launches then leave out `autoMemoryDirectory` until sbd restarts.
+  var memoryPinOff = false
   /// The most claude processes that may run at once. `sb live --set` changes it.
   var liveCap: Int
+  /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
+  var issueSettings: IssueSettings
+  /// The open issues from `issueSettings.sources`, as issues.json holds them.
+  var issueCache = IssueCache()
   var quota: any QuotaBudget = UnlimitedBudget()
   var groups: [String: SessionGroup] = [:]
   var plans: [String: PlanDocument] = [:]
@@ -159,8 +247,10 @@ public final class Service {
     var panes: [String: PaneRow] = [:]
     /// The claude process in each session's Claude pane, by session id.
     var claudePids: [String: Int] = [:]
-    var children: [Int: [ProcessRow]] = [:]
+    var processes = ProcessTable()
     var taken: Int64 = 0
+    /// The connection of the host's link that answered the read. Nil for this Mac.
+    var connection: Int?
   }
 
   /// Where a session's claude is, from the snapshot.
@@ -171,32 +261,38 @@ public final class Service {
     case starting
     /// The Claude pane is dead or missing.
     case stopped
+    /// A session on a remote host whose host has answered no snapshot on the link's current connection.
+    /// It equals no other state, so nothing launches, stops, or records an exit from it.
+    case unknown
   }
 
   public init(home: Home, sbPath: String) throws {
     self.home = home
     self.config = home.loadConfig()
     self.store = try Store(path: home.database)
-    self.host = try TerminalHost(home: home, config: config)
+    self.mac = try MacSite(home: home, config: config)
     self.sbPath = sbPath
     self.keeper = SnapshotKeeper(path: home.database, every: config.snapshotEvery)
     self.liveCap = config.liveCap
-    self.hostLinks = Service.makeHostLinks(config: config, home: home)
-    guard let git = findExecutable("git") else { throw APIError("can't find git") }
-    self.git = git
+    self.issueSettings = config.issues
+    let links = Service.makeHostLinks(config: config, home: home)
+    self.hostLinks = links
+    self.remoteSites = links.mapValues { RemoteSite(link: $0, config: $0.config, home: home) }
+    self.hostQueues = Dictionary(
+      uniqueKeysWithValues: links.keys.map { ($0, DispatchQueue(label: "sbd.host.\($0)")) })
   }
 
   public var tickSeconds: Double { config.tickSeconds }
 
-  /// Loads the sessions, rebuilds their facts and queued messages from the
-  /// event log, and writes the hook settings that every session's claude gets.
-  /// It records `delivered` or `delivery_unknown` for each message whose
+  /// Loads the sessions and rebuilds their facts and queued messages from the
+  /// event log. It records `delivered` or `delivery_unknown` for each message whose
   /// paste may have reached claude. Its last step queues the pastes of each
   /// running claude's queued messages on the state queue.
   public func load() throws {
-    try writeClaudeSettings()
     loadChosenAccount()
-    loadAutoContinue()
+    autoContinueOn = autoContinueSwitch.isOn
+    activityOn = activitySwitch.isOn
+    loadIssueCache()
     try store.pruneSnapshots()
     var uncertain: [String: [String]] = [:]
     for session in try store.sessions() {
@@ -213,8 +309,12 @@ public final class Service {
     for g in try store.groups() { groups[g.id] = g }
     for p in try store.plans() { plans[p.id] = p }
     pruneDeclinedSuggestions()
-    snapshot = buildSnapshot() ?? Snapshot()
-    for (id, texts) in uncertain { try settleUncertain(id, texts) }
+    mac.snapshot = buildSnapshot() ?? Snapshot()
+    for (id, texts) in uncertain {
+      // A transcript on a host can't be read before the host's link is up. The reconcile settles those.
+      if entries[id]?.session.host == nil { try settleUncertain(id, texts) } else { unsettled[id] = texts }
+    }
+    markInterruptedPosts()
     seedParentMarks(now: nowMs())
     try? refreshManagerGuide()
     try? refreshChatGuides()
@@ -222,6 +322,7 @@ public final class Service {
     for (id, e) in entries {
       let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
       startSummaries(id, verdict)
+      resolveDraftTargets(id, verdict)
     }
     try startMCPServers()
     github = GitHubPoller(service: self, settings: config.github, depot: config.depot, trunk: config.trunk)
@@ -233,6 +334,7 @@ public final class Service {
       for id in entries.keys {
         if case .running = claudeState(id) { deliverPending(id, after: 0) }
       }
+      superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
     }
@@ -242,17 +344,33 @@ public final class Service {
 
   static let actsOnProcesses: Set<String> = [
     "send", "send-group", "stop", "resume", "open", "terminals", "shell", "resolve-wait", "answer", "account-move",
-    "dependency-resolved",
+    "dependency-resolved", "live-next",
   ]
-  static let launches: Set<String> = ["send", "resume", "open", "resolve-wait", "answer", "dependency-resolved"]
+  static let launches: Set<String> = [
+    "send", "resume", "open", "resolve-wait", "answer", "dependency-resolved", "live-next",
+  ]
+  /// The requests that wait for the host of the session they name, and read its panes and processes first.
+  static let needsHost: Set<String> = [
+    "open", "resume", "stop", "send", "answer", "screen", "terminals", "shell", "live-next",
+  ]
+  /// The requests that can send claude a message. Each one first waits up to 5 s for a starting claude
+  /// to go live. `open` sends nothing, so it doesn't wait.
+  static let settles: Set<String> = ["send", "resume", "resolve-wait", "answer", "dependency-resolved"]
 
-  /// `hookGone` reports whether the client closed its connection, which a
-  /// held PermissionRequest checks while it waits. `caller` lets a request
-  /// that stops a session's panes refuse a client inside that session.
-  public func handle(_ request: Request, caller: Caller = .inProcess, hookGone: @escaping () -> Bool = { false })
-    -> Response
-  {
+  /// `origin` is the socket that the request arrived on. `caller` lets a request that stops a session's
+  /// panes refuse a client inside that session. `hookGone` reports whether the client closed its
+  /// connection, which a held PermissionRequest checks while it waits.
+  public func handle(
+    _ request: Request, origin: RequestOrigin = .mac, caller: Caller = .inProcess,
+    hookGone: @escaping () -> Bool = { false }
+  ) -> Response {
     do {
+      // A request from a host's socket ends here. It reaches no code below, so it can only be a hook, and
+      // `handleHostHook` takes it only for a session that sbd holds on that host.
+      if case .remote(let host) = origin {
+        guard request.op == "hook" else { throw APIError("a request from \(host) can only be a hook") }
+        return try handleHostHook(request.args, from: host, hookGone: hookGone)
+      }
       switch request.op {
       case "hook":
         return try handleHook(request.args, hookGone: hookGone)
@@ -270,6 +388,8 @@ public final class Service {
         return chatRequest(request.args)
       case "chat-log":
         return .success(try chatLog(request.args))
+      case "slash-commands":
+        return .success(try slashCommands(request.args))
       case "rm":
         return .success(try remove(request.args, caller: caller))
       case "cleanup":
@@ -284,6 +404,8 @@ public final class Service {
         return .success(try mergeRequest(request.args))
       case "review":
         return .success(try reviewRequest(request.args))
+      case "draft-post", "draft-check":
+        return .success(try draftReplyRequest(request.op, request.args, caller: caller))
       // An advance runs a tick before the reply, so the stop rule sees the
       // new time. `tick` takes the state queue itself, so `clock` runs here
       // and not in `dispatch`.
@@ -311,6 +433,8 @@ public final class Service {
       case "plan-followup":
         // `planFollowup` takes the state queue itself.
         return .success(try JSON(encoding: planFollowup(request.args)))
+      case "issues-refresh", "issues-start", "issues-clone":
+        return .success(try issueWorkRequest(request.op, request.args))
       case "poll":
         // A poll waits on GitHub, so it runs off the state queue.
         return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])
@@ -336,7 +460,8 @@ public final class Service {
   /// Takes the steps that `request` needs before it acts, then runs `body`
   /// on the state queue.
   func prepared(_ request: Request, _ body: () throws -> JSON) throws -> JSON {
-    if Service.launches.contains(request.op), let id = try? queue.sync(execute: { try lookup(request.args) }) {
+    let hostRead = try readHost(for: request)
+    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try lookup(request.args) }) {
       settle(id)
     }
     if Service.waitsForMCP.contains(request.op) { awaitMCPServers(for: request) }
@@ -345,22 +470,49 @@ public final class Service {
     if request.op == "send-group", request.args["confirmed"]?.bool == true, request.args["from"] == nil {
       awaitMCPServers()
     }
-    if request.op == "answer", request.args["behavior"]?.string == "allow",
-      queue.sync(execute: { answersGroupMessage(request.args) })
-    {
-      awaitMCPServers()
-    }
+    let sendsGroupMessage =
+      request.op == "answer" && request.args["behavior"]?.string == "allow"
+      && queue.sync(execute: { answersGroupMessage(request.args) })
+    if sendsGroupMessage { awaitMCPServers() }
     // A request that acts on claude decides from the current processes,
-    // so it takes a new snapshot. Other requests use the tick's.
-    let fresh = Service.actsOnProcesses.contains(request.op) ? buildSnapshot() : nil
+    // so it takes a new snapshot. Other requests use the tick's. A request
+    // about a session on a host takes the host's read instead. An approved
+    // group message can reach sessions on this Mac, so it takes both.
+    let fresh =
+      Service.actsOnProcesses.contains(request.op) && (hostRead == nil || sendsGroupMessage) ? buildSnapshot() : nil
     return try queue.sync {
       if let fresh { install(fresh) }
+      if let hostRead { install(hostRead.snapshot, onHost: hostRead.host) }
       if Service.actsOnProcesses.contains(request.op), let id = try? lookup(request.args),
         let refusal = removalRefusal(id)
       {
         throw refusal
       }
       return try body()
+    }
+  }
+
+  /// For a request that acts on a session on a host: waits for the host, then reads its panes and processes.
+  /// It throws the reason when the host is not ready or the read got no answer. A `send` does not fail then,
+  /// because it queues its message: its snapshot is nil, so the session reads `.unknown`. A `screen` reads no
+  /// snapshot, so it only waits for the host and returns nil. It returns nil for any other request. It runs off
+  /// the state queue.
+  private func readHost(for request: Request) throws -> (host: String, snapshot: Snapshot?)? {
+    guard Service.needsHost.contains(request.op) else { return nil }
+    let found: (host: String, site: any SessionSite)? = queue.sync {
+      guard let id = try? lookup(request.args), let session = entries[id]?.session, let host = session.host else {
+        return nil
+      }
+      return (host, site(for: session))
+    }
+    guard let found else { return nil }
+    do {
+      try awaitSite(found.site)
+      if request.op == "screen" { return nil }
+      return (found.host, try readSnapshot(onHost: found.host))
+    } catch {
+      guard request.op == "send" else { throw error }
+      return (found.host, nil)
     }
   }
 
@@ -382,14 +534,15 @@ public final class Service {
       return try shellRequest(args)
     case "open":
       let id = try lookup(args)
-      if claudeState(id) == .stopped { try launch(id, prompt: nil) }
+      try openSession(id)
+      if args["terminals"]?.bool == true { return try JSON(encoding: terminals(id)) }
       return try JSON(encoding: summary(id))
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
       // A sender that sbd no longer knows, or the session itself, goes unrecorded.
       let from = (try? lookup(["session": args["from"] ?? .null])).flatMap { $0 == id ? nil : $0 }
-      return ["delivery": .string(try send(id, text, from: from).rawValue)]
+      return ["delivery": .string(try send(id, text, trigger: from == nil ? .send : .session, from: from).rawValue)]
     case "dependency-resolved":
       return try dependencyResolved(args)
     case "stop":
@@ -398,7 +551,7 @@ public final class Service {
       return try JSON(encoding: summary(id))
     case "resume":
       let id = try lookup(args)
-      try launch(id, prompt: args["prompt"]?.string)
+      try launch(id, prompt: args["prompt"]?.string, trigger: .resume)
       return try JSON(encoding: summary(id))
     case "done":
       let id = try lookup(args)
@@ -434,12 +587,7 @@ public final class Service {
       let clear = args["clear"]?.bool == true
       let text = args["issue"]?.string
       guard clear != (text != nil) else { throw APIError("issue needs an issue or clear, not both") }
-      let issue = try text.map { text in
-        guard let ref = IssueRef(parsing: text) else {
-          throw APIError("can't read \"\(text)\" as an issue. Use 123, #123, owner/name#123, or an issue URL.")
-        }
-        return ref
-      }
+      let issue = try text.map(IssueRef.parse)
       try update(id) { $0.issue = issue }
       return try JSON(encoding: summary(id))
     case "events":
@@ -457,7 +605,7 @@ public final class Service {
     case "screen":
       let id = try lookup(args)
       let pane = Pane(rawValue: args["pane"]?.string ?? "claude") ?? .claude
-      return .string(try host.screen(paneName(id, pane), colors: args["colors"]?.bool == true))
+      return .string(try site(of: id).screen(paneName(id, pane), colors: args["colors"]?.bool == true))
     case "accounts", "account-use", "account-move":
       return try accountRequest(op, args)
     case "mcp":
@@ -468,8 +616,18 @@ public final class Service {
       return try snapshotRequest(args)
     case "autocontinue":
       return try autoContinueRequest(args)
+    case "activity":
+      return try activityRequest(args)
+    case "activity-report":
+      return try activityReport(args)
+    case "activity-clear":
+      return try activityClear()
     case "live":
       return try liveRequest(args)
+    case "live-next":
+      // A session that started after the user asked, such as on a second click, is already where it should be.
+      try openSession(try lookup(args))
+      return try liveRequest(.object([:]))
     case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-account",
       "group-suggest",
       "send-group",
@@ -477,6 +635,8 @@ public final class Service {
       return try groupRequest(op, args)
     case "plan-ls", "plan-get", "plan-detach", "plan-auto":
       return try planRequest(op, args)
+    case "issues", "issues-source-add", "issues-source-rm", "issues-settings", "issues-dismiss":
+      return try issuesRequest(op, args)
     case "plan-proposals", "plan-reject":
       return try planProposalRequest(op, args)
     case "plan-artifact-reject", "plan-artifact-report":
@@ -498,26 +658,52 @@ public final class Service {
   /// for an unknown session. A UserPromptSubmit of a Manager or a chat prints
   /// the digest of its children, and the SessionStart of a new Manager
   /// conversation prints the digest of the whole board. sbd records each
-  /// digest as a `digest` event.
-  func hook(_ args: JSON) throws -> (event: Event, answer: JSON)? {
+  /// digest as a `digest` event. A work session's UserPromptSubmit prints
+  /// the replies that the user posted from its drafts since it last heard.
+  /// `stamp` is set for an event that a host's shim made. Such an event is recorded with its id and its own
+  /// time. The result is nil, and nothing is recorded, when the id is already recorded. It throws, and
+  /// records nothing, when the store can't keep the event.
+  func hook(_ args: JSON, stamp: HostEventStamp? = nil) throws -> (event: Event, answer: JSON)? {
     guard let id = args["session"]?.string, let session = entries[id]?.session, let payload = args["payload"] else {
       return nil
     }
     let kind = payload["hook_event_name"]?.string ?? "unknown"
+    if let stamp, try store.hasHostEvent(stamp.id) { return nil }
+    let before = entries[id]!.facts
     // A job starts inside a turn, and the tick skips a running turn. The count
     // is recorded before the Stop, so the session never shows Needs you
     // between the Stop and the next tick.
     if kind == "Stop", case .running(let pid) = claudeState(id) {
-      recordJobs(id, backgroundJobs(pid, in: Processes.byParent()))
+      // A session on a host counts from the host's last answered read. A process read here would hold the
+      // state queue for a round trip, and a read with no answer would count no jobs.
+      let table =
+        session.host == nil
+        ? (try? site(for: session).processes()) ?? ProcessTable()
+        : processes(of: id)
+      recordJobs(id, backgroundJobs(pid, in: table))
     }
-    let event = record(id, kind, payload)
+    let event: Event
+    if let stamp {
+      let stored = try store.append(
+        Event(session: id, t: stamp.t, kind: kind, data: payload), hostEvent: stamp.id, host: stamp.host)
+      guard let stored else { return nil }
+      lowerSpoolFloors(stamp.id, host: stamp.host)
+      event = fold(stored)
+    } else {
+      event = record(id, kind, payload)
+    }
     var answer: JSON = [:]
     switch kind {
     case "SessionStart":
       // `/clear` and `/resume` in the pane start another conversation, which
       // the next resume has to open.
       let current = payload["session_id"]?.string ?? session.claudeSessionId
-      if current != session.claudeSessionId { try update(id) { $0.claudeSessionId = current } }
+      if current == session.claudeSessionId {
+        recordResumeReady(id, before, at: event.t)
+      } else {
+        try update(id) { $0.claudeSessionId = current }
+      }
+      checkFolderRule(session, payload)
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
       if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
@@ -532,10 +718,11 @@ public final class Service {
     case "UserPromptSubmit":
       entries[id]?.inFlight = nil
       try nameConversation(id, prompt: payload["prompt"]?.string)
-      if let text = digest(id, now: event.t) {
-        record(id, "digest", ["text": .string(text)])
-        answer = ParentDigest.hookOutput(text, event: kind)
-      }
+      let digestText = digest(id, now: event.t)
+      if let digestText { record(id, "digest", ["text": .string(digestText)]) }
+      // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
+      let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
+      if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
     case "Notification" where payload["notification_type"]?.string == "idle_prompt":
@@ -575,6 +762,7 @@ public final class Service {
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       startSummaries(id, verdict)
+      resolveDraftTargets(id, verdict)
     }
     releaseCards(id)
     return event
@@ -585,18 +773,18 @@ public final class Service {
   /// The main checkout of the repo at `path` and the folder that a worktree of
   /// it on `branch` gets.
   func worktreeLocation(
-    _ path: String, _ branch: String, on machine: any Machine
+    _ path: String, _ branch: String, at site: any SessionSite
   ) throws -> (main: String, dir: String) {
     // The first worktree names the main checkout, whose folder name names the repo.
-    let main = try worktreeEntries(path, on: machine).first?.path ?? path
-    return (main, "\(config.worktreeRoot.expandingTilde)/\((main as NSString).lastPathComponent)/\(branch)")
+    let main = try worktreeEntries(path, at: site).first?.path ?? path
+    return (main, "\(try site.worktreeRoot())/\((main as NSString).lastPathComponent)/\(branch)")
   }
 
   /// Whether `branch` exists in the repo at `path`, or the folder for a worktree on it does.
-  func branchOrFolderTaken(_ path: String, _ branch: String, on machine: any Machine = LocalMachine()) -> Bool {
-    if branchExists(path, branch, on: machine) { return true }
-    guard let location = try? worktreeLocation(path, branch, on: machine) else { return false }
-    return machine.exists(location.dir)
+  func branchOrFolderTaken(_ path: String, _ branch: String, at site: any SessionSite) -> Bool {
+    if branchExists(path, branch, at: site) { return true }
+    guard let location = try? worktreeLocation(path, branch, at: site) else { return false }
+    return site.machine.exists(location.dir)
   }
 
   /// The folder a new session runs in, its branch, and its repo. With a branch, the
@@ -604,34 +792,35 @@ public final class Service {
   /// which this creates unless it exists. An existing one must have the
   /// branch checked out. The repo is the main checkout, or the passed path when that
   /// is the main checkout. It is nil without a branch.
-  /// The folders and the repo are on `machine`.
+  /// The folders and the repo are at `site`.
   func prepareFolder(
-    _ args: NewSession, on machine: any Machine = LocalMachine()
+    _ args: NewSession, at site: any SessionSite
   ) throws -> (cwd: String, branch: String?, repo: String?) {
-    let path = (args.path as NSString).standardizingPath
-    guard machine.isFolder(path) else { throw APIError("no folder \(path)") }
+    // `standardizingPath` reads this Mac's folders. A path on a host stays as `newSession` resolved it there.
+    let path = site.hostName == nil ? (args.path as NSString).standardizingPath : args.path
+    guard site.machine.isFolder(path) else { throw APIError("no folder \(path)") }
     guard let branch = args.branch, !branch.isEmpty else {
-      let current = try? gitOutput(path, ["branch", "--show-current"], on: machine)
+      let current = try? gitOutput(path, ["branch", "--show-current"], at: site)
       return (path, current?.isEmpty == false ? current : nil, nil)
     }
-    let common = try gitOutput(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], on: machine)
-    let (main, dir) = try worktreeLocation(path, branch, on: machine)
+    let common = try gitOutput(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], at: site)
+    let (main, dir) = try worktreeLocation(path, branch, at: site)
     // The path can be a linked worktree, which goes away. The main checkout stays.
-    let repo = samePath(main, path) ? path : main
-    if machine.exists(dir) {
-      let other = try? gitOutput(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"], on: machine)
+    let repo = try site.samePath(main, path) ? path : main
+    if site.machine.exists(dir) {
+      let other = try? gitOutput(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"], at: site)
       guard other == common else { throw APIError("\(dir) exists and is not a worktree of \(main)") }
-      let current = (try? gitOutput(dir, ["branch", "--show-current"], on: machine)) ?? ""
+      let current = (try? gitOutput(dir, ["branch", "--show-current"], at: site)) ?? ""
       guard current == branch else {
         throw APIError("\(dir) has \(current.isEmpty ? "no branch" : current) checked out, not \(branch)")
       }
       return (dir, branch, repo)
     }
-    let exists = branchExists(path, branch, on: machine)
-    try machine.createFolder((dir as NSString).deletingLastPathComponent)
+    let exists = branchExists(path, branch, at: site)
+    try site.machine.createFolder((dir as NSString).deletingLastPathComponent)
     _ = try gitOutput(
       path, exists ? ["worktree", "add", dir, branch] : ["worktree", "add", "-b", branch, dir, args.base ?? "HEAD"],
-      on: machine)
+      at: site)
     return (dir, branch, repo)
   }
 
@@ -645,9 +834,9 @@ public final class Service {
     var lockedBySupacode = false
   }
 
-  func worktreeEntries(_ repo: String, on machine: any Machine = LocalMachine()) throws -> [WorktreeEntry] {
+  func worktreeEntries(_ repo: String, at site: any SessionSite) throws -> [WorktreeEntry] {
     var entries: [WorktreeEntry] = []
-    for line in try gitOutput(repo, ["worktree", "list", "--porcelain", "-z"], on: machine).split(
+    for line in try gitOutput(repo, ["worktree", "list", "--porcelain", "-z"], at: site).split(
       separator: "\0", omittingEmptySubsequences: true)
     {
       if line.hasPrefix("worktree ") {
@@ -669,44 +858,52 @@ public final class Service {
   /// The repo that `new` made the worktree from is that checkout. For any
   /// other folder, this returns nil until a lookup off the queue has read it.
   func checkout(_ s: Session) -> String? {
-    if let repo = s.repo { return realPath(repo) ?? repo }
+    let site = self.site(for: s)
+    // Resolving a path on a host is a round trip, and this runs on the state queue for every summary.
+    if let repo = s.repo { return site.hostName == nil ? (try? site.realPath(repo)) ?? repo : repo }
     // A follow-up that hasn't started has no folder. `git -C ""` would read sbd's own folder.
     guard !s.cwd.isEmpty else { return nil }
-    if let known = checkouts[s.cwd],
+    let folder = SitePath(s.cwd, at: site)
+    if let known = checkouts[folder],
       known.path != nil || !GitHub.elapsed(since: known.readMs, Self.checkoutRetryMs, now: nowMs())
     {
       return known.path
     }
-    let cwd = s.cwd
-    if checkoutLookups.insert(cwd).inserted {
+    if checkoutLookups.insert(folder).inserted {
       DispatchQueue.global().async { [self] in
         // The first worktree that git lists is the main checkout.
-        let main = (try? worktreeEntries(cwd))?.first.flatMap { realPath($0.path) }
+        let main = (try? worktreeEntries(folder.path, at: site))?.first.flatMap { try? site.realPath($0.path) }
         queue.async { [self] in
-          checkouts[cwd] = (main, nowMs())
-          checkoutLookups.remove(cwd)
+          checkouts[folder] = (main, nowMs())
+          checkoutLookups.remove(folder)
         }
       }
     }
     return nil
   }
 
+  /// The worktree of the repo that git lists at `path`.
+  func worktreeEntry(_ repo: String, holding path: String, at site: any SessionSite) throws -> WorktreeEntry? {
+    try worktreeEntries(repo, at: site).first { try site.samePath($0.path, path) }
+  }
+
   /// The owner/name that the origin remote of `checkout` names on GitHub.
   /// This returns nil until a lookup off the queue has read it.
   func repository(_ checkout: String, of s: Session) -> String? {
-    if let known = repositories[checkout],
+    let site = self.site(for: s)
+    let key = SitePath(checkout, at: site)
+    if let known = repositories[key],
       known.repository != nil || !GitHub.elapsed(since: known.readMs, Self.checkoutRetryMs, now: nowMs())
     {
       return known.repository
     }
-    if repositoryLookups.insert(checkout).inserted {
-      let machine = machine(for: s)
+    if repositoryLookups.insert(key).inserted {
       DispatchQueue.global().async { [self] in
-        let url = try? gitOutput(checkout, ["config", "--get", "remote.origin.url"], on: machine)
+        let url = try? gitOutput(checkout, ["config", "--get", "remote.origin.url"], at: site)
         let repository = url.flatMap(GitHub.repo(remoteURL:))
         queue.async { [self] in
-          repositories[checkout] = (repository, nowMs())
-          repositoryLookups.remove(checkout)
+          repositories[key] = (repository, nowMs())
+          repositoryLookups.remove(key)
         }
       }
     }
@@ -716,53 +913,29 @@ public final class Service {
   /// Whether sbd has read the session's checkout and, when it has one, the
   /// checkout's origin remote.
   func repositoryRead(_ s: Session, checkout: String?) -> Bool {
-    if let checkout { return repositories[checkout] != nil }
-    return checkouts[s.cwd] != nil
-  }
-
-  func worktreeEntry(
-    _ repo: String, at path: String, on machine: any Machine
-  ) throws -> WorktreeEntry? {
-    try worktreeEntries(repo, on: machine).first { samePath($0.path, path) }
-  }
-
-  func samePath(_ a: String, _ b: String) -> Bool {
-    // A gone worktree may have lost its parent folders too, so the deepest folder that exists is resolved.
-    let real = { (path: String) -> String in
-      var url = URL(fileURLWithPath: path).standardizedFileURL
-      var gone: [String] = []
-      while !FileManager.default.fileExists(atPath: url.path), url.path != "/" {
-        gone.insert(url.lastPathComponent, at: 0)
-        url.deleteLastPathComponent()
-      }
-      return gone.reduce(url.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }.path
-    }
-    return real(a) == real(b)
+    let site = self.site(for: s)
+    if let checkout { return repositories[SitePath(checkout, at: site)] != nil }
+    return checkouts[SitePath(s.cwd, at: site)] != nil
   }
 
   func lockedError(_ path: String) -> APIError {
     APIError("\(path) is a locked worktree, so git won't remove it. Unlock it with `git worktree unlock` first.")
   }
 
-  /// The machine that the session runs on. Every session runs on this Mac.
-  func machine(for session: Session) -> any Machine { LocalMachine() }
-
-  /// The machine of the session with the id, or this Mac when sbd has no such session. It runs on the state queue.
-  func machine(of id: String) -> any Machine { entries[id].map { machine(for: $0.session) } ?? LocalMachine() }
-
-  func branchExists(_ repo: String, _ branch: String, on machine: any Machine = LocalMachine()) -> Bool {
-    (try? machine.run(git, ["-C", repo, "rev-parse", "--verify", "--quiet", "refs/heads/\(branch)"]))?.status == 0
+  func branchExists(_ repo: String, _ branch: String, at site: any SessionSite) -> Bool {
+    (try? site.machine.run(site.git(), ["-C", repo, "rev-parse", "--verify", "--quiet", "refs/heads/\(branch)"]))?
+      .status == 0
   }
 
   /// Whether `commit` is in origin/main of the repo that `dir` belongs to.
-  func isInMain(_ dir: String, _ commit: String, on machine: any Machine) -> Bool {
-    (try? machine.run(git, ["-C", dir, "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"]))?.status
-      == 0
+  func isInMain(_ dir: String, _ commit: String, at site: any SessionSite) -> Bool {
+    (try? site.machine.run(
+      site.git(), ["-C", dir, "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"]))?.status == 0
   }
 
-  /// The trimmed output of git in `cwd` on the machine, or throws what git printed when it fails.
-  func gitOutput(_ cwd: String, _ args: [String], on machine: any Machine = LocalMachine()) throws -> String {
-    let r = try machine.run(git, ["-C", cwd] + args)
+  /// The trimmed output of git in `cwd` at the site, or throws what git printed when it fails.
+  func gitOutput(_ cwd: String, _ args: [String], at site: any SessionSite) throws -> String {
+    let r = try site.machine.run(site.git(), ["-C", cwd] + args)
     guard r.status == 0 else {
       throw APIError("git \(args.joined(separator: " ")): \(r.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
@@ -771,13 +944,9 @@ public final class Service {
 
   /// Makes the session's folder and worktree off the state queue, then creates the session and launches claude.
   func newSession(_ args: NewSession) throws -> SessionSummary {
+    if let host = args.host { return try newSession(args, onHost: host) }
     var args = args
-    if args.worktree == true, (args.branch ?? "").isEmpty {
-      let repo = (args.path as NSString).standardizingPath
-      args.branch = NewSession.freeAutoBranch(
-        prefix: config.branchPrefix, name: args.name,
-        exists: { branchOrFolderTaken(repo, $0) })
-    }
+    args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
     // An unknown group, an unknown account, or an account that differs from
     // the group's fails here, before prepareFolder makes a worktree.
     try queue.sync {
@@ -786,11 +955,59 @@ public final class Service {
       probe.group = try groupOfNew(args.group, parent: probe.parent)
       _ = try accountForNew(named: args.account, parent: probe.parent, for: probe)
     }
-    let folder = try prepareFolder(args)
+    let folder = try prepareFolder(args, at: mac)
+    let main = try? mainCheckout(of: folder.cwd)
     awaitMCPServers()
-    let summary = try queue.sync { try create(args, folder) }
-    rememberRepo(folder.cwd, used: summary.created ?? nowMs())
-    return summary
+    return try queue.sync {
+      // The launch reads the cached checkout, so git doesn't run on the state queue.
+      if let main { memoryCheckouts[folder.cwd] = main }
+      let summary = try create(args, folder)
+      // The session's creation time keeps the repo in its place in the list after the session is removed.
+      if let main { try? store.remember(repo: main, used: summary.created ?? nowMs()) }
+      return summary
+    }
+  }
+
+  /// Starts a session on a remote host. The folder is absolute or starts with `~`, and the host resolves it.
+  /// It waits for the host, makes the folder and worktree there off the state queue, and reads the host's
+  /// panes and processes before it creates the session.
+  private func newSession(_ args: NewSession, onHost host: String) throws -> SessionSummary {
+    let site = try remoteSite(host)
+    if args.account?.isEmpty == false {
+      throw APIError("a session on \(host) takes no account: it runs under the Claude login of \(host)")
+    }
+    try queue.sync {
+      let parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
+      _ = try groupOfNew(args.group, parent: parent)
+    }
+    try awaitSite(site)
+    var args = args
+    args.path = try site.expand(args.path)
+    guard args.path.hasPrefix("/") else {
+      throw APIError("a folder on \(host) is an absolute path or starts with ~, and \(args.path) is neither")
+    }
+    args.branch = branch(of: args, repo: args.path, at: site)
+    let folder: (cwd: String, branch: String?, repo: String?)
+    do {
+      folder = try prepareFolder(args, at: site)
+    } catch {
+      // A check that got no answer reads as a missing folder. The host's own reason replaces that.
+      try site.requireReady()
+      throw error
+    }
+    let read = try readSnapshot(onHost: host)
+    return try queue.sync {
+      install(read, onHost: host)
+      return try create(args, folder)
+    }
+  }
+
+  /// The branch of a new session: a free branch at the site for a worktree that names none, else the one it names.
+  /// `repo` is the repo's path at the site.
+  private func branch(of args: NewSession, repo: String, at site: any SessionSite) -> String? {
+    guard args.worktree == true, (args.branch ?? "").isEmpty else { return args.branch }
+    return NewSession.freeAutoBranch(
+      prefix: config.branchPrefix, name: args.name, exists: { branchOrFolderTaken(repo, $0, at: site) })
   }
 
   /// `configure` changes the session before its first launch.
@@ -806,16 +1023,25 @@ public final class Service {
     session.repo = folder.repo
     session.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
     session.group = try groupOfNew(args.group, parent: session.parent)
-    session.autoMode = args.autoMode ?? config.autoMode
+    session.setStartModes(
+      auto: args.autoMode, plan: args.planMode, manual: args.manualMode, defaultAuto: config.autoMode)
+    session.host = args.host
+    session.issue = args.issue
     configure(&session)
-    // After `configure`, which sets a chat's group.
-    session.claudeConfigDir =
-      try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount
+    if let host = session.host {
+      guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
+      // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
+      try site(for: session).requireReady()
+    } else {
+      // After `configure`, which sets a chat's group.
+      session.claudeConfigDir =
+        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount
+    }
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
-    try host.create(paneName(id, .shell), cwd: folder.cwd, env: paneEnv(id))
-    try launch(id, prompt: args.prompt)
+    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
 
@@ -828,7 +1054,17 @@ public final class Service {
 
   func paneName(_ id: String, _ pane: Pane) -> String { "\(id)-\(pane.rawValue)" }
 
+  /// The environment of a pane that sbd is about to start. A pane on a host gets the session's id and `SB_HOME`
+  /// set to the host's `~/.sb`, and nothing of this Mac. It throws `HostUnread` while the host's site is not ready.
+  func newPaneEnv(_ id: String) throws -> [String: String] {
+    guard let session = entries[id]?.session, session.host != nil else { return paneEnv(id) }
+    return ["SB_SESSION_ID": id, "SB_HOME": try site(for: session).sbFolder()]
+  }
+
   func paneEnv(_ id: String) -> [String: String] {
+    if let session = entries[id]?.session, session.host != nil {
+      return (try? newPaneEnv(id)) ?? ["SB_SESSION_ID": id]
+    }
     var env = ["SB_SESSION_ID": id, "SB_HOME": home.path]
     // CLAUDE_CONFIG_DIR picks the Claude account. A session runs under the
     // account it recorded. A session without one, stored by an older sbd,
@@ -844,12 +1080,15 @@ public final class Service {
   /// whose shell exited. It leaves a dead Claude pane dead.
   private func terminals(_ id: String) throws -> Terminals {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
+    try requireRead(id)
     try requireFolder(session)
     let shell = paneName(id, .shell)
-    if snapshot.panes[shell]?.dead == true { try closeShell(id) }
+    if paneRow(id, .shell)?.dead == true { try closeShell(id) }
     if entries[id]?.session.shellClosed != true { try startShell(id) }
-    if snapshot.panes[paneName(id, .claude)] == nil { try launch(id, prompt: nil) }
-    return Terminals(tmux: host.tmux, socket: host.socket, claude: paneName(id, .claude), shell: shell)
+    if paneRow(id, .claude) == nil { try launch(id, prompt: nil, trigger: .open) }
+    let terminals = try site(for: session).terminals()
+    return Terminals(
+      tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
   /// Starts claude in the session's Claude pane. A launch resumes the
@@ -858,43 +1097,56 @@ public final class Service {
   /// dies when claude exits. tmux keeps the dead pane's last screen until the
   /// next launch. It ignores the live cap. Callers use `launch` unless they
   /// have already found a free slot.
-  func startClaude(_ id: String, prompt: String?) throws {
-    _ = try requireStartable(id)
-    moveToGroupAccount(id)
-    trustOwnFolder(id)
+  func startClaude(_ id: String, prompt: String?, trigger: LaunchTrigger) throws {
+    // A session on a host runs under the host's Claude login, with the host's hook settings and no shared
+    // MCP servers, `claudeArgs`, or triage nudge of this Mac. This Mac's trust file and groups do not apply.
+    let local = try requireStartable(id).host == nil
+    entries[id]?.jumpedAt = nil
+    if local {
+      moveToGroupAccount(id)
+      trustOwnFolder(id)
+    }
     let session = entries[id]!.session
-    let resume = hasTranscript(session)
-    var args = [config.claude]
+    let resume = try hasTranscript(session)
+    var args = [claudeCommand(for: session)]
     args += resume ? ["--resume", session.claudeSessionId] : ["--session-id", session.claudeSessionId]
-    args += ["--settings", home.claudeSettings]
-    args += launchMCPArgs(id, session)
+    if local {
+      try writeClaudeSettings(id, session)
+      args += ["--settings", home.claudeSettings(id)]
+      args += launchMCPArgs(id, session)
+    } else {
+      args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
+    }
     if let model = session.model { args += ["--model", model] }
-    args += config.claudeArgs
+    if local { args += config.claudeArgs }
     // After claudeArgs, so that the session's mode wins over a global one.
-    if session.autoMode == true { args += ["--permission-mode", PermissionMode.auto] }
-    if !config.triage.systemPrompt.isEmpty { args += ["--append-system-prompt", config.triage.systemPrompt] }
+    let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
+    if let mode { args += ["--permission-mode", mode] }
+    if local, !config.triage.systemPrompt.isEmpty {
+      args += ["--append-system-prompt", config.triage.systemPrompt]
+    }
     // `--` keeps a prompt that starts with a dash from reading as an option.
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
-    let dir = home.sessionFolder(id)
-    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    let script =
+    let site = self.site(for: session)
+    let terminals = try site.terminals()
+    let env = try newPaneEnv(id)
+    try writeLauncher(
       "# Written by sbd. The Claude pane sources it to start or resume claude.\n"
-      + args.map(shellQuote).joined(separator: " ") + "\n"
-    try script.write(toFile: "\(dir)/claude.sh", atomically: true, encoding: .utf8)
-    // An interactive login shell gives claude the user's PATH and shell
-    // functions.
-    let command = "\(host.shell) -l -i -c 'source \"$SB_HOME/sessions/$SB_SESSION_ID/claude.sh\"'"
+        + args.map(shellQuote).joined(separator: " ") + "\n",
+      for: id, at: site)
+    let command =
+      "\(terminals.shell) \(Service.claudeShellFlags.joined(separator: " ")) 'source \"$SB_HOME/sessions/$SB_SESSION_ID/claude.sh\"'"
     let name = paneName(id, .claude)
-    if snapshot.panes[name] != nil {
-      try host.respawn(name, cwd: session.cwd, env: paneEnv(id), command: command)
+    if paneRow(id, .claude) != nil {
+      try terminals.respawn(name, cwd: session.cwd, env: env, command: command)
     } else {
-      try host.create(name, cwd: session.cwd, env: paneEnv(id), command: command)
-      try host.setDeadMessage(
+      try terminals.create(name, cwd: session.cwd, env: env, command: command)
+      try terminals.setDeadMessage(
         name, "Claude stopped. Switchboard resumes it when you open the session or send it a message.")
     }
     markStarting(name)
     if !session.started { try update(id) { $0.started = true } }
-    snapshot.claudePids[id] = nil
+    forgetClaudePid(id)
     // This launch reads the current MCP servers, so no relaunch for a change to them is still due.
     entries[id]?.mcpRelaunch = nil
     entries[id]?.unreportedSince = nil
@@ -902,8 +1154,9 @@ public final class Service {
     record(
       id, resume ? "resumed" : "started",
       [
-        "prompt": prompt.map(JSON.string) ?? .null, "mcp": mcpListening,
-        "permission_mode": session.autoMode == true ? .string(PermissionMode.auto) : .null,
+        "prompt": prompt.map(JSON.string) ?? .null, "mcp": local ? mcpListening : [],
+        "permission_mode": mode.map(JSON.string) ?? .null,
+        "trigger": .string(trigger.rawValue),
       ])
   }
 
@@ -915,18 +1168,31 @@ public final class Service {
   /// that account. Before a SessionStart for the conversation, as for an
   /// imported one, this looks in the account that the pane sets. A session
   /// that sbd never started claude for has none.
-  private func hasTranscript(_ session: Session) -> Bool { transcriptFile(session) != nil }
-
-  /// The session's transcript file, by the rules of `hasTranscript`.
-  func transcriptFile(_ session: Session) -> String? {
-    guard session.started else { return nil }
-    if let path = entries[session.id]?.facts.transcriptPath,
-      (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl"
-    {
-      return machine(for: session).exists(path) ? path : nil
+  /// For a session on a host, it throws `HostUnread` unless the host answered every read of the lookup, so a
+  /// lookup that got no answer never starts the conversation again.
+  func hasTranscript(_ session: Session) throws -> Bool {
+    let named = entries[session.id]?.facts.transcriptPath
+    return try site(for: session).confirmed("the transcript lookup of \(session.id)") {
+      try transcriptFile(session, named: named, on: $0) != nil
     }
-    let account = claudeAccount(of: session.id)
-    return Transcript.find(session.claudeSessionId, account: account, cwd: session.cwd, on: machine(for: session))
+  }
+
+  /// The session's transcript file, by the rules of `hasTranscript`. It is nil when the session's host is not
+  /// ready, and a read that got no answer reads as a missing file.
+  func transcriptFile(_ session: Session) -> String? {
+    let named = entries[session.id]?.facts.transcriptPath
+    return (try? transcriptFile(session, named: named, on: site(for: session).machine)) ?? nil
+  }
+
+  /// A session on a host keeps its transcripts under `~/.claude` there. `named` is the transcript that the
+  /// session's last SessionStart named. For a session on a host, this reads nothing of the state queue.
+  func transcriptFile(_ session: Session, named: String?, on machine: any Machine) throws -> String? {
+    guard session.started else { return nil }
+    if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
+      return machine.exists(path) ? path : nil
+    }
+    let account = session.host == nil ? claudeAccount(of: session.id) : try hostClaudeFolder(session)
+    return Transcript.find(session.claudeSessionId, account: account, cwd: session.cwd, on: machine)
   }
 
   /// Whether claude sits at its prompt, ready for a paste: this launch's
@@ -947,7 +1213,8 @@ public final class Service {
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
   func send(
-    _ id: String, _ text: String, byUser: Bool = true, launchesWithPrompt: Bool = true, from: String? = nil
+    _ id: String, _ text: String, byUser: Bool = true, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    from: String? = nil
   ) throws -> Delivery {
     guard entries[id] != nil else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
@@ -955,11 +1222,13 @@ public final class Service {
     // Claude Code does not attach the images of a prompt that starts it, so
     // a message with images waits for a paste.
     let attaches = Attachments.split(text, folder: home.attachmentsFolder(id)) != nil
-    if launchesWithPrompt, claudeState(id) == .stopped, entries[id]!.pending.isEmpty, !attaches, hasRoom() {
-      // A missing folder is the usual reason startClaude throws, so the check comes before `sent` is stored.
-      try requireFolder(entries[id]!.session)
+    if launchesWithPrompt, claudeState(id) == .stopped, entries[id]!.pending.isEmpty, !attaches,
+      hasRoom(onHost: entries[id]!.session.host)
+    {
+      // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
+      _ = try requireStartable(id)
       try recordSent(id, text, .resumed, byUser: byUser, from: from)
-      try startClaude(id, prompt: text)
+      try startClaude(id, prompt: text, trigger: trigger)
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
       let sent = try recordSent(id, text, .pasted, byUser: byUser, from: from)
@@ -969,7 +1238,7 @@ public final class Service {
       // A stopped session launches without a prompt when older messages wait,
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
-      if claudeState(id) == .stopped { try launch(id, prompt: nil) }
+      if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
       try queueMessage(id, text, byUser: byUser, from: from)
       return .queued
     }
@@ -1006,6 +1275,8 @@ public final class Service {
       // A session that the removal job holds keeps its messages. `failRemoval` delivers them.
       guard let e = entries[id], !e.pending.isEmpty, e.deliveryGeneration == generation, removalRefusal(id) == nil
       else { return }
+      // The facts of a session whose host sbd can't read may be old. The reconcile delivers after it.
+      guard claudeState(id) != .unknown else { return }
       let now = nowMs()
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
@@ -1025,18 +1296,40 @@ public final class Service {
   /// that paste started. It records `delivery_unknown` for the rest, which
   /// sbd leaves for the user instead of pasting them again.
   private func settleUncertain(_ id: String, _ texts: [String]) throws {
-    var pastings = try store.events(session: id).filter { $0.kind == "pasting" }
-    for text in texts {
-      let pasting = pastings.lastIndex { $0.data["text"]?.string == text }.map { pastings.remove(at: $0) }
+    let machine = try site(of: id).machine
+    for paste in try uncertainPastes(id, texts) {
       // A paste that found no transcript started before claude wrote any of it.
-      let path = pasting?.data["transcript"]?.string ?? entries[id].flatMap { transcriptFile($0.session) }
-      let offset = UInt64(pasting?.data["transcript_bytes"]?.int ?? 0)
-      let pasted = Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text
-      let machine = self.machine(of: id)
-      let landed =
-        pasting != nil
-        && path.map { Transcript.hasUserMessage($0, holding: pasted, from: offset, on: machine) } == true
-      record(id, landed ? "delivered" : "delivery_unknown", ["text": .string(text)])
+      let path = paste.transcript ?? entries[id].flatMap { transcriptFile($0.session) }
+      record(id, paste.landed(in: path, on: machine) ? "delivered" : "delivery_unknown", ["text": .string(paste.text)])
+    }
+  }
+
+  /// A message whose paste started before sbd stopped, with what its `pasting` event recorded.
+  struct UncertainPaste {
+    var text: String
+    /// The text that the paste typed, without the image paths.
+    var pasted: String
+    /// Whether the log holds the message's `pasting` event.
+    var started: Bool
+    /// The transcript and its size when the paste started.
+    var transcript: String?
+    var offset: UInt64
+
+    /// Whether the transcript at `path` holds the message in a user message after the paste started.
+    func landed(in path: String?, on machine: any Machine) -> Bool {
+      started && path.map { Transcript.hasUserMessage($0, holding: pasted, from: offset, on: machine) } == true
+    }
+  }
+
+  /// The messages with the `pasting` event of each. It runs on the state queue.
+  func uncertainPastes(_ id: String, _ texts: [String]) throws -> [UncertainPaste] {
+    var pastings = try store.events(session: id).filter { $0.kind == "pasting" }
+    return texts.map { text in
+      let pasting = pastings.lastIndex { $0.data["text"]?.string == text }.map { pastings.remove(at: $0) }
+      return UncertainPaste(
+        text: text, pasted: Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text,
+        started: pasting != nil, transcript: pasting?.data["transcript"]?.string,
+        offset: UInt64(pasting?.data["transcript_bytes"]?.int ?? 0))
     }
   }
 
@@ -1053,9 +1346,12 @@ public final class Service {
     let name = paneName(id, .claude)
     let parts = Attachments.split(text, folder: home.attachmentsFolder(id))
     entries[id]?.inFlight = nowMs()
+    let site = try? site(of: id)
+    let terminals = try? site?.terminals()
     pasteQueue.async { [self] in
       waitAtGate("hold-paste")
-      guard (try? host.screen(name, colors: true)).map(ClaudeScreen.promptIsEmpty) == true else {
+      guard let site, let terminals, (try? site.screen(name, colors: true)).map(ClaudeScreen.promptIsEmpty) == true
+      else {
         queue.async { [self] in
           if entries[id]?.heldText != text {
             logLine("holds a message for \(id) until claude's prompt box shows empty")
@@ -1067,7 +1363,7 @@ public final class Service {
       }
       guard queue.sync(execute: { startPaste(id, message) }) else { return }
       do {
-        try host.paste(name, parts?.text ?? text, attachments: parts?.paths)
+        try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
         waitAtGate("hold-delivered")
         queue.async { self.record(id, "delivered", ["text": .string(text)]) }
       } catch {
@@ -1094,8 +1390,9 @@ public final class Service {
   /// can give the event's id to a later row, so the check also compares the
   /// session, the time, the kind, and the text. It returns false and drops
   /// the message when the log lacks the `sent` event. It returns false and
-  /// requeues the message when the store fails.
-  private func startPaste(_ id: String, _ message: QueuedMessage) -> Bool {
+  /// requeues the message when the store fails, or when the session's host
+  /// did not answer the read of the transcript's size.
+  func startPaste(_ id: String, _ message: QueuedMessage) -> Bool {
     entries[id]?.heldText = nil
     // The removal job can take the session after `deliverPending` let the paste start.
     if removalRefusal(id) != nil {
@@ -1103,13 +1400,21 @@ public final class Service {
       return false
     }
     var data: [String: JSON] = ["text": .string(message.text)]
-    if let session = entries[id]?.session, let path = transcriptFile(session),
-      let size = machine(for: session).size(path)
-    {
-      data["transcript"] = .string(path)
-      data["transcript_bytes"] = .number(Double(size))
-    }
     do {
+      if let session = entries[id]?.session {
+        // A restart looks for the message after this size, so a size that a host did not answer must not
+        // read as a missing transcript.
+        let named = entries[id]?.facts.transcriptPath
+        let found: (path: String, size: UInt64)? = try site(for: session).confirmed("the transcript size of \(id)") {
+          guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
+          else { return nil }
+          return (path, size)
+        }
+        if let found {
+          data["transcript"] = .string(found.path)
+          data["transcript_bytes"] = .number(Double(found.size))
+        }
+      }
       if let sent = message.sent {
         guard let row = try store.event(id: sent.id), row.session == id, row.t == sent.t, row.kind == "sent",
           row.data["text"] == sent.data["text"]
@@ -1138,9 +1443,10 @@ public final class Service {
 
   /// Defers the session's held questions first, so that their cards stay.
   func stop(_ id: String, reason: String) throws {
+    try requireRead(id)
     guard case .running(let pid) = claudeState(id) else { throw APIError("\(id) is not running") }
     deferQuestions(id)
-    machine(of: id).signal(pid, SIGTERM)
+    try stopClaude(id, pid)
     record(id, "stopped", ["reason": .string(reason), "pid": .number(Double(pid))])
   }
 
@@ -1170,9 +1476,15 @@ public final class Service {
   /// left alone and the call succeeds. The call refuses a session with an open to-do
   /// before anything stops, unless `resolve` names each open to-do. A to-do
   /// that arrives later keeps the session, even after its worktree is gone.
-  /// A removal of the worktree refuses a caller inside the session before
-  /// anything stops, as `beginPaneStop` describes. It refuses a session that
-  /// the removal job holds, or that another `rm` or `cleanup` is removing.
+  /// For a session on a host, rm waits for the host, then runs every check and
+  /// git command there on one connection, and refuses before the next command
+  /// once one got no answer. It refuses while sbd can't read the session's
+  /// claude there, and it closes the host's panes from the host's answers
+  /// before it forgets the session. A session whose host config.json no longer
+  /// lists is forgotten only when its claude stopped on record.
+  /// A removal of the worktree refuses a caller inside a session on this Mac before anything stops, as
+  /// `beginPaneStop` describes. It refuses a session that the removal job holds, or that another `rm` or
+  /// `cleanup` is removing.
   func remove(_ args: JSON, caller: Caller) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
@@ -1197,18 +1509,14 @@ public final class Service {
         return id
       }
       defer { queue.sync { _ = removing.remove(id) } }
-      let check = try checkBeforeRemoval(
+      let (session, released) = try removeAtSite(
         id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
-        resolving: resolving)
-      let session = check.session
-      let (repo, branch, supacode) = try stopForRemoval(
-        session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone, worktree: removesWorktree,
-        branch: removesBranch, resolving: resolving, ancestry: ancestry, command: command,
-        again: "run `\(command)` again")
-      let released = try releaseFiles(
-        session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, folderGone: check.folderGone,
-        remoteBranch: check.remoteTarget)
-      try forgetRemoved(session, released, resolving: resolving)
+        resolving: resolving, ancestry: ancestry, command: command, again: "run `\(command)` again"
+      ) { check, stopped, site in
+        try releaseFiles(
+          check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
+          folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
+      }
       if let kept = released.keptMessage(session.id, remoteBranch: removesRemoteBranch) { throw APIError(kept) }
       return [
         "removed": .string(session.id), "worktree_removed": .bool(released.worktree),
@@ -1220,57 +1528,122 @@ public final class Service {
     }
   }
 
-  /// What `checkBeforeRemoval` read, for the phases that follow it.
+  /// What `checkRemoval` returns: the repo, the branch to delete with its tip, whether Supacode locked the
+  /// worktree, and the PR as `provenPR` finds it.
+  typealias CheckedRemoval = (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?)
+
+  /// Runs `rm`'s phases on the session and returns what `release` removed and kept. A session whose host
+  /// config.json no longer lists goes through `removeFromUnlistedHost`, which removes no file. For any other
+  /// session, sbd waits for the session's site, then runs `checkBeforeRemoval`, `stopForRemoval`, and `release`
+  /// in one scope of the site, so on a host every check and git command runs on one connection, and the scope's
+  /// machine refuses each command once one got no answer. `release` gets the scope's site. Then
+  /// `forgetRemoved` forgets the session. It runs off the state queue.
+  func removeAtSite(
+    _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
+    command: String, again: String, release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
+  ) throws -> (session: Session, released: ReleasedFiles) {
+    let entry = try removalEntry(id, resolving: resolving)
+    let site = self.site(for: entry.session)
+    if site is UnlistedSite {
+      _ = try removeFromUnlistedHost(
+        entry.session, resolving: resolving, worktree: worktree, mayRunClaude: entry.mayRunClaude, site: site)
+      return (entry.session, ReleasedFiles(worktree: false))
+    }
+    try awaitSite(site)
+    let released = try releaseInScope("the removal of \(id)", at: site) { scope in
+      let check = try checkBeforeRemoval(
+        entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
+      let stopped = try stopForRemoval(
+        check, worktree: worktree, branch: branch, resolving: resolving, ancestry: ancestry, command: command,
+        again: again, scope: scope)
+      return try release(check, stopped, scope.site)
+    }
+    try forgetRemoved(entry.session, released, resolving: resolving, at: site)
+    return (entry.session, released)
+  }
+
+  /// Runs `body` in one scope of the site, as `SessionSite.scoped` says, and returns what `body` released. When
+  /// the scope's final check fails after `body` removed the worktree, it logs the error and returns the release,
+  /// because the worktree is gone. Each step after the worktree's removal keeps its own error in the release.
+  func releaseInScope(
+    _ what: String, at site: any SessionSite, _ body: (SiteScope) throws -> ReleasedFiles
+  ) throws -> ReleasedFiles {
+    var released: ReleasedFiles?
+    do {
+      return try site.scoped(what) { scope in
+        let result = try body(scope)
+        released = result
+        return result
+      }
+    } catch {
+      guard let released, released.worktree else { throw error }
+      logLine("\(what): \(error)")
+      return released
+    }
+  }
+
+  /// What `removalEntry` and `checkBeforeRemoval` read, for the phases that follow them.
   struct RemovalCheck {
     var session: Session
     var pr: PullRequest?
     var sharedWith: String?
-    var folderGone: Bool
+    /// Whether the session's claude may still run, as `mayRunClaude` says.
+    var mayRunClaude: Bool
+    var folderGone = false
     /// The remote branch that `releaseFiles` deletes, or nil when it stays.
     var remoteTarget: (repo: String, remote: String, branch: String)?
   }
 
   /// `rm`'s first phase. It refuses a session that is starting or merging,
-  /// or that has an open to-do that `resolving` doesn't name, then runs
-  /// `checkRemoval`. It reads the remote of the branch that `remoteBranch`
-  /// deletes before anything stops, because the branch's git config goes
-  /// with the branch. It runs off the state queue.
-  func checkBeforeRemoval(
-    _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>
-  ) throws -> RemovalCheck {
-    let (session, pr, sharedWith): (Session, PullRequest?, String?) = try queue.sync {
+  /// or that has an open to-do that `resolving` doesn't name. It runs off the
+  /// state queue.
+  func removalEntry(_ id: String, resolving: Set<String>) throws -> RemovalCheck {
+    try queue.sync {
       guard let entry = entries[id] else { throw APIError("no session \(id)") }
       // The start would otherwise leave its new worktree behind.
       guard !starting.contains(id) else { throw APIError("\(id) is starting") }
       guard !merging.contains(id) else { throw APIError("\(id) is merging its PR") }
       try checkTodos(id, resolving: removalResolving(id, resolving))
-      return (entry.session, entry.facts.pr, sharedSession(entry.session))
+      return RemovalCheck(
+        session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
+        mayRunClaude: mayRunClaude(entry))
     }
-    let machine = self.machine(for: session)
-    let folderGone = !machine.exists(session.cwd)
+  }
+
+  /// `rm`'s checks at the session's site: it runs `checkRemoval`. It reads the
+  /// remote of the branch that `remoteBranch` deletes before anything stops,
+  /// because the branch's git config goes with the branch. Only a removal of
+  /// the worktree reads whether the folder is gone, so a plain rm asks a host
+  /// nothing about the folder. It runs off the state queue.
+  func checkBeforeRemoval(
+    _ entry: RemovalCheck, worktree: Bool, branch: Bool, remoteBranch: Bool, at site: any SessionSite
+  ) throws -> RemovalCheck {
+    var check = entry
+    let session = entry.session
+    check.folderGone = worktree ? try folderIsGone(session.cwd, at: site) : false
     let checked = try checkRemoval(
-      session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: worktree, branch: branch)
+      session, pr: entry.pr, sharedWith: entry.sharedWith, folderGone: check.folderGone, worktree: worktree,
+      branch: branch, at: site)
     // A local branch that is already gone still has its remote branch checked.
-    var remoteTarget: (repo: String, remote: String, branch: String)?
     if remoteBranch, let repo = checked.repo, let name = checked.branch?.name ?? session.branch {
-      remoteTarget = (repo, trackedRemote(repo, name, on: machine), name)
+      check.remoteTarget = (repo, trackedRemote(repo, name, at: site), name)
     }
-    return RemovalCheck(
-      session: session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, remoteTarget: remoteTarget)
+    return check
   }
 
   /// `rm`'s second phase, after `checkRemoval`. It closes the panes and waits
   /// for their processes as `beginPaneStop` and `finishPaneStop` describe
-  /// when `worktree` is set, and otherwise only sends SIGTERM to claude. It
-  /// first refuses a session that changed since the checks, or whose record
-  /// the store can't delete. It returns what `checkRemoval` returns when it
-  /// runs again after the stop. It runs off the state queue.
+  /// when `worktree` is set, and otherwise stops claude as
+  /// `stopForRemoval(_:at:)` says. It first refuses a session that changed
+  /// since the checks, whose record the store can't delete, or whose scope's
+  /// check fails. It returns what `checkRemoval` returns when it runs again
+  /// after the stop. It runs off the state queue.
   func stopForRemoval(
-    _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
-    resolving: Set<String>, ancestry: Set<Int>?, command: String, again: String
-  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool) {
-    let machine = self.machine(for: session)
-    let fresh = buildSnapshot()
+    _ check: RemovalCheck, worktree: Bool, branch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
+    command: String, again: String, scope: SiteScope
+  ) throws -> CheckedRemoval {
+    let session = check.session
+    let fresh = try freshSnapshot(of: session)
     let stop: PaneStop? = try queue.sync {
       guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
         !merging.contains(session.id)
@@ -1279,15 +1652,18 @@ public final class Service {
       }
       // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
       try store.checkDeletable(
-        session: session.id, resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving)))
-      install(fresh)
+        session: session.id, resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving)),
+        onHost: session.host)
+      install(fresh, of: session)
+      try scope.require()
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
-      if case .running(let pid) = claudeState(session.id) { machine.signal(pid, SIGTERM) }
+      try stopForRemoval(session, at: site(for: session))
       return nil
     }
     if let stop { try finishPaneStop(session, stop, again: again) }
     return try checkRemoval(
-      session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: worktree, branch: branch)
+      session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone, worktree: worktree,
+      branch: branch, at: scope.site)
   }
 
   /// What `releaseFiles` removed, and the error that kept each branch that stayed.
@@ -1317,44 +1693,45 @@ public final class Service {
   /// `remoteBranch`. A failed worktree removal throws. A failed branch check
   /// or delete keeps the branch, keeps the remote branch, and is returned.
   /// The remote branch goes only once the local branch is gone and only with
-  /// a merged PR for it. It runs off the state queue.
+  /// a merged PR for it. git runs at `site`. It runs off the state queue.
   func releaseFiles(
     _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
-    folderGone: Bool, remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?
+    folderGone: Bool, remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?,
+    at site: any SessionSite
   ) throws -> ReleasedFiles {
-    if let repo { try releaseWorktree(session, repo: repo, folderGone: folderGone) }
-    return releaseBranches(session, repo: repo, branch: branch, supacode: supacode, pr: pr, remoteBranch: remoteTarget)
+    if let repo { try releaseWorktree(session, repo: repo, folderGone: folderGone, at: site) }
+    return releaseBranches(
+      session, repo: repo, branch: branch, supacode: supacode, pr: pr, remoteBranch: remoteTarget, at: site)
   }
 
   /// Removes the worktree's folder and record. With `folderGone`, it removes
   /// only the record, and nothing when git no longer lists the worktree.
-  func releaseWorktree(_ session: Session, repo: String, folderGone: Bool) throws {
-    let machine = self.machine(for: session)
+  func releaseWorktree(_ session: Session, repo: String, folderGone: Bool, at site: any SessionSite) throws {
     // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
     // folder's path through a symlink, so it gets the path that it lists for the worktree.
-    let listed = folderGone ? try worktreeEntry(repo, at: session.cwd, on: machine)?.path : session.cwd
-    if let listed { try removeWorktree(repo, listed, on: machine) }
+    let listed = folderGone ? try worktreeEntry(repo, holding: session.cwd, at: site)?.path : session.cwd
+    if let listed { try removeWorktree(repo, listed, at: site) }
   }
 
   /// The branch and remote-branch half of `releaseFiles`, after the worktree is gone.
   func releaseBranches(
     _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
-    remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?
+    remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?, at site: any SessionSite
   ) -> ReleasedFiles {
-    let machine = self.machine(for: session)
     var released = ReleasedFiles(worktree: repo != nil)
     if let repo, let branch {
       do {
-        released.branch = try deleteBranch(repo, branch, pr: pr, inMain: supacode, on: machine)
+        released.branch = try deleteBranch(repo, branch, pr: pr, inMain: supacode, at: site)
       } catch {
         released.keptBranch = (branch.name, error)
       }
     }
-    if let target = remoteTarget, released.keptBranch == nil,
-      !branchExists(target.repo, target.branch, on: machine), let pr = mergedPR(pr, of: target.branch)
-    {
+    if let target = remoteTarget, released.keptBranch == nil, let merged = mergedPR(pr, of: target.branch) {
       do {
-        released.remoteBranch = try deleteRemoteBranch(target.repo, target.remote, target.branch, pr: pr, on: machine)
+        if try branchIsGone(target.repo, target.branch, at: site) {
+          released.remoteBranch = try deleteRemoteBranch(
+            target.repo, target.remote, target.branch, pr: merged, at: site)
+        }
       } catch {
         released.keptRemoteBranch = error
       }
@@ -1363,10 +1740,13 @@ public final class Service {
   }
 
   /// `rm`'s last phase: forgets the session, closes its panes, detaches its
-  /// plans, and deletes its folder in the sb home. It refuses a session that
-  /// changed since the checks. A to-do that arrived since the checks keeps
-  /// the session, and its error names what `releaseFiles` removed and kept.
-  func forgetRemoved(_ session: Session, _ released: ReleasedFiles, resolving: Set<String>) throws {
+  /// plans, and deletes its launcher folder at `site`. It refuses a session
+  /// that changed since the checks. A to-do that arrived since the checks
+  /// keeps the session, and its error names what `releaseFiles` removed and
+  /// kept. A host's panes closed in `stopForRemoval`, from answers of the host.
+  func forgetRemoved(
+    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, at site: any SessionSite
+  ) throws {
     try queue.sync {
       // A follow-up can start between the two steps.
       guard !starting.contains(session.id), !merging.contains(session.id),
@@ -1388,6 +1768,7 @@ public final class Service {
       } else if let remoteError = released.keptRemoteBranch {
         stayed = " It kept the remote branch: \(remoteError)"
       }
+      let terminals = session.host == nil ? try site.terminals() : nil
       do {
         try forgetSession(session.id, resolving: removalResolving(session.id, resolving))
       } catch var error as OpenTodoError {
@@ -1397,11 +1778,11 @@ public final class Service {
       } catch let error where !removed.isEmpty {
         throw APIError("\(kept): \(error)\(stayed)")
       }
-      host.kill(paneName(session.id, .claude))
-      host.kill(paneName(session.id, .shell))
+      terminals?.kill(paneName(session.id, .claude))
+      terminals?.kill(paneName(session.id, .shell))
       try detachPlans { $0.session == session.id }
     }
-    try? FileManager.default.removeItem(atPath: home.sessionFolder(session.id))
+    removeSessionFolder(session.id, at: site)
   }
 
   /// The checks that `rm` makes before it stops anything. Returns the repo
@@ -1409,39 +1790,48 @@ public final class Service {
   /// tip. The branch is nil when the folder and the branch are both gone, and
   /// when Supacode locked the worktree and origin/main doesn't contain the tip.
   /// `supacode` is true when Supacode locked the worktree.
+  /// The checks run git and read the folder at `site`. They count the PR only as
+  /// `provenPR` finds it, and return that PR for the steps after them.
   func checkRemoval(
-    _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool
-  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool) {
-    guard worktree else { return (nil, nil, false) }
+    _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
+    at site: any SessionSite
+  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?) {
+    guard worktree else { return (nil, nil, false, pr) }
+    let pr = try provenPR(pr, of: session, in: folderGone ? session.repo ?? session.cwd : session.cwd, at: site)
     let merged = pr?.state == .merged
     if folderGone {
-      let repo = try checkGoneWorktree(session, mergedPR: merged)
-      return (repo, branch ? try checkGoneBranchIsMerged(repo, session, pr: pr) : nil, false)
+      let repo = try checkGoneWorktree(session, mergedPR: merged, at: site)
+      return (repo, branch ? try checkGoneBranchIsMerged(repo, session, pr: pr, at: site) : nil, false, pr)
     }
     let (repo, supacode) = try checkWorktreeIsLossless(
-      session, mergedPR: merged, sharedWith: sharedWith, onlyBuildOutputIgnored: false)
-    guard branch else { return (repo, nil, supacode) }
-    return (repo, supacode ? try supacodeBranch(session, pr: pr) : try checkBranchIsMerged(session, pr: pr), supacode)
+      session, mergedPR: merged, sharedWith: sharedWith, onlyBuildOutputIgnored: false, at: site)
+    guard branch else { return (repo, nil, supacode, pr) }
+    let checked =
+      supacode
+      ? try supacodeBranch(session, pr: pr, at: site) : try checkBranchIsMerged(session, pr: pr, at: site)
+    return (repo, checked, supacode, pr)
   }
 
   /// The session's repo, or throws when sbd made no worktree for the session. When the repo folder is
   /// gone, because the session started from a linked worktree that was later removed, this returns the
   /// one known main checkout that still lists the session's worktree.
-  func worktreeRepo(_ session: Session) throws -> String {
+  func worktreeRepo(_ session: Session, at site: any SessionSite) throws -> String {
     guard let repo = session.repo else {
       throw APIError(
         "\(session.id) runs in \(session.cwd), and sbd didn't make a worktree for it. Remove the session without the worktree instead."
       )
     }
-    let machine = self.machine(for: session)
-    if machine.isFolder(repo) { return repo }
-    let folders = queue.sync { entries.values.map(\.session).flatMap { [$0.repo, $0.cwd].compactMap { $0 } } }
+    if site.machine.isFolder(repo) { return repo }
+    let folders = queue.sync {
+      entries.values.map(\.session).filter { $0.host == session.host }.flatMap { [$0.repo, $0.cwd].compactMap { $0 } }
+    }
     var mains: [String] = []
     var seen: [String] = []
-    for folder in folders where machine.isFolder(folder) && !seen.contains(where: { samePath($0, folder) }) {
-      guard let listed = try? worktreeEntries(folder, on: machine), let main = listed.first?.path else { continue }
+    for folder in folders
+    where try site.machine.isFolder(folder) && !seen.contains(where: { try site.samePath($0, folder) }) {
+      guard let listed = try? worktreeEntries(folder, at: site), let main = listed.first?.path else { continue }
       seen += listed.map(\.path)
-      if listed.contains(where: { samePath($0.path, session.cwd) }) { mains.append(main) }
+      if try listed.contains(where: { try site.samePath($0.path, session.cwd) }) { mains.append(main) }
     }
     if mains.count == 1 { return mains[0] }
     if mains.count > 1 {
@@ -1456,10 +1846,9 @@ public final class Service {
   /// Returns the session's repo for a session whose folder is gone, or throws when sbd made no
   /// worktree for it, git keeps the worktree locked, or the worktree's HEAD has commits that are on
   /// no pushed branch. Removing the worktree's record drops the only ref to such commits.
-  private func checkGoneWorktree(_ session: Session, mergedPR: Bool) throws -> String {
-    let repo = try worktreeRepo(session)
-    let machine = self.machine(for: session)
-    guard let entry = try worktreeEntry(repo, at: session.cwd, on: machine) else { return repo }
+  private func checkGoneWorktree(_ session: Session, mergedPR: Bool, at site: any SessionSite) throws -> String {
+    let repo = try worktreeRepo(session, at: site)
+    guard let entry = try worktreeEntry(repo, holding: session.cwd, at: site) else { return repo }
     if entry.locked { throw lockedError(session.cwd) }
     // git lists the zero OID when the worktree's HEAD names a ref that no longer exists. Commits made there
     // survive only in the worktree's reflog, which goes with its record, so they can't be checked.
@@ -1468,17 +1857,17 @@ public final class Service {
         "git lists no commit at the HEAD of the gone worktree \(session.cwd), so its commits can't be checked.")
     }
     try requireNoUnpushedCommits(
-      in: repo, at: head, mergedPR: mergedPR, subject: "\(session.cwd) is gone, and its HEAD", on: machine)
+      in: repo, at: head, mergedPR: mergedPR, subject: "\(session.cwd) is gone, and its HEAD", at: site)
     return repo
   }
 
   /// Throws when `rev` has commits on no remote branch. With a merged PR, local branches count too, because a
   /// squash merge leaves the commits on no remote branch and `worktree remove` keeps the branch.
   private func requireNoUnpushedCommits(
-    in dir: String, at rev: String, mergedPR: Bool, subject: String, on machine: any Machine
+    in dir: String, at rev: String, mergedPR: Bool, subject: String, at site: any SessionSite
   ) throws {
     let kept = mergedPR ? ["--remotes", "--branches"] : ["--remotes"]
-    let unpushed = try gitOutput(dir, ["rev-list", "--count", rev, "--not"] + kept, on: machine)
+    let unpushed = try gitOutput(dir, ["rev-list", "--count", rev, "--not"] + kept, at: site)
     guard unpushed == "0" else {
       throw APIError(
         "\(subject) has commits that are not on a pushed branch and not in a merged PR (\(unpushed)). Push them first."
@@ -1488,19 +1877,18 @@ public final class Service {
 
   /// `checkBranchIsMerged` for a session whose folder is gone: the branch is read from the repo.
   /// A branch that is already gone leaves nothing to delete, so it returns nil.
-  private func checkGoneBranchIsMerged(_ repo: String, _ session: Session, pr: PullRequest?) throws -> (
-    name: String, tip: String
-  )? {
-    let machine = self.machine(for: session)
-    guard let name = session.branch, branchExists(repo, name, on: machine) else { return nil }
-    let branch = (name: name, tip: try gitOutput(repo, ["rev-parse", "refs/heads/\(name)"], on: machine))
-    try recheckBranch(repo, branch.name, pr: pr, ignoring: session.cwd, on: machine)
+  private func checkGoneBranchIsMerged(
+    _ repo: String, _ session: Session, pr: PullRequest?, at site: any SessionSite
+  ) throws -> (name: String, tip: String)? {
+    guard let name = session.branch, branchExists(repo, name, at: site) else { return nil }
+    let branch = (name: name, tip: try gitOutput(repo, ["rev-parse", "refs/heads/\(name)"], at: site))
+    try recheckBranch(repo, branch.name, pr: pr, ignoring: session.cwd, at: site)
     return branch
   }
 
   /// The remote that the branch tracks, or origin.
-  private func trackedRemote(_ repo: String, _ branch: String, on machine: any Machine) -> String {
-    let tracked = try? gitOutput(repo, ["config", "branch.\(branch).remote"], on: machine)
+  private func trackedRemote(_ repo: String, _ branch: String, at site: any SessionSite) -> String {
+    let tracked = try? gitOutput(repo, ["config", "branch.\(branch).remote"], at: site)
     return tracked.flatMap { $0.isEmpty ? nil : $0 } ?? "origin"
   }
 
@@ -1508,9 +1896,9 @@ public final class Service {
   /// head of the merged PR. Returns false when the remote has no such branch. The push names the
   /// tip it expects, so git refuses when the branch moved after the check.
   private func deleteRemoteBranch(
-    _ repo: String, _ remote: String, _ branch: String, pr: PullRequest, on machine: any Machine
+    _ repo: String, _ remote: String, _ branch: String, pr: PullRequest, at site: any SessionSite
   ) throws -> Bool {
-    let listed = try gitOutput(repo, ["ls-remote", "--heads", remote, "refs/heads/\(branch)"], on: machine)
+    let listed = try gitOutput(repo, ["ls-remote", "--heads", remote, "refs/heads/\(branch)"], at: site)
     guard let tip = listed.split(whereSeparator: \.isWhitespace).first.map(String.init) else { return false }
     guard tip == pr.headSha else {
       throw APIError(
@@ -1518,15 +1906,17 @@ public final class Service {
       )
     }
     _ = try gitOutput(
-      repo, ["push", remote, "--delete", "--force-with-lease=refs/heads/\(branch):\(tip)", branch], on: machine)
+      repo, ["push", remote, "--delete", "--force-with-lease=refs/heads/\(branch):\(tip)", branch], at: site)
     return true
   }
 
   /// Returns the session's branch and its tip, or throws unless the worktree has the branch
   /// checked out and the tip is the head of the session's merged PR. A branch with no merged PR may
   /// hold the only copy of the work, and a commit made after the merge is in no PR.
-  func checkBranchIsMerged(_ session: Session, pr: PullRequest?) throws -> (name: String, tip: String) {
-    let (branch, tip) = try checkedOutBranch(session)
+  func checkBranchIsMerged(
+    _ session: Session, pr: PullRequest?, at site: any SessionSite
+  ) throws -> (name: String, tip: String) {
+    let (branch, tip) = try checkedOutBranch(session, at: site)
     try requireTip(tip, of: branch, inMerged: try requireMergedPR(pr, of: branch))
     return (branch, tip)
   }
@@ -1540,18 +1930,17 @@ public final class Service {
   }
 
   /// The session's branch and its tip, or throws unless the session's worktree has that branch checked out.
-  func checkedOutBranch(_ session: Session) throws -> (name: String, tip: String) {
-    let machine = self.machine(for: session)
+  func checkedOutBranch(_ session: Session, at site: any SessionSite) throws -> (name: String, tip: String) {
     guard let branch = session.branch,
-      try gitOutput(session.cwd, ["branch", "--show-current"], on: machine) == branch
+      try gitOutput(session.cwd, ["branch", "--show-current"], at: site) == branch
     else {
       throw APIError("\(session.cwd) doesn't have the branch of \(session.id) checked out.")
     }
-    return (branch, try gitOutput(session.cwd, ["rev-parse", "HEAD"], on: machine))
+    return (branch, try gitOutput(session.cwd, ["rev-parse", "HEAD"], at: site))
   }
 
   /// The PR when it merged `branch`, or nil.
-  private func mergedPR(_ pr: PullRequest?, of branch: String) -> PullRequest? {
+  func mergedPR(_ pr: PullRequest?, of branch: String) -> PullRequest? {
     guard let pr, pr.state == .merged, pr.head == branch else { return nil }
     return pr
   }
@@ -1568,22 +1957,22 @@ public final class Service {
   /// A worktree at `path` does not count as having the branch checked out.
   func recheckBranch(
     _ repo: String, _ branch: String, pr: PullRequest?, ignoring path: String? = nil,
-    on machine: any Machine
+    at site: any SessionSite
   ) throws {
     let pr = try requireMergedPR(pr, of: branch)
-    guard branchExists(repo, branch, on: machine) else { throw APIError("\(branch) no longer exists.") }
+    guard branchExists(repo, branch, at: site) else { throw APIError("\(branch) no longer exists.") }
     try requireTip(
-      try gitOutput(repo, ["rev-parse", "refs/heads/\(branch)"], on: machine), of: branch, inMerged: pr)
-    try requireNotCheckedOut(repo, branch, ignoring: path, on: machine)
+      try gitOutput(repo, ["rev-parse", "refs/heads/\(branch)"], at: site), of: branch, inMerged: pr)
+    try requireNotCheckedOut(repo, branch, ignoring: path, at: site)
   }
 
   /// Throws when a worktree other than the one at `path` has the branch checked out.
   /// Deleting the ref of a checked-out branch breaks that worktree.
   func requireNotCheckedOut(
-    _ repo: String, _ branch: String, ignoring path: String? = nil, on machine: any Machine
+    _ repo: String, _ branch: String, ignoring path: String? = nil, at site: any SessionSite
   ) throws {
-    let checkedOut = try worktreeEntries(repo, on: machine).contains { entry in
-      entry.branch == branch && !(path.map { samePath(entry.path, $0) } ?? false)
+    let checkedOut = try worktreeEntries(repo, at: site).contains { entry in
+      try entry.branch == branch && !(path.map { try site.samePath(entry.path, $0) } ?? false)
     }
     guard !checkedOut else { throw APIError("\(branch) is checked out in a worktree.") }
   }
@@ -1593,28 +1982,31 @@ public final class Service {
   /// Passing the checked tip makes git refuse when a commit landed after the
   /// check.
   func deleteMergedBranch(
-    _ repo: String, _ branch: (name: String, tip: String), pr: PullRequest?, on machine: any Machine
+    _ repo: String, _ branch: (name: String, tip: String), pr: PullRequest?, at site: any SessionSite
   ) throws {
-    try recheckBranch(repo, branch.name, pr: pr, on: machine)
-    try deleteBranchRef(repo, branch, on: machine)
+    try recheckBranch(repo, branch.name, pr: pr, at: site)
+    try deleteBranchRef(repo, branch, at: site)
   }
 
   /// Deletes the branch's ref at the checked tip, so git refuses when a commit landed after the check.
-  func deleteBranchRef(_ repo: String, _ branch: (name: String, tip: String), on machine: any Machine) throws {
-    _ = try gitOutput(repo, ["update-ref", "-d", "refs/heads/\(branch.name)", branch.tip], on: machine)
+  func deleteBranchRef(_ repo: String, _ branch: (name: String, tip: String), at site: any SessionSite) throws {
+    _ = try gitOutput(repo, ["update-ref", "-d", "refs/heads/\(branch.name)", branch.tip], at: site)
     // `update-ref` leaves the upstream settings that `branch -D` removes. A later branch of the same name would track the old one.
-    _ = try? gitOutput(repo, ["config", "--remove-section", "branch.\(branch.name)"], on: machine)
+    _ = try? gitOutput(repo, ["config", "--remove-section", "branch.\(branch.name)"], at: site)
   }
 
-  /// Another session that runs in the session's folder.
+  /// Another session that runs in the session's folder at the session's site.
   func sharedSession(_ session: Session) -> String? {
-    entries.values.first { $0.session.id != session.id && $0.session.cwd == session.cwd }?.session.id
+    entries.values.first {
+      $0.session.id != session.id && $0.session.cwd == session.cwd && $0.session.host == session.host
+    }?.session.id
   }
 
   /// Returns the session's repo and whether Supacode locked the worktree, or
   /// throws unless the session's folder is a linked worktree of the repo that
   /// `new` made it from, no other session runs in it, git doesn't lock it
-  /// unless the lock is Supacode's and sbd can find supacode, it has no
+  /// unless the lock is Supacode's, the folder is on this Mac, and sbd can
+  /// find supacode, it has no
   /// uncommitted file and no file whose change git status
   /// skips, and HEAD is on a remote branch. With a merged PR, HEAD may instead
   /// be on a local branch, because a squash merge leaves the commits on no
@@ -1623,40 +2015,43 @@ public final class Service {
   /// is not build output or in `cleanupDeletes` also refuses. Any git failure
   /// refuses the removal. `folder` is where the worktree's files are, when
   /// they moved away from the path that git lists. The errors name `session.cwd`.
+  /// git runs at `site`.
   func checkWorktreeIsLossless(
-    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool, in folder: String? = nil
+    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool, in folder: String? = nil,
+    at site: any SessionSite
   ) throws -> (repo: String, supacode: Bool) {
-    let repo = try worktreeRepo(session)
+    let repo = try worktreeRepo(session, at: site)
     if let sharedWith {
       throw APIError(
         "\(sharedWith) also runs in \(session.cwd). Remove that session first, or remove this one without the worktree."
       )
     }
-    let machine = self.machine(for: session)
     guard
-      let entry = try worktreeEntries(repo, on: machine).dropFirst().first(where: { samePath($0.path, session.cwd) })
+      let entry = try worktreeEntries(repo, at: site).dropFirst().first(where: {
+        try site.samePath($0.path, session.cwd)
+      })
     else {
       throw APIError("\(session.cwd) is not a worktree of \(repo)")
     }
     if entry.locked && !entry.lockedBySupacode { throw lockedError(session.cwd) }
     let folder = folder ?? session.cwd
-    let status = try readStatus(folder, listingIgnored: onlyBuildOutputIgnored, on: machine)
+    let status = try readStatus(folder, listingIgnored: onlyBuildOutputIgnored, at: site)
     guard status.changed == 0 else {
       throw APIError("\(session.cwd) has uncommitted files (\(status.changed)). Commit or discard them first.")
     }
-    try requireNoHiddenChanges(folder, naming: session.cwd, on: machine)
+    try requireNoHiddenChanges(folder, naming: session.cwd, at: site)
     if onlyBuildOutputIgnored { try requireOnlyBuildOutputIgnored(session.cwd, ignored: status.ignored) }
     try requireNoUnpushedCommits(
-      in: folder, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, on: machine)
-    if entry.lockedBySupacode { _ = try supacodeExecutable() }
+      in: folder, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, at: site)
+    if entry.lockedBySupacode { try requireSupacode(for: session.cwd, at: site) }
     return (repo, entry.lockedBySupacode)
   }
 
   /// Throws when a tracked file in `folder` has git's assume-unchanged or
   /// skip-worktree flag, because `git status` doesn't list a change to such a
   /// file. The error names `cwd`.
-  private func requireNoHiddenChanges(_ folder: String, naming cwd: String, on machine: any Machine) throws {
-    let listed = try gitOutput(folder, ["ls-files", "-v", "-z"], on: machine)
+  private func requireNoHiddenChanges(_ folder: String, naming cwd: String, at site: any SessionSite) throws {
+    let listed = try gitOutput(folder, ["ls-files", "-v", "-z"], at: site)
     let hidden = listed.split(separator: "\0").filter { $0.first.map { $0.isLowercase || $0 == "S" } ?? false }
       .map { String($0.dropFirst(2)) }
     guard hidden.isEmpty else {
@@ -1673,11 +2068,11 @@ public final class Service {
   /// A rename or copy entry is followed by its source path, which has no
   /// status of its own.
   private func readStatus(
-    _ cwd: String, listingIgnored: Bool, on machine: any Machine
+    _ cwd: String, listingIgnored: Bool, at site: any SessionSite
   ) throws -> (changed: Int, ignored: [String]) {
     // The flag keeps status from taking the index lock while claude commits.
     let args = ["--no-optional-locks", "status", "--porcelain", "-z"] + (listingIgnored ? ["--ignored=matching"] : [])
-    var fields = try gitOutput(cwd, args, on: machine).split(separator: "\0").makeIterator()
+    var fields = try gitOutput(cwd, args, at: site).split(separator: "\0").makeIterator()
     var changed = 0
     var ignored: [String] = []
     while let field = fields.next() {
@@ -1713,69 +2108,40 @@ public final class Service {
   /// Reads the panes and the processes. It reads no Service state, so it runs
   /// off the state queue. It returns nil when tmux can't list the panes. An
   /// empty list would make sbd start the panes that it already has.
-  func buildSnapshot() -> Snapshot? { try? buildSnapshot(reading: host.checkedPanes) }
-
-  /// The snapshot of the panes that `readPanes` returns and a new process
-  /// list. It throws what `readPanes` throws.
-  func buildSnapshot(reading readPanes: () throws -> [String: PaneRow]) rethrows -> Snapshot {
-    var s = Snapshot()
-    // A snapshot is as old as its first read. `install` uses this to drop
-    // one that began before a launch.
-    s.taken = nowMs()
-    s.panes = try readPanes()
-    s.children = Processes.byParent()
-    let program = (config.claude as NSString).lastPathComponent
-    for (name, pane) in s.panes where name.hasSuffix("-claude") && !pane.dead {
-      if let pid = Service.findClaude(below: pane.pid, program: program, in: s.children) {
-        s.claudePids[String(name.dropLast("-claude".count))] = pid
-      }
-    }
-    return s
-  }
+  func buildSnapshot() -> Snapshot? { try? mac.readSnapshot(claudeProgram: claudeProgram) }
 
   /// The process nearest the pane's shell whose command names the claude
   /// command. A forked child of claude keeps its command line, so the nearest
   /// one is claude itself.
-  static func findClaude(below pane: Int, program: String, in children: [Int: [ProcessRow]]) -> Int? {
+  static func findClaude(below pane: Int, program: String, in processes: ProcessTable) -> Int? {
     var level = [pane]
     while !level.isEmpty {
-      let kids = level.flatMap { children[$0] ?? [] }
-      if let match = kids.first(where: { runs($0, program: program) }) { return match.pid }
+      let kids = level.flatMap { processes.children(of: $0) }
+      if let match = kids.first(where: { runs(processes.command(of: $0.pid) ?? "", program: program) }) {
+        return match.pid
+      }
       level = kids.map(\.pid)
     }
     return nil
   }
 
-  /// Whether the command of the process names the claude command, in its
+  /// Whether a process's command line names the claude command, in its
   /// first or second word.
-  static func runs(_ row: ProcessRow, program: String) -> Bool {
-    row.command.split(separator: " ").prefix(2).contains { ($0 as NSString).lastPathComponent == program }
+  static func runs(_ command: String, program: String) -> Bool {
+    command.split(separator: " ").prefix(2).contains { ($0 as NSString).lastPathComponent == program }
   }
 
   /// Programs that run a script named in the second word of their command.
   private static let interpreters: Set<String> = ["node", "bun", "deno", "python", "python3", "sh", "bash", "zsh"]
 
-  /// Whether the process is claude itself: its command starts with the claude
+  /// Whether a process's command line is claude itself: it starts with the claude
   /// command, or with an interpreter that runs it. `runs` is looser, because
   /// any argument in the second word matches, such as `tail /tmp/claude`.
   /// Signals use this one.
-  static func isClaude(_ row: ProcessRow, program: String) -> Bool {
-    let words = row.command.split(separator: " ").map { ($0 as NSString).lastPathComponent }
+  static func isClaude(_ command: String, program: String) -> Bool {
+    let words = command.split(separator: " ").map { ($0 as NSString).lastPathComponent }
     guard let first = words.first else { return false }
     return first == program || (interpreters.contains(first) && words.dropFirst().first == program)
-  }
-
-  /// Marks a pane that sbd just started as alive until the next snapshot, so
-  /// a second request can't start it again. A snapshot that began before
-  /// this can no longer replace it.
-  func markStarting(_ name: String) {
-    snapshot.panes[name] = PaneRow(pid: 0, dead: false, clients: snapshot.panes[name]?.clients ?? 0)
-    snapshot.taken = nowMs()
-  }
-
-  /// Takes a newer snapshot, keeping what `markStarting` set since it was read.
-  func install(_ s: Snapshot?) {
-    if let s, s.taken >= snapshot.taken { snapshot = s }
   }
 
   /// Takes a snapshot off the state queue and installs it, without making
@@ -1788,26 +2154,28 @@ public final class Service {
   }
 
   func claudeState(_ id: String) -> ClaudeState {
-    guard let pane = snapshot.panes[paneName(id, .claude)], !pane.dead else { return .stopped }
-    return snapshot.claudePids[id].map(ClaudeState.running) ?? .starting
+    if isUnread(id) { return .unknown }
+    guard let pane = paneRow(id, .claude), !pane.dead else { return .stopped }
+    return claudePid(id).map(ClaudeState.running) ?? .starting
   }
 
   /// Returns once the session's claude is live, or its Claude pane is dead
   /// or missing, or after 5 s. It checks one pane, without a snapshot.
   private func settle(_ id: String) {
     let name = paneName(id, .claude)
+    guard let terminals = queue.sync(execute: { try? site(of: id).terminals() }) else { return }
     let deadline = Date().addingTimeInterval(5)
     while Date() < deadline {
       if queue.sync(execute: { entries[id]?.facts.live ?? true }) { return }
-      guard let dead = host.isDead(name), !dead else { return }
+      guard let dead = terminals.isDead(name), !dead else { return }
       usleep(50_000)
     }
   }
 
   /// The number of background jobs. A job is a child of claude that leads its
   /// own process group, as a background Bash job does.
-  func backgroundJobs(_ pid: Int, in children: [Int: [ProcessRow]]? = nil) -> Int {
-    ((children ?? snapshot.children)[pid] ?? []).filter { $0.pgid == $0.pid }.count
+  func backgroundJobs(_ pid: Int, in processes: ProcessTable) -> Int {
+    processes.children(of: pid).filter { $0.pgid == $0.pid }.count
   }
 
   /// Records the job count when it differs from the one in the session's facts.
@@ -1824,6 +2192,7 @@ public final class Service {
       let now = nowMs()
       superviseMCPServers(now: now)
       superviseHosts(now: now)
+      superviseSites(now: now)
       closeExitedShells()
       for id in entries.keys.sorted() {
         let live = entries[id]?.facts.live ?? false
@@ -1836,18 +2205,20 @@ public final class Service {
           if live || entries[id]?.facts.startedSinceLaunch == true {
             entries[id]?.unreportedSince = nil
           } else if let since = entries[id]?.unreportedSince {
-            if now - since > 10_000 {
+            if now - since > Service.unreportedMs {
               record(id, "running")
               entries[id]?.unreportedSince = nil
             }
           } else {
             entries[id]?.unreportedSince = now
           }
-          let jobs = backgroundJobs(pid)
+          let jobs = backgroundJobs(pid, in: processes(of: id))
           if jobs > 0 { entries[id]?.lastJobSeen = now }
           // A running turn outranks the job rule. The tick records the count after the turn ends.
           if live, entries[id]?.facts.turnRunning == false { recordJobs(id, jobs) }
-          if shouldStop(id, now: now, pid: pid) { try? stop(id, reason: "idle for \(idleStopMs(id) / 1000) s") }
+          if let e = entries[id], stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
+            try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+          }
         case .stopped:
           entries[id]?.unreportedSince = nil
           // Exit typed in the terminal, a stop, or a crash ends claude at the trust dialog.
@@ -1859,17 +2230,22 @@ public final class Service {
           if let e = entries[id], !e.pending.isEmpty, e.facts.startedSinceLaunch,
             now - (e.facts.lastLaunch ?? 0) >= 5_000, !mcpStarting(now: now)
           {
-            try? launch(id, prompt: nil)
+            try? launch(id, prompt: nil, trigger: .pending)
           }
         case .starting:
           entries[id]?.unreportedSince = nil
+        case .unknown:
+          break
         }
         if var e = entries[id] {
           let verdict = Attention.track(e.session, &e.facts, now: now, stateOf: lastState)
           entries[id] = e
           startSummaries(id, verdict)
+          resolveDraftTargets(id, verdict)
+          checkUnknownPosts(id)
         }
       }
+      noteViewed(now: now)
       runQueuedStarts(now: now)
       // A resolved `resume` wait can launch claude.
       if !mcpStarting(now: now) { resolveDueWaits(now: now) }
@@ -1880,33 +2256,27 @@ public final class Service {
       notifyParents(now: now)
       applyMCPChanges(now: now)
       autoContinueSessions(now: now)
+      pruneActivityIfDue(now: now)
       compactSnapshots()
+      pruneHostEvents(now: now)
     }
     endIdleTurns()
     closeGoneDialogs()
     noteTrustDialogs()
   }
 
-  func shouldStop(_ id: String, now: Int64, pid: Int) -> Bool {
-    guard let e = entries[id], isQuiet(id, pid: pid, now: now) else { return false }
-    // A background job's process exits up to 1.3 s before claude starts the
-    // turn that reports it, so the wait starts again when the job exits.
-    let idle = now - e.idleSince
-    guard idle >= idleStopMs(id) else { return false }
-    // A running subagent's tool calls fire hooks. A subagent with no event
-    // for twice the idle time lost its SubagentStop, as when sbd was down.
-    return e.facts.subagents.isEmpty || idle >= 2 * Int64(config.idleStopSeconds) * 1000
+  var stopPolicy: StopPolicy { StopPolicy(idleStopSeconds: config.idleStopSeconds) }
+
+  /// Records that each session with a terminal on its Claude pane was viewed now.
+  func noteViewed(now: Int64) {
+    for id in entries.keys where attached(id) { entries[id]?.lastViewed = now }
   }
 
-  /// Whether the session's claude sits idle with nothing that a stop would
-  /// lose: no turn, prompt, trust dialog, queued or in-flight message, or
-  /// background job, and no terminal on screen. The idle stop and the live cap both need it.
-  func isQuiet(_ id: String, pid: Int, now: Int64) -> Bool {
-    guard let e = entries[id] else { return false }
-    let f = e.facts
-    return f.live && !f.turnRunning && f.openPermission == nil && f.openQuestion == nil
-      && f.trustCard == nil && !e.messageWaiting(now: now) && !attached(id)
-      && backgroundJobs(pid) == 0
+  /// The session's running claude, as the stop rules see it.
+  func stopInput(_ e: Entry, jobs: Int, now: Int64) -> StopPolicy.Claude {
+    StopPolicy.Claude(
+      session: e.session, facts: e.facts, lastJobSeen: e.lastJobSeen, jobs: jobs,
+      messageWaiting: e.messageWaiting(now: now), attached: attached(e.session.id))
   }
 
   // MARK: Summaries
@@ -1920,13 +2290,13 @@ public final class Service {
 
   func summary(_ id: String, rowFollowups: PlanRowFollowups? = nil) -> SessionSummary {
     let e = entries[id]!
-    let verdict = Attention.shown(Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState), e.facts)
+    let verdict = shown(id, Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState))
     let s = e.session
     var out = SessionSummary(
       id: id, name: s.name, cwd: s.cwd, repo: s.repo, branch: e.branch,
       claudeSessionId: s.claudeSessionId, state: verdict.state, reason: verdict.reason, since: e.facts.stateSince,
       lastActivity: e.facts.lastActivity,
-      live: e.facts.live, claudePid: snapshot.claudePids[id],
+      live: e.facts.live, claudePid: claudePid(id),
       attached: attached(id), lastReply: e.facts.lastReply,
       waits: s.waits ?? [], notes: s.notes ?? [], cards: e.facts.cards,
       openPrompt: e.facts.openPermission != nil || e.facts.openQuestion != nil, pr: e.facts.pr.map(PRSummary.init),
@@ -1941,14 +2311,15 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if Triage.mayHaveItem(out) {
-      let shown = Triage.itemAndDecisions(e.facts, verdict)
-      out.triage = shown.item
+    let shown = Triage.itemAndDecisions(e.facts, verdict, kind: s.kind)
+    out.triage = shown.item
+    if out.triage != nil {
       let details = Triage.details(for: out)
       out.triage?.details = details
-      out.decisions = shown.decisions
-      if shown.decisionsSent { out.decisionsSent = true }
+      if let callout = Triage.branchCallout(for: out) { out.triage?.callouts.append(callout) }
     }
+    out.decisions = shown.decisions
+    if shown.decisionsSent { out.decisionsSent = true }
     out.decisionsDelivery = e.facts.decisionsDelivery
     out.followup = s.followup
     out.created = s.created
@@ -1967,7 +2338,15 @@ public final class Service {
     out.permissionMode = e.facts.permissionMode
     out.pr?.mergeMethod = e.facts.mergeMethod
     if verdict.state == .readyToMerge, let since = e.facts.readyToMergeSince { out.since = since }
-    if e.queuedSince != nil { out.reason = queuedReason }
+    if e.queuedSince != nil {
+      out.reason = queuedReason(onHost: e.session.host)
+      out.queued = true
+    }
+    if let host = s.host {
+      out.host = host
+      out.link = hostLinks[host]?.status.state
+      if let error = remoteSites[host]?.setupError { out.reason = error }
+    }
     out.shellClosed = s.shellClosed
     out.removal = s.removal
     // A follow-up has been Not started since it was added, which for an
@@ -1985,24 +2364,68 @@ public final class Service {
 
   // MARK: Settings
 
-  /// Every hook runs `sb hook`, which forwards the payload to sbd. It exits 0
-  /// with no output when sbd is down, so the session shows no hook errors.
-  private func writeClaudeSettings() throws {
+  /// Writes the --settings file of a local session's claude. A claude that an
+  /// earlier sbd started reads <SB_HOME>/claude-settings.json. sbd leaves that
+  /// file in place. Its hooks keep working until that claude's next launch.
+  private func writeClaudeSettings(_ id: String, _ session: Session) throws {
+    try FileManager.default.createDirectory(atPath: home.sessionFolder(id), withIntermediateDirectories: true)
+    var settings = Service.hookSettings(command: "\(shellQuote(sbPath)) hook")
+    if !memoryPinOff, let base = memoryBase(session) {
+      settings["autoMemoryDirectory"] = .string(ClaudeFolder.memoryDirectory(base))
+    }
+    try JSON.object(settings).text.write(toFile: home.claudeSettings(id), atomically: true, encoding: .utf8)
+  }
+
+  /// The folder that claude names a local session's auto-memory folder after: the main checkout of the git
+  /// repository that holds the session's folder, or the folder's real path when no repository holds it. It is
+  /// nil when git can't name the main checkout of a repository, such as a bare one. `newSession` and
+  /// `rememberRepo` cache the main checkout before the first launch. This runs git on the state queue at the
+  /// first launch in a folder that neither cached, such as one from before sbd restarted, and at each launch
+  /// in a folder outside git.
+  private func memoryBase(_ s: Session) -> String? {
+    if let known = memoryCheckouts[s.cwd] { return known }
+    if let main = try? mainCheckout(of: s.cwd) {
+      memoryCheckouts[s.cwd] = main
+      return main
+    }
+    if (try? gitOutput(s.cwd, ["rev-parse", "--git-dir"], at: mac)) != nil {
+      memoryCheckouts[s.cwd] = .some(nil)
+      return nil
+    }
+    return (try? mac.realPath(s.cwd)) ?? s.cwd
+  }
+
+  /// Makes later launches leave out `autoMemoryDirectory` when claude started a conversation of a local
+  /// session in a folder that `ClaudeFolder.name` doesn't give for its cwd. A resumed conversation keeps the
+  /// folder it started in, so only a new one shows how claude names folders. It checks how claude names a
+  /// folder, not which folder claude names the memory folder after.
+  private func checkFolderRule(_ session: Session, _ payload: JSON) {
+    guard !memoryPinOff, session.host == nil, ["startup", "clear"].contains(payload["source"]?.string),
+      let transcript = payload["transcript_path"]?.string
+    else { return }
+    let cwd = payload["cwd"]?.string ?? session.cwd
+    guard !ClaudeFolder.holds(transcript, startedIn: cwd, realPath: try? mac.realPath(cwd)) else { return }
+    memoryPinOff = true
+    logLine(
+      "stops pinning auto-memory: claude put a conversation that started in \(cwd) in \(transcript), not in \(ClaudeFolder.name(cwd))"
+    )
+  }
+
+  /// The settings that run `command` for every hook that sbd
+  /// reads. Every hook runs `sb hook`, which forwards the payload to sbd. It
+  /// exits 0 with no output when sbd is down, so the session shows no hook errors.
+  static func hookSettings(command: String) -> [String: JSON] {
     var hooks: [String: JSON] = [:]
     for event in SessionFacts.hookKinds {
       let timeout: JSON = event == "PermissionRequest" ? .number(Double(Card.holdSeconds)) : 30
-      let handler: JSON = ["type": "command", "command": .string("\(shellQuote(sbPath)) hook"), "timeout": timeout]
+      let handler: JSON = ["type": "command", "command": .string(command), "timeout": timeout]
       hooks[event] = [["matcher": "", "hooks": [handler]]]
     }
-    let text = JSON.object(["hooks": .object(hooks)]).text
-    try text.write(toFile: home.claudeSettings, atomically: true, encoding: .utf8)
+    return ["hooks": .object(hooks)]
   }
 }
 
 extension SessionFacts {
-  /// Whether the claude that the last launch started has reported its SessionStart.
-  fileprivate var startedSinceLaunch: Bool { (lastStart ?? 0) >= (lastLaunch ?? 0) }
-
   /// Whether the claude that the last launch started has ended, so that its
   /// process is exiting.
   var exiting: Bool { !live && startedSinceLaunch }

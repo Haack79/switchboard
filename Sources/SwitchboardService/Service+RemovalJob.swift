@@ -110,38 +110,36 @@ extension Service {
     return nil
   }
 
-  /// Runs `rm`'s phases on the session with the removal's arguments. The
-  /// worktree goes through the trash as `releaseThroughTrash` says, and the
-  /// trash folder is purged once the session is forgotten. A removal whose
-  /// folder an earlier run moved to the trash continues from there, as
-  /// `folderInTrash` says. It resolves the to-dos in the removal's `resolve`
-  /// that are still open, and a to-do that is open and not in `resolve`
-  /// fails the removal. A failure before the session is forgotten records
-  /// the removal as failed with `rm`'s message, and the session stays. A
-  /// branch or remote branch that stayed after the session was forgotten
-  /// becomes a removal notice. It runs on `removalQueue`.
+  /// Runs `rm`'s phases on the session with the removal's arguments, at the
+  /// session's site, as `removeAtSite` says. On this Mac, the worktree goes
+  /// through the trash as `releaseThroughTrash` says, and the trash folder is
+  /// purged once the session is forgotten. A removal whose folder an earlier
+  /// run moved to the trash continues from there, as `folderInTrash` says.
+  /// It resolves the to-dos in the removal's `resolve` that are still open,
+  /// and a to-do that is open and not in `resolve` fails the removal. A
+  /// failure before the session is forgotten records the removal as failed
+  /// with `rm`'s message, and the session stays. A branch or remote branch
+  /// that stayed after the session was forgotten becomes a removal notice. It
+  /// runs on `removalQueue`.
   private func runRemoval(_ id: String, _ removal: Removal) {
     let resolving = Set(removal.resolve ?? [])
     do {
       let inTrash = try folderInTrash(id, removal)
-      let check = try checkBeforeRemoval(
+      var trash: String?
+      let (session, released) = try removeAtSite(
         id, worktree: removal.worktree, branch: removal.branch, remoteBranch: removal.remoteBranch,
-        resolving: resolving)
-      let session = check.session
-      let (repo, branch, supacode) = try stopForRemoval(
-        session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone,
-        worktree: removal.worktree, branch: removal.branch, resolving: resolving, ancestry: nil,
-        command: "sb rm --worktree", again: "retry the delete")
-      let trash = try releaseThroughTrash(
-        session, removal, inTrash: inTrash, repo: repo, supacode: supacode, check: check)
-      let released =
-        trash == nil
-        ? try releaseFiles(
-          session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, folderGone: check.folderGone,
-          remoteBranch: check.remoteTarget)
-        : releaseBranches(
-          session, repo: repo, branch: branch, supacode: supacode, pr: check.pr, remoteBranch: check.remoteTarget)
-      try forgetRemoved(session, released, resolving: resolving)
+        resolving: resolving, ancestry: nil, command: "sb rm --worktree", again: "retry the delete"
+      ) { check, checked, site in
+        trash = try releaseThroughTrash(check, checked, removal, inTrash: inTrash)
+        guard trash == nil else {
+          return releaseBranches(
+            check.session, repo: checked.repo, branch: checked.branch, supacode: checked.supacode, pr: checked.pr,
+            remoteBranch: check.remoteTarget, at: site)
+        }
+        return try releaseFiles(
+          check.session, repo: checked.repo, branch: checked.branch, supacode: checked.supacode, pr: checked.pr,
+          folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
+      }
       if let trash { purge(trash) }
       if let kept = released.keptMessage(id, remoteBranch: removal.remoteBranch) {
         logLine(kept)

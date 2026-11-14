@@ -32,4 +32,32 @@ public enum KnownRepos {
       return an != bn ? an < bn : a.path < b.path
     }
   }
+
+  /// The repository that the New Session sheet selects for `group`: the one whose path is the checkout of the
+  /// most work sessions in the group. A tie goes to the one that comes first in `known`. When no session in the
+  /// group has a checkout in `known`, or `group` is nil, it is the first of `known`.
+  public static func preferred(_ known: [KnownRepo], group: String?, sessions: [SessionSummary]) -> KnownRepo? {
+    guard let group else { return known.first }
+    var counts: [String: Int] = [:]
+    for s in sessions where s.group == group && s.kind == .work {
+      if let checkout = s.checkout { counts[checkout, default: 0] += 1 }
+    }
+    var best: (repo: KnownRepo, count: Int)?
+    for repo in known {
+      let count = counts[repo.path, default: 0]
+      if count > (best?.count ?? 0) { best = (repo, count) }
+    }
+    return best?.repo ?? known.first
+  }
+
+  /// The group that Start from an issue in `repository` (owner/name) selects: the one that holds the most work
+  /// sessions in that repository, the converse of `preferred`. A tie goes to the group whose id sorts first. It is
+  /// nil when no session in a group works in the repository.
+  public static func preferredGroup(repository: String, sessions: [SessionSummary]) -> String? {
+    var counts: [String: Int] = [:]
+    for s in sessions where s.kind == .work && s.repository?.lowercased() == repository.lowercased() {
+      if let group = s.group { counts[group, default: 0] += 1 }
+    }
+    return counts.max { a, b in a.value != b.value ? a.value < b.value : a.key > b.key }?.key
+  }
 }

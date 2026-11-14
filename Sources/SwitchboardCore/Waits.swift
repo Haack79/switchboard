@@ -16,7 +16,9 @@ public enum Author: String, Codable, Sendable {
 
 /// Something a session waits on, and what happens when it resolves. sbd
 /// resolves the `date`, `session`, and `manual` kinds on each tick. A poller
-/// resolves the others through `Service.resolveWait`.
+/// resolves the others through `Service.resolveWait`. A wait that passes its
+/// `recheck` time stays open, and its session moves to Needs you until the
+/// wait resolves or the user clears it.
 public struct Wait: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, CaseIterable, Sendable {
     case ci
@@ -33,8 +35,10 @@ public struct Wait: Codable, Equatable, Sendable {
     /// The `wait` request's fields that this kind reads.
     var fields: Set<String> {
       switch self {
-      case .ci, .queue, .merge: ["target"]
-      case .review, .botReview, .approval: ["target", "who"]
+      case .ci, .merge: ["target"]
+      case .queue: ["target", "since"]
+      case .review, .botReview: ["target", "who", "since"]
+      case .approval: ["target", "who"]
       case .deploy: ["target", "environment", "service"]
       case .session: ["target", "state"]
       case .date, .manual: ["until"]
@@ -48,6 +52,9 @@ public struct Wait: Codable, Equatable, Sendable {
     case resume
     /// Move the session to Needs you with what happened as the reason.
     case notify
+    /// Nothing happens to the session. The `sb wait --block` that set the
+    /// wait reads the outcome from the `wait-resolved` event.
+    case caller
   }
 
   public struct PullRequest: Codable, Equatable, Sendable {
@@ -115,6 +122,12 @@ public struct Wait: Codable, Equatable, Sendable {
   public var service: String?
   /// When a `date` wait resolves, or when a `manual` wait returns to Needs you.
   public var until: Int64?
+  /// For a `review`, `bot-review`, or `queue` wait, the time that
+  /// `countsAfter` uses in place of `created`. For `queue`, it covers Trunk's
+  /// queue state, not GitHub's merge queue. A loop of `sb wait --block`
+  /// calls sets a new wait on each call. With `since`, a review that landed
+  /// between two calls still resolves the next call's wait.
+  public var since: Int64?
   public var note: String?
   /// The commit that the session's checked-out branch pointed at when a `ci`
   /// wait on the session's own PR was set. Nil for a wait on another PR, for
@@ -125,11 +138,19 @@ public struct Wait: Codable, Equatable, Sendable {
   /// Milliseconds since the epoch.
   public var created: Int64
   public var then: Then
+  /// When the wait stops holding the session in Waiting and moves it to
+  /// Needs you. It is nil for a `date` wait, for a manual wait, whose `until`
+  /// serves instead, and for a wait that sbd has not stamped yet.
+  public var recheck: Int64?
+
+  /// The time after which a review or a queue change counts.
+  public var countsAfter: Int64 { since ?? created }
 
   public init(
     id: String, kind: Kind, pr: PullRequest? = nil, session: SessionTarget? = nil, state: AttentionState? = nil,
-    who: String? = nil, environment: String? = nil, service: String? = nil, until: Int64? = nil, note: String? = nil,
-    headSha: String? = nil, by: Author = .you, created: Int64, then: Then = .resume
+    who: String? = nil, environment: String? = nil, service: String? = nil, until: Int64? = nil, since: Int64? = nil,
+    note: String? = nil, headSha: String? = nil, by: Author = .you, created: Int64, then: Then = .resume,
+    recheck: Int64? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -140,11 +161,13 @@ public struct Wait: Codable, Equatable, Sendable {
     self.environment = environment
     self.service = service
     self.until = until
+    self.since = since
     self.note = note
     self.headSha = headSha
     self.by = by
     self.created = created
     self.then = then
+    self.recheck = recheck
   }
 
   public static let environments = ["dev", "prod-us", "prod-eu", "prod"]
@@ -175,6 +198,29 @@ public struct Wait: Codable, Equatable, Sendable {
     return summary + (note.map { " (\($0))" } ?? "")
   }
 
+  /// Whether the wait is past its recheck time and still open.
+  public func isOverdue(now: Int64) -> Bool {
+    guard let recheck else { return false }
+    return recheck <= now
+  }
+
+  /// The reason line of an overdue wait. The age is the time from when the
+  /// wait was set to its recheck time, so the line stays the same while the
+  /// wait stays overdue.
+  public var overdueLine: String {
+    outcomeLine("still open after \(Wait.age((recheck ?? created) - created))")
+  }
+
+  /// A duration in its largest whole unit, such as `45 min`, `2 h`, or `3 d`.
+  static func age(_ ms: Int64) -> String {
+    let minute: Int64 = 60_000
+    let hour = 60 * minute
+    let day = 24 * hour
+    if ms >= day { return "\(ms / day) d" }
+    if ms >= hour { return "\(ms / hour) h" }
+    return "\(max(1, ms / minute)) min"
+  }
+
   /// The reason line after the wait resolved with `notify`.
   public func outcomeLine(_ outcome: String) -> String { "\(summary): \(outcome)" }
 
@@ -192,6 +238,10 @@ public struct Wait: Codable, Equatable, Sendable {
   /// What happened, when sbd itself resolves this wait at `now`, or nil while
   /// it stays open. `stateOf` gives another session's state, or nil when that
   /// session no longer exists. The kinds that a poller resolves return nil.
+  ///
+  /// A `session` wait also resolves when its target can't reach the wanted
+  /// state on its own: the target was removed, it reached Done, or it went
+  /// Stale, which is how sbd defines an abandoned session.
   public func resolution(now: Int64, stateOf: (String) -> AttentionState?) -> String? {
     switch kind {
     case .date, .manual:
@@ -200,7 +250,12 @@ public struct Wait: Codable, Equatable, Sendable {
     case .session:
       guard let target = session else { return nil }
       guard let current = stateOf(target.id) else { return "it was removed" }
-      return current == (state ?? .done) ? "it did" : nil
+      switch current {
+      case state ?? .done: return "it did"
+      case .done: return "it reached Done first"
+      case .stale: return "it went stale"
+      default: return nil
+      }
     default:
       return nil
     }
@@ -214,15 +269,15 @@ public struct Wait: Codable, Equatable, Sendable {
   /// - `ci`: the head commit's rollup is SUCCESS, or FAILURE or ERROR, or the
   ///   head commit's Depot run has a failed job. A Depot failure names the
   ///   failed jobs.
-  /// - `review` and `bot-review`: a review that was submitted after the wait was
-  ///   set, by `who`, or by any app when a `bot-review` wait has no `who`. The
-  ///   outcome names the newest one.
+  /// - `review` and `bot-review`: a review that was submitted after
+  ///   `countsAfter`, by `who`, or by any app when a `bot-review` wait has no
+  ///   `who`. The outcome names the newest one.
   /// - `approval`: `who`'s last verdict is an approval, or the PR is approved
   ///   when there is no `who`. It holds at any time, since an approval is a
   ///   state.
   /// - `merge`: the PR merged or closed.
   /// - `queue`: the PR merged or closed, or the queue state shows that Trunk
-  ///   merged it or removed it from the queue after the wait was set. A PR that
+  ///   merged it or removed it from the queue after `countsAfter`. A PR that
   ///   Trunk has not queued yet keeps the wait open. A state that trunk gave
   ///   names Trunk's reason for a removal.
   public func resolution(of pr: SwitchboardCore.PullRequest) -> String? {
@@ -245,7 +300,8 @@ public struct Wait: Codable, Equatable, Sendable {
     case .review, .botReview:
       let verbs = ["APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed"]
       let newest = pr.reviews.last { r in
-        guard verbs[r.state] != nil, let at = r.submittedAt.flatMap(Transcript.milliseconds), at > created else {
+        guard verbs[r.state] != nil, let at = r.submittedAt.flatMap(Transcript.milliseconds), at > countsAfter
+        else {
           return false
         }
         if let who { return Wait.sameLogin(r.author, who) }
@@ -262,7 +318,7 @@ public struct Wait: Codable, Equatable, Sendable {
     case .queue:
       if ended != nil { return ended }
       // A status from before the wait can describe an earlier run of the PR.
-      guard let at = pr.queueAt, at > created else { return nil }
+      guard let at = pr.queueAt, at > countsAfter else { return nil }
       switch pr.queue {
       case .removed?:
         guard let label = pr.queueLabel, let text = pr.queueText else { return "Trunk removed it from the queue" }
@@ -275,15 +331,15 @@ public struct Wait: Codable, Equatable, Sendable {
     }
   }
 
-  /// Whether the PR merged or closed before this wait was set, or at a time
-  /// that GitHub didn't give. A deploy wait is usually set after its PR
-  /// merged, so a merge doesn't count for it.
-  public func finishedBeforeSet(_ pr: SwitchboardCore.PullRequest) -> Bool {
+  /// Whether the PR merged or closed before `countsAfter`, or at a time that
+  /// GitHub didn't give. A deploy wait is usually set after its PR merged, so
+  /// a merge doesn't count for it.
+  public func finishedBeforeItCounts(_ pr: SwitchboardCore.PullRequest) -> Bool {
     guard pr.state != .open, !(kind == .deploy && pr.state == .merged) else { return false }
     guard let at = (pr.state == .merged ? pr.mergedAt : pr.closedAt).flatMap(Transcript.milliseconds) else {
       return true
     }
-    return at < created
+    return at < countsAfter
   }
 
   /// GitHub's REST API shows a GitHub App's login with `[bot]`, and its
@@ -313,6 +369,15 @@ public struct Wait: Codable, Equatable, Sendable {
     "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
   ]
 
+  /// The milliseconds in a duration such as `90s`, `30m`, `2h`, `1d`, or `1w`.
+  public static func durationMs(_ text: String) -> Int64? {
+    guard let unit = text.last.flatMap({ units[$0] }) else { return nil }
+    let count = text.dropLast()
+    guard !count.isEmpty, count.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int64(count) else { return nil }
+    let (ms, overflow) = n.multipliedReportingOverflow(by: unit * 1000)
+    return overflow ? nil : ms
+  }
+
   /// Reads a duration after `now` (`90s`, `30m`, `2h`, `1d`, `1w`), a date
   /// (`2026-10-26`, midnight in `zone`), a date and time in `zone`
   /// (`2026-10-26T09:00`, `2026-10-26 09:00`, optionally with seconds), or an
@@ -322,12 +387,10 @@ public struct Wait: Codable, Equatable, Sendable {
   /// `03:30`.
   public static func parseTime(_ text: String, now: Int64, zone: TimeZone = .current) -> Int64? {
     let text = text.trimmingCharacters(in: .whitespaces)
-    if let unit = text.last.flatMap({ units[$0] }) {
-      let count = text.dropLast()
-      guard !count.isEmpty, count.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int64(count) else { return nil }
-      let (ms, overflow) = n.multipliedReportingOverflow(by: unit * 1000)
+    if let unit = text.last, units[unit] != nil {
+      guard let ms = durationMs(text) else { return nil }
       let (time, later) = now.addingReportingOverflow(ms)
-      return overflow || later ? nil : time
+      return later ? nil : time
     }
     // The zone formatter reads a time that the zone repeats as the later one.
     // Calendar would read it as the earlier one, so it only handles skips.
@@ -356,180 +419,6 @@ public struct Wait: Codable, Equatable, Sendable {
     f.dateFormat = format
     return f
   }
-}
-
-/// The arguments of the `wait` request, as sb sends them. Every field is text,
-/// so that a bad value gets an error that names it.
-public struct WaitRequest: Codable, Equatable, Sendable {
-  public var kind: String?
-  /// A PR for the PR kinds, or a session for `session`.
-  public var target: String?
-  public var who: String?
-  public var environment: String?
-  public var service: String?
-  public var state: String?
-  public var until: String?
-  public var note: String?
-  public var then: String?
-  public var by: String?
-
-  /// Checks the arguments against the kind and builds the wait. The kind
-  /// defaults to `manual`. A field that the kind doesn't use is refused.
-  /// `waiter` is the id of the session that waits, which a `session` wait
-  /// can't target. `findSession` looks up a session by id, prefix, or name.
-  public func makeWait(id: String, waiter: String, now: Int64, findSession: (String) throws -> Wait.SessionTarget)
-    throws -> Wait
-  {
-    let kind = try oneOf("wait kind", self.kind ?? Wait.Kind.manual.rawValue, Wait.Kind.allCases, \.rawValue)
-    let given = [
-      ("target", target), ("who", who), ("environment", environment), ("service", service), ("state", state),
-      ("until", until),
-    ]
-    if let (field, _) = given.first(where: { $0.1 != nil && !kind.fields.contains($0.0) }) {
-      throw APIError("a \(kind.rawValue) wait doesn't take \(field)")
-    }
-    let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-    var wait = Wait(
-      id: id, kind: kind, who: who, service: service, note: trimmed?.isEmpty == false ? trimmed : nil,
-      by: try Author(parsing: by), created: now, then: kind == .manual ? .notify : .resume)
-    if let then {
-      guard let value = Wait.Then(rawValue: then) else { throw APIError("then is resume or notify, not \(then)") }
-      wait.then = value
-    }
-    switch kind {
-    case .session:
-      guard let target else { throw APIError("a session wait needs the other session as its target") }
-      let other = try findSession(target)
-      guard other.id != waiter else { throw APIError("a session can't wait on itself") }
-      wait.session = other
-      wait.state = try oneOf("state", state ?? AttentionState.done.rawValue, AttentionState.allCases, \.rawValue)
-    case .date, .manual:
-      if let until {
-        guard let time = Wait.parseTime(until, now: now) else { throw APIError("can't read the time \(until)") }
-        guard time > now else { throw APIError("\(until) has passed") }
-        wait.until = time
-      } else if kind == .date {
-        throw APIError("a date wait needs until")
-      }
-    default:
-      if let target {
-        guard let pr = Wait.PullRequest(parsing: target) else { throw APIError("\(target) isn't a PR") }
-        wait.pr = pr
-      }
-      if kind == .review && who == nil { throw APIError("a review wait needs who, the reviewer") }
-      if kind == .deploy {
-        wait.environment = try oneOf("environment", environment ?? "prod", Wait.environments) { $0 }
-      }
-    }
-    return wait
-  }
-
-  /// The value whose name is `text`, or an error that lists the names.
-  private func oneOf<T>(_ what: String, _ text: String, _ values: [T], _ name: (T) -> String) throws -> T {
-    guard let value = values.first(where: { name($0) == text }) else {
-      throw APIError("no \(what) \(text). Use one of: \(values.map(name).joined(separator: ", "))")
-    }
-    return value
-  }
-}
-
-/// A note on a session. A to-do is a note that names a task for the user.
-/// sbd refuses to delete a session that has an open to-do.
-public struct Note: Codable, Equatable, Sendable {
-  public enum Kind: String, Codable, Sendable, CaseIterable {
-    case note, todo
-
-    /// The kind that `text` names. Nil text is a plain note.
-    public init(parsing text: String?) throws {
-      guard let kind = Kind(rawValue: text ?? Kind.note.rawValue) else {
-        throw APIError("kind is \(Kind.allCases.map(\.rawValue).joined(separator: " or ")), not \(text ?? "")")
-      }
-      self = kind
-    }
-  }
-
-  /// How and when the user resolved a to-do.
-  public struct Resolution: Codable, Equatable, Sendable {
-    /// Milliseconds since the epoch.
-    public var t: Int64
-    /// Always `you`. Only the user resolves a to-do.
-    public var by: Author
-    /// "resolved", or "resolved and deleted the session".
-    public var how: String
-
-    public init(t: Int64, by: Author, how: String) {
-      self.t = t
-      self.by = by
-      self.how = how
-    }
-  }
-
-  public var id: String
-  public var text: String
-  public var by: Author
-  /// Milliseconds since the epoch.
-  public var t: Int64
-  /// Nil reads as `.note`. Rows that an older sbd stored have none.
-  public var kind: Kind?
-  /// Nil while a to-do is open.
-  public var resolved: Resolution?
-
-  public init(id: String, text: String, by: Author, t: Int64, kind: Kind? = nil) {
-    self.id = id
-    self.text = text
-    self.by = by
-    self.t = t
-    self.kind = kind
-  }
-
-  public var isOpenTodo: Bool { kind == .todo && resolved == nil }
-}
-
-/// A row of the `resolved_todos` table. The row stays after its session is deleted.
-public struct ResolvedTodo: Codable, Equatable, Sendable {
-  public var id: Int64?
-  public var session: String
-  public var name: String
-  public var repo: String?
-  public var branch: String?
-  public var pr: Int?
-  /// The note's id.
-  public var note: String
-  public var text: String
-  /// Who added the to-do.
-  public var by: Author
-  /// When the to-do was added, in ms since the epoch.
-  public var added: Int64
-  /// When the user resolved it, in ms since the epoch.
-  public var resolved: Int64
-  public var how: String
-}
-
-extension ResolvedTodo {
-  /// `branch` and `pr` are the branch and the PR that sbd shows for the session.
-  public init(session: Session, branch: String?, note: Note, pr: Int?, resolution: Note.Resolution) {
-    self.init(
-      session: session.id, name: session.name, repo: session.repo, branch: branch, pr: pr, note: note.id,
-      text: note.text, by: note.by, added: note.t, resolved: resolution.t, how: resolution.how)
-  }
-}
-
-extension Array where Element == Note {
-  /// The open to-dos, in the order they were added.
-  public var openTodos: [Note] { filter(\.isOpenTodo) }
-  /// The notes that are not to-dos, including rows without a kind.
-  public var plainNotes: [Note] { filter { $0.kind != .todo } }
-  public var resolvedTodos: [Note] { filter { $0.kind == .todo && $0.resolved != nil } }
-}
-
-extension Session {
-  /// The open to-dos, in the order they were added.
-  public var openTodos: [Note] { (notes ?? []).openTodos }
-}
-
-extension SessionSummary {
-  /// The open to-dos, in the order they were added.
-  public var openTodos: [Note] { notes.openTodos }
 }
 
 /// A prefix and 5 random characters that aren't in `taken`, such as `w3k9ap`.
@@ -562,11 +451,16 @@ extension SessionFacts {
 
 extension Attention {
   /// Needs you after a wait resolved with `notify`, until the next prompt,
-  /// even while other waits stay open. Otherwise Waiting while the session
-  /// has an open wait.
-  static func waitVerdict(_ session: Session, _ facts: SessionFacts) -> Verdict? {
+  /// even while other waits stay open. Needs you while an open wait is past
+  /// its recheck time, naming each overdue wait. Otherwise Waiting while the
+  /// session has an open wait.
+  static func waitVerdict(_ session: Session, _ facts: SessionFacts, now: Int64) -> Verdict? {
     if let outcome = facts.waitOutcome { return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info) }
     guard let waits = session.waits, !waits.isEmpty else { return nil }
+    let overdue = waits.filter { $0.isOverdue(now: now) }
+    if !overdue.isEmpty {
+      return Verdict(state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info)
+    }
     return Verdict(state: .waiting, reason: oneLine(waits.map(\.line).joined(separator: "; ")))
   }
 }

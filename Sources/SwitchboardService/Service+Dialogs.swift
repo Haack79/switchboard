@@ -17,15 +17,16 @@ extension Service {
   /// request marks the event `allowed`. It captures the screens off the state
   /// queue.
   func closeGoneDialogs() {
-    let due: [(id: String, pane: String)] = queue.sync {
+    let due: [(id: String, pane: String, site: any SessionSite)] = queue.sync {
       entries.keys.sorted().compactMap { id in
         guard entries[id]?.facts.cards.contains(where: DialogWatch.watches) == true, case .running = claudeState(id)
         else { return nil }
-        return (id, paneName(id, .claude))
+        guard let site = try? site(of: id) else { return nil }
+        return (id, paneName(id, .claude), site)
       }
     }
     guard !due.isEmpty else { return }
-    let screens = due.map { ($0.id, try? host.screen($0.pane)) }
+    let screens = due.map { ($0.id, try? $0.site.screen($0.pane)) }
     queue.sync {
       for case (let id, let screen?) in screens {
         guard let cards = entries[id]?.facts.cards, let left = entries[id]?.dialogs.check(cards, screen: screen)
@@ -45,7 +46,7 @@ extension Service {
     let (pane, dialog) = try shownDialog(card)
     switch answer {
     case .yes: try pick("Yes", card, pane, dialog, ClaudeScreen.isYes, key: "Up")
-    case .escape: try host.press(pane, ["Escape"])
+    case .escape: try site(of: card.session).terminals().press(pane, ["Escape"])
     }
   }
 
@@ -67,14 +68,14 @@ extension Service {
     }
   }
 
-  /// The card's pane and the lines of its dialog. It throws when the screen
-  /// doesn't show the card's dialog, because keys would answer another.
+  /// The card's pane and the lines of its dialog. It throws why when the
+  /// screen doesn't show the card's dialog, because keys would answer another.
   private func shownDialog(_ card: Card) throws -> (pane: String, dialog: [String]) {
     let pane = paneName(card.session, .claude)
-    guard case .running = claudeState(card.session), let dialog = cardDialog(card, pane) else {
-      throw APIError("the terminal doesn't show card \(card.id)'s dialog. Answer it in the terminal")
+    guard case .running = claudeState(card.session) else {
+      return (pane, try ClaudeScreen.typingDialog(card, screen: nil))
     }
-    return (pane, dialog)
+    return (pane, try typingDialog(card, pane))
   }
 
   /// Waits up to 3 s for the card's session to show no dialog, and returns
@@ -82,9 +83,10 @@ extension Service {
   /// dialog that still shows. This runs on the state queue.
   func dialogClosed(_ card: Card) -> Bool {
     let pane = paneName(card.session, .claude)
+    guard let site = try? site(of: card.session) else { return false }
     let deadline = Date() + 3
     while true {
-      if let screen = try? host.screen(pane), ClaudeScreen.dialog(screen) == nil { return true }
+      if let screen = try? site.screen(pane), ClaudeScreen.dialog(screen) == nil { return true }
       if Date() >= deadline { return false }
       usleep(100_000)
     }
@@ -97,10 +99,11 @@ extension Service {
   private func pick(
     _ name: String, _ card: Card, _ pane: String, _ dialog: [String], _ wanted: (String) -> Bool, key: String
   ) throws {
+    let terminals = try site(of: card.session).terminals()
     let deadline = Date() + 1
     var item = ClaudeScreen.highlighted(dialog)
     while let current = item, !wanted(current), Date() < deadline {
-      try host.press(pane, [key])
+      try terminals.press(pane, [key])
       repeat {
         usleep(50_000)
         item = cardDialog(card, pane).flatMap(ClaudeScreen.highlighted)
@@ -109,14 +112,15 @@ extension Service {
     guard let item, wanted(item) else {
       throw APIError("can't pick \(name) in card \(card.id)'s dialog. Answer it in the terminal")
     }
-    try host.press(pane, ["Enter"])
+    try terminals.press(pane, ["Enter"])
   }
 
   /// The lines of the card's dialog, or nil when the screen doesn't show it.
-  private func cardDialog(_ card: Card, _ pane: String) -> [String]? {
-    guard let screen = try? host.screen(pane), let dialog = ClaudeScreen.dialog(screen),
-      ClaudeScreen.shows(card, dialog)
-    else { return nil }
-    return dialog
+  private func cardDialog(_ card: Card, _ pane: String) -> [String]? { try? typingDialog(card, pane) }
+
+  /// The lines of the card's dialog on the pane's screen. Its error says why
+  /// sbd may not type into the dialog.
+  private func typingDialog(_ card: Card, _ pane: String) throws -> [String] {
+    try ClaudeScreen.typingDialog(card, screen: try? site(of: card.session).screen(pane))
   }
 }

@@ -18,7 +18,7 @@ final class GitHubPoller {
   /// After GitHub's rate limit, no request to that quota goes out before this
   /// time. GitHub counts GraphQL and REST (`core`) requests separately. Other
   /// `gh` calls with the same token spend `core`.
-  private var graphQLPausedUntil: Int64 = 0
+  private(set) var graphQLPausedUntil: Int64 = 0
   private var restPausedUntil: Int64 = 0
   var tracked: [String: Tracked] = [:]
   /// The PRs that this sbd has read, by node id, with their comments from
@@ -58,6 +58,8 @@ final class GitHubPoller {
   /// Each PR's merge details, by node id, with the head commit they belong
   /// to and when the poller read them.
   var mergeDetails: [String: (head: String, read: Int64, details: MergeDetails)] = [:]
+  /// When the last issues poll started, in ms.
+  var issuesReadAt: Int64?
 
   /// What the poller knows about one session.
   struct Tracked {
@@ -72,9 +74,17 @@ final class GitHubPoller {
     /// branch's lookup finds a PR. It also drops it when the lookup finds none
     /// and the recorded PR is the folder's earlier work, as `readPRs` decides.
     var recordedPRId: String?
+    /// The linked or recorded PRs that are the folder's open earlier work and
+    /// that the folder did not make on its current branch. They do not count,
+    /// but the poller keeps reading them, so a later head that the folder
+    /// made brings them back.
+    var hidden: Set<String> = []
 
     /// The branch's PR comes first, then the transcript's.
-    var prId: String? { branch.prId ?? transcript.prId ?? recordedPRId }
+    var prId: String? { readIds.first { !hidden.contains($0) } }
+
+    /// The PRs that the poller reads for the session, hidden ones included.
+    var readIds: [String] { [branch.prId, transcript.prId, recordedPRId].compactMap { $0 } }
   }
 
   /// The folder's branch and its PR.
@@ -100,6 +110,11 @@ final class GitHubPoller {
     /// the last value while HEAD is detached. It is empty when the reflog
     /// can't be read.
     var checkedOut: Set<String> = []
+    /// The commits that the folder made on its branch since it switched to
+    /// it, from HEAD's reflog. nil when the reflog shows no switch.
+    var made: Set<String>?
+    /// The size of HEAD's reflog when the poller last read it.
+    var reflogSize: UInt64?
   }
 
   /// The session's transcript and the PR of its last pr-link line.
@@ -130,8 +145,8 @@ final class GitHubPoller {
     var cwd: String
     var claudeSessionId: String
     var configDir: String
-    /// The machine that holds the session's folder and transcript.
-    var machine: any Machine
+    /// The site that holds the session's folder and transcript.
+    var site: any SessionSite
     /// The branch that sbd shows for the session.
     var branch: String?
     var facts: SessionFacts
@@ -151,6 +166,7 @@ final class GitHubPoller {
     var resumed = 0
     var planReads = 0
     var planWrites = 0
+    var issueReads = 0
   }
 
   init(service: Service, settings: GitHubSettings, depot: DepotSettings, trunk: TrunkSettings) {
@@ -182,8 +198,8 @@ final class GitHubPoller {
       service.entries.map { id, e in
         Watched(
           id: id, cwd: e.session.cwd, claudeSessionId: e.session.claudeSessionId,
-          configDir: (service.paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? "~/.claude").expandingTilde,
-          machine: service.machine(for: e.session), branch: e.branch, facts: e.facts)
+          configDir: service.transcriptAccount(e.session),
+          site: service.site(for: e.session), branch: e.branch, facts: e.facts)
       }
     }
     let now = nowMs()
@@ -208,6 +224,7 @@ final class GitHubPoller {
       logLine("github: \(error)")
     }
     let depotError = refreshDepot(all: all, now: now, stats: &stats)
+    let issuesError = refreshIssues(all: all, now: now, stats: &stats)
     // Each status read rebuilds its PR without a requirement. The reads
     // above can throw after they rebuild some PRs, so the apply runs after
     // the catch and before `record` compares each PR.
@@ -220,7 +237,7 @@ final class GitHubPoller {
     resolveWaits(interest, stats: &stats)
     recordDependencies(sessions, now: now, stats: &stats)
     updatePlans(all: all, now: now, stats: &stats)
-    let kept = Set(tracked.values.compactMap(\.prId)).union(targets.values.compactMap(\.prId))
+    let kept = Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId))
     prs = prs.filter { kept.contains($0.key) }
     recordedDepot = recordedDepot.filter { kept.contains($0.key) }
     pruneCodeOwners()
@@ -230,6 +247,7 @@ final class GitHubPoller {
     var result = (try? JSON(encoding: stats).object) ?? [:]
     if let failure { result["error"] = .string(failure) }
     if let depotError { result["depotError"] = .string(depotError) }
+    if let issuesError { result["issuesError"] = .string(issuesError) }
     if let codeOwnersError { result["codeOwnersError"] = .string(codeOwnersError) }
     if let mergeDetailsError { result["mergeDetailsError"] = .string(mergeDetailsError) }
     if let problem = trunk.problem { result["trunkError"] = .string(problem) }
@@ -241,18 +259,32 @@ final class GitHubPoller {
   // MARK: Local facts
 
   /// What one poll reads once for every session: each config dir's project
-  /// folders, and each repo's git config.
-  private struct Shared {
-    var projects: [String: [String]] = [:]
-    var configs: [String: [String: String]] = [:]
+  /// folders, and each repo's git config. A host can hold the paths that this Mac
+  /// holds, so each read belongs to the path and its site.
+  struct Shared {
+    var projects: [SitePath: [String]] = [:]
+    var configs: [SitePath: [String: String]] = [:]
   }
 
-  /// Reads the session's branch and the new lines of its transcript.
-  private func refreshLocal(_ s: Watched, all: Bool, now: Int64, shared: inout Shared) {
+  /// Reads the session's branch and the new lines of its transcript. For a session on a host, it keeps the
+  /// last values unless the host answered every read.
+  func refreshLocal(_ s: Watched, all: Bool, now: Int64, shared: inout Shared) {
+    let before = (tracked[s.id], shared)
+    do {
+      try s.site.confirmed("the poll of \(s.id)") { machine in
+        refreshLocal(s, at: CheckedSite(s.site, machine: machine), all: all, now: now, shared: &shared)
+      }
+    } catch {
+      (tracked[s.id], shared) = before
+    }
+  }
+
+  private func refreshLocal(_ s: Watched, at site: any SessionSite, all: Bool, now: Int64, shared: inout Shared) {
     if tracked[s.id] == nil, let pr = s.facts.pr, let run = pr.depot, prs[pr.id] == nil { recordedDepot[pr.id] = run }
     var t =
       tracked[s.id] ?? Tracked(transcript: Transcript(claudeSessionId: s.claudeSessionId), recordedPRId: s.facts.pr?.id)
-    refreshBranch(&t.branch, cwd: s.cwd, on: s.machine, all: all, now: now, configs: &shared.configs)
+    refreshBranch(
+      &t.branch, cwd: s.cwd, at: site, all: all, now: now, watchReflog: !t.hidden.isEmpty, configs: &shared.configs)
     // `/clear` starts another conversation, with its own transcript. The
     // session keeps the PR that the old one linked until the new one links
     // another.
@@ -268,21 +300,28 @@ final class GitHubPoller {
       t.transcript.folder = nil
       t.transcript.path = nil
     }
-    readTranscript(&t.transcript, configDir: s.configDir, cwd: s.cwd, on: s.machine, projects: &shared.projects)
+    readTranscript(&t.transcript, configDir: s.configDir, cwd: s.cwd, at: site, projects: &shared.projects)
     tracked[s.id] = t
   }
 
+  /// The git config keys that `GitHub.branchKey` reads, as a pattern of `git config --get-regexp`.
+  static let branchKeyConfig =
+    #"^(remote\..*\.(url|gh-resolved)|remote\.pushdefault|branch\..*\.(pushremote|remote|merge))$"#
+
   /// Reading the HEAD file and the config's modification time costs less
   /// than running git, so git runs only when either changed. A folder outside
-  /// git is checked again once per idle interval.
+  /// git is checked again once per idle interval. A commit changes HEAD's
+  /// reflog but not the HEAD file, so `watchReflog` also checks the reflog's
+  /// size. Only a session with a hidden PR needs that.
   private func refreshBranch(
-    _ b: inout Branch, cwd: String, on machine: any Machine, all: Bool, now: Int64,
-    configs: inout [String: [String: String]]
+    _ b: inout Branch, cwd: String, at site: any SessionSite, all: Bool, now: Int64, watchReflog: Bool,
+    configs: inout [SitePath: [String: String]]
   ) {
+    let machine = site.machine
     let read = machine.text
     var head = b.gitDir.flatMap { read("\($0)/HEAD") }
     if head == nil && (all || GitHub.elapsed(since: b.gitDirRead, settings.idleMs, now: now)) {
-      let dirs = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], on: machine)?
+      let dirs = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], at: site)?
         .split(separator: "\n").map(String.init)
       b.gitDir = dirs?.first
       b.commonDir = dirs?.last
@@ -290,7 +329,8 @@ final class GitHubPoller {
       head = b.gitDir.flatMap { read("\($0)/HEAD") }
     }
     let stamp = b.commonDir.flatMap { machine.modified("\($0)/config") }
-    guard all || head != b.head || stamp != b.configStamp else { return }
+    let reflogMoved = watchReflog && b.gitDir.flatMap { machine.size("\($0)/logs/HEAD") } != b.reflogSize
+    guard all || head != b.head || stamp != b.configStamp || reflogMoved else { return }
     b.head = head
     b.configStamp = stamp
     // A rebase or a bisect detaches HEAD for a while, and the session keeps
@@ -300,19 +340,27 @@ final class GitHubPoller {
     if let branch { b.name = branch }
     if let branch, let common = b.commonDir {
       // The worktrees of a repo share its config, so git reads it once per poll.
-      if configs[common] == nil {
-        let pattern = #"^(remote\..*\.(url|gh-resolved)|remote\.pushdefault|branch\..*\.(pushremote|remote|merge))$"#
-        configs[common] = GitHub.gitConfig(git(cwd, ["config", "--get-regexp", pattern], on: machine) ?? "")
+      let repo = SitePath(common, at: site)
+      // git exits 1 when no key matches. A read that fails in another way keeps the last known remotes.
+      if configs[repo] == nil {
+        let r = try? machine.run(site.git(), ["-C", cwd, "config", "--get-regexp", Self.branchKeyConfig])
+        if let r, r.status <= 1 {
+          configs[repo] = GitHub.gitConfig(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
       }
-      let config = configs[common] ?? [:]
+      let config = configs[repo] ?? [:]
       key = GitHub.branchKey(branch: branch, config: config) { remote in
         // A remote's HEAD is a symbolic ref, which git never packs.
         read("\(common)/refs/remotes/\(remote)/HEAD").flatMap {
           GitHub.branch(head: $0, under: "refs/remotes/\(remote)/")
         }
       }
-      let local = b.gitDir.flatMap { read("\($0)/logs/HEAD") }.map(GitHub.checkedOutBranches) ?? []
+      let reflogData = b.gitDir.flatMap { machine.read("\($0)/logs/HEAD", from: 0, count: nil) }
+      b.reflogSize = reflogData.map { UInt64($0.count) }
+      let reflog = reflogData.map { String(decoding: $0, as: UTF8.self) }
+      let local = reflog.map(GitHub.checkedOutBranches) ?? []
       b.checkedOut = local.union(local.compactMap { GitHub.upstreamName(of: $0, config: config) })
+      b.made = reflog.flatMap { GitHub.commitsSinceSwitch(reflog: $0, to: branch) }
     }
     if key != b.key {
       b.key = key
@@ -321,23 +369,45 @@ final class GitHubPoller {
     }
   }
 
-  private func git(_ cwd: String, _ args: [String], on machine: any Machine) -> String? {
-    try? service.gitOutput(cwd, args, on: machine)
+  /// The folder's count of uncommitted files, or nil when git can't count them, and whether the folder is
+  /// gone. For a session on a host, it is nil unless the host answered both reads, so the session keeps its
+  /// last `worktree` facts.
+  func worktreeCount(_ s: Watched) -> (dirty: Int?, gone: Bool)? {
+    // Without the optional index lock, the count can't make a git commit
+    // in the session fail.
+    let count = { (site: any SessionSite) in
+      self.git(s.cwd, ["--no-optional-locks", "status", "--porcelain"], at: site)
+        .map { $0.split(separator: "\n").count }
+    }
+    do {
+      let dirty = try s.site.confirmed("the count of \(s.id)'s uncommitted files") { machine in
+        count(CheckedSite(s.site, machine: machine))
+      }
+      return (dirty, try dirty == nil && s.site.folderGone(s.cwd))
+    } catch {
+      return nil
+    }
+  }
+
+  private func git(_ cwd: String, _ args: [String], at site: any SessionSite) -> String? {
+    try? service.gitOutput(cwd, args, at: site)
   }
 
   /// Reads the transcript's lines since the last read. Until the poller knows
   /// the session's project folder, it searches every project folder. Then it
   /// looks only in the cwd's folder and that one.
   private func readTranscript(
-    _ t: inout Transcript, configDir: String, cwd: String, on machine: any Machine,
-    projects: inout [String: [String]]
+    _ t: inout Transcript, configDir: String, cwd: String, at site: any SessionSite,
+    projects: inout [SitePath: [String]]
   ) {
+    let machine = site.machine
     if t.path == nil {
       let known = t.folder
       t.path = SwitchboardCore.Transcript.find(t.claudeSessionId, account: configDir, cwd: cwd, on: machine) { root in
         if let known { return [known] }
-        if projects[root] == nil { projects[root] = machine.list(root) }
-        return projects[root]!
+        let folder = SitePath(root, at: site)
+        if projects[folder] == nil { projects[folder] = machine.list(root) }
+        return projects[folder]!
       }
       if let path = t.path { t.folder = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent }
     }
@@ -411,7 +481,7 @@ final class GitHubPoller {
     // A PR in `waited.pending` or in Trunk's queue polls at the pending rate. A
     // PR with any open wait also polls at once when the wait is newer than the
     // last read. That read can't show what happened after the wait was set.
-    let ids = Set(tracked.values.compactMap(\.prId)).union(targets.values.compactMap(\.prId)).sorted().filter {
+    let ids = Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)).sorted().filter {
       all || (waited.created[$0] ?? 0) > (prs[$0]?.polled ?? 0)
         || GitHub.isDue(
           prs[$0]?.pr, lastPolled: prs[$0]?.polled, now: now, pendingMs: settings.pendingMs,
@@ -442,19 +512,26 @@ final class GitHubPoller {
       if let prId = t.transcript.prId, gone.contains(prId) { t.transcript.prId = nil }
       if let prId = t.recordedPRId, gone.contains(prId) { t.recordedPRId = nil }
       // A linked or recorded PR in the branch's repo whose head branch the
-      // folder had checked out before belongs to the session's earlier work.
-      // It no longer counts once GitHub answers that the current branch has
-      // no PR. A PR whose head another checkout made still counts, in this
-      // repo or another, because a session can open its PR from another
-      // worktree.
+      // folder had checked out before belongs to the session's earlier work,
+      // unless the folder made the PR's head commit on its current branch.
+      // Earlier work stops counting once GitHub answers that the current
+      // branch has no PR. A PR whose head another checkout made still counts,
+      // in this repo or another, because a session can open its PR from
+      // another worktree.
+      t.hidden = []
       if t.branch.prId == nil, t.branch.lookedUp != nil, case .branch(let repo, let branch, _)? = t.branch.key {
-        let checkedOut = t.branch.checkedOut
-        let earlier = { (id: String?) -> Bool in
-          guard let pr = id.flatMap({ self.prs[$0]?.pr }) else { return false }
-          return pr.repo.lowercased() == repo.lowercased() && pr.head != branch && checkedOut.contains(pr.head)
+        for id in [t.transcript.prId, t.recordedPRId].compactMap({ $0 }) {
+          guard let pr = prs[id]?.pr else { continue }
+          switch GitHub.earlierStanding(
+            pr, repo: repo, branch: branch, checkedOut: t.branch.checkedOut, made: t.branch.made)
+          {
+          case .current: break
+          case .hidden: t.hidden.insert(id)
+          case .dropped:
+            if t.transcript.prId == id { t.transcript.prId = nil }
+            if t.recordedPRId == id { t.recordedPRId = nil }
+          }
         }
-        if earlier(t.transcript.prId) { t.transcript.prId = nil }
-        if earlier(t.recordedPRId) { t.recordedPRId = nil }
       }
       tracked[id] = t
     }
@@ -580,17 +657,9 @@ final class GitHubPoller {
     if let name = t.branch.name, name != s.branch { event(s.id, "branch", ["branch": .string(name)]) }
     if let pr = t.prId.flatMap({ prs[$0]?.pr }) ?? s.facts.pr, pr.state != .open,
       s.facts.cleanedUp == nil,
-      shouldCount(t, s, pr.id, all, now)
+      shouldCount(t, s, pr.id, all, now), let (dirty, gone) = worktreeCount(s)
     {
-      // Without the optional index lock, the count can't make a git commit
-      // in the session fail.
-      let dirty = git(s.cwd, ["--no-optional-locks", "status", "--porcelain"], on: s.machine)
-        .map { $0.split(separator: "\n").count }
       t.counted = (now, s.facts.lastActivity, pr.id)
-      // Only ENOENT counts as gone. A permission error or a hung mount leaves
-      // the folder unread, which stays unsafe.
-      var info = stat()
-      let gone = dirty == nil && stat(s.cwd, &info) != 0 && errno == ENOENT
       // The checks run 8 git commands, or 9 in a worktree that Supacode locked.
       // `sb cleanup` refuses a running turn, so the poller keeps the last result during one.
       let checked: CleanupStatus? =

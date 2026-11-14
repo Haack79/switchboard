@@ -1,0 +1,14 @@
+import Foundation
+import SwitchboardCore
+
+/// The forms that name no machine, which read this Mac. `Sources` has none, so that no session path reads this Mac
+/// by default. The tests that read the files of a local sbd keep them.
+extension Transcript {
+  static func find(_ sessionId: String, account: String, cwd: String) -> String? {
+    find(sessionId, account: account, cwd: cwd, on: LocalMachine())
+  }
+
+  static func messages(_ path: String, limit: Int) -> [ChatMessage] {
+    messages(path, limit: limit, on: LocalMachine())
+  }
+}
