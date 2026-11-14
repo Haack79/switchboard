@@ -87,10 +87,13 @@ extension BoardModel {
   /// terminal shows in place. Any other target is selected first, so its terminal shows.
   func focusTerminal() {
     guard let target = terminalTarget, showsClaudeTerminal(target) else { return }
-    let inPlace =
-      visibleView == .inbox && TriageDetail.pane(for: target, showingTerminal: showingTerminal) == .terminal
-    if !inPlace { selection = target.id }
+    if !inboxShowsTerminal(target) { selection = target.id }
     terminalFocus = target.id
+  }
+
+  /// Whether the Inbox shows `target`'s terminal in its right pane.
+  private func inboxShowsTerminal(_ target: SessionSummary) -> Bool {
+    visibleView == .inbox && TriageDetail.pane(for: target, showingTerminal: showingTerminal) == .terminal
   }
 
   /// Shows the current Inbox item's terminal in the Inbox's right pane and puts keyboard focus in it.
@@ -118,12 +121,12 @@ extension BoardModel {
   /// The session whose terminal view shows now, where ⇧⌘E reveals the Message Claude field. The Board and a
   /// pane that shows a chat's messages or an Inbox summary have no terminal view.
   var messageFieldTarget: SessionSummary? {
-    if visibleView == .board || visibleView == .issues { return nil }
     guard let target = terminalTarget, target.docket == nil, showsClaudeTerminal(target) else { return nil }
-    if visibleView == .inbox, TriageDetail.pane(for: target, showingTerminal: showingTerminal) != .terminal {
-      return nil
+    switch visibleView {
+    case nil: return target
+    case .inbox: return inboxShowsTerminal(target) ? target : nil
+    case .board, .issues: return nil
     }
-    return target
   }
 
   /// Shows the Message Claude field under the terminal of `id`, or of `messageFieldTarget`. With `focus`, it also
@@ -138,7 +141,7 @@ extension BoardModel {
   func hideMessageField(_ id: String) {
     forgetMessageField(id)
     // An error alone keeps the field showing.
-    if let session = allBoard.first(where: { $0.id == id }) { messageDraft(for: session).error = nil }
+    if let session = summary(id) { messageDraft(for: session).error = nil }
     terminalFocus = id
   }
 

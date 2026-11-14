@@ -46,7 +46,9 @@ struct MessageField: View {
       }
     }
     .overlay {
-      FileDropTarget(isTargeted: $dropTargeted, drop: draft.add(dropped:))
+      // A closure, unlike a method reference, differs on each render. SwiftUI then calls `updateNSView`, which
+      // limits the field editor's drag types again after a focus change.
+      FileDropTarget(isTargeted: $dropTargeted) { urls in draft.add(dropped: urls) }
     }
     // A refused paste or drop changes neither the text nor the chips, so VoiceOver would say nothing.
     .onChange(of: draft.error) {

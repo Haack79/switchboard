@@ -114,8 +114,13 @@ struct SessionView: View {
   /// SwiftTerm takes no drops, so a file dropped on the Claude terminal attaches to the draft and shows the field.
   private var imageDrop: some View {
     FileDropTarget(isTargeted: $dropTargeted) { [model, session] urls in
+      let draft = model.messageDraft(for: session)
+      let shown = SessionView.showsMessageField(revealed: model.revealedMessageField == session.id, draft: draft)
       model.revealMessageField(session.id, focus: false)
-      return model.messageDraft(for: session).add(dropped: urls)
+      let left = draft.add(dropped: urls)
+      // A field that appears with an error already set never sees the error change, so it would not announce it.
+      if !shown, let error = draft.error { AccessibilityNotification.Announcement(error).post() }
+      return left
     }
     .overlay {
       if dropTargeted { Rectangle().stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) }
@@ -328,6 +333,9 @@ private struct SessionMessageField: View {
         onSent: { [model, session, draft] in if draft.isEmpty { model.hideMessageField(session) } }
       )
       .padding(8)
+      // A field that shows only for its draft would vanish under the cursor when the user empties the draft. A
+      // field that shows counts as revealed, so only Esc on an empty field, a send, or leaving the view hides it.
+      .onChange(of: session, initial: true) { [model] in model.revealMessageField(session, focus: false) }
     }
   }
 }

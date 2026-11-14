@@ -59,6 +59,7 @@ enum DraftSelfTest {
     escape(field)
     await pause()
     log("after two escs: \(field.stringValue)")
+    log("after two escs: field shows \(self.field() != nil)")
     escape(field)
     await pause()
     log("after a third esc: field shows \(self.field() != nil)")
@@ -86,7 +87,7 @@ enum DraftSelfTest {
     return nil
   }
 
-  static func field() -> NSTextField? {
+  private static func field() -> NSTextField? {
     guard let root = NSApp.switchboardWindow?.contentView
     else { return nil }
     func find(_ view: NSView) -> NSTextField? {
