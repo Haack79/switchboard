@@ -2118,8 +2118,11 @@ public final class Service {
       }
       noteViewed(now: now)
       runQueuedStarts(now: now)
-      // A resolved `resume` wait can launch claude.
-      if !mcpStarting(now: now) { resolveDueWaits(now: now) }
+      // A resolved `resume` wait and a schedule's run can launch claude.
+      if !mcpStarting(now: now) {
+        resolveDueWaits(now: now)
+        fireDueSchedules(now: now)
+      }
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)

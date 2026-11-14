@@ -54,11 +54,75 @@ extension Service {
         schedule.next = try Schedule.next(after: nowMs(), every: schedule.every)
         schedule.paused = nil
       }
-      try update(id) { s in s.schedules = s.schedules?.map { $0.id == schedule.id ? schedule : $0 } }
+      try changeSchedule(id, schedule.id) { $0 = schedule }
       record(id, pausing ? "schedule-paused" : "schedule-resumed", ["schedule": try JSON(encoding: schedule)])
       return try JSON(encoding: scheduleRow(id, schedule))
     default:
       throw APIError("unknown request \(op)")
+    }
+  }
+
+  /// Sends each due schedule's prompt to its session when the session is
+  /// free. A schedule whose session is busy stays due and runs once when the
+  /// session is free. The tick calls it after it resolves due waits. A
+  /// session marked done keeps its schedules and runs none of them.
+  func fireDueSchedules(now: Int64) {
+    for id in entries.keys.sorted() {
+      guard let session = entries[id]?.session, !session.done else { continue }
+      let due = (session.schedules ?? []).filter { $0.isDue(now: now) }
+        .sorted { ($0.next, $0.id) < ($1.next, $1.id) }
+      // A run makes the session busy, so the guard runs again before each schedule.
+      for schedule in due {
+        guard let e = entries[id],
+          Schedule.blocker(facts: e.facts, process: promptProcess(id), messageWaiting: e.messageWaiting(now: now))
+            == nil
+        else { break }
+        fire(id, schedule, now: now)
+      }
+    }
+  }
+
+  /// Saves the next run before the send and the result after it, so a crash
+  /// between the two loses the run instead of sending it twice. A failed send
+  /// waits for the next run instead of trying again on each tick.
+  private func fire(_ id: String, _ schedule: Schedule, now: Int64) {
+    var ran = schedule
+    let (next, skipped) = schedule.fired(at: now)
+    ran.next = next
+    do {
+      try changeSchedule(id, schedule.id) { $0.next = next }
+    } catch {
+      logLine("can't run schedule \(schedule.id) of \(id), because its next run can't be saved: \(error)")
+      return
+    }
+    let run: Schedule.Run
+    do {
+      let delivery = try send(id, schedule.prompt, byUser: false, trigger: .schedule)
+      run = Schedule.Run(t: now, outcome: .init(delivery), skipped: skipped)
+    } catch {
+      logLine("can't run schedule \(schedule.id) of \(id): \(error)")
+      run = Schedule.Run(t: now, outcome: .failed, skipped: skipped, error: "\(error)")
+    }
+    ran.last = run
+    do {
+      try changeSchedule(id, schedule.id) { $0.last = run }
+    } catch {
+      logLine("can't save the run of schedule \(schedule.id) of \(id): \(error)")
+    }
+    var data: [String: JSON] = ["outcome": .string(run.outcome.rawValue), "skipped": .number(Double(skipped))]
+    data["schedule"] = try? JSON(encoding: ran)
+    if let error = run.error { data["error"] = .string(error) }
+    record(id, "schedule-ran", .object(data))
+  }
+
+  /// Changes one schedule of the session and saves the session's row.
+  private func changeSchedule(_ id: String, _ scheduleId: String, _ change: (inout Schedule) -> Void) throws {
+    try update(id) { s in
+      s.schedules = s.schedules?.map { schedule in
+        var schedule = schedule
+        if schedule.id == scheduleId { change(&schedule) }
+        return schedule
+      }
     }
   }
 

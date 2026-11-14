@@ -303,3 +303,248 @@ private func encoded(_ value: some Encodable, without key: String) throws -> Str
     }
   }
 }
+
+private func due(at next: Int64, every: Int64 = 30 * minute, paused: Bool? = nil) -> Schedule {
+  Schedule(
+    id: "rk3x9p", prompt: "check the queue", every: every, next: next, paused: paused, by: .you,
+    created: next - every)
+}
+
+private func idleFacts() -> SessionFacts {
+  var f = SessionFacts()
+  f.live = true
+  return f
+}
+
+/// The prompts that `PromptGuard.openCard` reports. The card from `sb summary set` is left out.
+private let scheduleGuardedCards = AutoContinueGuardTests.OpenPrompt.allCases.filter { $0 != .sessionCard }
+
+extension ScheduleTests {
+  @Suite struct IsDue {
+    @Test func aScheduleWhoseNextRunIsNowIsDue() {
+      #expect(due(at: now).isDue(now: now))
+    }
+
+    @Test func aScheduleWhoseNextRunHasPassedIsDue() {
+      #expect(due(at: now - hour).isDue(now: now))
+    }
+
+    @Test func aScheduleWhoseNextRunIsAheadIsNotDue() {
+      #expect(!due(at: now + 1).isDue(now: now))
+    }
+
+    @Test func aPausedScheduleIsNotDue() {
+      #expect(!due(at: now - hour, paused: true).isDue(now: now))
+    }
+
+    /// Only `paused == true` pauses a schedule. Nil and false both mean active.
+    @Test func aScheduleWithPausedFalseIsDue() {
+      #expect(due(at: now - hour, paused: false).isDue(now: now))
+    }
+  }
+
+  @Suite struct Fired {
+    @Test func aRunOnTimeSkipsNothing() {
+      let fired = due(at: now).fired(at: now)
+
+      #expect(fired.skipped == 0)
+    }
+
+    @Test func aRunLessThanOneIntervalLateSkipsNothing() {
+      let fired = due(at: now - 29 * minute).fired(at: now)
+
+      #expect(fired.skipped == 0)
+    }
+
+    @Test func aRunOneAndAHalfIntervalsLateSkipsOne() {
+      let fired = due(at: now - 45 * minute).fired(at: now)
+
+      #expect(fired.skipped == 1)
+    }
+
+    @Test func aRunFiveIntervalsLateSkipsFive() {
+      let fired = due(at: now - 5 * 30 * minute).fired(at: now)
+
+      #expect(fired.skipped == 5)
+    }
+
+    /// The next run counts from the run, not from the old grid, so a run held
+    /// for most of an interval is not followed by another one at once.
+    @Test(arguments: [0, 1, 29 * minute, 45 * minute, 150 * minute, 3 * day])
+    func theNextRunIsOneIntervalAfterTheRun(_ late: Int64) {
+      let fired = due(at: now - late).fired(at: now)
+
+      #expect(fired.next == now + 30 * minute)
+    }
+
+    @Test(arguments: [minute, 30 * minute, week])
+    func theNextRunUsesTheSchedulesInterval(_ every: Int64) {
+      let fired = due(at: now - 2 * every, every: every).fired(at: now)
+
+      #expect(fired.next == now + every)
+    }
+
+    /// A message whose `UserPromptSubmit` never came stops holding the session
+    /// after its in-flight window. The schedule must still wait for its next run.
+    @Test(arguments: [0, 10 * second, 11 * second, 30 * minute - 1])
+    func aFiredScheduleIsNotDueAgainBeforeOneInterval(_ after: Int64) {
+      var s = due(at: now - 45 * minute)
+      s.next = s.fired(at: now).next
+
+      #expect(!s.isDue(now: now + after))
+    }
+
+    @Test func aFiredScheduleIsDueAgainOneIntervalAfterTheRun() {
+      var s = due(at: now - 45 * minute)
+      s.next = s.fired(at: now).next
+
+      #expect(s.isDue(now: now + 30 * minute))
+    }
+  }
+
+  @Suite struct Blocker {
+    @Test func anIdleLiveClaudeIsFree() {
+      #expect(Schedule.blocker(facts: idleFacts(), process: .running, messageWaiting: false) == nil)
+    }
+
+    /// `send` resumes a stopped claude with the prompt.
+    @Test func aStoppedClaudeWithNothingWaitingIsFree() {
+      #expect(Schedule.blocker(facts: SessionFacts(), process: .stopped, messageWaiting: false) == nil)
+    }
+
+    /// The host link has no snapshot, so sbd can't read the process. `send`
+    /// would queue the prompt on every tick.
+    @Test func anUnknownProcessHolds() {
+      #expect(
+        Schedule.blocker(facts: idleFacts(), process: nil, messageWaiting: false) == "its host is not connected")
+    }
+
+    @Test func aRunningTurnHolds() {
+      var f = idleFacts()
+      f.turnRunning = true
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "a turn is running")
+    }
+
+    @Test func anOpenPermissionHolds() {
+      var f = idleFacts()
+      f.turnRunning = true
+      AutoContinueGuardTests.OpenPrompt.permission.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "an open card")
+    }
+
+    @Test func anOpenQuestionHolds() {
+      var f = idleFacts()
+      f.turnRunning = true
+      AutoContinueGuardTests.OpenPrompt.question.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "an open card")
+    }
+
+    /// A deferred question's turn has ended. A new prompt would bury its card.
+    @Test func aDeferredCardWithNoTurnHolds() {
+      var f = idleFacts()
+      AutoContinueGuardTests.OpenPrompt.deferredCard.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "an open card")
+    }
+
+    @Test(arguments: scheduleGuardedCards)
+    func eachKindOfCardHolds(_ open: AutoContinueGuardTests.OpenPrompt) {
+      var f = idleFacts()
+      open.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == "an open card")
+    }
+
+    @Test(arguments: scheduleGuardedCards)
+    func aCardOnAStoppedClaudeHolds(_ open: AutoContinueGuardTests.OpenPrompt) {
+      var f = SessionFacts()
+      open.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .stopped, messageWaiting: false) == "an open card")
+    }
+
+    /// Decision 8: a resolved `resume` wait does not hold on the turn's own
+    /// summary card, and neither does a schedule. Auto-continue does.
+    @Test func aSessionSummaryAloneDoesNotHold() {
+      var f = idleFacts()
+      AutoContinueGuardTests.OpenPrompt.sessionCard.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .running, messageWaiting: false) == nil)
+    }
+
+    @Test func aSessionSummaryOnAStoppedClaudeDoesNotHold() {
+      var f = SessionFacts()
+      AutoContinueGuardTests.OpenPrompt.sessionCard.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .stopped, messageWaiting: false) == nil)
+    }
+
+    /// A queued message, a start queued behind the live cap, or a paste or
+    /// resume whose `UserPromptSubmit` has not come.
+    @Test func aWaitingMessageHolds() {
+      #expect(
+        Schedule.blocker(facts: idleFacts(), process: .running, messageWaiting: true) == "a message is on its way")
+    }
+
+    @Test func aWaitingMessageHoldsAStoppedClaude() {
+      #expect(
+        Schedule.blocker(facts: SessionFacts(), process: .stopped, messageWaiting: true) == "a message is on its way")
+    }
+
+    @Test func claudeStartingHolds() {
+      #expect(
+        Schedule.blocker(facts: SessionFacts(), process: .starting, messageWaiting: false)
+          == "claude is starting or stopping")
+    }
+
+    @Test func claudeStartingWithALiveSessionHolds() {
+      #expect(
+        Schedule.blocker(facts: idleFacts(), process: .starting, messageWaiting: false)
+          == "claude is starting or stopping")
+    }
+
+    @Test func claudeRunningButNotLiveHolds() {
+      #expect(
+        Schedule.blocker(facts: SessionFacts(), process: .running, messageWaiting: false)
+          == "claude is starting or stopping")
+    }
+
+    @Test func anUnknownProcessComesBeforeAnOpenCardARunningTurnAndAWaitingMessage() {
+      var f = idleFacts()
+      f.turnRunning = true
+      AutoContinueGuardTests.OpenPrompt.card.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: nil, messageWaiting: true) == "its host is not connected")
+    }
+
+    @Test(arguments: PromptGuardCase.all)
+    func anUnknownProcessHoldsWhateverTheFacts(_ c: PromptGuardCase) {
+      #expect(
+        Schedule.blocker(facts: c.facts, process: nil, messageWaiting: c.messageWaiting)
+          == "its host is not connected")
+    }
+
+    @Test func anOpenCardComesBeforeARunningTurnAndAWaitingMessage() {
+      var f = idleFacts()
+      f.turnRunning = true
+      AutoContinueGuardTests.OpenPrompt.card.open(in: &f, since: now - minute)
+
+      #expect(Schedule.blocker(facts: f, process: .starting, messageWaiting: true) == "an open card")
+    }
+
+    /// `AutoContinue.blocker` and `Schedule.blocker` share `PromptGuard`. For
+    /// a known process, a schedule holds exactly when the shared checks hold,
+    /// with no fallback for the summary card.
+    @Test(arguments: PromptGuardCase.all)
+    func aKnownProcessHoldsWhenThePromptGuardHolds(_ c: PromptGuardCase) {
+      let f = c.facts
+
+      let guarded = PromptGuard.openCard(f) ?? PromptGuard.turn(f, process: c.process, messageWaiting: c.messageWaiting)
+
+      #expect(Schedule.blocker(facts: f, process: c.process, messageWaiting: c.messageWaiting) == guarded)
+    }
+  }
+}

@@ -11,6 +11,14 @@ public struct Schedule: Codable, Equatable, Sendable {
       case resumed
       case queued
       case failed
+
+      public init(_ delivery: Delivery) {
+        switch delivery {
+        case .pasted: self = .pasted
+        case .resumed: self = .resumed
+        case .queued: self = .queued
+        }
+      }
     }
 
     /// Milliseconds since the epoch.
@@ -112,6 +120,24 @@ public struct Schedule: Codable, Equatable, Sendable {
     let (next, overflow) = now.addingReportingOverflow(every)
     guard !overflow else { throw APIError("a run \(intervalText(every)) from now is past the end of the clock") }
     return next
+  }
+
+  public func isDue(now: Int64) -> Bool { paused != true && next <= now }
+
+  /// The first reason that the session can't take the schedule's prompt now,
+  /// or nil when it can. `process` is nil when sbd can't read the session's
+  /// host. The card from `sb summary set` does not hold a schedule, as it
+  /// does not hold a resolved `resume` wait.
+  public static func blocker(facts: SessionFacts, process: PromptGuard.Process?, messageWaiting: Bool) -> String? {
+    guard let process else { return "its host is not connected" }
+    return PromptGuard.openCard(facts) ?? PromptGuard.turn(facts, process: process, messageWaiting: messageWaiting)
+  }
+
+  /// The next run after a run at `now`, and the due times that the run
+  /// drops. The next run counts from `now`, not from the old due time.
+  public func fired(at now: Int64) -> (next: Int64, skipped: Int) {
+    let next = (try? Schedule.next(after: now, every: every)) ?? .max
+    return (next, Int(max(0, now - self.next) / every))
   }
 
   /// When the schedule runs next, as `sb schedule ls` shows it.
