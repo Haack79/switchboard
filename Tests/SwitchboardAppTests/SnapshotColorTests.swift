@@ -55,12 +55,20 @@ import Testing
     #expect(Snapshot.apply([1, 0, 0], to: color) == color)
   }
 
-  /// A `vibrantColorMatrix` filter, as AppKit puts on sidebar layers. CAFilter is private.
-  static func vibrantFilter(_ matrix: [Float]) -> NSObject {
-    let type = NSClassFromString("CAFilter") as! NSObject.Type
+  /// The offsets make the output orange for any input. AppKit's sidebar matrices color a status dot the same way.
+  static let orange: [Float] = [
+    0, 0, 0, 0, 1,
+    0, 0, 0, 0, 0.5,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 1, 0,
+  ]
+
+  /// A color matrix filter of `type`, such as the `vibrantColorMatrix` filter that AppKit puts on sidebar layers.
+  /// CAFilter is private.
+  static func filter(_ type: String, _ matrix: [Float]) -> NSObject {
+    let filterClass = NSClassFromString("CAFilter") as! NSObject.Type
     let filter =
-      type.perform(NSSelectorFromString("filterWithType:"), with: "vibrantColorMatrix").takeUnretainedValue()
-      as! NSObject
+      filterClass.perform(NSSelectorFromString("filterWithType:"), with: type).takeUnretainedValue() as! NSObject
     let encoding = "{CAColorMatrix=" + String(repeating: "f", count: 20) + "}"
     let value = matrix.withUnsafeBytes { NSValue(bytes: $0.baseAddress!, objCType: encoding) }
     filter.setValue(value, forKey: "inputColorMatrix")
@@ -68,17 +76,10 @@ import Testing
   }
 
   @MainActor @Test func recolorsAFilteredBackgroundAndPutsItBack() {
-    // The offsets make the output orange for any input. AppKit's sidebar matrices color a status dot the same way.
-    let matrix: [Float] = [
-      0, 0, 0, 0, 1,
-      0, 0, 0, 0, 0.5,
-      0, 0, 0, 0, 0,
-      0, 0, 0, 1, 0,
-    ]
     let root = CALayer()
     let dot = CALayer()
     dot.backgroundColor = Self.white
-    dot.filters = [Self.vibrantFilter(matrix)]
+    dot.filters = [Self.filter("vibrantColorMatrix", Self.orange)]
     root.addSublayer(dot)
     let restore = Snapshot.applyVibrancy(root)
     #expect(Self.matches(dot.backgroundColor!, [1, 0.5, 0, 1]))
@@ -95,5 +96,36 @@ import Testing
     #expect(child.backgroundColor == Self.white)
     restore()
     #expect(child.backgroundColor == Self.white)
+  }
+
+  @MainActor @Test func leavesOtherColorMatrixFiltersAlone() {
+    let root = CALayer()
+    let child = CALayer()
+    child.backgroundColor = Self.white
+    child.filters = [Self.filter("colorMatrix", Self.orange)]
+    root.addSublayer(child)
+    let restore = Snapshot.applyVibrancy(root)
+    #expect(child.backgroundColor == Self.white)
+    restore()
+    #expect(child.backgroundColor == Self.white)
+  }
+
+  @MainActor @Test func keepsFilteredContentsThatAreNotATintedImage() throws {
+    let context = try #require(
+      CGContext(
+        data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    let image = try #require(context.makeImage())
+    let root = CALayer()
+    let symbol = CALayer()
+    symbol.contents = image
+    symbol.filters = [Self.filter("vibrantColorMatrix", Self.orange)]
+    root.addSublayer(symbol)
+    let restore = Snapshot.applyVibrancy(root)
+    let applied = try #require(symbol.contents) as AnyObject
+    #expect(applied === image)
+    restore()
+    let restored = try #require(symbol.contents) as AnyObject
+    #expect(restored === image)
   }
 }

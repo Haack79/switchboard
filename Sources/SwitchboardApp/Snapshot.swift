@@ -164,9 +164,10 @@ enum Snapshot {
     return NSSize(width: parts[0], height: parts[1])
   }
 
-  /// What `view` draws. `cacheDisplay` leaves out two things that the window server adds as it composites the
-  /// window: the contents of some scroll views, such as a `List`'s rows, and the colors that a vibrancy filter gives
-  /// sidebar text and symbols. This draws both.
+  /// What `view` draws. `cacheDisplay` gets four things wrong that the window shows correctly. It leaves out the
+  /// contents of some scroll views, such as a `List`'s rows. It leaves out the colors that a vibrancy filter gives
+  /// sidebar text and symbols. It draws a selected row's highlight black. It draws a translucent overlay, such as the
+  /// dimming behind a sheet, opaque. This draws all four as the window shows them.
   static func cache(_ view: NSView) -> NSBitmapImageRep? {
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
     let restore = view.layer.map(applyVibrancy) ?? {}
@@ -212,7 +213,15 @@ enum Snapshot {
   private static func drawContents(of clip: NSClipView, in view: NSView) {
     guard let document = clip.documentView, !clip.isHiddenOrHasHiddenAncestor else { return }
     let scroll = clip.enclosingScrollView ?? clip
-    let visible = scroll.convert(scroll.safeAreaRect, to: view).intersection(clip.convert(clip.bounds, to: view))
+    var visible = scroll.convert(scroll.safeAreaRect, to: view).intersection(clip.convert(clip.bounds, to: view))
+    // A scroll view inside another one, such as a code block in a transcript, shows only what the outer one shows.
+    var ancestor = clip.superview
+    while let outer = ancestor, outer !== view {
+      if let outerClip = outer as? NSClipView {
+        visible = visible.intersection(outerClip.convert(outerClip.bounds, to: view))
+      }
+      ancestor = outer.superview
+    }
     guard !visible.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
     defer { NSGraphicsContext.restoreGraphicsState() }
@@ -359,7 +368,7 @@ enum Snapshot {
       let popover = popovers.contains(window)
       guard let content = window.contentView else { continue }
       let view = popover ? content : content.superview ?? content
-      guard let layer = cache(view) else { continue }
+      guard let image = cache(view) else { continue }
       let rect = window.convertToScreen(view.convert(view.bounds, to: nil)).offsetBy(dx: -bounds.minX, dy: -bounds.minY)
       window.effectiveAppearance.performAsCurrentDrawingAppearance {
         NSColor.windowBackgroundColor.setFill()
@@ -369,7 +378,7 @@ enum Snapshot {
           NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10).stroke()
         }
       }
-      layer.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+      image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
     NSGraphicsContext.restoreGraphicsState()
     do {
