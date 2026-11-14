@@ -134,6 +134,9 @@ final class BoardModel: ObservableObject {
   /// Artifact plans whose Apply or Reject is on its way to sbd. Their buttons
   /// stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringArtifacts: Set<String> = []
+  /// The artifacts, as `<group> <url>`, that "Use as plan" is attaching. Their buttons stay disabled until sbd
+  /// replies, so a second click can't ask the group's chat to read the artifact again.
+  @Published var usingAsPlan: Set<String> = []
   /// The decision requests that wait for sbd: `<session>/<number>` for an
   /// answer, and `<session>/submit` and `<session>/discard`.
   @Published var deciding: Set<String> = []
@@ -237,8 +240,9 @@ final class BoardModel: ObservableObject {
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)
   /// A plan apply waits for sbd's GitHub poll and then writes to GitHub, so
-  /// it runs apart from other actions too.
-  private let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
+  /// it runs apart from other actions too. An artifact attach runs here because
+  /// it can wait for the group's chat to start.
+  let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
   private var timer: Timer?
   /// Each session as the last refresh listed it.
   private var lastSeen: [String: SessionSummary] = [:]

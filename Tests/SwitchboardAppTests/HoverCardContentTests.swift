@@ -871,3 +871,77 @@ extension HoverCardContentTests {
     }
   }
 }
+
+extension HoverCardContentTests {
+  @Suite struct Artifacts {
+    static func session(_ artifacts: [SessionArtifact]?) -> SessionSummary {
+      var s = bare()
+      s.artifacts = artifacts
+      return s
+    }
+
+    static func lines(_ artifacts: [SessionArtifact]?) -> [String] {
+      content(session(artifacts)).details.filter { $0.contains("rtifact") }
+    }
+
+    @Test func aSessionWithoutArtifactsHasNoArtifactLine() {
+      #expect(content(Self.session(nil)).details == ["active 42s ago"])
+    }
+
+    @Test func aSessionWhoseArtifactsAreAllRemovedHasNoArtifactLine() {
+      let artifacts = [
+        artifactFixture("a", title: "Delta Rates", updated: now - hour, removed: now - minute),
+        artifactFixture("b", title: "Flag plan", updated: now - hour, removed: now - minute),
+      ]
+
+      #expect(content(Self.session(artifacts)).details == ["active 42s ago"])
+    }
+
+    @Test func oneArtifactNamesItsTitle() {
+      #expect(Self.lines([artifactFixture("a", title: "Delta Rates")]) == ["Artifact: Delta Rates"])
+    }
+
+    @Test func aRemovedArtifactDoesNotCountBesideALiveOne() {
+      let artifacts = [
+        artifactFixture("a", title: "Delta Rates", updated: now - hour),
+        artifactFixture("b", title: "Old draft", updated: now - minute, removed: now - minute),
+      ]
+
+      #expect(Self.lines(artifacts) == ["Artifact: Delta Rates"])
+    }
+
+    /// sbd lists artifacts in first-publish order, so the newest is not the last entry. A removed entry
+    /// with a later update is not the newest live artifact.
+    @Test func severalArtifactsGiveTheCountAndTheNewestLiveTitle() {
+      let artifacts = [
+        artifactFixture("a", title: "Flag plan", published: now - day, updated: now - minute),
+        artifactFixture("b", title: "Delta Rates", published: now - hour, updated: now - hour),
+        artifactFixture("c", title: "Old draft", published: now - hour, updated: now - second, removed: now - second),
+      ]
+
+      #expect(Self.lines(artifacts) == ["2 artifacts, newest Flag plan"])
+    }
+
+    @Test func aLongTitleIsCutToSixtyCharacters() {
+      let title = String(repeating: "x", count: 100)
+
+      #expect(
+        Self.lines([artifactFixture("a", title: title)]) == ["Artifact: " + String(repeating: "x", count: 59) + "…"])
+    }
+
+    @Test func accessibilityTextIncludesTheArtifactLine() {
+      let text = content(Self.session([artifactFixture("a", title: "Delta Rates")])).accessibilityText
+
+      #expect(text.contains("Artifact: Delta Rates"))
+    }
+
+    @Test func accessibilityTextOfSeveralArtifactsIncludesTheCount() {
+      let artifacts = [
+        artifactFixture("a", title: "Flag plan", updated: now - minute),
+        artifactFixture("b", title: "Delta Rates", updated: now - hour),
+      ]
+
+      #expect(content(Self.session(artifacts)).accessibilityText.contains("2 artifacts, newest Flag plan"))
+    }
+  }
+}

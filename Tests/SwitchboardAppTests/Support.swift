@@ -190,6 +190,16 @@ func notedSession(_ notes: [Note], state: AttentionState = .done, id: String = "
     attached: false, lastReply: nil, waits: [], notes: notes)
 }
 
+/// An artifact at `https://claude.ai/artifact/<id>`, first published at `published`.
+func artifactFixture(
+  _ id: String, title: String? = nil, artifactId: String? = nil, published: Int64 = 0, updated: Int64? = nil,
+  removed: Int64? = nil
+) -> SessionArtifact {
+  SessionArtifact(
+    url: "https://claude.ai/artifact/\(id)", artifactId: artifactId, title: title ?? id, published: published,
+    updated: updated ?? published, removed: removed)
+}
+
 // MARK: - Cards
 
 /// A permission card that asks to run `ls` in the session.

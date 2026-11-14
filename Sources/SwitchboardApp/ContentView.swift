@@ -713,6 +713,7 @@ private struct LaneLabel: View {
             .help(group.sessions.isEmpty ? "Delete this group" : "Delete this group and move its sessions to Ungrouped")
             .accessibilityLabel("Delete group \(group.name)")
         }
+        GroupArtifactsLink(group: group)
       }
       let plans = group?.plans ?? []
       PlanFollowupList(plans: plans)
