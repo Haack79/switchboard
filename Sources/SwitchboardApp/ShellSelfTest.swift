@@ -131,7 +131,9 @@ enum ShellSelfTest {
     anchor name: String, modifiers: NSEvent.ModifierFlags, throughWindow: Bool
   ) -> String {
     guard let window, let root = window.contentView else { return "no window" }
-    guard let anchor = ClickAnchorView.find(name, in: root) else { return "no \(name)" }
+    guard let anchor = ClickAnchorView.find(name, in: root) ?? scrollIntoView(name, in: root) else {
+      return "no \(name)"
+    }
     let frame = anchor.convert(anchor.bounds, to: nil)
     let point = NSPoint(x: frame.minX + clickInset, y: frame.midY)
     guard let hit = (root.superview ?? root).hitTest(point) else { return "nothing at \(name)" }
@@ -139,6 +141,27 @@ enum ShellSelfTest {
       return "no event"
     }
     return "clicked at \(Int(point.x)),\(Int(point.y)) on \(type(of: hit))"
+  }
+
+  /// The anchor named `name` in a row of a table under `view`, after that table scrolls the row into view. A
+  /// SwiftUI List builds views only for the rows near its visible area.
+  private static func scrollIntoView(_ name: String, in view: NSView) -> ClickAnchorView? {
+    for table in tables(in: view) {
+      for row in 0..<table.numberOfRows {
+        table.scrollRowToVisible(row)
+        table.layoutSubtreeIfNeeded()
+        if let rowView = table.rowView(atRow: row, makeIfNecessary: true),
+          let anchor = ClickAnchorView.find(name, in: rowView)
+        {
+          return anchor
+        }
+      }
+    }
+    return nil
+  }
+
+  private static func tables(in view: NSView) -> [NSTableView] {
+    (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap(tables)
   }
 
   /// Reports the menu item that `shortcut` runs. When none runs, it reports the item that owns the key and
