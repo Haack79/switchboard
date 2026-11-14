@@ -25,6 +25,16 @@ public struct MergeReview: Codable, Equatable, Sendable {
     public var url: String?
     public var notes: [MergeDetails.ReviewDetail.Note]
     public var noteCount: Int
+
+    /// Which commit the approval is on, such as "on the head" or "2 commits earlier".
+    public var place: String {
+      switch (atHead, commitsSince) {
+      case (true?, _): "on the head"
+      case (false?, let n?): "\(n) \(n == 1 ? "commit" : "commits") earlier"
+      case (false?, nil): "on an earlier commit"
+      case (nil, _): "on an unknown commit"
+      }
+    }
   }
 
   /// An open review thread that the panel shows, with the numbers of the
@@ -53,6 +63,15 @@ public struct MergeReview: Codable, Equatable, Sendable {
       replied = detail.replied
       drafts = []
     }
+
+    /// Where the thread is: "a.swift:12", "a.swift", "outdated", or "PR conversation".
+    public var place: String {
+      if outdated { return "outdated" }
+      if path.isEmpty { return "PR conversation" }
+      return line.map { "\(path):\($0)" } ?? path
+    }
+
+    public var replyLabel: String { replied ? "you replied" : "no reply" }
   }
 
   /// The PR's review threads as the merge details read counted them.
@@ -200,7 +219,7 @@ public struct MergeReview: Codable, Equatable, Sendable {
     threads = t
   }
 
-  static let notRead = "sbd hasn't read the review details yet."
+  public static let notRead = "sbd hasn't read the review details yet."
 
   /// The rows that the panel shows, in panel order. The approval and threads
   /// rows always show. The other rows show only when amber. The text is
@@ -224,16 +243,9 @@ public struct MergeReview: Codable, Equatable, Sendable {
 
   private var approvalDetails: [String] {
     let lines = approvals.map { a in
-      let place: String
-      switch (a.atHead, a.commitsSince) {
-      case (true?, _): place = "on the head"
-      case (false?, let n?): place = "\(n) \(n == 1 ? "commit" : "commits") earlier"
-      case (false?, nil): place = "on an earlier commit"
-      case (nil, _): place = "on an unknown commit"
-      }
       let notes = a.noteCount == 0 ? "" : ", \(a.noteCount) inline \(a.noteCount == 1 ? "comment" : "comments")"
       let body = a.body.map { ": " + oneLine($0, max: 200) } ?? ""
-      return "\(a.author)\(a.bot == true ? " (bot)" : ""), \(place)\(notes)\(body)"
+      return "\(a.author)\(a.bot == true ? " (bot)" : ""), \(a.place)\(notes)\(body)"
     }
     return (detailsRead ? [] : [Self.notRead]) + lines
   }
@@ -245,21 +257,18 @@ public struct MergeReview: Codable, Equatable, Sendable {
     return t.open == 0 ? "No open review threads" : open
   }
 
+  /// Why the threads row can't list every open thread: sbd hasn't read the
+  /// details, or the PR has more threads than one read covers. nil otherwise.
+  public var threadsNote: String? {
+    guard let t = threads else { return Self.notRead }
+    return t.read < t.total ? "The PR has \(t.total) review threads, and sbd read \(t.read)." : nil
+  }
+
   private var threadsDetails: [String] {
-    guard let t = threads else { return [Self.notRead] }
-    let unread = t.read < t.total ? ["The PR has \(t.total) review threads, and sbd read \(t.read)."] : []
-    return unread
-      + t.shown.map { thread in
-        let place: String
-        if thread.outdated {
-          place = "outdated"
-        } else if thread.path.isEmpty {
-          place = "PR conversation"
-        } else {
-          place = thread.line.map { "\(thread.path):\($0)" } ?? thread.path
-        }
+    (threadsNote.map { [$0] } ?? [])
+      + (threads?.shown ?? []).map { thread in
         let author = thread.author + (thread.bot == true ? " (bot)" : "")
-        return "\(place), \(author), \(thread.replied ? "you replied" : "no reply"): \(thread.excerpt)"
+        return "\(thread.place), \(author), \(thread.replyLabel): \(thread.excerpt)"
       }
   }
 

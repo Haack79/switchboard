@@ -3,8 +3,9 @@ import SwitchboardCore
 
 /// The Inbox message of a session, in sections that never change their
 /// order: the Summary (what it did and needs, and what to read before
-/// deciding), the Drafts when the session wrote a message for the user to
-/// send, the Details (behind a disclosure), and the Action (the buttons).
+/// deciding), Before you merge on a Ready to merge item, the Drafts when the
+/// session wrote a message for the user to send, the Details (behind a
+/// disclosure), and the Action (the buttons).
 /// An item with decisions shows them one step at a time in its Action. Its
 /// Summary shrinks to its first line, and its callouts move into Details.
 /// The step view owns ⌘⇧Return.
@@ -34,7 +35,10 @@ struct DecisionCard: View {
           if !item.callouts.isEmpty { callouts }
         }
       }
-      DraftsSection(session: session, item: item, drafts: item.drafts)
+      if Self.showsReview(item, listOpen: list != nil), let review = item.review {
+        MergeReviewPanel(session: session, item: item, review: review).id(item.ref)
+      }
+      DraftsSection(session: session, item: item, drafts: Self.sectionDrafts(item, listOpen: list != nil))
       // A new item starts with its own open or closed Details.
       CardDetails(session: session, ref: item.ref, details: item.details, callouts: list == nil ? [] : item.callouts)
         .id(item.ref)
@@ -56,6 +60,20 @@ struct DecisionCard: View {
   /// when it is wide enough. A card without either one keeps a single stack.
   static func splitsSummary(_ item: TriageItem) -> Bool {
     !item.summary.isEmpty && !item.callouts.isEmpty
+  }
+
+  /// Whether the card shows Before you merge. The step view takes the card
+  /// while a decision list is open.
+  static func showsReview(_ item: TriageItem, listOpen: Bool) -> Bool {
+    item.review != nil && !listOpen
+  }
+
+  /// The drafts that the Drafts section shows: every draft that no thread in
+  /// Before you merge holds, so each draft shows once.
+  static func sectionDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
+    guard showsReview(item, listOpen: listOpen) else { return item.drafts }
+    let held = MergeReviewPanel.heldDrafts(in: item)
+    return item.drafts.filter { !held.contains($0.number) }
   }
 
   /// Whether the Action says that the item has no summary: a fallback item
