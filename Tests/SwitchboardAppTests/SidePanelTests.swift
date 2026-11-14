@@ -156,3 +156,79 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     #expect(SidePanel.fits(width: Self.sessionViewMinimum, beside: beside))
   }
 }
+
+@Suite struct SidePanelTests {
+  static let now: Int64 = 1_800_000_000_000
+  static let minute: Int64 = 60_000
+  static let hour: Int64 = 60 * minute
+
+  static func session(_ artifacts: [SessionArtifact]?) -> SessionSummary {
+    var s = notedSession([])
+    s.artifacts = artifacts
+    return s
+  }
+
+  @Test func titlesTheArtifactsSectionWithoutACountWhenThereIsNoArtifact() {
+    #expect(SidePanel(Self.session(nil)).artifactsTitle == "Artifacts")
+  }
+
+  @Test func countsOnlyTheArtifactsThatAreNotRemovedInTheTitle() {
+    let artifacts = [artifactFixture("a"), artifactFixture("b", removed: 5), artifactFixture("c")]
+
+    #expect(SidePanel(Self.session(artifacts)).artifactsTitle == "Artifacts (2)")
+  }
+
+  @Test func titlesTheArtifactsSectionWithoutACountWhenEveryArtifactIsRemoved() {
+    let artifacts = [artifactFixture("a", removed: 5), artifactFixture("b", removed: 6)]
+
+    #expect(SidePanel(Self.session(artifacts)).artifactsTitle == "Artifacts")
+  }
+
+  @Test func hasNoArtifactsForASessionWithoutAnArtifact() {
+    #expect(!SidePanel(Self.session(nil)).hasArtifacts)
+  }
+
+  /// Removed artifacts still show as rows, so the empty text stays hidden.
+  @Test func hasArtifactsWhenEveryArtifactIsRemoved() {
+    #expect(SidePanel(Self.session([artifactFixture("a", removed: 5)])).hasArtifacts)
+  }
+
+  @Test func theEmptyTextSaysThereAreNoArtifacts() {
+    #expect(SidePanel.noArtifacts == "No artifacts.")
+  }
+
+  /// sbd lists a session's artifacts in first-publish order. The panel shows the newest update first.
+  @Test func sortsTheArtifactsByTheirLastUpdateNewestFirst() {
+    let artifacts = [
+      artifactFixture("a", published: 1, updated: 1),
+      artifactFixture("b", published: 2, updated: 9),
+      artifactFixture("c", published: 3, updated: 5),
+    ]
+
+    #expect(SidePanel(Self.session(artifacts)).artifacts.map(\.title) == ["b", "c", "a"])
+  }
+
+  /// Equal updates sort by URL, the order that sbd gives a group's list.
+  @Test func sortsArtifactsWithTheSameUpdateByTheirLink() {
+    let artifacts = [artifactFixture("b", updated: 5), artifactFixture("a", updated: 5)]
+
+    #expect(SidePanel(Self.session(artifacts)).artifacts.map(\.title) == ["a", "b"])
+  }
+
+  @Test func listsNoArtifactsForASessionWithoutAnArtifact() {
+    #expect(SidePanel(Self.session(nil)).artifacts.isEmpty)
+  }
+
+  @Test func captionSaysWhenALiveArtifactWasLastUpdated() {
+    let artifact = artifactFixture("a", published: Self.now - Self.hour, updated: Self.now - 5 * Self.minute)
+
+    #expect(artifact.caption(now: Self.now) == "updated 5m ago")
+  }
+
+  @Test func captionSaysWhenARemovedArtifactWasRemoved() {
+    let artifact = artifactFixture(
+      "a", published: Self.now - 3 * Self.hour, updated: Self.now - 2 * Self.hour, removed: Self.now - 5 * Self.minute)
+
+    #expect(artifact.caption(now: Self.now) == "removed 5m ago")
+  }
+}

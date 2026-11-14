@@ -10,7 +10,8 @@ struct HoverCardContent: Equatable {
   }
 
   var title: String
-  /// Muted lines under the title: the repo and branch, the issues, then the group, account, and last activity.
+  /// Muted lines under the title: the repo and branch, the issues, the group, account, and last activity, then the
+  /// artifacts that no delete removed.
   var details: [String]
   var pr: PRChip?
   /// What the session is doing or waits on, in one line of plain text.
@@ -37,6 +38,7 @@ struct HoverCardContent: Equatable {
       Self.joined([repo, branch]),
       issues.count > 1 ? "Issues " + issues.map { $0.label(from: s.pr?.repo) }.joined(separator: ", ") : nil,
       Self.joined(meta),
+      Self.artifacts(s.artifacts ?? []),
     ].compactMap { $0 }
     pr = s.pr.map { PRChip(text: $0.line, status: $0.status) }
     summary = Self.summary(s, names: names)
@@ -45,6 +47,12 @@ struct HoverCardContent: Equatable {
   /// Every fact in one string, for VoiceOver, which reads no hover card.
   var accessibilityText: String {
     ([title] + details + [pr?.text, summary].compactMap { $0 }).joined(separator: ". ")
+  }
+
+  private static func artifacts(_ artifacts: [SessionArtifact]) -> String? {
+    let live = artifacts.newestFirst.filter { $0.removed == nil }
+    guard let newest = live.first.map({ oneLine($0.title, max: 60) }) else { return nil }
+    return live.count == 1 ? "Artifact: \(newest)" : "\(live.count) artifacts, newest \(newest)"
   }
 
   private static func joined(_ parts: [String?]) -> String? {
