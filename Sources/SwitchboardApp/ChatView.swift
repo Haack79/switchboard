@@ -35,6 +35,7 @@ struct ChatView: View {
     }
     // A tool call changes lastActivity, so the log reloads only when the reply or the state changes.
     .task(id: "\(session.lastReply?.count ?? 0)/\(session.state)/\(session.since)") { model.loadChatLog(session.id) }
+    .referenceRepo(session)
   }
 }
 

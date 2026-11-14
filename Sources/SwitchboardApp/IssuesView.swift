@@ -242,7 +242,7 @@ private struct IssueDetail: View {
         if issue.body.isEmpty {
           Text("No description").foregroundStyle(.secondary).padding(12)
         } else {
-          MarkdownView(text: issue.body).padding(12)
+          MarkdownView(text: issue.body).padding(12).environment(\.referenceRepo, issue.repo)
         }
       }
     }

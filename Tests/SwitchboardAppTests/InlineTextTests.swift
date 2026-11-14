@@ -57,17 +57,17 @@ private let names = SessionNames(
   live: [liveID: liveName, otherID: otherName], removed: [removedID: removedName])
 private let noNames = SessionNames(live: [:], removed: [:])
 
-private func render(_ text: MarkdownText, names: SessionNames = names, links: Bool = true) -> (
+private func render(_ text: MarkdownText, names: SessionNames = names, repo: String? = nil, links: Bool = true) -> (
   text: AttributedString, help: String?
 ) {
-  let (attributed, help) = InlineText.attributed(text, names: names, links: links)
+  let (attributed, help) = InlineText.attributed(text, names: names, repo: repo, links: links)
   return (attributed, help)
 }
 
-private func render(plain: String, names: SessionNames = names, links: Bool = true) -> (
+private func render(plain: String, names: SessionNames = names, repo: String? = nil, links: Bool = true) -> (
   text: AttributedString, help: String?
 ) {
-  render(MarkdownText(stringLiteral: plain), names: names, links: links)
+  render(MarkdownText(stringLiteral: plain), names: names, repo: repo, links: links)
 }
 
 /// Each distinct link in the part of `text` that reads `substring`, nil for a run with no link.
@@ -288,6 +288,247 @@ extension InlineTextTests {
     /// A view whose host never sets `sessionNames` draws ids as written.
     @Test func theEnvironmentDirectoryStartsEmpty() {
       #expect(EnvironmentValues().sessionNames == SessionNames(live: [:], removed: [:]))
+    }
+  }
+}
+
+// MARK: - References
+
+/// The repository that a bare `#N` refers to in these tests.
+private let contextRepo = "haacked/switchboard"
+
+private func url(_ string: String) -> URL? { URL(string: string) }
+
+extension InlineTextTests {
+  @Suite struct References {
+    // MARK: Bare #N
+
+    @Test func aBareNumberWithAContextLinksToTheContextRepositorysIssue() throws {
+      let result = render(plain: "Fix #1 first.", repo: contextRepo)
+
+      #expect(try links(in: result.text, of: "#1") == [url("https://github.com/haacked/switchboard/issues/1")])
+    }
+
+    @Test func theTextAroundABareNumberHasNoLink() throws {
+      let result = render(plain: "Fix #1 first.", repo: contextRepo)
+
+      #expect(try links(in: result.text, of: "Fix ") == [nil])
+      #expect(try links(in: result.text, of: " first.") == [nil])
+    }
+
+    @Test func aBareNumberWithoutAContextHasNoLink() {
+      let result = render(plain: "Fix #1 first.")
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    /// Assumes that an invalid context repository acts as no context, as `InlineMentions` does.
+    @Test(arguments: ["", "nope", "1/2", "o/r/x", "o r/x", "-/r"])
+    func aBareNumberWithAnInvalidContextHasNoLink(_ repo: String) {
+      let result = render(plain: "Fix #1 first.", repo: repo)
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    @Test(arguments: ["a#1", "&#123;", "/#1", "##1", "x.#1", "#12.5", "#12:30", "#12-fix", "#12a", "#0", "#01"])
+    func aNumberThatIsNotABareReferenceHasNoLink(_ s: String) {
+      let result = render(plain: s, repo: contextRepo)
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    // MARK: owner/name#N
+
+    @Test func anOwnerNameReferenceLinksWithoutAContext() throws {
+      let result = render(plain: "See o/r#1.")
+
+      #expect(try links(in: result.text, of: "o/r#1") == [url("https://github.com/o/r/issues/1")])
+    }
+
+    @Test func anOwnerNameReferenceLinksToItsOwnRepositoryNotTheContext() throws {
+      let result = render(plain: "See o/r#1.", repo: contextRepo)
+
+      #expect(try links(in: result.text, of: "o/r#1") == [url("https://github.com/o/r/issues/1")])
+    }
+
+    // MARK: URLs
+
+    @Test func aPullFilesURLInPlainTextLinksToItself() throws {
+      let result = render(plain: "See https://github.com/o/r/pull/1/files.")
+
+      #expect(
+        try links(in: result.text, of: "https://github.com/o/r/pull/1/files")
+          == [url("https://github.com/o/r/pull/1/files")])
+    }
+
+    @Test func aURLInPlainTextKeepsItsFragmentInTheLink() throws {
+      let link = "https://github.com/o/r/issues/1#issuecomment-1"
+
+      let result = render(plain: "See \(link) now")
+
+      #expect(try links(in: result.text, of: link) == [url(link)])
+    }
+
+    @Test func anHttpURLInPlainTextLinksToHttps() throws {
+      let result = render(plain: "See http://github.com/o/r/pull/1 now")
+
+      #expect(try links(in: result.text, of: "http://github.com/o/r/pull/1") == [url("https://github.com/o/r/pull/1")])
+    }
+
+    // MARK: Existing links
+
+    @Test func aGitHubMarkdownLinkKeepsItsOwnURL() {
+      let link = "https://github.com/o/r/pull/1#discussion_r1"
+      let text = MarkdownText([MarkdownText.Run("the fix", link: link)])
+
+      let result = render(text, repo: contextRepo)
+
+      #expect(String(result.text.characters) == "the fix")
+      #expect(allLinks(result.text) == [url(link)])
+    }
+
+    @Test func aMarkdownLinkWhoseTextIsABareNumberKeepsItsURL() {
+      let text = MarkdownText([MarkdownText.Run("#1", link: "https://example.com/x")])
+
+      let result = render(text, repo: contextRepo)
+
+      #expect(allLinks(result.text) == [url("https://example.com/x")])
+    }
+
+    // MARK: No link
+
+    @Test(arguments: ["Fix #1.", "See o/r#1.", "See https://github.com/o/r/pull/1/files."])
+    func withoutLinksAReferenceHasNoLink(_ s: String) {
+      let result = render(plain: s, repo: contextRepo, links: false)
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    @Test func withoutLinksAGitHubMarkdownLinkHasNoLink() {
+      let text = MarkdownText([MarkdownText.Run("the fix", link: "https://github.com/o/r/pull/1")])
+
+      let result = render(text, repo: contextRepo, links: false)
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    /// Only a reference loses its link. Any other Markdown link keeps it.
+    @Test func withoutLinksAnotherMarkdownLinkKeepsItsURL() {
+      let text = MarkdownText([MarkdownText.Run("docs", link: "https://example.com/x")])
+
+      let result = render(text, repo: contextRepo, links: false)
+
+      #expect(allLinks(result.text) == [url("https://example.com/x")])
+    }
+
+    @Test(arguments: ["#1", "o/r#1", "https://github.com/o/r/pull/1", "see #1 and o/r#2"])
+    func aCodeSpanReferenceHasNoLink(_ s: String) {
+      let text = MarkdownText([MarkdownText.Run("Run "), MarkdownText.Run(s, .code)])
+
+      let result = render(text, repo: contextRepo)
+
+      #expect(allLinks(result.text) == [nil])
+    }
+
+    @Test func aCodeSpanReferenceKeepsTheCodeStyle() throws {
+      let text = MarkdownText([MarkdownText.Run("Run "), MarkdownText.Run("#1", .code)])
+
+      let result = render(text, repo: contextRepo)
+
+      let range = try #require(result.text.range(of: "#1"))
+      #expect(result.text[range].inlinePresentationIntent == .code)
+    }
+
+    // MARK: Text and style
+
+    @Test(arguments: [nil, contextRepo] as [String?])
+    func aReferenceKeepsItsTextAsWritten(_ repo: String?) {
+      let s = "Fix #1, o/r#2 and https://github.com/o/r/pull/3/files."
+
+      let result = render(plain: s, repo: repo)
+
+      #expect(String(result.text.characters) == s)
+    }
+
+    @Test func aStrongReferenceKeepsItsStrongStyleAndLinks() throws {
+      let text = MarkdownText([MarkdownText.Run("Fix "), MarkdownText.Run("#1", .strong)])
+
+      let result = render(text, repo: contextRepo)
+
+      let range = try #require(result.text.range(of: "#1"))
+      #expect(result.text[range].inlinePresentationIntent == .stronglyEmphasized)
+      #expect(result.text[range].link == url("https://github.com/haacked/switchboard/issues/1"))
+    }
+
+    // MARK: Help
+
+    /// Assumes that the tooltip lists sessions only, so a text with only references has none.
+    @Test func aReferenceAddsNoHelp() {
+      let result = render(plain: "Fix #1 and o/r#2.", repo: contextRepo)
+
+      #expect(result.help == nil)
+    }
+
+    @Test func helpWithAReferenceNamesOnlyTheSession() {
+      let result = render(plain: "Ask \(liveID) about #1.", repo: contextRepo)
+
+      #expect(result.help == "\(liveName): \(liveID)")
+    }
+
+    // MARK: Sessions
+
+    @Test func aSessionAndAReferenceInOneTextEachLinkToTheirOwnTarget() throws {
+      let result = render(plain: "Ask \(liveID) about #1.", repo: contextRepo)
+
+      #expect(try links(in: result.text, of: liveName) == [SessionLink.url(for: liveID)])
+      #expect(try links(in: result.text, of: "#1") == [url("https://github.com/haacked/switchboard/issues/1")])
+    }
+
+    @Test func withAContextALiveIdStillReadsAsItsName() {
+      let result = render(plain: "Ask \(liveID) to rebase.", repo: contextRepo)
+
+      #expect(String(result.text.characters) == "Ask \(liveName) to rebase.")
+    }
+
+    @Test func withAContextATextWithoutReferencesDrawsAsWithout() {
+      let s = "Ask \(liveID) and \(removedID) to rebase."
+
+      let withContext = render(plain: s, repo: contextRepo)
+      let without = render(plain: s)
+
+      #expect(withContext.text == without.text)
+    }
+
+    // MARK: Parity
+
+    static let parityTexts: [MarkdownText] = [
+      "Fix #1 first.",
+      "See o/r#1.",
+      "See https://github.com/o/r/pull/1/files.",
+      "See https://github.com/o/r/issues/1#issuecomment-1 and http://github.com/o/r/pull/2",
+      MarkdownText(stringLiteral: "Ask \(liveID) about #1 and o/r#2."),
+      "&#123; a#1 #12.5 ##1",
+      MarkdownText([MarkdownText.Run("Run "), MarkdownText.Run("#1", .code)]),
+      MarkdownText([MarkdownText.Run("the fix", link: "https://github.com/o/r/pull/1"), MarkdownText.Run(" #2")]),
+      MarkdownText([MarkdownText.Run("Fix "), MarkdownText.Run("#1", .strong), MarkdownText.Run(", ok")]),
+    ]
+
+    /// The same text with and without links gives the same characters.
+    @Test(arguments: InlineTextTests.References.parityTexts, [nil, contextRepo] as [String?])
+    func withAndWithoutLinksGiveTheSameCharacters(_ text: MarkdownText, repo: String?) {
+      let linked = render(text, repo: repo, links: true)
+      let unlinked = render(text, repo: repo, links: false)
+
+      #expect(String(linked.text.characters) == String(unlinked.text.characters))
+    }
+
+    /// A context changes only links, never the characters.
+    @Test(arguments: InlineTextTests.References.parityTexts)
+    func withAndWithoutAContextGiveTheSameCharacters(_ text: MarkdownText) {
+      let withContext = render(text, repo: contextRepo)
+      let without = render(text)
+
+      #expect(String(withContext.text.characters) == String(without.text.characters))
     }
   }
 }
