@@ -150,7 +150,7 @@ extension Service {
       return "its group \(group.name) uses the account \(ClaudeAccount.name(bound))"
     }
     if starting.contains(id) { return "it is starting" }
-    if let refusal = removalRefusal(id) ?? removingRefusal(id) { return "\(refusal)" }
+    if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
     if claudeState(id) != .stopped { return "its claude is running. Stop it first" }
     if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
     if let source = transcriptFile(e.session) {

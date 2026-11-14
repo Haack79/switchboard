@@ -132,6 +132,16 @@ end_app() {
   app_pid=''
 }
 
+# ShellSelfTest checks run one app command at a time in the caller's "$shots".
+cmd_done() { [ ! -e "$shots/cmd" ]; }
+app() { # runs one ShellSelfTest command and prints its result
+  # The app polls for cmd. The rename makes the whole command appear at once.
+  echo "$*" >"$shots/cmd.tmp"
+  mv "$shots/cmd.tmp" "$shots/cmd"
+  wait_for 20 cmd_done || fail "the app did not run: $*"
+  grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
+}
+
 # Replaces the last run's files in .build/gui-test/<check> with this run's.
 save_shots() {
   [ -n "${check:-}" ] && [ -d "$home/shots/$check" ] || return 0
@@ -395,14 +405,6 @@ check_shell() {
   shell_gone() { ! tmux -S "$tmux_socket" has-session -t "=$1-shell" 2>/dev/null; }
   closed() { sb get "$1" --json | jq -e '.shellClosed == true' >/dev/null; }
   is_open() { ! closed "$1"; }
-  cmd_done() { [ ! -e "$shots/cmd" ]; }
-  app() { # runs one ShellSelfTest command and prints its result
-    # The app polls for cmd. The rename makes the whole command appear at once.
-    echo "$*" >"$shots/cmd.tmp"
-    mv "$shots/cmd.tmp" "$shots/cmd"
-    wait_for 20 cmd_done || fail "the app did not run: $*"
-    grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
-  }
   panes_are() { [ "$(app panes)" = "$1" ]; }
   click() { # <close | open> <where>
     local result
@@ -767,17 +769,11 @@ check_multiselect() {
   first=$session
   new_session multiselect-two
   second=$session
-  cmd_done() { [ ! -e "$shots/cmd" ]; }
-  app() { # runs one ShellSelfTest command and prints its result
-    echo "$*" >"$shots/cmd.tmp"
-    mv "$shots/cmd.tmp" "$shots/cmd"
-    wait_for 20 cmd_done || fail "the app did not run: $*"
-    grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
-  }
   shows() { [ "$(app where)" = "session(\"$1\")" ]; }
   detail_is() { [ "$(app detail)" = "$1" ]; }
   confirming() { [ "$(app sheet)" = "confirming 2" ]; }
-  listed() { sb get "$1" --json | jq -e --arg id "$1" '.id == $id' >/dev/null; }
+  # A queued delete keeps the session listed until its delay passes, so "listed" also requires no removal.
+  listed() { sb get "$1" --json | jq -e --arg id "$1" '.id == $id and .removal == null' >/dev/null; }
 
   SB_SELECT="$first" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
   app_pid=$!
@@ -791,7 +787,7 @@ check_multiselect() {
   wait_for 60 confirming || fail "Delete 2 Sessions… did not open the confirmation: $(app sheet)"
   app snapshot "$shots/confirmation.png" >/dev/null
   end_app
-  listed "$first" && listed "$second" || fail "opening the confirmation deleted a session"
+  listed "$first" && listed "$second" || fail "opening the confirmation queued or deleted a session"
   save_shots
   echo "ok: multiselect (⌘-click, detail pane, Delete 2 Sessions… confirmation)"
 }

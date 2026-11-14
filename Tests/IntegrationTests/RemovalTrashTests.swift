@@ -12,10 +12,6 @@ private let holdRename = "hold-removal-rename"
 /// waits here.
 private let holdTrashCheck = "hold-removal-trash"
 
-/// The gate file that holds the removal worker on the trash path after git dropped the worktree's record and the
-/// removal recorded `released`, before the branch deletes.
-private let holdReleased = "hold-removal-released"
-
 /// The config key that makes sbd treat the trash folder as on another volume than every worktree, as a differing
 /// `st_dev` does. sbd reads it only with `testClock`.
 private let trashOnOtherVolume = "testTrashOtherVolume"
@@ -485,6 +481,75 @@ private func isTrashPath(_ path: String, of id: String, in sbd: Instance) -> Boo
     #expect(try sbd.git(a.cwd, "status", "--porcelain").contains("notes.txt"))
   }
 
+  /// A to-do that arrives after git dropped the worktree's record fails the removal with `released` set. The folder's
+  /// .git file names an admin folder that git deleted, so Keep refuses to move it back, and Retry finishes the delete.
+  @Test func keepRefusesAFolderWhoseRecordGitDroppedAndRetryFinishesTheDelete() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    sbd.hold(holdReleased)
+    #expect(queued(try sbd.queueRemoval([a.id], scope: "work")) == [a.id])
+    _ = try sbd.waitFor("\(a.id)'s removal to record released", timeout: 60, fetch: { try sbd.removal(a.id) }) {
+      $0["released"]?.bool == true
+    }
+    let late = try sbd.addTodo(a.id, "close the incident")
+    try sbd.release(holdReleased)
+    let failed = try sbd.waitForRemoval(a.id, "failed")
+    #expect(failed["released"] == true, Comment(rawValue: failed.text))
+    let trash = sbd.trashFolder(a.id)
+
+    let refused = failure(sbd, "rm-keep", ["session": .string(a.id)])
+
+    #expect(refused.contains("Retry the delete"), Comment(rawValue: refused))
+    #expect(try sbd.removalState(a.id) == "failed")
+    #expect(FileManager.default.fileExists(atPath: "\(trash)/.git"), "Keep took the folder out of the trash")
+    #expect(!FileManager.default.fileExists(atPath: a.cwd))
+    try sbd.resolveTodo(a.id, late.id)
+    _ = try sbd.client.call("rm-retry", ["session": .string(a.id)])
+    try sbd.waitUntilGone(a.id)
+    #expect(!FileManager.default.fileExists(atPath: a.cwd))
+    try sbd.waitForEmptyTrash()
+  }
+
+  // MARK: Cancel
+
+  /// A retried removal is queued with its folder still in the trash. Clearing it would leave no removal that names the
+  /// folder, and the purge on the next load would delete files that no check passed, so rm-cancel refuses it. The
+  /// worker waits on b, so a stays queued.
+  @Test func rmCancelRefusesARetriedRemovalWhoseFolderIsInTheTrash() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    sbd.hold(holdTrashCheck)
+    #expect(queued(try sbd.queueRemoval([a.id], scope: "work")) == [a.id])
+    try sbd.waitForFolderInTrash(a)
+    let trash = sbd.trashFolder(a.id)
+    try "late".write(toFile: "\(trash)/notes.txt", atomically: true, encoding: .utf8)
+    try FileManager.default.createDirectory(atPath: a.cwd, withIntermediateDirectories: false)
+    try sbd.release(holdTrashCheck)
+    try sbd.waitForRemoval(a.id, "failed")
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+    #expect(queued(try sbd.queueRemoval([b.id], scope: "work")) == [b.id])
+    try sbd.waitForRemoval(b.id, "running")
+    _ = try sbd.client.call("rm-retry", ["session": .string(a.id)])
+    #expect(try sbd.removalState(a.id) == "queued")
+
+    let result = try sbd.client.call("rm-cancel", ["sessions": [.string(a.id)]])
+
+    #expect(result["cancelled"]?.array?.isEmpty == true, Comment(rawValue: result.text))
+    let reason = try #require(result["refused"]?.array?.first?["reason"]?.string, Comment(rawValue: result.text))
+    #expect(reason.contains(trash), Comment(rawValue: reason))
+    #expect(try sbd.removalState(a.id) == "queued")
+    sbd.killSbd()
+    let stray = sbd.trashFolder("stray")
+    try FileManager.default.createDirectory(atPath: stray, withIntermediateDirectories: true)
+    try sbd.startSbd()
+    try sbd.waitFor("the purge of \(stray)", timeout: 60) { !FileManager.default.fileExists(atPath: stray) }
+    #expect(try String(contentsOfFile: "\(trash)/notes.txt", encoding: .utf8) == "late")
+  }
+
   // MARK: The purge on load
 
   @Test func aTrashFolderThatNoRemovalNamesIsPurgedOnLoad() throws {
@@ -622,6 +687,36 @@ private func isTrashPath(_ path: String, of id: String, in sbd: Instance) -> Boo
     #expect(calls.first?.hasPrefix("worktree delete --worktree ") == true, Comment(rawValue: calls.joined()))
     #expect(!FileManager.default.fileExists(atPath: a.cwd))
     #expect(try !sbd.listsWorktree(repo, a), "git still lists \(a.cwd)")
+    #expect(!FileManager.default.fileExists(atPath: sbd.trashFolder(a.id)))
+  }
+
+  /// `git worktree remove` on a path that is gone skips git's refusal of a worktree with a submodule and deletes the
+  /// submodule's repo, so the worker deletes such a worktree in place, where git refuses it. Both trash gates are held,
+  /// so a removal that took the trash path could not end.
+  @Test func aWorktreeWithASubmoduleIsDeletedInPlaceWhereGitRefusesIt() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let sub = "\(sbd.home.path)/sub"
+    try sbd.git(sbd.home.path, "init", "-q", sub)
+    try sbd.commit(sub, "sub.txt")
+    try sbd.git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub")
+    try sbd.git(
+      repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "sub")
+    try sbd.git(repo, "push", "-q", "origin", "main")
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    try sbd.git(a.cwd, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init")
+    try #require(FileManager.default.fileExists(atPath: "\(a.cwd)/sub/sub.txt"))
+    sbd.hold(holdRename)
+    sbd.hold(holdTrashCheck)
+
+    #expect(queued(try sbd.queueRemoval([a.id], scope: "work")) == [a.id])
+
+    let failed = try sbd.waitForRemoval(a.id, "failed")
+    let error = try #require(failed["error"]?.string, Comment(rawValue: failed.text))
+    #expect(error.contains("submodules"), Comment(rawValue: error))
+    #expect(try sbd.intact(a))
+    #expect(FileManager.default.fileExists(atPath: "\(a.cwd)/sub/sub.txt"))
+    #expect(try sbd.listsWorktree(repo, a), "git no longer lists \(a.cwd)")
     #expect(!FileManager.default.fileExists(atPath: sbd.trashFolder(a.id)))
   }
 }

@@ -432,6 +432,8 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     let targets = await confirm(model, plan, sent)
 
     #expect(targets == ["ph"])
+    await settle { model.actionError != nil }
+    #expect(model.actionError?.contains(BoardModel.hiddenOrgReason) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func aSessionWhoseOrgBecomesKnownAndHiddenWhileTheSheetIsOpenIsNeverQueued() async throws {
@@ -447,6 +449,8 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     let targets = await confirm(model, plan, sent)
 
     #expect(targets == ["ph"])
+    await settle { model.actionError != nil }
+    #expect(model.actionError?.contains(BoardModel.hiddenOrgReason) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func aSessionWhoseOrgIsUnknownIsNeverQueuedUnderAFilter() async throws {
@@ -459,6 +463,8 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
 
     #expect(model.shownIDs.contains("un"))
     #expect(targets == ["ph"])
+    await settle { model.actionError != nil }
+    #expect(model.actionError?.contains(BoardModel.unreadOrgReason) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func anIdThatTheBoardDoesNotListIsNeverQueued() async throws {
@@ -470,6 +476,8 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     let targets = await confirm(model, plan, sent)
 
     #expect(targets == ["ph"])
+    await settle { model.actionError != nil }
+    #expect(model.actionError?.contains(BoardModel.unlistedReason) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func underAllOrgsOneRmQueueTakesEveryPlannedSession() async throws {

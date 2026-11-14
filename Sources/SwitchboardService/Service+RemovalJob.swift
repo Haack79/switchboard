@@ -17,6 +17,10 @@ extension Service {
     removing.contains(id) ? APIError("\(id) is being deleted") : nil
   }
 
+  /// The refusal for a request that would start or change a session that the removal job holds or that `rm` or
+  /// `cleanup` is removing, or nil. It runs on the state queue.
+  func beingDeletedRefusal(_ id: String) -> APIError? { removalRefusal(id) ?? removingRefusal(id) }
+
   /// The refusal for a removal of a session that `followup start` is starting or `merge` is merging, or nil. It
   /// runs on the state queue.
   func busyRefusal(_ id: String) -> APIError? {
@@ -72,7 +76,8 @@ extension Service {
   /// starting, merging, or that `rm` or `cleanup` is removing. `rm-keep`
   /// moves the worktree's folder back from the trash, then clears the
   /// removal, and the session goes back to the state its events give it. A
-  /// folder that can't move back keeps the removal.
+  /// folder that can't move back keeps the removal, and so does one whose
+  /// worktree record git already dropped.
   /// Both refuse a session with no failed removal. `removal-notices` lists the notices,
   /// oldest first. `removal-notice-dismiss` deletes the notice `id`.
   func removalRequest(_ op: String, _ args: JSON) throws -> JSON {
@@ -97,10 +102,12 @@ extension Service {
       return try JSON(encoding: cancelRemovals(args))
     case "removal-notices":
       return try JSON(encoding: store.removalNotices())
-    default:
+    case "removal-notice-dismiss":
       guard let id = args["id"]?.int else { throw APIError("removal-notice-dismiss needs the notice's id") }
       try store.deleteRemovalNotice(id: Int64(id))
       return [:]
+    default:
+      throw APIError("unknown request \(op)")
     }
   }
 
@@ -114,8 +121,8 @@ extension Service {
 
   /// Clears the queued removal of each session in `sessions`. The job stopped nothing yet, so the session is as
   /// it was before `rm-queue`. It clears a queued removal whose `notBefore` passed too. It refuses each id that
-  /// names no session, no removal, or a running or failed removal. A refusal does not stop the other ids. It
-  /// runs on the state queue.
+  /// names no session, no removal, a running or failed removal, or a queued removal whose folder is in the trash.
+  /// A refusal does not stop the other ids. It runs on the state queue.
   private func cancelRemovals(_ args: JSON) throws -> RemovalCancelled {
     var result = RemovalCancelled(cancelled: [], refused: [])
     for id in try idList(args, key: "sessions", op: "rm-cancel") {
@@ -128,7 +135,9 @@ extension Service {
         case nil: "\(id) is not being deleted"
         case .running: "\(id) is already being deleted"
         case .failed: "the delete of \(id) failed, and Keep brings it back"
-        case .queued: nil
+        // A retried removal can be queued with its folder still in the trash, and clearing it would leave the
+        // folder for the purge.
+        case .queued: trashedFolder(id).map { "\(id) is already being deleted: its folder is in the trash at \($0)" }
         }
       if let refusal {
         result.refused.append(.init(id: id, name: session.name, reason: refusal))

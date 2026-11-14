@@ -120,7 +120,7 @@ final class Instance {
       // Tests that start many sessions don't expect sbd to stop the idle ones.
       "liveCap": 50,
       // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the
-      // undo window. The tests in RemovalUndoTests.swift set it.
+      // undo window. A test that checks the undo window sets it.
       "removalDelaySeconds": 0,
     ]
     try JSON.object(config.merging(extra) { $1 }).text.write(toFile: home.config, atomically: true, encoding: .utf8)
@@ -258,8 +258,9 @@ final class Instance {
   /// Runs sb with this instance's SB_HOME, whatever its exit status.
   func run(_ args: String...) throws -> CommandResult { try run(args) }
 
-  func run(_ args: [String], env extra: [String: String] = [:]) throws -> CommandResult {
-    try runCommand("\(Instance.bin)/sb", args, env: environment(extra))
+  func run(_ args: [String], env extra: [String: String] = [:], timeout: Double? = nil) throws -> CommandResult {
+    try runCommand(
+      "\(Instance.bin)/sb", args, env: environment(extra), timeout: timeout.map { $0 * Instance.timeoutScale })
   }
 
   /// The settings in config.json.

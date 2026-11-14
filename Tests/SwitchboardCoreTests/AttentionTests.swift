@@ -1008,7 +1008,6 @@ enum WaitingCause: String, CaseIterable, Sendable {
   }
 }
 
-/// The suite's name holds `AttentionTests`, so `--filter AttentionTests` runs it.
 @Suite struct RemovalAttentionTests {
   /// Short enough that a reason that `oneLine` shortens to 70 characters keeps it whole.
   static let message = "/tmp/w has uncommitted files (1)."

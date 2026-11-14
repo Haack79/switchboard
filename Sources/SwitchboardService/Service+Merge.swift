@@ -17,7 +17,7 @@ extension Service {
   func mergeRequest(_ args: JSON) throws -> JSON {
     let (id, pr, method): (String, PullRequest?, MergeMethod) = try queue.sync {
       let id = try sessionByPR(args)
-      if let refusal = removalRefusal(id) ?? removingRefusal(id) { throw refusal }
+      if let refusal = beingDeletedRefusal(id) { throw refusal }
       let e = entries[id]!
       let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
       guard verdict.state == .readyToMerge, let pr = e.facts.pr else {

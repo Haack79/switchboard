@@ -61,8 +61,8 @@ func removeDone(_ a: Args) {
 
 /// Polls sbd until each of `ids` is gone or no longer waits in the removal
 /// job, and returns the gone ids and each other id with the reason it stayed,
-/// both in the order of `ids`. `failed` is true for a removal that failed,
-/// and false for one that someone cleared while sb waited.
+/// both in the order of `ids`. `failed` is true for a removal that failed
+/// and that Keep can bring back, and false otherwise.
 private func waitForRemovals(_ ids: [String]) -> (gone: [String], stayed: [Stayed]) {
   var retry = UnreachableRetry()
   while true {
@@ -89,6 +89,11 @@ private func waitForRemovals(_ ids: [String]) -> (gone: [String], stayed: [Staye
       switch session.removal {
       case let removal? where removal.holdsSession:
         waiting = true
+      case let removal? where removal.released:
+        // Keep would put back a folder whose worktree record git already deleted.
+        let reason = removal.error ?? "\(session.name) failed to delete"
+        stayed.append(
+          (id, append(reason, "git already dropped its worktree, so retry the delete in the Inbox."), false))
       case let removal?:
         stayed.append((id, removal.error ?? "\(session.name) failed to delete", true))
       case nil:
@@ -108,10 +113,15 @@ private typealias Stayed = (id: String, reason: String, failed: Bool)
 private func keep(_ id: String, failedWith reason: String) -> String {
   do {
     _ = try client.call("rm-keep", ["session": .string(id)])
-    return reason
+    return append(reason, "Kept in Done. Run sb rm --done again to retry.")
   } catch {
-    return "\(reason)\(reason.hasSuffix(".") ? "" : ".") Keep failed: \(error)"
+    return append(reason, "Keep failed: \(error)")
   }
+}
+
+/// `reason`, ended with a period, then `more`.
+private func append(_ reason: String, _ more: String) -> String {
+  "\(reason)\(reason.hasSuffix(".") ? "" : ".") \(more)"
 }
 
 private func dismiss(_ notice: RemovalNotice) {

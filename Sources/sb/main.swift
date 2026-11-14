@@ -122,10 +122,10 @@ let usage = """
                                   remove every Done session the same way, after listing
                                   them and the ones whose checks fail, which it skips.
                                   --worktree also deletes each branch whose PR merged.
-                                  sbd's removal job waits 5 s, while the app's Undo can
-                                  bring them back, then deletes them one at a time, and sb
-                                  waits for it. --no-wait prints what the job queued and
-                                  returns. Without a terminal or inside Claude, it needs
+                                  sbd's removal job waits 5 s by default, while the app's
+                                  Undo can bring them back, then deletes them one at a time,
+                                  and sb waits for it. --no-wait prints what the job queued
+                                  and returns. Without a terminal or inside Claude, it needs
                                   --yes. With --json and without --yes, it removes nothing
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits

@@ -33,8 +33,10 @@ extension MergedPRRepo {
 }
 
 extension Instance {
+  /// `sb rm --done` waits for the removal job with no deadline, so a hung job would hold the test until CI's job
+  /// timeout.
   fileprivate func rmDone(_ flags: String..., env: [String: String] = [:]) throws -> CommandResult {
-    try run(["rm", "--done"] + flags, env: env)
+    try run(["rm", "--done"] + flags, env: env, timeout: 300)
   }
 
   /// The `rm-done` preview.
@@ -78,7 +80,7 @@ extension Instance {
   /// Starts `sb rm --done` with the flags on a thread of its own, so the test can read sbd while the command waits.
   fileprivate func startRmDone(_ flags: String...) -> Outcome<CommandResult> {
     let args = ["rm", "--done"] + flags
-    return Outcome.detached { try self.run(args) }
+    return Outcome.detached { try self.run(args, timeout: 300) }
   }
 
   /// Waits until sbd's removal job holds every session in `ids`, with one of them running and the rest queued, and
@@ -106,16 +108,13 @@ extension Instance {
 
   /// Waits for the command to exit and returns its result.
   fileprivate func finish(_ command: Outcome<CommandResult>, timeout: Double = 60) throws -> CommandResult {
-    guard command.done.wait(timeout: .now() + timeout) == .success else {
+    guard command.done.wait(timeout: .now() + timeout * Instance.timeoutScale) == .success else {
       throw TestError(description: "sb rm --done did not exit within \(timeout) s after the job was released")
     }
     return try #require(command.result).get()
   }
 
-  /// The `removal-notices` op's list.
-  fileprivate func noticeSessions() throws -> [String] {
-    try #require(try client.call("removal-notices").array).compactMap { $0["session"]?.string }
-  }
+  fileprivate func noticeSessions() throws -> [String] { try removalNotices().map(\.session) }
 }
 
 /// The ids in the result's `removed`.
@@ -288,10 +287,10 @@ private func parse(_ r: CommandResult) throws -> JSON {
   @Test func keepsTheBranchOfAClosedPRAndDeletesTheBranchOfAMergedPR() throws {
     let s = try MergedPRRepo()
     let closed = try s.finished(.cohort, state: "CLOSED", push: true)
-    let merged = try s.finished(.breaker, state: "MERGED")
+    let merged = try s.finished(.breaker, state: "MERGED", push: true)
     try s.pollUntilDone(closed, merged)
 
-    let r = try s.sbd.rmDone("--worktree", "--yes", "--json")
+    let r = try s.sbd.rmDone("--worktree", "--delete-remote-branch", "--yes", "--json")
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
     #expect(removed(try parse(r)) == [closed.id, merged.id])
@@ -300,6 +299,8 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try !s.sbd.git(s.repo, "worktree", "list", "--porcelain").contains(closed.cwd))
     #expect(try s.sbd.localBranch(s.repo, RemovalPR.cohort.branch))
     #expect(try !s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
+    #expect(try s.sbd.localBranch(s.origin, RemovalPR.cohort.branch))
+    #expect(try !s.sbd.localBranch(s.origin, RemovalPR.breaker.branch))
   }
 
   @Test func leavesSessionsThatAreNotDone() throws {
@@ -1103,6 +1104,56 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(skipLine.contains("uncommitted"), Comment(rawValue: skipLine))
     #expect(try sbd.listedIds() == [dirty.id])
     #expect(try sbd.removalState(dirty.id) == nil, "sb rm --done did not keep the session whose removal failed")
+  }
+
+  /// launchd may restart sbd while the command waits. The job resumes after the restart, and the command waits
+  /// through the restart until the job ends.
+  @Test func waitsThroughARestartOfSbd() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    for s in [a, b] { try sbd.markSessionDone(s.id) }
+    sbd.hold(holdRemoval)
+    defer { try? sbd.release(holdRemoval) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--json")
+    try sbd.waitForJob([a.id, b.id], while: command)
+    sbd.killSbd()
+    try sbd.release(holdRemoval)
+    try sbd.startSbd()
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(Set(result.removed) == [a.id, b.id], Comment(rawValue: r.stdout))
+    #expect(result.skipped.isEmpty, Comment(rawValue: r.stdout))
+  }
+
+  /// A to-do arrives after git dropped the worktree's record, so the removal fails with `released` set and Keep can't
+  /// move the folder back. The command sends no `rm-keep` and says to retry the delete.
+  @Test func reportsAFailureAfterGitDroppedTheWorktreeWithoutKeepingIt() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    try sbd.markSessionDone(a.id)
+    sbd.hold(holdReleased)
+    defer { try? sbd.release(holdReleased) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--json")
+    _ = try sbd.waitFor("\(a.id)'s removal to record released", timeout: 60, fetch: { try sbd.removal(a.id) }) {
+      $0["released"]?.bool == true
+    }
+    try sbd.addTodo(a.id, "close the incident")
+    try sbd.release(holdReleased)
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    let reason = try #require(result.skipped.first { $0.id == a.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains("retry the delete in the Inbox"), Comment(rawValue: reason))
+    #expect(!reason.contains("Keep failed") && !reason.contains("Kept in Done"), Comment(rawValue: reason))
+    #expect(try sbd.removalState(a.id) == "failed")
   }
 
   /// The app's Undo cancels a session while the command waits out the delay. The command reports it as skipped and

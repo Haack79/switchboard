@@ -3,8 +3,7 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// The suite's name holds `RemovalJobTests`, so the removal job's `--filter RemovalJobTests` runs it.
-@Suite struct StoredRemovalJobTests {
+@Suite struct RemovalStoreTests {
   @Test func aSessionThatAnOlderSbdStoredHasNoRemoval() throws {
     let json = #"{"id":"s1","name":"one","cwd":"/a","claudeSessionId":"u1","created":5,"started":true,"done":false}"#
 
@@ -52,6 +51,12 @@ import Testing
 
     let again = try JSONCoding.decode(Session.self, from: JSONCoding.encode(session))
 
+    var expected = Removal(
+      requested: 1000, notBefore: 6000, worktree: true, branch: true, remoteBranch: true, resolve: ["n1", "n2"])
+    expected.state = .running
+    expected.trash = "/sb/trash/s1"
+    expected.released = true
+    #expect(session.removal == expected)
     #expect(again == session)
     let stored = try #require(try JSON(encoding: again)["removal"])
     #expect(stored["state"] == "running")

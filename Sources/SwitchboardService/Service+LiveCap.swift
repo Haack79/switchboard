@@ -39,7 +39,7 @@ extension Service {
   /// removing it, and the removal job doesn't hold it.
   func requireStartable(_ id: String) throws -> Session {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
-    if let refusal = removalRefusal(id) ?? removingRefusal(id) { throw refusal }
+    if let refusal = beingDeletedRefusal(id) { throw refusal }
     try requireRead(id)
     try requireFolder(session)
     guard claudeState(id) == .stopped else { throw APIError("\(id) is already running") }

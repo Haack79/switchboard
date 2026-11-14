@@ -7,6 +7,10 @@ import Testing
 /// session queued after that one stays `queued`.
 let holdRemoval = "hold-removal"
 
+/// The gate file that holds the removal worker on the trash path after git dropped the worktree's record and the
+/// removal recorded `released`, before the branch deletes.
+let holdReleased = "hold-removal-released"
+
 /// A recorded PR in PostHog/posthog and its head branch.
 struct RemovalPR {
   let number: Int
@@ -118,6 +122,12 @@ extension Instance {
       try listedIds().isDisjoint(with: ids)
     }
   }
+
+  /// The `removal-notices` op's list, oldest first.
+  func removalNotices() throws -> [RemovalNotice] { try client.call("removal-notices", as: [RemovalNotice].self) }
+
+  /// The notice about the session, or nil when none names it.
+  func removalNotice(for id: String) throws -> RemovalNotice? { try removalNotices().first { $0.session == id } }
 
   func localBranch(_ repo: String, _ name: String) throws -> Bool {
     try runCommand("/usr/bin/git", ["-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/\(name)"]).status == 0

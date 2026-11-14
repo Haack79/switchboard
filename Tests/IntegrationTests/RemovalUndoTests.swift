@@ -146,6 +146,22 @@ extension RemovalJobTests {
 
   // MARK: rm-cancel
 
+  /// The store refuses the cancel, so the removal stays queued in sbd as it is in the store.
+  @Test func aStoreThatRefusesRmCancelKeepsTheQueuedRemoval() throws {
+    let sbd = try undoInstance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    #expect(queued(try sbd.queueRemoval([a.id], scope: "work")) == [a.id])
+    try sbd.block("INSERT", on: "sessions")
+
+    let result = try sbd.cancelRemoval([a.id])
+
+    #expect(cancelled(result).isEmpty, Comment(rawValue: result.text))
+    let reason = try #require(refusals(result)[a.id]?["reason"]?.string, Comment(rawValue: result.text))
+    #expect(reason.contains("read-only"), Comment(rawValue: reason))
+    #expect(try sbd.removalState(a.id) == "queued")
+  }
+
   /// Nothing stopped yet, so each session is as it was: Done, its claude running, its worktree and branch in place.
   @Test func rmCancelBeforeNotBeforeClearsEachRemovalAndClaudeIsNeverSignaled() throws {
     let sbd = try undoInstance()

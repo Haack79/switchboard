@@ -110,8 +110,8 @@ public final class Service {
   var starting: Set<String> = []
   /// The sessions whose PR `merge` is merging.
   var merging: Set<String> = []
-  /// The sessions whose files `rm` or `cleanup` is removing. Nothing launches them, because sbd closes no pane
-  /// on a host after it forgets the session. `rm-queue` skips them.
+  /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
+  /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
@@ -1535,7 +1535,7 @@ public final class Service {
 
   /// What `checkRemoval` returns: the repo, the branch to delete with its tip, whether Supacode locked the
   /// worktree, and the PR as `provenPR` finds it.
-  typealias CheckedRemoval = (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?)
+  typealias ReleaseTargets = (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?)
 
   /// The command whose run inside a session `rm` refuses when the session's worktree would go.
   static let removalCommand = "sb rm --worktree"
@@ -1549,7 +1549,7 @@ public final class Service {
   /// remote branch that stayed. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    by runner: RemovalRunner, release: (RemovalCheck, CheckedRemoval, any SessionSite) throws -> ReleasedFiles
+    by runner: RemovalRunner, release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
   ) throws -> ReleasedFiles {
     let entry = try removalEntry(id, resolving: resolving, for: runner)
     let site = self.site(for: entry.session)
@@ -1594,7 +1594,7 @@ public final class Service {
   }
 
   /// What `removalEntry` and `checkBeforeRemoval` read, for the phases that follow them.
-  struct RemovalCheck {
+  struct RemovalSubject {
     var session: Session
     var pr: PullRequest?
     var sharedWith: String?
@@ -1608,13 +1608,13 @@ public final class Service {
   /// `rm`'s first phase. It refuses a session that is starting or merging,
   /// or that has an open to-do that `resolving` doesn't name. It runs off the
   /// state queue.
-  func removalEntry(_ id: String, resolving: Set<String>, for runner: RemovalRunner) throws -> RemovalCheck {
+  func removalEntry(_ id: String, resolving: Set<String>, for runner: RemovalRunner) throws -> RemovalSubject {
     try queue.sync {
       guard let entry = entries[id] else { throw APIError("no session \(id)") }
       // The start would otherwise leave its new worktree behind.
       if let refusal = busyRefusal(id) { throw refusal }
       try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
-      return RemovalCheck(
+      return RemovalSubject(
         session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
         mayRunClaude: mayRunClaude(entry))
     }
@@ -1626,8 +1626,8 @@ public final class Service {
   /// the worktree reads whether the folder is gone, so a plain rm asks a host
   /// nothing about the folder. It runs off the state queue.
   func checkBeforeRemoval(
-    _ entry: RemovalCheck, worktree: Bool, branch: Bool, remoteBranch: Bool, at site: any SessionSite
-  ) throws -> RemovalCheck {
+    _ entry: RemovalSubject, worktree: Bool, branch: Bool, remoteBranch: Bool, at site: any SessionSite
+  ) throws -> RemovalSubject {
     var check = entry
     let session = entry.session
     check.folderGone = worktree ? try folderIsGone(session.cwd, at: site) : false
@@ -1649,9 +1649,9 @@ public final class Service {
   /// check fails. It returns what `checkRemoval` returns when it runs again
   /// after the stop. It runs off the state queue.
   func stopAndCheckAgain(
-    _ check: RemovalCheck, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
+    _ check: RemovalSubject, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
     ancestry: Set<Int>?, scope: SiteScope
-  ) throws -> CheckedRemoval {
+  ) throws -> ReleaseTargets {
     let session = check.session
     let fresh = try freshSnapshot(of: session)
     let stop: PaneStop? = try queue.sync {
@@ -1817,7 +1817,7 @@ public final class Service {
   func checkRemoval(
     _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
     at site: any SessionSite
-  ) throws -> CheckedRemoval {
+  ) throws -> ReleaseTargets {
     guard worktree else { return (nil, nil, false, pr) }
     let pr = try provenPR(pr, of: session, in: folderGone ? session.repo ?? session.cwd : session.cwd, at: site)
     let merged = pr?.state == .merged

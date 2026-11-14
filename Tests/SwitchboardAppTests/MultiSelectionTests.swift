@@ -443,14 +443,7 @@ private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].ma
 
     model.removeDone(shown)
     await settle { !sent.queues.isEmpty }
-    model.apply(
-      .success(
-        Self.list.map { s in
-          var held = s
-          held.removal = Removal(
-            requested: 1, notBefore: 1, worktree: true, branch: false, remoteBranch: false, resolve: [])
-          return held
-        }), followups: nil)
+    model.apply(.success(Self.list.map { removalSession($0.id, .queued, state: $0.state) }), followups: nil)
 
     #expect(model.multiSelection.isEmpty)
   }
@@ -462,7 +455,7 @@ private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].ma
     #expect(DoneRemovalText.selected(count) == expected)
   }
 
-  @Test(arguments: [(2, "Delete 2 Sessions…"), (5, "Delete 5 Sessions…")])
+  @Test(arguments: [(1, "Delete 1 Session…"), (2, "Delete 2 Sessions…"), (5, "Delete 5 Sessions…")])
   func theDeleteButtonNamesHowManySessionsItDeletes(_ count: Int, _ expected: String) {
     #expect(DoneRemovalText.deleteSessions(count) == expected)
   }

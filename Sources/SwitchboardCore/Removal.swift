@@ -119,8 +119,8 @@ public struct Removal: Codable, Equatable, Sendable {
     self.resolve = resolve
   }
 
-  /// Earlier builds of the removal job left out `released` while it was false, and could leave out `notBefore`
-  /// and `resolve`. A store row that fails to decode stops sbd from loading every session.
+  /// It fills in a missing `released`, `notBefore`, or `resolve`, because a store row that fails to decode stops
+  /// sbd from loading every session.
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     state = try c.decode(State.self, forKey: .state)

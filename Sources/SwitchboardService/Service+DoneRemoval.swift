@@ -12,7 +12,8 @@ extension Service {
   /// `RemovalResult`. A target that fails is skipped with `rm`'s message, and
   /// the rest continue. git runs off the state queue, as it does for `rm`.
   /// Both steps skip a session whose worktree would go when the caller runs
-  /// inside it, as `rm` refuses it.
+  /// inside it, as `rm` refuses it. An `sb` built before `rm-plan` and
+  /// `rm-queue` sends it.
   func removeDone(_ args: JSON, caller: Caller) throws -> JSON {
     let options = try RemovalOptions(args, caller: caller)
     guard args["confirmed"]?.bool == true else {
@@ -125,7 +126,7 @@ extension Service {
       case .success(let t):
         do {
           // `checkRemoval` checks nothing for a removal that keeps the worktree.
-          let checked: CheckedRemoval =
+          let checked: ReleaseTargets =
             t.worktree ? try removalCheck(t) : (repo: nil, branch: nil, supacode: false, pr: t.pr)
           return .success(
             .init(
@@ -149,7 +150,7 @@ extension Service {
 
   /// `rm`'s checks of the target's worktree, run at the session's site on one connection after sbd waited for a
   /// host.
-  private func removalCheck(_ t: RemovalTarget) throws -> CheckedRemoval {
+  private func removalCheck(_ t: RemovalTarget) throws -> ReleaseTargets {
     let sharedWith = queue.sync { sharedSession(t.session) }
     let site = self.site(for: t.session)
     try awaitSite(site)

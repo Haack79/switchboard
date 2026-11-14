@@ -15,7 +15,7 @@ extension Service {
   /// check in the trash moves the folder back to `cwd` and throws. It runs
   /// on `removalQueue`.
   func releaseThroughTrash(
-    _ check: RemovalCheck, _ checked: CheckedRemoval, _ removal: Removal, inTrash: String?
+    _ check: RemovalSubject, _ checked: ReleaseTargets, _ removal: Removal, inTrash: String?
   ) throws -> String? {
     let session = check.session
     guard let repo = checked.repo else { return nil }
@@ -26,7 +26,9 @@ extension Service {
       }
       return inTrash
     }
-    guard !check.folderGone, !checked.supacode, let trash = trashFolder(for: session), try moveToTrash(session, trash)
+    // `trashFolder` gives a session on a host no trash, so `holdsSubmodules` runs git only on this Mac.
+    guard !check.folderGone, !checked.supacode, let trash = trashFolder(for: session),
+      try !holdsSubmodules(session.cwd), try moveToTrash(session, trash)
     else { return nil }
     try checkTrash(check, checked, trash)
     try releaseFromTrash(session, repo: repo, trash)
@@ -57,6 +59,20 @@ extension Service {
       )
     }
     return trash
+  }
+
+  /// Whether the worktree at `cwd` holds a submodule that `git worktree remove` refuses to delete, as git decides
+  /// it: the worktree's admin folder holds a `modules` folder, or a gitlink in its index names a populated folder.
+  /// git skips that refusal for a worktree whose folder is gone and deletes the submodules' repos, so such a
+  /// worktree goes in place. It runs on `removalQueue`.
+  private func holdsSubmodules(_ cwd: String) throws -> Bool {
+    let admin = try gitOutput(cwd, ["rev-parse", "--absolute-git-dir"], at: mac)
+    if let modules = linkStatus("\(admin)/modules"), isFolder(modules) { return true }
+    let index = try gitOutput(cwd, ["ls-files", "--stage", "-z"], at: mac)
+    return index.split(separator: "\0").contains { entry in
+      guard entry.hasPrefix("160000 "), let tab = entry.firstIndex(of: "\t") else { return false }
+      return linkStatus("\(cwd)/\(entry[entry.index(after: tab)...])/.git") != nil
+    }
   }
 
   /// The path that the session's worktree folder can move to with a rename,
@@ -108,7 +124,7 @@ extension Service {
   /// that git lists at `cwd`. A failure moves the folder back to `cwd` and
   /// throws. When the move back fails too, the folder stays in the trash and
   /// the error says so.
-  private func checkTrash(_ check: RemovalCheck, _ checked: CheckedRemoval, _ trash: String) throws {
+  private func checkTrash(_ check: RemovalSubject, _ checked: ReleaseTargets, _ trash: String) throws {
     let session = check.session
     waitAtGate("hold-removal-trash")
     do {
@@ -158,13 +174,24 @@ extension Service {
     waitAtGate("hold-removal-released")
   }
 
+  /// The trash path of the removal of `id` while its folder is still there, or nil. It runs on the state queue.
+  func trashedFolder(_ id: String) -> String? {
+    guard let trash = entries[id]?.session.removal?.trash, linkStatus(trash) != nil else { return nil }
+    return trash
+  }
+
   /// Moves the folder of a failed removal back from the trash to `cwd`, and
   /// does nothing when the trash holds no folder for the session. It throws,
-  /// and the folder stays, when something is at `cwd` or the rename fails.
-  /// It runs on the state queue.
+  /// and the folder stays, when git already dropped the worktree's record,
+  /// when something is at `cwd`, or when the rename fails. It runs on the
+  /// state queue.
   func restoreFromTrash(_ id: String) throws {
-    guard let session = entries[id]?.session, let trash = session.removal?.trash, linkStatus(trash) != nil else {
-      return
+    guard let session = entries[id]?.session, let trash = trashedFolder(id) else { return }
+    // A folder put back after `git worktree remove` has a .git file that names a deleted admin folder.
+    guard session.removal?.released != true else {
+      throw APIError(
+        "git no longer lists \(session.cwd) as a worktree, so sbd can't move its folder back from the trash at \(trash). Retry the delete to finish it."
+      )
     }
     guard linkStatus(session.cwd) == nil else {
       throw APIError(

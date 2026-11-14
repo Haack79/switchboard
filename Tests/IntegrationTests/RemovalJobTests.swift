@@ -3,35 +3,13 @@ import SwitchboardCore
 import Testing
 
 extension Instance {
-  /// The `removal-notices` op's list.
-  fileprivate func removalNotices() throws -> [JSON] {
-    let result = try client.call("removal-notices")
-    return try #require(
-      result.array ?? result["notices"]?.array, Comment(rawValue: "removal-notices returned \(result.text)"))
-  }
-
-  /// The notice about the session, found by its `session` field, or by `id` when the notice carries the session's id
-  /// there.
-  fileprivate func removalNotice(for id: String) throws -> JSON? {
-    try removalNotices().first { $0["session"]?.string == id || $0["id"]?.string == id }
-  }
-
   /// How many times the stub ran with the session's conversation, which counts the launches of its claude.
   fileprivate func launches(_ s: SessionSummary) -> Int {
     stubArgs().filter { $0.contains(s.claudeSessionId) }.count
   }
 
   /// Starts `sb rm --worktree` on the session without waiting for it.
-  fileprivate func startRm(_ id: String) throws -> Process {
-    let rm = Process()
-    rm.executableURL = URL(fileURLWithPath: "\(Instance.bin)/sb")
-    rm.arguments = ["rm", id, "--worktree"]
-    rm.environment = environment()
-    rm.standardOutput = FileHandle.nullDevice
-    rm.standardError = FileHandle.nullDevice
-    try rm.run()
-    return rm
-  }
+  fileprivate func startRm(_ id: String) throws -> BackgroundSb { try BackgroundSb(self, ["rm", id, "--worktree"]) }
 
   /// A session in its own worktree whose claude asked a question and then stopped, so its card is deferred. Each of
   /// `send`, `resume`, `open`, and `answer` would launch its claude again.
@@ -295,6 +273,26 @@ private final class FolderHold {
     #expect(try sbd.removalState(waiting.id) == "queued")
   }
 
+  /// The store refuses the one transaction, so every target is skipped with the store's error and none keeps a
+  /// removal that sbd never saved.
+  @Test func aStoreThatRefusesRmQueueSkipsEveryTargetAndLeavesNoRemoval() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    try sbd.block("INSERT", on: "sessions")
+
+    let result = try sbd.queueRemoval([a.id, b.id], scope: "work")
+
+    #expect(queued(result).isEmpty, Comment(rawValue: result.text))
+    for s in [a, b] {
+      let reason = try #require(skipped(result, s.id)?["reason"]?.string, Comment(rawValue: result.text))
+      #expect(reason.contains("read-only"), Comment(rawValue: reason))
+      #expect(try sbd.removal(s.id) == nil)
+      #expect(try sbd.intact(s))
+    }
+  }
+
   /// The to-do arrives after rm-queue checked the session's to-dos, so the worker's own to-do check must refuse it.
   @Test func aToDoAddedAfterTheSessionWasQueuedKeepsTheSession() throws {
     let sbd = try Instance()
@@ -430,13 +428,9 @@ private final class FolderHold {
     try s.sbd.waitUntilGone(merged.id)
     #expect(!FileManager.default.fileExists(atPath: merged.cwd))
     #expect(try s.sbd.localBranch(s.repo, RemovalPR.breaker.branch))
-    let notices = try s.sbd.removalNotices()
-    let notice = try #require(
-      notices.first { $0["session"]?.string == merged.id || $0["id"]?.string == merged.id },
-      Comment(rawValue: notices.description))
-    let message = try #require(notice["message"]?.string, Comment(rawValue: notice.text))
-    #expect(message.contains("not in its merged PR"), Comment(rawValue: message))
-    #expect(notice["name"]?.string == merged.name, Comment(rawValue: notice.text))
+    let notice = try #require(try s.sbd.removalNotice(for: merged.id), "no removal notice names \(merged.id)")
+    #expect(notice.message.contains("not in its merged PR"), Comment(rawValue: notice.message))
+    #expect(notice.name == merged.name)
   }
 
   /// The remote branch moved after the merge, so the removal forgets the session and keeps the remote branch.
@@ -452,14 +446,13 @@ private final class FolderHold {
     #expect(queued(try s.sbd.queueRemoval([merged.id], remoteBranch: true)) == [merged.id])
     try s.sbd.waitUntilGone(merged.id)
     let notice = try #require(try s.sbd.removalNotice(for: merged.id), "no removal notice names \(merged.id)")
-    #expect(notice["message"]?.string?.contains("kept the remote branch") == true, Comment(rawValue: notice.text))
+    #expect(notice.message.contains("kept the remote branch"), Comment(rawValue: notice.message))
 
     s.sbd.stopSbd()
     try s.sbd.startSbd()
 
     let kept = try #require(try s.sbd.removalNotice(for: merged.id), "the restart dropped the notice")
-    let id = try #require(kept["id"], Comment(rawValue: kept.text))
-    _ = try s.sbd.client.call("removal-notice-dismiss", ["id": id])
+    _ = try s.sbd.client.call("removal-notice-dismiss", ["id": .number(Double(kept.id))])
     #expect(try s.sbd.removalNotice(for: merged.id) == nil)
     s.sbd.stopSbd()
     try s.sbd.startSbd()
@@ -647,12 +640,12 @@ private final class FolderHold {
 
     let result = try sbd.queueRemoval([a.id], scope: "work")
     hold.end()
-    rm.waitUntilExit()
+    let removed = try rm.finish(within: 60)
 
     #expect(queued(result).isEmpty, Comment(rawValue: result.text))
     let reason = try #require(skipped(result, a.id)?["reason"]?.string, Comment(rawValue: result.text))
     #expect(reason.contains("is being deleted"), Comment(rawValue: reason))
-    #expect(rm.terminationStatus == 0)
+    #expect(removed.status == 0, Comment(rawValue: removed.stderr))
     try sbd.waitUntilGone(a.id)
   }
 
@@ -672,14 +665,14 @@ private final class FolderHold {
     let cleanup = try sbd.run("cleanup", a.id)
     let result = try sbd.queueRemoval([a.id], scope: "work")
     hold.end()
-    rm.waitUntilExit()
+    let removed = try rm.finish(within: 60)
 
     for r in [second, cleanup] {
       #expect(r.status != 0)
       #expect(r.stderr.contains("\(a.id) is being deleted"), Comment(rawValue: r.stderr))
     }
     #expect(queued(result).isEmpty, Comment(rawValue: result.text))
-    #expect(rm.terminationStatus == 0)
+    #expect(removed.status == 0, Comment(rawValue: removed.stderr))
     try sbd.waitUntilGone(a.id)
   }
 
@@ -704,11 +697,11 @@ private final class FolderHold {
     let refusal = failure(sbd, "rm-retry", ["session": .string(a.id)])
     let state = try sbd.removalState(a.id)
     hold.end()
-    rm.waitUntilExit()
+    let removed = try rm.finish(within: 60)
 
     #expect(refusal.contains("\(a.id) is being deleted"), Comment(rawValue: refusal))
     #expect(state == "failed")
-    #expect(rm.terminationStatus == 0)
+    #expect(removed.status == 0, Comment(rawValue: removed.stderr))
     try sbd.waitUntilGone(a.id)
     #expect(!FileManager.default.fileExists(atPath: a.cwd))
     #expect(try sbd.removalNotice(for: a.id) == nil)

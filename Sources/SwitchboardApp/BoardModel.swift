@@ -229,7 +229,7 @@ final class BoardModel: ObservableObject {
   /// Issue reads and Starts, which wait on GitHub, gh, or git. They run here so the session list and other
   /// actions do not wait behind them.
   let issueWork = DispatchQueue(label: "switchboard.issues", attributes: .concurrent)
-  let worker = DispatchQueue(label: "switchboard.actions")
+  private let worker = DispatchQueue(label: "switchboard.actions")
   /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
   /// on `worker`, such as the header's `rm --worktree`.
   let undos = DispatchQueue(label: "switchboard.undo")
@@ -286,7 +286,7 @@ final class BoardModel: ObservableObject {
   }
 
   /// Changes the session before sbd lists the change.
-  private func update(_ id: String, _ change: (inout SessionSummary) -> Void) {
+  func update(_ id: String, _ change: (inout SessionSummary) -> Void) {
     for i in allSessions.indices where allSessions[i].id == id { change(&allSessions[i]) }
     for i in allFollowups.indices where allFollowups[i].id == id { change(&allFollowups[i]) }
   }

@@ -32,26 +32,29 @@ extension BoardModel {
   }
 
   /// Asks sbd to cancel, in one `rm-cancel`, every removal that is undoable at `now`. sbd refuses a session that
-  /// started since, and the banner names it with the reason. The refresh after the reply lists the others again.
+  /// started since, and the banner names it with the reason. The reply clears each cancelled removal here, so Undo
+  /// does not offer it again before the refresh lists it.
   func undoRemovals(now: Int64) {
     let ids = (removalStatus?.undoable(now: now) ?? []).filter { answeringRemovals.insert($0).inserted }
     guard !ids.isEmpty else { return }
     perform(
       "rm-cancel", ["sessions": .array(ids.map(JSON.string))], on: undos,
       then: { value in
-        let refused = (try? JSONCoding.convert(value, to: RemovalCancelled.self))?.refused ?? []
-        self.actionError = DoneRemovalText.skipped(refused, "Not undone")
+        let reply = try? JSONCoding.convert(value, to: RemovalCancelled.self)
+        for id in reply?.cancelled ?? [] { self.update(id) { $0.removal = nil } }
+        self.actionError = DoneRemovalText.skipped(reply?.refused ?? [], "Not undone")
       },
       finally: { self.answeringRemovals.subtract(ids) })
   }
 
-  func retryRemoval(_ id: String) { answerRemoval(id, "rm-retry") }
+  func retryRemoval(_ id: String) { answerRemoval(id, "rm-retry") { $0.removal?.state = .queued } }
 
   /// sbd clears the failed removal, and the session goes back to Done.
-  func keepRemoval(_ id: String) { answerRemoval(id, "rm-keep") }
+  func keepRemoval(_ id: String) { answerRemoval(id, "rm-keep") { $0.removal = nil } }
 
-  private func answerRemoval(_ id: String, _ op: String) {
-    answer(id, in: \.answeringRemovals, op, ["session": .string(id)]) { _ in }
+  /// `change` makes the session what sbd's reply says, so the buttons don't turn back on before the refresh.
+  private func answerRemoval(_ id: String, _ op: String, _ change: @escaping (inout SessionSummary) -> Void) {
+    answer(id, in: \.answeringRemovals, op, ["session": .string(id)]) { $0.update(id, change) }
   }
 
   /// sbd reads the notice's id as a number.
@@ -142,6 +145,7 @@ private struct RemovalStatusPopover: View {
               }
               Spacer()
               Button("Dismiss") { model.dismissRemovalNotice(notice.id) }
+                .accessibilityLabel("Dismiss: \(notice.name)")
             }
           }
         }

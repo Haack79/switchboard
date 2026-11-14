@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwitchboardApp
 
-/// A session in `state` whose removal sbd's job holds as `removal`, or with no removal when `removal` is nil.
+/// A session in `state` with a removal in the state `removal`, or with no removal when `removal` is nil.
 func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionState = .needsYou) -> SessionSummary {
   var s = needsItem(id, state: state)
   s.removal = removal.map { removal in
@@ -89,6 +89,17 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
   }
 }
 
+/// Stopping a held session's claude can move it to Needs you, and the delete should not notify for it.
+@MainActor
+@Suite struct RemovalNotifications {
+  @Test func aHeldSessionThatStartsNeedingYouDoesNotNotify() {
+    let model = appliedModel([removalSession("q", nil, state: .working)])
+
+    #expect(model.sessionsToNotify([removalSession("q", .queued, state: .needsYou)]).isEmpty)
+    #expect(model.sessionsToNotify([removalSession("q", nil, state: .needsYou)]).map(\.id) == ["q"])
+  }
+}
+
 /// The "Removing N sessions…" row at the bottom of the sidebar.
 @MainActor
 @Suite struct RemovalStatusRow {
@@ -131,6 +142,7 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
 
     #expect(status.warning)
     #expect(status.notices == [Self.notice])
+    #expect(status.title == "1 delete notice")
   }
 
   @Test func heldSessionsAndANoticeShowTheCountAndTheWarning() throws {
@@ -179,6 +191,18 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
     let status = try #require(model.removalStatus)
 
     #expect(status.undoable(now: now) == expected)
+  }
+
+  /// The row redraws at each deadline, so Undo goes when the first undoable session reaches its `notBefore`.
+  @Test func undoDeadlinesAreTheNotBeforesOfTheUndoableSessionsInOrder() throws {
+    let model = appliedModel([
+      undoSession("later", notBefore: 12_000), undoSession("ahead", notBefore: 10_000),
+      undoSession("running", .running, notBefore: 11_000), undoSession("past", notBefore: 4_000),
+    ])
+
+    let status = try #require(model.removalStatus)
+
+    #expect(status.undoDeadlines(now: 5_000) == [10_000, 12_000].map { Date(timeIntervalSince1970: $0 / 1000) })
   }
 
   /// The row shows Undo while `undoable` is not empty. Once every session has started, the row stays and Undo goes.
@@ -291,6 +315,40 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
     await settle { model.actionError != nil }
 
     #expect(model.actionError?.contains("a is being deleted") == true, "\(model.actionError ?? "nil")")
+  }
+
+  /// The refresh after the reply comes later, so the cancelled sessions are no longer undoable in the meantime, and
+  /// a second click does not send them again.
+  @Test func undoClearsTheCancelledRemovalsBeforeTheRefresh() async {
+    let sent = SentRequests()
+    let model = undoModel(sent, reply: ["cancelled": ["a", "b"], "refused": []])
+
+    model.undoRemovals(now: 5_000)
+    await settle { sent.ops.contains("rm-cancel") && model.answeringRemovals.isEmpty }
+
+    #expect(model.removalStatus?.undoable(now: 5_000) ?? [] == [])
+    #expect(model.allSessions.first { $0.id == "a" }?.removal == nil)
+  }
+
+  @Test func keepClearsTheRemovalBeforeTheRefresh() async {
+    let model = appliedModel([removalSession("f", .failed)])
+    model.send = { _, _ in .null }
+
+    model.keepRemoval("f")
+    await settle { model.allSessions.first?.removal == nil }
+
+    #expect(model.allSessions.first?.removal == nil)
+  }
+
+  /// A retried session is held again, so the Inbox drops it and its Retry button with it.
+  @Test func retryQueuesTheRemovalBeforeTheRefresh() async {
+    let model = appliedModel([removalSession("f", .failed)])
+    model.send = { _, _ in .null }
+
+    model.retryRemoval("f")
+    await settle { model.allSessions.first?.removal?.state == .queued }
+
+    #expect(model.allSessions.first?.isBeingRemoved == true)
   }
 
   /// A cancelled session returns to the lists unselected.
