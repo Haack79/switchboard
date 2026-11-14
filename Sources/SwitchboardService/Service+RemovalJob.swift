@@ -23,7 +23,10 @@ extension Service {
     return resolving.intersection(session.openTodos.map(\.id))
   }
 
-  /// `rm-retry` queues a failed removal again, and refuses a session that is
+  /// How long after `rm-queue` the job starts a session, from `removalDelaySeconds`.
+  var removalDelayMs: Int64 { Int64(config.removalDelaySeconds) * 1000 }
+
+  /// `rm-retry` queues a failed removal again with no delay, and refuses a session that is
   /// starting, merging, or that `rm` or `cleanup` is removing. `rm-keep`
   /// moves the worktree's folder back from the trash, then clears the
   /// removal, and the session goes back to the state its events give it. A
@@ -47,12 +50,15 @@ extension Service {
       } else {
         try update(id) {
           $0.removal?.state = .queued
+          $0.removal?.notBefore = nowMs()
           $0.removal?.error = nil
         }
         removalOrder.append(id)
         runRemovals()
       }
       return try JSON(encoding: summary(id))
+    case "rm-cancel":
+      return try JSON(encoding: cancelRemovals(args))
     case "removal-notices":
       return try JSON(encoding: store.removalNotices())
     default:
@@ -60,6 +66,48 @@ extension Service {
       try store.deleteRemovalNotice(id: Int64(id))
       return [:]
     }
+  }
+
+  /// Clears the queued removal of each session in `sessions`. The job stopped nothing yet, so the session is as
+  /// it was before `rm-queue`. It clears a queued removal whose `notBefore` passed too. It refuses each id that
+  /// names no session, no removal, or a running or failed removal. A refusal does not stop the other ids. It
+  /// runs on the state queue.
+  private func cancelRemovals(_ args: JSON) throws -> RemovalCancelled {
+    guard case .array(let list)? = args["sessions"], list.allSatisfy({ $0.string != nil }) else {
+      throw APIError("rm-cancel needs sessions as a list of session ids")
+    }
+    var seen = Set<String>()
+    var result = RemovalCancelled(cancelled: [], refused: [])
+    for id in list.compactMap(\.string) where seen.insert(id).inserted {
+      guard let session = entries[id]?.session else {
+        result.refused.append(.init(id: id, name: id, reason: "no session \(id)"))
+        continue
+      }
+      let refusal: String? =
+        switch session.removal?.state {
+        case nil: "\(id) is not being deleted"
+        case .running: "\(id) is already being deleted"
+        case .failed: "the delete of \(id) failed, and Keep brings it back"
+        case .queued: nil
+        }
+      if let refusal {
+        result.refused.append(.init(id: id, name: session.name, reason: refusal))
+        continue
+      }
+      do {
+        try update(id) { $0.removal = nil }
+      } catch {
+        // `update` changes the entry before the store refuses the save.
+        entries[id]?.session.removal = session.removal
+        result.refused.append(.init(id: id, name: session.name, reason: "\(error)"))
+        continue
+      }
+      removalOrder.removeAll { $0 == id }
+      deliverPending(id, after: 0)
+      result.cancelled.append(id)
+    }
+    if !result.cancelled.isEmpty { runRemovals() }
+    return result
   }
 
   /// Rebuilds the job's order from the stored removals after a restart, the
@@ -77,8 +125,10 @@ extension Service {
   }
 
   /// Runs the queued removals on `removalQueue`, one at a time, in the order
-  /// that `removalOrder` gives, until none is left. A call while the job
-  /// runs adds a pass that finds nothing to do.
+  /// that `removalOrder` gives, until none is due. A call while the job
+  /// runs adds a pass that finds nothing to do. Every change to the queue
+  /// calls it, and so does `removalWake`, so each pass sees the current
+  /// queue and clock.
   func runRemovals() {
     removalQueue.async { [self] in
       while let next = queue.sync(execute: { takeNextRemoval() }) {
@@ -88,12 +138,24 @@ extension Service {
     }
   }
 
-  /// Takes the next session in `removalOrder` whose removal is still queued
-  /// or running, and records it as running. It runs on the state queue.
+  /// Takes the first session in `removalOrder` whose removal is running, or
+  /// queued with its `notBefore` passed, and records it as running. It drops
+  /// the sessions that the job no longer holds. When the rest all wait for
+  /// their `notBefore`, it sets `removalWake` for the earliest one and
+  /// returns nil. It runs on the state queue.
   private func takeNextRemoval() -> (id: String, removal: Removal)? {
-    while !removalOrder.isEmpty {
-      let id = removalOrder.removeFirst()
-      guard var removal = entries[id]?.session.removal, removal.holdsSession else { continue }
+    removalWake?.cancel()
+    removalWake = nil
+    let now = nowMs()
+    while true {
+      removalOrder.removeAll { entries[$0]?.session.removal?.holdsSession != true }
+      guard let index = removalOrder.firstIndex(where: { entries[$0]?.session.removal?.startsAfter(now) == false })
+      else {
+        wakeRemovals(now: now)
+        return nil
+      }
+      let id = removalOrder.remove(at: index)
+      guard var removal = entries[id]?.session.removal else { continue }
       // `rm-queue` and `rm-retry` refuse a session that `rm` or `cleanup` is removing. This check covers any other path.
       if removing.contains(id) {
         failRemoval(id, APIError("\(id) is being deleted"))
@@ -107,7 +169,16 @@ extension Service {
       }
       return (id, removal)
     }
-    return nil
+  }
+
+  /// Sets `removalWake` to start a pass at the earliest `notBefore` in `removalOrder`. The timer counts wall time,
+  /// so it keeps counting while the Mac sleeps. A `clock` advance in a test starts its own pass. It runs on the
+  /// state queue.
+  private func wakeRemovals(now: Int64) {
+    guard let earliest = removalOrder.compactMap({ entries[$0]?.session.removal?.notBefore }).min() else { return }
+    let wake = DispatchWorkItem { [self] in runRemovals() }
+    removalWake = wake
+    queue.asyncAfter(wallDeadline: .now() + .milliseconds(Int(clamping: max(earliest - now, 0))), execute: wake)
   }
 
   /// Runs `rm`'s phases on the session with the removal's arguments, at the

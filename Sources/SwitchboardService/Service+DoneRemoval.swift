@@ -95,14 +95,15 @@ extension Service {
     let targets = list.compactMap(\.string).filter { seen.insert($0).inserted }
     let result: RemovalQueued = queue.sync {
       var result = RemovalQueued(queued: [], skipped: [])
+      let now = nowMs()
       for id in targets {
         switch checkedRemovalTarget(id, scope: scope, options) {
         case .failure(let skipped):
           result.skipped.append(skipped.skip)
         case .success(let t):
           let removal = Removal(
-            requested: nowMs(), worktree: t.worktree, branch: t.branch, remoteBranch: t.remoteBranch,
-            resolve: t.resolve)
+            requested: now, notBefore: now + removalDelayMs, worktree: t.worktree, branch: t.branch,
+            remoteBranch: t.remoteBranch, resolve: t.resolve)
           do {
             try update(id) { $0.removal = removal }
           } catch {

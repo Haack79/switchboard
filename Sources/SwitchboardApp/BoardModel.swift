@@ -66,7 +66,7 @@ final class BoardModel: ObservableObject {
   @Published var doneRemoval: DoneRemoval?
   /// The branches that sbd's removal job kept after it forgot their sessions, read with `removal-notices` in each refresh.
   @Published var removalNotices: [RemovalNotice] = []
-  /// The failed removals whose Retry or Keep is on its way to sbd.
+  /// The failed removals whose Retry or Keep is on its way to sbd, and the queued ones whose Undo is.
   @Published var answeringRemovals: Set<String> = []
   var showingDoneRemoval: Bool { doneRemoval != nil }
   var presentingSheet: Bool {
@@ -229,6 +229,9 @@ final class BoardModel: ObservableObject {
   /// actions do not wait behind them.
   let issueWork = DispatchQueue(label: "switchboard.issues", attributes: .concurrent)
   let worker = DispatchQueue(label: "switchboard.actions")
+  /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
+  /// on `worker`, such as the header's `rm --worktree`.
+  let undos = DispatchQueue(label: "switchboard.undo")
   /// Merges wait on gh for up to 120 s, and review requests for up to 60 s.
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)

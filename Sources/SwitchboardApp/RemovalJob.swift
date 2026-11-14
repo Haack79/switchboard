@@ -10,6 +10,16 @@ struct RemovalStatus: Equatable {
   var warning: Bool { !notices.isEmpty }
 
   var title: String { count > 0 ? DoneRemovalText.removing(count) : DoneRemovalText.notices(notices.count) }
+
+  /// The sessions that Undo can bring back at `now`, in ms since the epoch: those the job has not started and
+  /// will not start before their `notBefore`.
+  func undoable(now: Int64) -> [String] { sessions.filter { $0.removal?.startsAfter(now) == true }.map(\.id) }
+
+  /// The times at which a session stops being undoable, so the row can drop Undo then.
+  func undoDeadlines(now: Int64) -> [Date] {
+    sessions.compactMap(\.removal).filter { $0.startsAfter(now) }.compactMap(\.notBefore).sorted()
+      .map { Date(timeIntervalSince1970: Double($0) / 1000) }
+  }
 }
 
 extension BoardModel {
@@ -19,6 +29,20 @@ extension BoardModel {
     let held = allSessions.filter(\.isBeingRemoved)
     guard !held.isEmpty || !removalNotices.isEmpty else { return nil }
     return RemovalStatus(sessions: held, notices: removalNotices)
+  }
+
+  /// Asks sbd to cancel, in one `rm-cancel`, every removal that is undoable at `now`. sbd refuses a session that
+  /// started since, and the banner names it with the reason. The refresh after the reply lists the others again.
+  func undoRemovals(now: Int64) {
+    let ids = (removalStatus?.undoable(now: now) ?? []).filter { answeringRemovals.insert($0).inserted }
+    guard !ids.isEmpty else { return }
+    perform(
+      "rm-cancel", ["sessions": .array(ids.map(JSON.string))], on: undos,
+      then: { value in
+        let refused = (try? JSONCoding.convert(value, to: RemovalCancelled.self))?.refused ?? []
+        self.actionError = DoneRemovalText.skipped(refused, "Not undone")
+      },
+      finally: { self.answeringRemovals.subtract(ids) })
   }
 
   func retryRemoval(_ id: String) { answerRemoval(id, "rm-retry") }
@@ -40,38 +64,54 @@ struct RemovalStatusView: View {
   @EnvironmentObject var model: BoardModel
 
   var body: some View {
-    if let status = model.removalStatus { RemovalStatusButton(status: status) }
+    if let status = model.removalStatus {
+      // The schedule starts at `now`, so the first render reads it as its date.
+      let now = Date()
+      TimelineView(.explicit([now] + status.undoDeadlines(now: now.ms))) { context in
+        RemovalStatusButton(status: status, undoable: !status.undoable(now: context.date.ms).isEmpty)
+      }
+    }
   }
 }
 
 /// The row's popover state lives here, so it resets when the row goes away.
 private struct RemovalStatusButton: View {
+  @EnvironmentObject var model: BoardModel
   let status: RemovalStatus
+  let undoable: Bool
   @State private var showing = false
 
   var body: some View {
-    Button {
-      showing = true
-    } label: {
-      HStack(spacing: 6) {
-        if status.count > 0 { ProgressView().controlSize(.small) }
-        Text(status.title)
-        Spacer(minLength: 4)
-        if status.warning {
-          Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            .accessibilityLabel("A delete left something behind")
+    HStack(spacing: 6) {
+      Button {
+        showing = true
+      } label: {
+        HStack(spacing: 6) {
+          if status.count > 0 { ProgressView().controlSize(.small) }
+          Text(status.title)
+          Spacer(minLength: 4)
+          if status.warning {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+              .accessibilityLabel("A delete left something behind")
+          }
         }
+        .contentShape(Rectangle())
       }
-      .font(.caption)
-      .contentShape(Rectangle())
+      .buttonStyle(.plain)
+      .help("Show the sessions that sbd is deleting, and what a delete left behind")
+      .accessibilityIdentifier("sidebar-removal-status")
+      .popover(isPresented: $showing, arrowEdge: .top) { RemovalStatusPopover(status: status) }
+      if undoable {
+        Button("Undo") { model.undoRemovals(now: nowMs()) }
+          .buttonStyle(.borderless)
+          .help("Bring back the sessions whose delete hasn't started")
+          .accessibilityIdentifier("sidebar-removal-undo")
+      }
     }
-    .buttonStyle(.plain)
+    .font(.caption)
     .padding(.horizontal, 10)
     .padding(.vertical, 6)
     .background(.bar)
-    .help("Show the sessions that sbd is deleting, and what a delete left behind")
-    .accessibilityIdentifier("sidebar-removal-status")
-    .popover(isPresented: $showing, arrowEdge: .top) { RemovalStatusPopover(status: status) }
   }
 }
 
@@ -131,4 +171,9 @@ struct FailedRemovalActions: View {
     }
     .disabled(model.answeringRemovals.contains(session.id))
   }
+}
+
+extension Date {
+  /// The date in ms since the epoch. It rounds, so a date made from a `notBefore` reads back as that `notBefore`.
+  fileprivate var ms: Int64 { Int64((timeIntervalSince1970 * 1000).rounded()) }
 }

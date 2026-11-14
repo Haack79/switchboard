@@ -141,6 +141,10 @@ public struct Config: Codable, Equatable, Sendable {
   public var cleanupDeletes: [String] = []
   /// The supacode command, which deletes a worktree that Supacode locked. A test points it at a stub.
   public var supacode = "supacode"
+  /// How long the removal job waits after `rm-queue` before it starts a session, so the app's Undo can bring
+  /// the session back with nothing stopped.
+  public var removalDelaySeconds = 5
+  public static let maxRemovalDelaySeconds = 86_400
   /// Makes the removal job treat the trash as on another volume than every
   /// worktree. sbd reads it only with `testClock`.
   public var testTrashOtherVolume = false
@@ -168,7 +172,7 @@ public struct Config: Codable, Equatable, Sendable {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
-      cleanupDeletes, supacode
+      cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates
     case issues
     case recheck = "recheckSeconds"
@@ -225,6 +229,19 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
+    // A bad value keeps the default. Throwing would make sbd ignore all of config.json.
+    switch try c.decodeIfPresent(JSON.self, forKey: .removalDelaySeconds) {
+    case nil, .null:
+      break
+    case let value?:
+      if let seconds = value.int, (0...Self.maxRemovalDelaySeconds).contains(seconds) {
+        removalDelaySeconds = seconds
+      } else {
+        logLine(
+          "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
+            + "\(Self.maxRemovalDelaySeconds)")
+      }
+    }
     testTrashOtherVolume =
       try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)

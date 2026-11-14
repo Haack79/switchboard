@@ -107,9 +107,12 @@ public struct Removal: Codable, Equatable, Sendable {
   /// The ids of the session's open to-dos that the removal resolves.
   public var resolve: [String]?
 
-  public init(requested: Int64, worktree: Bool, branch: Bool, remoteBranch: Bool, resolve: [String]) {
+  public init(
+    requested: Int64, notBefore: Int64? = nil, worktree: Bool, branch: Bool, remoteBranch: Bool, resolve: [String]
+  ) {
     self.state = .queued
     self.requested = requested
+    self.notBefore = notBefore
     self.worktree = worktree
     self.branch = branch
     self.remoteBranch = remoteBranch
@@ -118,6 +121,11 @@ public struct Removal: Codable, Equatable, Sendable {
 
   /// True while the job holds the session: queued or running.
   public var holdsSession: Bool { state != .failed }
+
+  /// True while the removal is queued and `now` is before its `notBefore`, so the job does not start it yet and
+  /// `rm-cancel` brings the session back with nothing stopped. A removal that an older sbd queued has no
+  /// `notBefore` and may start at once.
+  public func startsAfter(_ now: Int64) -> Bool { state == .queued && notBefore.map { now < $0 } == true }
 }
 
 /// A branch or remote branch that a removal kept after it forgot the session,
@@ -144,5 +152,16 @@ public struct RemovalQueued: Codable, Equatable, Sendable {
   public init(queued: [String], skipped: [RemovalPlan.Skip]) {
     self.queued = queued
     self.skipped = skipped
+  }
+}
+
+/// What `rm-cancel` returns: the sessions whose queued removal it cleared, and those it refused with the reason.
+public struct RemovalCancelled: Codable, Equatable, Sendable {
+  public var cancelled: [String]
+  public var refused: [RemovalPlan.Skip]
+
+  public init(cancelled: [String], refused: [RemovalPlan.Skip]) {
+    self.cancelled = cancelled
+    self.refused = refused
   }
 }

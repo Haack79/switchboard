@@ -1168,6 +1168,36 @@ private func parse(_ r: CommandResult) throws -> JSON {
     #expect(try sbd.removalState(dirty.id) == nil, "sb rm --done did not keep the session whose removal failed")
   }
 
+  /// The app's Undo cancels a session while the command waits out the delay. The command reports it as skipped and
+  /// sends no `rm-keep`, because the session is already back in Done with no removal.
+  @Test func reportsASessionThatUndoBringsBackAsSkipped() throws {
+    let sbd = try Instance(idleStopSeconds: 3600, config: ["removalDelaySeconds": 600])
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    let b = try sbd.worktreeSession(repo, branch: "haacked/b")
+    for s in [a, b] { try sbd.markDone(s.id) }
+
+    let command = sbd.startRmDone("--worktree", "--yes", "--json")
+    try sbd.waitFor("the removal job to queue a and b", timeout: 30) {
+      if command.result != nil { throw TestError(description: "sb rm --done ended before the delay passed") }
+      return try sbd.removalState(a.id) == "queued" && sbd.removalState(b.id) == "queued"
+    }
+    let cancel = try sbd.client.call("rm-cancel", ["sessions": [.string(a.id)]])
+    #expect(cancel["cancelled"]?.array?.compactMap(\.string) == [a.id], Comment(rawValue: cancel.text))
+    try sbd.advanceClock(601_000)
+    let r = try sbd.finish(command)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    let result = try JSONCoding.decode(RemovalResult.self, from: r.stdout)
+    #expect(result.removed == [b.id], Comment(rawValue: r.stdout))
+    let reason = try #require(result.skipped.first { $0.id == a.id }?.reason, Comment(rawValue: r.stdout))
+    #expect(reason.contains("no longer being deleted"), Comment(rawValue: reason))
+    #expect(!reason.contains("Keep failed"), Comment(rawValue: reason))
+    #expect(try sbd.intact(a))
+    #expect(try sbd.removal(a.id) == nil)
+    #expect(try sbd.get(a.id).state == .done)
+  }
+
   /// The remote branch moved after the merge, so the job forgets the session, keeps the remote branch, and records
   /// a removal notice. The command reports that notice as a partial removal, as `rm` reported its error before.
   @Test(arguments: [true, false])

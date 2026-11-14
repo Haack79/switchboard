@@ -42,9 +42,10 @@ enum DoneRemovalText {
 
   static func notices(_ count: Int) -> String { count == 1 ? "1 delete notice" : "\(count) delete notices" }
 
-  /// The banner's text for the sessions that a delete left in place, or nil when it left none.
-  static func skipped(_ skips: [RemovalPlan.Skip]) -> String? {
-    skips.isEmpty ? nil : "Not deleted: " + skips.map { "\($0.name): \($0.reason)" }.joined(separator: "; ")
+  /// The banner's text for the sessions that a delete left in place, or that Undo could not bring back, after
+  /// `heading`. It is nil when the list is empty.
+  static func skipped(_ skips: [RemovalPlan.Skip], _ heading: String = "Not deleted") -> String? {
+    skips.isEmpty ? nil : "\(heading): " + skips.map { "\($0.name): \($0.reason)" }.joined(separator: "; ")
   }
 
   static func deletes(_ item: RemovalPlan.Item) -> String {

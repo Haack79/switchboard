@@ -131,6 +131,8 @@ public final class Service {
   var submittingDecisions: Set<String> = []
   /// The sessions that the removal job takes next, in order.
   var removalOrder: [String] = []
+  /// The timer that starts a pass of the removal job at the earliest `notBefore` of the queued removals.
+  var removalWake: DispatchWorkItem?
   /// The main checkout of each session folder that a lookup read, or nil for
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
@@ -411,7 +413,11 @@ public final class Service {
       // and not in `dispatch`.
       case "clock":
         let now = try queue.sync { try clockRequest(request.args) }
-        if request.args["advance"] != nil { tick() }
+        if request.args["advance"] != nil {
+          tick()
+          // The removal job's timer runs on real time, so a removal whose `notBefore` the clock passed starts now.
+          runRemovals()
+        }
         return .success(now)
       case "followup-add", "followup-ls", "followup-start", "followup-rm", "followup-import", "pr-merged":
         return .success(try followupRequest(request.op, request.args))
@@ -567,7 +573,7 @@ public final class Service {
       return try noteRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
-    case "rm-retry", "rm-keep", "removal-notices", "removal-notice-dismiss":
+    case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":
       return try removalRequest(op, args)
     case "manager-ls":
       return try JSON(encoding: managerList())

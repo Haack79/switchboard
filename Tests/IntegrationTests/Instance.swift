@@ -119,6 +119,9 @@ final class Instance {
       "autoMode": false,
       // Tests that start many sessions don't expect sbd to stop the idle ones.
       "liveCap": 50,
+      // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the
+      // undo window. The tests in RemovalUndoTests.swift set it.
+      "removalDelaySeconds": 0,
     ]
     try JSON.object(config.merging(extra) { $1 }).text.write(toFile: home.config, atomically: true, encoding: .utf8)
     FileManager.default.createFile(atPath: home.log, contents: nil)

@@ -19,6 +19,13 @@ func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionSta
   return s
 }
 
+/// A session whose removal is `state` and does not start before `notBefore`, in ms on sbd's clock.
+func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int64?) -> SessionSummary {
+  var s = removalSession(id, state)
+  s.removal?.notBefore = notBefore
+  return s
+}
+
 /// The sidebar, the Inbox, and the Board leave out a session while sbd's removal job holds it.
 @MainActor
 @Suite struct BoardModelRemovalFilter {
@@ -147,6 +154,43 @@ func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionSta
     #expect(text.hasSuffix("\u{2026}"))
     #expect(!text.contains("..."))
   }
+
+  // MARK: Undo
+
+  /// Only a queued session whose `notBefore` is still ahead can come back. A running one already stopped claude,
+  /// a queued one past its `notBefore` may start at any moment, and one with no `notBefore` was queued by an
+  /// older sbd that started it at once.
+  @Test func undoableListsOnlyTheQueuedSessionsBeforeTheirNotBefore() throws {
+    let model = appliedModel([
+      undoSession("ahead", notBefore: 10_000), undoSession("ahead2", notBefore: 12_000),
+      undoSession("running", .running, notBefore: 10_000), undoSession("past", notBefore: 4_000),
+      undoSession("unset", notBefore: nil), undoSession("failed", .failed, notBefore: 10_000),
+    ])
+
+    let status = try #require(model.removalStatus)
+
+    #expect(Set(status.undoable(now: 5_000)) == ["ahead", "ahead2"])
+  }
+
+  /// The worker may start the session at `notBefore`, so Undo goes at that moment, not a moment later.
+  @Test(arguments: [(9_999, ["q"]), (10_000, []), (10_001, [])] as [(Int64, [String])])
+  func aQueuedSessionIsUndoableOnlyStrictlyBeforeItsNotBefore(_ now: Int64, _ expected: [String]) throws {
+    let model = appliedModel([undoSession("q", notBefore: 10_000)])
+
+    let status = try #require(model.removalStatus)
+
+    #expect(status.undoable(now: now) == expected)
+  }
+
+  /// The row shows Undo while `undoable` is not empty. Once every session has started, the row stays and Undo goes.
+  @Test func theRowStaysWithoutUndoOnceEverySessionIsPastItsNotBefore() throws {
+    let model = appliedModel([undoSession("q", notBefore: 10_000), undoSession("r", .running, notBefore: 9_000)])
+
+    let status = try #require(model.removalStatus)
+
+    #expect(status.undoable(now: 10_000).isEmpty)
+    #expect(status.count == 2)
+  }
 }
 
 /// Retry and Keep on a failed session, and Dismiss on a removal notice.
@@ -172,5 +216,93 @@ func removalSession(_ id: String, _ removal: Removal.State?, state: AttentionSta
 
     #expect(request.op == "removal-notice-dismiss")
     #expect(request.args["id"]?.int == 7)
+  }
+
+  // MARK: Undo
+
+  /// The model as the row's Undo finds it: two sessions before their `notBefore`, one past it, and one running.
+  func undoModel(_ sent: SentRequests, reply: JSON = ["cancelled": [], "refused": []]) -> BoardModel {
+    let model = appliedModel([
+      undoSession("a", notBefore: 10_000), undoSession("b", notBefore: 11_000), undoSession("past", notBefore: 4_000),
+      undoSession("running", .running, notBefore: 10_000),
+    ])
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-cancel" ? reply : .null
+    }
+    return model
+  }
+
+  @Test func undoSendsOneRmCancelWithEveryUndoableID() async throws {
+    let sent = SentRequests()
+    let model = undoModel(sent)
+
+    model.undoRemovals(now: 5_000)
+    await settle { sent.ops.contains("rm-cancel") }
+
+    let cancels = sent.value.filter { $0.op == "rm-cancel" }
+    #expect(cancels.count == 1)
+    let ids = try #require(cancels.first?.args["sessions"]?.array, "\(cancels)")
+    #expect(Set(ids.compactMap(\.string)) == ["a", "b"])
+    #expect(ids.count == 2)
+  }
+
+  /// The request after Undo, on Undo's serial queue, marks the point by which Undo's own request would have
+  /// reached sbd.
+  @Test func undoWithNothingBeforeItsNotBeforeSendsNothing() async {
+    let sent = SentRequests()
+    let model = undoModel(sent)
+
+    model.undoRemovals(now: 20_000)
+    model.perform("after", [:], on: model.undos)
+    await settle { sent.ops.contains("after") }
+
+    #expect(!sent.ops.contains("rm-cancel"))
+  }
+
+  /// The header's `rm --worktree` can hold `worker` for minutes, and Undo must reach sbd before `notBefore`.
+  @Test func undoIsSentWhileWorkerIsBusy() async {
+    let sent = SentRequests()
+    let model = undoModel(sent)
+    let gate = DispatchSemaphore(value: 0)
+    let send = model.send
+    model.send = { op, args in
+      if op == "hold" { gate.wait() }
+      return try send(op, args)
+    }
+    model.perform("hold", [:])
+
+    model.undoRemovals(now: 5_000)
+    await settle { sent.ops.contains("rm-cancel") }
+    let sentWhileHeld = sent.ops.contains("rm-cancel")
+
+    gate.signal()
+    #expect(sentWhileHeld)
+  }
+
+  /// sbd refuses a session that started between the click and the request. The user learns that it stays deleted.
+  @Test func aRefusedUndoShowsTheReasonInTheBanner() async {
+    let reply: JSON = [
+      "cancelled": ["b"],
+      "refused": [["id": "a", "name": "a", "reason": "a is being deleted"]],
+    ]
+    let model = undoModel(SentRequests(), reply: reply)
+
+    model.undoRemovals(now: 5_000)
+    await settle { model.actionError != nil }
+
+    #expect(model.actionError?.contains("a is being deleted") == true, "\(model.actionError ?? "nil")")
+  }
+
+  /// The plan's stage 9 decision: a cancelled session returns to the lists unselected.
+  @Test func aSessionThatUndoBringsBackReturnsToTheListsUnselected() {
+    let model = appliedModel([removalSession("a", nil), removalSession("b", nil)])
+    model.selection = "a"
+    model.apply(.success([undoSession("a", notBefore: 10_000), removalSession("b", nil)]), followups: nil)
+
+    model.apply(.success([removalSession("a", nil), removalSession("b", nil)]), followups: nil)
+
+    #expect(model.sessions.contains { $0.id == "a" })
+    #expect(model.selection == nil)
   }
 }
