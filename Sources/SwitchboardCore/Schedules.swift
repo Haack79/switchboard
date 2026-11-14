@@ -140,7 +140,12 @@ public struct Schedule: Codable, Equatable, Sendable {
     return (next, Int(max(0, now - self.next) / every))
   }
 
-  /// When the schedule runs next, as `sb schedule ls` shows it.
+  /// The interval and the next run, such as `every 30m · next in 12m`. `sb schedule ls` and the app show it.
+  public func timingText(now: Int64 = nowMs()) -> String {
+    "every \(Schedule.intervalText(every)) · \(nextText(now: now))"
+  }
+
+  /// When the schedule runs next, such as `next in 12m`, `paused`, or `due, runs when the session is free`.
   public func nextText(now: Int64 = nowMs()) -> String {
     if paused == true { return "paused" }
     if next <= now { return "due, runs when the session is free" }

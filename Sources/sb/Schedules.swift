@@ -42,7 +42,7 @@ func scheduleCommand(_ a: Args) {
 
 /// The prompt on one line, then the interval, the next run, and the last result.
 func scheduleText(_ s: Schedule) -> String {
-  "\(oneLine(s.prompt)) (every \(Schedule.intervalText(s.every)), \(s.nextText()); \(s.lastText()))"
+  "\(oneLine(s.prompt))  \(s.timingText()) · \(s.lastText())"
 }
 
 func printSchedules(_ s: SessionSummary) {

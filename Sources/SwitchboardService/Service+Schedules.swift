@@ -67,8 +67,11 @@ extension Service {
   /// session is free. The tick calls it after it resolves due waits. A
   /// session marked done keeps its schedules and runs none of them.
   func fireDueSchedules(now: Int64) {
-    for id in entries.keys.sorted() {
-      guard let session = entries[id]?.session, !session.done else { continue }
+    let ids = entries.compactMap { id, e in
+      !e.session.done && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
+    }
+    for id in ids.sorted() {
+      guard let session = entries[id]?.session else { continue }
       let due = (session.schedules ?? []).filter { $0.isDue(now: now) }
         .sorted { ($0.next, $0.id) < ($1.next, $1.id) }
       // A run makes the session busy, so the guard runs again before each schedule.

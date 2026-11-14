@@ -466,8 +466,8 @@ extension ScheduleTests {
       #expect(Schedule.blocker(facts: f, process: .stopped, messageWaiting: false) == "an open card")
     }
 
-    /// Decision 8: a resolved `resume` wait does not hold on the turn's own
-    /// summary card, and neither does a schedule. Auto-continue does.
+    /// A resolved `resume` wait does not hold on the turn's own summary card.
+    /// A schedule does not hold on it either. Auto-continue does.
     @Test func aSessionSummaryAloneDoesNotHold() {
       var f = idleFacts()
       AutoContinueGuardTests.OpenPrompt.sessionCard.open(in: &f, since: now - minute)

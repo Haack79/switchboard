@@ -12,7 +12,7 @@ struct ScheduleCaption {
 
   init(_ schedule: Schedule, now: Int64) {
     prompt = schedule.prompt
-    timing = "every \(Schedule.intervalText(schedule.every)) · \(schedule.nextText(now: now))"
+    timing = schedule.timingText(now: now)
     result = schedule.lastText(now: now)
     toggleTitle = schedule.paused == true ? "Resume" : "Pause"
   }
