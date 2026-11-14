@@ -119,7 +119,8 @@ extension Instance {
     try sbd.advanceClock(600_000)
     try sbd.poll()
 
-    #expect(detailsReads(github) == 2)
+    // The re-read without thread comments finds the open thread, so a third read fetches its comments.
+    #expect(detailsReads(github) == 3)
     let callouts = try #require(try sbd.mergeSummary(s.id)["callouts"]?.array)
     #expect(callouts.first?["title"]?.string == "1 open review thread")
   }

@@ -8,25 +8,51 @@ extension GitHubPoller {
   /// Reads the details of each session's open PR that is at a merge
   /// decision, when no read holds them at the PR's head or the status query
   /// read the PR again since. Reads a PR In review once per head commit. A
-  /// failed chunk keeps its last reads. Returns the first failure.
+  /// read asks for thread comments only for a PR at a merge decision that
+  /// has or may have open threads, and reads such a PR again with them
+  /// when a read without them finds an open thread. A failed chunk keeps
+  /// its last reads. Returns the first failure.
   func readMergeDetails(_ sessions: [Watched], now: Int64, stats: inout Stats) -> String? {
-    var due: Set<String> = []
+    var due: [String: Bool] = [:]
+    var decisions: Set<String> = []
     for s in sessions {
-      guard let id = tracked[s.id]?.prId, !due.contains(id), let read = prs[id], let pr = shown(id, last: s.facts.pr)
+      guard let id = tracked[s.id]?.prId, due[id] == nil, let read = prs[id], let pr = shown(id, last: s.facts.pr)
       else { continue }
       let cached = mergeDetails[id].flatMap { $0.head == pr.headSha ? $0 : nil }
       var facts = s.facts
       facts.pr = pr
       if Attention.atMergeDecision(facts) {
-        if (cached?.read ?? .min) < read.polled { due.insert(id) }
+        decisions.insert(id)
+        if (cached?.read ?? .min) < read.polled {
+          due[id] = cached.map { $0.details.openThreads > 0 || $0.details.threadsRead < $0.details.threads } ?? true
+        }
       } else if cached == nil, BoardColumn.wantsNudgeDetails(pr) {
-        due.insert(id)
+        due[id] = false
       }
     }
     var failure: String?
-    for chunk in GitHub.chunks(due.sorted()) {
+    readDetails(due.filter(\.value).map(\.key), threads: true, now: now, stats: &stats, failure: &failure)
+    let read = readDetails(
+      due.filter { !$0.value }.map(\.key), threads: false, now: now, stats: &stats, failure: &failure)
+    let again = read.filter { id in
+      guard decisions.contains(id), let details = mergeDetails[id]?.details else { return false }
+      return details.openThreads > 0 && details.threadDetails == nil
+    }
+    readDetails(Array(again), threads: true, now: now, stats: &stats, failure: &failure)
+    return failure
+  }
+
+  /// Reads the details of `ids` and returns the ids it read. Sets `failure`
+  /// to the first failure when it has none.
+  @discardableResult
+  private func readDetails(
+    _ ids: [String], threads: Bool, now: Int64, stats: inout Stats, failure: inout String?
+  ) -> Set<String> {
+    var read: Set<String> = []
+    for chunk in GitHub.chunks(ids.sorted()) {
       do {
-        let response = try request(GitHub.mergeDetailsQuery, idsVariable(chunk), stats: &stats)
+        let variables: JSON = ["ids": .array(chunk.map(JSON.string)), "threads": .bool(threads)]
+        let response = try request(GitHub.mergeDetailsQuery, variables, stats: &stats)
         let nodes = response["data"]?["nodes"]?.array ?? []
         for (i, id) in chunk.enumerated() {
           guard i < nodes.count, let (head, details) = GitHub.parseMergeDetails(nodes[i]) else {
@@ -34,12 +60,13 @@ extension GitHubPoller {
             continue
           }
           mergeDetails[id] = (head, now, details)
+          read.insert(id)
         }
       } catch {
         failure = failure ?? "merge details: \(error)"
       }
     }
-    return failure
+    return read
   }
 
   /// Sets each PR's merge details from the read at its head. A status read
