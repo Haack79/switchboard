@@ -165,8 +165,11 @@ struct FailedRemovalActions: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      Button("Keep") { model.keepRemoval(session.id) }
-        .help("Keep the session in Done")
+      // sbd refuses Keep once git has dropped the worktree's record.
+      if session.removal?.released != true {
+        Button("Keep") { model.keepRemoval(session.id) }
+          .help("Keep the session in Done")
+      }
       Button("Retry") { model.retryRemoval(session.id) }
         .help("Ask sbd to delete the session again")
     }

@@ -231,7 +231,8 @@ public struct Wait: Codable, Equatable, Sendable {
     return text
   }
 
-  static func sentence(_ text: String) -> String {
+  /// `text` ended with a period, unless it already ends with `.`, `!` or `?`.
+  public static func sentence(_ text: String) -> String {
     text.last.map { ".!?".contains($0) } == true ? text : text + "."
   }
 

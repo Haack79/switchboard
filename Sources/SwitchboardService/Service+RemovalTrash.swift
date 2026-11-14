@@ -209,9 +209,7 @@ extension Service {
   /// purge deletes a trash folder that no session's removal names. It runs
   /// on the state queue.
   func trashRefusal(_ id: String) -> APIError? {
-    guard let removal = entries[id]?.session.removal, !removal.released, let trash = removal.trash,
-      linkStatus(trash) != nil
-    else { return nil }
+    guard let trash = trashedFolder(id), entries[id]?.session.removal?.released != true else { return nil }
     return APIError(
       "The worktree of \(id) is in the trash at \(trash), and sbd hasn't shown that it is safe to delete. Retry the delete, or keep the session to move the folder back."
     )
