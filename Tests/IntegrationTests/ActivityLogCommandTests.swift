@@ -114,6 +114,8 @@ extension Instance {
     let s = try stoppedSession(sbd)
     let other = try sbd.new(prompt: "busy", name: "other")
     try sbd.waitFor(other.id, "the other reply") { $0.lastReply == "Done: busy" }
+    // The tick never stops the session that the user opened last. The start stays queued until the user opens s.
+    try sbd.sb("open", other.id)
     try sbd.sb("activity", "on")
 
     try sbd.sb(["send", s.id, "from another session"], env: ["SB_SESSION_ID": other.id, "CLAUDECODE": "1"])
