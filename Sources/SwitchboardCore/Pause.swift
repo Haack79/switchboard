@@ -129,3 +129,41 @@ public struct Pause: Codable, Equatable, Sendable {
     return clean.isEmpty ? nil : clean
   }
 }
+
+/// sbd's answer to a `pause` or `resume` request that names a group: one row for each session in the group.
+public struct PauseReport: Codable, Equatable, Sendable {
+  public var group: String
+  public var name: String
+  public var sessions: [PauseRow]
+
+  public init(group: String, name: String, sessions: [PauseRow]) {
+    self.group = group
+    self.name = name
+    self.sessions = sessions
+  }
+}
+
+/// What a group pause or resume did to one session of the group.
+public struct PauseRow: Codable, Equatable, Sendable {
+  public enum Result: String, Codable, Sendable {
+    case paused
+    /// A group pause keeps the pause that the session already had.
+    case alreadyPaused = "already_paused"
+    /// A pause skips a session that hasn't started or is marked done. A resume skips a session that isn't paused.
+    case skipped
+    case resumed
+    case failed
+  }
+
+  public var session: String
+  public var name: String
+  public var result: Result
+  public var error: String?
+
+  public init(session: String, name: String, result: Result, error: String? = nil) {
+    self.session = session
+    self.name = name
+    self.result = result
+    self.error = error
+  }
+}

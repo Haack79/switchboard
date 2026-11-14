@@ -14,15 +14,65 @@ extension Service {
     "\(pause.line). Resume the session to start claude again."
   }
 
-  /// Pauses one session and returns its summary. It refuses a session that hasn't started, a session that
-  /// pauses itself, Claude pausing a Manager conversation or a group chat, and a session on a host that sbd
-  /// can't read. A second pause replaces who paused, the reason, and the message, and keeps `since`.
+  /// Pauses the session or each session of the group that the request names. One session returns its summary,
+  /// and a group returns a `PauseReport`. The condition is read once, before anything is paused.
   func pauseRequest(_ args: JSON) throws -> JSON {
-    let id = try lookup(args)
-    let session = entries[id]!.session
+    let target = try pauseTarget(args)
     let by = try Author(parsing: args["by"]?.string)
     // A sender that sbd no longer knows goes unrecorded.
     let from = try? lookup(["session": args["from"] ?? .null])
+    let reason = try Pause.cleanReason(args["reason"]?.string)
+    let message = args["message"]?.string.flatMap(nonBlank)
+    let now = nowMs()
+    let condition = try args["until"]?.string.map { try Pause.parseUntil($0, now: now) }
+    let pauseOne = { (id: String) in
+      try self.pause(id, by: by, from: from, reason: reason, message: message, condition: condition, now: now)
+    }
+    switch target {
+    case .session(let id):
+      try pauseOne(id)
+      return try JSON(encoding: summary(id))
+    case .group(let group):
+      return try JSON(encoding: pauseGroup(group, condition: condition, now: now, pauseOne))
+    }
+  }
+
+  /// Pauses each work session of the group that has started, isn't marked done, and isn't paused. It refuses a
+  /// condition that names a session of the group, because that session would be paused too and never reach
+  /// the state.
+  private func pauseGroup(
+    _ group: String, condition: WaitRequest?, now: Int64, _ pauseOne: (String) throws -> Void
+  ) throws -> PauseReport {
+    let sessions = members(group).filter { $0.kind == .work }
+    if let condition {
+      // The group's id is never a session's, so this checks the condition without the waiter's own refusal.
+      let check = try condition.makeWait(id: "w", waiter: group, now: now, findSession: waitTarget)
+      if let other = check.session, sessions.contains(where: { $0.id == other.id }) {
+        throw APIError(
+          "--until names \(other.name) (\(other.id)), which is in group \(groups[group]!.name). The group pause would pause it too, so it would never reach the state"
+        )
+      }
+    }
+    let rows = sessions.map { s -> PauseRow in
+      if (try? refuseNotStarted(s)) == nil || s.done { return PauseRow(session: s.id, name: s.name, result: .skipped) }
+      if s.pause != nil { return PauseRow(session: s.id, name: s.name, result: .alreadyPaused) }
+      do {
+        try pauseOne(s.id)
+        return PauseRow(session: s.id, name: s.name, result: .paused)
+      } catch {
+        return PauseRow(session: s.id, name: s.name, result: .failed, error: "\(error)")
+      }
+    }
+    return PauseReport(group: group, name: groups[group]!.name, sessions: rows)
+  }
+
+  /// Pauses one session. It refuses a session that hasn't started, a session that pauses itself, Claude pausing
+  /// a Manager conversation or a group chat, and a session on a host that sbd can't read. A second pause replaces
+  /// who paused, the reason, the condition, and the message, and keeps `since`.
+  private func pause(
+    _ id: String, by: Author, from: String?, reason: String?, message: String?, condition: WaitRequest?, now: Int64
+  ) throws {
+    let session = entries[id]!.session
     try refuseNotStarted(session)
     if from == id {
       throw APIError(
@@ -31,14 +81,12 @@ extension Service {
     }
     if by == .claude, let label = session.kind.label { throw APIError("only the user can pause \(label)") }
     try requireRead(id)
-    let now = nowMs()
-    let until = try args["until"]?.string.map { text in
-      try Pause.parseUntil(text, now: now).makeWait(
-        id: shortId("w", taken: waitIds(id)), waiter: id, now: now, findSession: waitTarget)
+    let until = try condition.map {
+      try $0.makeWait(id: shortId("w", taken: waitIds(id)), waiter: id, now: now, findSession: waitTarget)
     }
     let pause = Pause(
-      by: by, from: from.map(pauser), reason: try Pause.cleanReason(args["reason"]?.string),
-      since: session.pause?.since ?? now, until: until, message: args["message"]?.string.flatMap(nonBlank))
+      by: by, from: from.map(pauser), reason: reason, since: session.pause?.since ?? now, until: until,
+      message: message)
     try update(id) { $0.pause = pause }
     entries[id]?.queuedSince = nil
     entries[id]?.queuedTrigger = nil
@@ -50,7 +98,53 @@ extension Service {
     record(id, "paused", try JSON(encoding: pause))
     // A starting claude has no pid to stop yet. The tick stops it once it has one.
     if case .running = claudeState(id) { enforcePause(id, now: nowMs()) }
-    return try JSON(encoding: summary(id))
+  }
+
+  /// What a `pause` or `resume` request names.
+  enum PauseTarget {
+    case session(String)
+    case group(String)
+  }
+
+  /// The session or group that the request names, checked against the request's `scope`. `group` names a group.
+  /// `session` names a session, and names a group only when no session matches it. A ref that matches a
+  /// session and also names a group is refused, unless it is the session's whole id.
+  func pauseTarget(_ args: JSON) throws -> PauseTarget {
+    let target: PauseTarget
+    if args["group"] != nil {
+      guard args["session"] == nil else { throw APIError("name a session or a group, not both") }
+      target = .group(try lookupGroup(args))
+    } else if let ref = args["session"]?.string, entries[ref] == nil, !ref.isEmpty {
+      let matches = { (items: [(id: String, name: String)]) in
+        items.contains { $0.id.hasPrefix(ref) || $0.name == ref }
+      }
+      let namesSession = matches(entries.values.map { ($0.session.id, $0.session.name) })
+      let namesGroup = matches(groups.values.map { ($0.id, $0.name) })
+      if namesSession && namesGroup {
+        throw APIError("\(ref) names a session and a group. Use the session's id, or --group")
+      }
+      target = namesGroup ? .group(try lookupGroup(["group": .string(ref)])) : .session(try lookup(args))
+    } else {
+      target = .session(try lookup(args))
+    }
+    try requireInScope(target, args)
+    return target
+  }
+
+  /// A scoped MCP server sends `scope`, its group, and `caller`, its own session. Such a request may act only on
+  /// a session in that group, on the caller itself, or on that group.
+  private func requireInScope(_ target: PauseTarget, _ args: JSON) throws {
+    guard let value = args["scope"], value != .null else { return }
+    guard let scope = value.string else { throw APIError("scope is a group id") }
+    let name = groups[scope]?.name ?? scope
+    switch target {
+    case .session(let id):
+      guard entries[id]!.session.group == scope || id == args["caller"]?.string else {
+        throw APIError("\(id) is not in group \(name)")
+      }
+    case .group(let id):
+      guard id == scope else { throw APIError("\(groups[id]!.name) is not group \(name)") }
+    }
   }
 
   /// The ids of the session's open waits and of its pause condition, which a new wait or condition doesn't reuse.
@@ -95,22 +189,41 @@ extension Service {
     do { try stop(id, reason: "paused") } catch { logLine("can't stop paused \(id): \(error)") }
   }
 
-  /// Resumes a paused session with the request's message, else the pause's own. A session that isn't paused
-  /// launches as `sb resume` always did, with the message as its prompt.
+  /// Resumes the session or each paused session of the group that the request names, with the request's
+  /// message, else each pause's own. A session that isn't paused launches as `sb resume` always did, with the
+  /// message as its prompt. A group skips a session that isn't paused.
   func resumeRequest(_ args: JSON) throws -> JSON {
-    let id = try lookup(args)
+    let target = try pauseTarget(args)
     let message = args["message"]?.string
     let prompt = args["prompt"]?.string
     if message != nil && prompt != nil { throw APIError("resume takes a message or a prompt, not both") }
     let text = (message ?? prompt).flatMap(nonBlank)
-    if entries[id]!.session.pause != nil {
-      let by = try Author(parsing: args["by"]?.string)
-      let from = (try? lookup(["session": args["from"] ?? .null])).flatMap { $0 == id ? nil : $0 }
-      try unpause(id, outcome: nil, message: text, trigger: from == nil ? .resume : .session, by: by, from: from)
-    } else {
-      try launch(id, prompt: text, trigger: .resume)
+    let by = try Author(parsing: args["by"]?.string)
+    let from = try? lookup(["session": args["from"] ?? .null])
+    let resumeOne = { (id: String) in
+      let other = from == id ? nil : from
+      try self.unpause(id, outcome: nil, message: text, trigger: other == nil ? .resume : .session, by: by, from: other)
     }
-    return try JSON(encoding: summary(id))
+    switch target {
+    case .session(let id):
+      if entries[id]!.session.pause != nil {
+        try resumeOne(id)
+      } else {
+        try launch(id, prompt: text, trigger: .resume)
+      }
+      return try JSON(encoding: summary(id))
+    case .group(let group):
+      let rows = members(group).filter { $0.kind == .work }.map { s -> PauseRow in
+        guard s.pause != nil else { return PauseRow(session: s.id, name: s.name, result: .skipped) }
+        do {
+          try resumeOne(s.id)
+          return PauseRow(session: s.id, name: s.name, result: .resumed)
+        } catch {
+          return PauseRow(session: s.id, name: s.name, result: .failed, error: "\(error)")
+        }
+      }
+      return try JSON(encoding: PauseReport(group: group, name: groups[group]!.name, sessions: rows))
+    }
   }
 
   /// Ends the session's pause and sends the resume message ahead of the held messages. `outcome` says why it

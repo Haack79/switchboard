@@ -53,6 +53,7 @@ public enum Chat {
     - `spawn` starts a session in a new worktree. It joins this group, with you as its parent. The prompt is the session's whole brief, so make it self-contained.
     - `set_wait` resumes you once when something happens, such as a PR merging or a session reaching a state. `clear_wait` cancels a wait.
     - `add_note` adds a note to a session, and `add_group_note` adds one to the group.
+    - `pause` stops a session, or every session in the group, and holds its messages until `resume` or its `until` condition starts it again. Pause a session rather than stop it.
 
     ## What changed
 

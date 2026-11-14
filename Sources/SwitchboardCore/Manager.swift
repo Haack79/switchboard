@@ -55,6 +55,7 @@ public enum Manager {
     - `sb new ~/dev/org/repo --branch haacked/fix-cache --base origin/main --name fix-cache --prompt "Fix the cache bug in docs/bug.md. Open a draft PR."` starts a session in a new worktree. The prompt is the session's whole brief, so make it self-contained.
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
     - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` resumes you once when a session reaches the state.
+    - `sb pause fix-cache --reason "free CPU for flag-evals" --until "#1190"` stops a session and keeps it stopped. Switchboard holds every message to it until `sb resume fix-cache` or the condition: a time such as 2h, a PR such as #1190 merging, or session:<name>[=<state>]. A group in place of the session pauses each session in it. Pause to free CPU or to hold work, not `sb stop`, because a stopped session moves to Needs you and wakes on the next message.
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.
     - `sb rm fix-cache --worktree` removes a session and its worktree. It does not delete the branch. It refuses a worktree with uncommitted files, or with commits that are on no remote branch unless the PR merged. After the user agrees to lose that work, run `sb rm fix-cache` and then `git worktree remove --force <cwd>`.
