@@ -185,6 +185,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Set from a `link_down` until the next `link_up`: sbd can't read the session's host, so the events that
   /// would update these facts are not arriving.
   public var unread: UnreadHost?
+  /// The artifacts that the session published, in first-publish order.
+  public var artifacts: [SessionArtifact] = []
   /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
   public var openReports: [OperatorReport] = []
 
@@ -220,6 +222,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     // Only an acknowledgment needs the snapshot. Startup replay applies every event, so most events skip it.
     let promptsBefore = acknowledgment == nil ? nil : openPrompts
     applyWait(event, userPrompt: userPrompt)
+    applyArtifact(event)
     // A subagent's tool calls don't change what the main session waits on.
     let fromSubagent = event.fromSubagent
     let tool = d["tool_name"]?.string ?? ""

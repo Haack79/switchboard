@@ -1,6 +1,29 @@
 import Foundation
 import SQLite3
 
+/// What `Store.delete(session:)` writes when it removes a session.
+public struct SessionRemoval: Equatable, Sendable {
+  public var id: String
+  /// The name that `removed_sessions` records.
+  public var name: String
+  /// The open to-dos that the delete resolves.
+  public var todos: [ResolvedTodo]
+  /// The host of a session on a remote host, which `removed_host_sessions` records.
+  public var host: String?
+  /// The group to save in the same transaction, with the session's artifacts added to its kept rows.
+  public var group: SessionGroup?
+
+  public init(
+    id: String, name: String, todos: [ResolvedTodo] = [], host: String? = nil, group: SessionGroup? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.todos = todos
+    self.host = host
+    self.group = group
+  }
+}
+
 /// sbd's SQLite database: the sessions and their event log. Each session is a
 /// JSON row, so a new field needs no table migration.
 public final class Store {
@@ -52,34 +75,32 @@ public final class Store {
   /// to-dos, and records the session's `name` and the time in
   /// `removed_sessions`, in one transaction. A failure leaves all of it as it
   /// was. For a session on `host`, the same transaction records it in
-  /// `removed_host_sessions`.
-  public func delete(
-    session id: String, name: String, resolving todos: [ResolvedTodo] = [], onHost host: String? = nil
-  ) throws {
-    try transaction { try deleteRows(session: id, name: name, resolving: todos, onHost: host) }
+  /// `removed_host_sessions`. The same transaction saves `group` when the
+  /// removal has one.
+  public func delete(session removal: SessionRemoval) throws {
+    try transaction { try deleteRows(removal) }
   }
 
-  /// Throws when `delete(session:name:resolving:onHost:)` hits an abort or a
-  /// constraint, a read-only connection, or a write lock held past the busy
-  /// timeout. It runs the same statements in a transaction that it rolls back.
-  /// It does not see a failure that only the commit causes.
-  public func checkDeletable(
-    session id: String, name: String, resolving todos: [ResolvedTodo], onHost host: String? = nil
-  ) throws {
+  /// Throws when `delete(session:)` hits an abort or a constraint, a
+  /// read-only connection, or a write lock held past the busy timeout. It runs
+  /// the same statements in a transaction that it rolls back. It does not see
+  /// a failure that only the commit causes.
+  public func checkDeletable(session removal: SessionRemoval) throws {
     try exec("BEGIN IMMEDIATE")
     defer { try? exec("ROLLBACK") }
-    try deleteRows(session: id, name: name, resolving: todos, onHost: host)
+    try deleteRows(removal)
   }
 
-  private func deleteRows(session id: String, name: String, resolving todos: [ResolvedTodo], onHost host: String?)
-    throws
-  {
-    for todo in todos { try insert(todo) }
-    try run("DELETE FROM sessions WHERE id = ?", [id])
-    try run("DELETE FROM events WHERE session = ?", [id])
-    try run("DELETE FROM snapshots WHERE session = ?", [id])
-    try run("INSERT OR REPLACE INTO removed_sessions (id, name, removed) VALUES (?, ?, ?)", [id, name, nowMs()])
-    if let host { try recordRemovedHostSession(id, host: host) }
+  private func deleteRows(_ removal: SessionRemoval) throws {
+    if let group = removal.group { try save(group: group) }
+    for todo in removal.todos { try insert(todo) }
+    try run("DELETE FROM sessions WHERE id = ?", [removal.id])
+    try run("DELETE FROM events WHERE session = ?", [removal.id])
+    try run("DELETE FROM snapshots WHERE session = ?", [removal.id])
+    try run(
+      "INSERT OR REPLACE INTO removed_sessions (id, name, removed) VALUES (?, ?, ?)",
+      [removal.id, removal.name, nowMs()])
+    if let host = removal.host { try recordRemovedHostSession(removal.id, host: host) }
   }
 
   /// The sessions that sbd removed, newest first. A second removal of an id replaces its row.

@@ -121,3 +121,51 @@ import Testing
     #expect(proposalGoneWhenTheButtonsTurnOn)
   }
 }
+
+@MainActor
+@Suite(.timeLimit(.minutes(1))) struct BoardModelPlanArtifactUse {
+  static let url = "https://claude.ai/artifact/AbCdEfGhIjKlMnOpQrStUv"
+
+  @Test func useArtifactAsPlanSendsPlanAttachWithTheLinkAndTheGroup() async {
+    let sent = await firstRequest { $0.useArtifactAsPlan(url: Self.url, group: "g1") }
+
+    #expect(sent.op == "plan-attach")
+    #expect(sent.args == ["doc": JSON.string(Self.url), "group": "g1"])
+  }
+
+  @Test func ignoresASecondUseWhileTheFirstRuns() async {
+    let sent = await firstRequest { model in
+      model.useArtifactAsPlan(url: Self.url, group: "g1")
+      model.useArtifactAsPlan(url: Self.url, group: "g1")
+      #expect(model.isUsingAsPlan(url: Self.url, group: "g1"))
+    }
+    #expect(sent.count == 1)
+  }
+
+  /// The group lists the plan in the same turn that turns the button back on, before the refresh lists it, and
+  /// lists it once when a refresh already did.
+  @Test(arguments: [false, true])
+  func theGroupListsTheAttachedPlanOnceWhenTheButtonTurnsBackOn(_ alreadyListed: Bool) async throws {
+    let model = offlineModel()
+    let plan = PlanDocument(id: "p1", source: PlanSource(kind: .artifact, url: Self.url), group: "g1", attached: 0)
+    var group = GroupSummary(SessionGroup(id: "g1", name: "G", created: 0), sessions: [])
+    group.plans = alreadyListed ? [PlanSummary(plan)] : nil
+    model.groups = [group]
+    let reply = try JSON(encoding: plan)
+    model.send = { _, _ in reply }
+
+    var turnedOn: AnyCancellable?
+    let plansWhenTheButtonTurnsOn = await withCheckedContinuation { done in
+      turnedOn = model.$usingAsPlan.dropFirst().first(where: \.isEmpty).sink { _ in
+        done.resume(returning: MainActor.assumeIsolated { model.groups.first?.plans?.map(\.id) })
+      }
+      model.useArtifactAsPlan(url: Self.url, group: "g1")
+    }
+    turnedOn?.cancel()
+    #expect(plansWhenTheButtonTurnsOn == ["p1"])
+  }
+
+  @Test func isNotUsingAnArtifactAsPlanBeforeTheUse() {
+    #expect(!offlineModel().isUsingAsPlan(url: Self.url, group: "g1"))
+  }
+}

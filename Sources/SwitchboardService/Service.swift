@@ -1734,9 +1734,7 @@ public final class Service {
       }
       // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
       try store.checkDeletable(
-        session: session.id, name: session.name,
-        resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving, for: runner)),
-        onHost: session.host)
+        session: removal(session.id, resolving: removalResolving(session.id, resolving, for: runner)))
       install(fresh, of: session)
       try scope.require()
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
@@ -2429,6 +2427,7 @@ public final class Service {
     }
     if !e.facts.dependencies.isEmpty { out.dependencies = e.facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
+    if !e.facts.artifacts.isEmpty { out.artifacts = e.facts.artifacts }
     out.docket = s.docket.map { DocketSummary($0, e.facts.docket) }
     out.mergeError = e.facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }

@@ -242,4 +242,45 @@ import Testing
     #expect(try sent(sbd, a.id) == ["Rebase on main."])
     #expect(try sent(sbd, caller.id).isEmpty)
   }
+
+  // MARK: Artifacts
+
+  @Test func listGroupsCarriesTheGroupsArtifacts() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "alpha")
+    let g = try addGroup(sbd, "Flags", a.id)
+    try sbd.postArtifactHook(a.id)
+    let mcp = try MCPClient(sbd)
+
+    let groups = try #require(try mcp.call("list_groups").json?["groups"]?.array)
+
+    let flags = try #require(groups.first { $0["id"]?.string == g.id })
+    let row = try #require(flags["artifacts"]?.array?.first)
+    #expect(row["url"]?.string == artifactPageURL)
+    #expect(row["session"]?.string == a.id)
+    #expect(row["sessionName"]?.string == "alpha")
+  }
+
+  @Test func listGroupsCarriesTheRowsOfARemovedMember() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "alpha")
+    let g = try addGroup(sbd, "Flags", a.id)
+    try sbd.postArtifactHook(a.id)
+    try sbd.sb("rm", a.id)
+    let mcp = try MCPClient(sbd)
+
+    let groups = try #require(try mcp.call("list_groups").json?["groups"]?.array)
+
+    let flags = try #require(groups.first { $0["id"]?.string == g.id })
+    #expect(flags["artifacts"]?.array?.compactMap { $0["session"]?.string } == [a.id])
+  }
+
+  @Test func theListGroupsDescriptionNamesArtifacts() throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let tool = try #require(try mcp.tools().first { $0["name"]?.string == "list_groups" })
+
+    #expect(tool["description"]?.string?.contains("artifacts") == true, "\(tool["description"]?.string ?? "")")
+  }
 }
