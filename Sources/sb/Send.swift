@@ -32,5 +32,8 @@ func sendCommand(_ a: Args) {
       })
   }
   let result = call("send", args)
-  if a.json { printJSON(result) } else { print(result["delivery"]?.string ?? "sent") }
+  if a.json { return printJSON(result) }
+  guard result["held"]?.bool == true else { return print(result["delivery"]?.string ?? "sent") }
+  let held = summary(call("get", ["session": args["session"]!]))
+  print("held until \(held.name) resumes (\(held.pause?.line ?? held.reason))".printable)
 }

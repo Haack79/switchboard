@@ -108,6 +108,8 @@
 # the stub uses $SB_HOME/claude instead.
 # While $SB_HOME/hold-start exists, it waits before SessionStart, as a claude
 # that starts slowly does. SIGTERM then ends it with no hook.
+# When $SB_HOME/start-linger holds n, SIGTERM before SessionStart ends it n s
+# later with no hook, and it ignores a second SIGTERM.
 # While $SB_HOME/ask-trust exists, it shows Claude Code's workspace trust
 # dialog before SessionStart, unless the account's .claude.json trusts the
 # folder. See trust_dialog.
@@ -827,6 +829,10 @@ resume:no) echo "No conversation found with session ID: $session" && exit 1 ;;
 esac
 # Before the trap, so that SIGTERM at the dialog ends the stub with no hook,
 # as it ends claude before its SessionStart.
+if [ -e "$SB_HOME/start-linger" ]; then
+  start_linger=$(<"$SB_HOME/start-linger")
+  trap 'trap "" TERM; sleep "$start_linger"; exit 143' TERM
+fi
 while [ -e "$SB_HOME/hold-start" ]; do sleep 0.1; done
 if [ -e "$SB_HOME/ask-trust" ] &&
   ! jq -e --arg k "$(pwd -P)" '.projects[$k].hasTrustDialogAccepted == true' "$config_dir/.claude.json" >/dev/null 2>&1; then

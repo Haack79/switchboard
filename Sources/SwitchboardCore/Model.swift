@@ -117,6 +117,8 @@ public struct Session: Codable, Equatable, Sendable {
   /// True once sbd gave a Manager conversation its first `mcp` list. A
   /// conversation that the user later set to the full setup keeps nil.
   public var mcpScoped: Bool?
+  /// Set while the session is paused. Nil in a session that an older sbd stored.
+  public var pause: Pause?
 
   public var kind: SessionKind { SessionKind(manager: manager, chat: chat) }
 
@@ -327,6 +329,10 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var host: String?
   /// The state of the host's link, or nil for a session on this Mac and for a host that has no link.
   public var link: LinkState?
+  /// The session's pause, or nil when it isn't paused.
+  public var pause: Pause?
+  /// How many messages wait for the resume of a paused session, or nil when it isn't paused.
+  public var heldMessages: Int?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,

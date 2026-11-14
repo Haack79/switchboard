@@ -35,10 +35,14 @@ extension Service {
     "queued: \(liveCount(onHost: host)) of \(liveCap(onHost: host)) live\(host.map { " on \($0)" } ?? "")"
   }
 
-  /// The session, when its folder exists, its claude is stopped, and no `rm` is removing it.
+  /// The session, when its folder exists, its claude is stopped, it isn't paused, and no `rm` is removing it.
+  /// Every start of claude calls it, so a start that misses the pause check of its own still refuses.
   func requireStartable(_ id: String) throws -> Session {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     guard !removing.contains(id) else { throw APIError("\(id) is being removed") }
+    if let blocker = Pause.blocker(session) {
+      throw APIError("\(id) is \(session.pause?.line ?? blocker). Resume it with: sb resume \(id)")
+    }
     try requireRead(id)
     try requireFolder(session)
     guard claudeState(id) == .stopped else { throw APIError("\(id) is already running") }
@@ -102,6 +106,7 @@ extension Service {
   func livePlan(onHost host: String?, now: Int64) -> LivePlan {
     let queued = entries.values.filter {
       $0.session.host == host && claudeState($0.session.id) != .unknown && !removing.contains($0.session.id)
+        && Pause.blocker($0.session) == nil
     }.compactMap(liveStart)
     return LivePlan.make(
       cap: liveCap(onHost: host),
@@ -156,9 +161,10 @@ extension Service {
   /// ahead of every queued start. It moves `lastOpened` to this session before
   /// it launches, so the session opened before it loses its protection, and
   /// this launch may stop it to make room. It refuses a session that can't
-  /// start before it records anything.
+  /// start before it records anything. A paused session only records the view.
   func openSession(_ id: String) throws {
-    let stopped = claudeState(id) == .stopped
+    let paused = entries[id].flatMap { Pause.blocker($0.session) } != nil
+    let stopped = claudeState(id) == .stopped && !paused
     if stopped { _ = try requireStartable(id) }
     let now = nowMs()
     entries[id]?.lastViewed = now

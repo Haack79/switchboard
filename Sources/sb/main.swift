@@ -84,7 +84,16 @@ let usage = """
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
     stop <session>                stop the session's claude
-    resume <session> [--prompt P] resume the session's claude
+    pause <session> [--reason R] [--message M]
+                                  stop the session's claude and keep it stopped.
+                                  Nothing starts it or types into it, and every
+                                  message waits until the resume. --message sets
+                                  the text that the resume sends
+    resume <session> [--message M]
+                                  resume the session's claude. A paused session
+                                  gets M, else the pause's message, else a note
+                                  that it was paused, then the messages that
+                                  waited. --prompt is another name for --message
     done <session>, undone <session>
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
@@ -390,6 +399,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--steps",
+      "--reason", "--message",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -519,6 +529,7 @@ func printSession(_ s: SessionSummary) {
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
+  printPause(s)
   printWaitsAndNotes(s)
 }
 
@@ -783,8 +794,10 @@ case "open":
   }
 case "stop":
   sessionCommand("stop", a)
+case "pause":
+  pauseCommand(a)
 case "resume":
-  sessionCommand("resume", a, extra: a.values["--prompt"].map { ["prompt": .string($0)] } ?? [:])
+  resumeCommand(a)
 case "done":
   sessionCommand("done", a, extra: ["done": .bool(true)])
 case "undone":
