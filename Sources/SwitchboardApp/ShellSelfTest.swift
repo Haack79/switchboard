@@ -15,9 +15,10 @@ import SwiftUI
 /// `NavShortcuts` to the menu bar as a US keyboard types it, and reports the title of the menu item that ran.
 /// `mouse <3|4>` posts a press of mouse button 4 or 5 (button numbers 3 and 4) over the window to the app's
 /// event queue, so it passes through the app's event monitors as a real press does. `where` reports the place
-/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `click-row <session>` and
-/// `cmd-click <session>` click and ⌘-click the session's sidebar row with mouse events at the row's place in
-/// the window. `detail` reports
+/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `click-row <session>` clicks the
+/// session's sidebar row with mouse events at the row's place in the window. `extend-row <session>` adds the
+/// session's row to the sidebar table's selection, as a ⌘-click does. `selection` reports the model's selection,
+/// its multi-selection, and the sidebar table's selected rows. `detail` reports
 /// "N sessions selected" while the detail pane shows the multi-selection, else the place that the window shows.
 /// `click-delete-selected` clicks Delete N Sessions… in the detail pane the same way. `sheet` reports the removal
 /// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`.
@@ -103,8 +104,8 @@ enum ShellSelfTest {
       return "\(model.location.place)"
     case "click-row":
       return click(anchor: rest, modifiers: [], throughWindow: true)
-    case "cmd-click":
-      return click(anchor: rest, modifiers: .command, throughWindow: true)
+    case "extend-row":
+      return extendSelection(to: rest)
     case "detail":
       return model.showsMultiSelection ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
     case "click-delete-selected":
@@ -153,6 +154,23 @@ enum ShellSelfTest {
       return "no event"
     }
     return "clicked at \(Int(point.x)),\(Int(point.y)) on \(type(of: hit))"
+  }
+
+  /// Adds the table row that holds the anchor named `name` to that table's selection. A posted ⌘-click
+  /// replaces a List's selection on macOS 26 instead of extending it, so the step uses the table's own
+  /// selection call. The table reports the change to SwiftUI the way it reports a ⌘-click.
+  private static func extendSelection(to name: String) -> String {
+    guard let root = window?.contentView else { return "no window" }
+    guard let anchor = ClickAnchorView.find(name, in: root) ?? scrollIntoView(name, in: root) else {
+      return "no \(name)"
+    }
+    var next = anchor.superview
+    while let v = next, !(v is NSTableView) { next = v.superview }
+    guard let table = next as? NSTableView else { return "\(name) is not in a table" }
+    let row = table.row(for: anchor)
+    guard row >= 0 else { return "\(name) has no row" }
+    table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: true)
+    return "selected row \(row)"
   }
 
   /// The anchor named `name` in a row of a table under `view`, after that table scrolls the row into view. A
