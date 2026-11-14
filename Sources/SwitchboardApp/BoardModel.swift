@@ -841,7 +841,7 @@ final class BoardModel: ObservableObject {
   /// request can wait on that start, so it runs on `planWrites`. `then` lists the plan on the group unless a
   /// refresh already did, so the row shows "Plan" as soon as its button turns back on.
   func useArtifactAsPlan(url: String, group: String) {
-    let key = "\(group) \(url)"
+    let key = usingAsPlanKey(url: url, group: group)
     guard usingAsPlan.insert(key).inserted else { return }
     perform(
       "plan-attach", ["doc": .string(url), "group": .string(group)], on: planWrites,
@@ -855,7 +855,11 @@ final class BoardModel: ObservableObject {
       finally: { self.usingAsPlan.remove(key) })
   }
 
-  func isUsingAsPlan(url: String, group: String) -> Bool { usingAsPlan.contains("\(group) \(url)") }
+  func isUsingAsPlan(url: String, group: String) -> Bool {
+    usingAsPlan.contains(usingAsPlanKey(url: url, group: group))
+  }
+
+  private func usingAsPlanKey(url: String, group: String) -> String { "\(group) \(url)" }
 
   private func followUpKey(plan: String, row: String) -> String { "\(plan) \(row)" }
 

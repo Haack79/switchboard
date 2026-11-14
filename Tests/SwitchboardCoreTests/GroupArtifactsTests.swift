@@ -40,7 +40,9 @@ struct ArtifactMember: Sendable {
 }
 
 private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [GroupArtifact] {
-  GroupArtifacts.list(live: live.map { (session: $0.id, name: $0.name, artifacts: $0.artifacts) }, kept: kept)
+  GroupArtifacts.list(
+    live.flatMap { member in member.artifacts.map { GroupArtifact($0, session: member.id, sessionName: member.name) } }
+      + kept)
 }
 
 /// The group list (`GroupArtifacts.list`): live members' and the chat's entries plus the kept rows, one row per
@@ -295,11 +297,11 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
   }
 }
 
-/// A group keeps its removed sessions' rows in `SessionGroup.artifacts`, and a merge carries them.
+/// A group keeps its removed sessions' rows in `SessionGroup.keptArtifacts`, and a merge carries them.
 @Suite struct GroupKeptArtifactsTests {
   private func group(_ id: String, _ name: String, artifacts: [GroupArtifact]? = nil) -> SessionGroup {
     var g = SessionGroup(id: id, name: name, created: 1)
-    g.artifacts = artifacts
+    g.keptArtifacts = artifacts
     return g
   }
 
@@ -307,7 +309,7 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
     let g = try JSONCoding.decode(
       SessionGroup.self, from: #"{"id": "g1", "name": "Flags", "notes": [], "created": 1}"#)
 
-    #expect(g.artifacts == nil)
+    #expect(g.keptArtifacts == nil)
   }
 
   @Test func keptArtifactsSurviveEncoding() throws {
@@ -339,7 +341,7 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 
     let merged = group("g1", "Flags", artifacts: [mine]).absorbing(group("g2", "Docs", artifacts: [theirs]), now: 30)
 
-    #expect(merged.artifacts == [mine, theirs])
+    #expect(merged.keptArtifacts == [mine, theirs])
   }
 
   @Test func absorbingIntoAGroupWithoutKeptRowsTakesTheOthers() {
@@ -347,7 +349,7 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 
     let merged = group("g1", "Flags").absorbing(group("g2", "Docs", artifacts: [theirs]), now: 30)
 
-    #expect(merged.artifacts == [theirs])
+    #expect(merged.keptArtifacts == [theirs])
   }
 
   @Test func absorbingAGroupWithoutKeptRowsKeepsThisGroupsRows() {
@@ -355,13 +357,13 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 
     let merged = group("g1", "Flags", artifacts: [mine]).absorbing(group("g2", "Docs"), now: 30)
 
-    #expect(merged.artifacts == [mine])
+    #expect(merged.keptArtifacts == [mine])
   }
 
   @Test func absorbingTwoGroupsWithoutKeptRowsKeepsNone() {
     let merged = group("g1", "Flags").absorbing(group("g2", "Docs"), now: 30)
 
-    #expect((merged.artifacts ?? []).isEmpty)
+    #expect((merged.keptArtifacts ?? []).isEmpty)
   }
 
   /// The merged rows list like the two groups' rows together.
@@ -371,6 +373,6 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 
     let merged = group("g1", "Flags", artifacts: [mine]).absorbing(group("g2", "Docs", artifacts: [theirs]), now: 30)
 
-    #expect(list([], kept: merged.artifacts ?? []) == list([], kept: [mine, theirs]))
+    #expect(list([], kept: merged.keptArtifacts ?? []) == list([], kept: [mine, theirs]))
   }
 }

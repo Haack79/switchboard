@@ -23,9 +23,6 @@ public struct SessionArtifact: Codable, Equatable, Sendable {
     self.updated = updated
     self.removed = removed
   }
-
-  /// Whether `link` names this artifact, by its URL or by its artifact id.
-  public func names(_ link: String) -> Bool { ArtifactCall.names(link, url: url, artifactId: artifactId) }
 }
 
 /// A row of a group's artifact list: a member's artifact, or one that a removed session kept on the group.
@@ -61,14 +58,12 @@ public struct GroupArtifact: Codable, Equatable, Sendable {
       url: artifact.url, artifactId: artifact.artifactId, title: artifact.title, published: artifact.published,
       updated: artifact.updated, removed: artifact.removed, session: session, sessionName: sessionName)
   }
-
-  /// Whether `link` names this artifact, by its URL or by its artifact id.
-  public func names(_ link: String) -> Bool { ArtifactCall.names(link, url: url, artifactId: artifactId) }
 }
 
-/// The fields that order an artifact row and caption it.
+/// The fields that identify an artifact row, order it, and caption it.
 public protocol ArtifactRecord {
   var url: String { get }
+  var artifactId: String? { get }
   var updated: Int64 { get }
   var removed: Int64? { get }
 }
@@ -77,6 +72,13 @@ extension SessionArtifact: ArtifactRecord {}
 extension GroupArtifact: ArtifactRecord {}
 
 extension ArtifactRecord {
+  /// Whether `link` names this artifact: the link's normalized form is `url`, or its id is `artifactId`. A
+  /// `/code/artifact/<uuid>` link names the uuid that `artifact_id` holds.
+  public func names(_ link: String) -> Bool {
+    guard let normalized = ArtifactLink.normalized(link) else { return false }
+    return normalized == url || (artifactId != nil && ArtifactLink.id(of: normalized) == artifactId)
+  }
+
   /// When a delete removed the artifact, else when its last publish ran, such as `updated 5m ago`.
   public func caption(now: Int64 = nowMs()) -> String {
     removed.map { "removed \(ago($0, now: now)) ago" } ?? "updated \(ago(updated, now: now)) ago"
@@ -132,13 +134,6 @@ public enum ArtifactCall: Equatable, Sendable {
       url: url, artifactId: result["artifact_id"]?.string.flatMap { $0.isEmpty ? nil : $0 },
       title: titles.first { !$0.isEmpty })
   }
-
-  /// The same-artifact rule: the link's normalized form is `url`, or its id is `artifactId`. A
-  /// `/code/artifact/<uuid>` link names the uuid that `artifact_id` holds.
-  static func names(_ link: String, url: String, artifactId: String?) -> Bool {
-    guard let normalized = ArtifactLink.normalized(link) else { return false }
-    return normalized == url || (artifactId != nil && ArtifactLink.id(of: normalized) == artifactId)
-  }
 }
 
 extension SessionFacts {
@@ -146,7 +141,8 @@ extension SessionFacts {
   mutating func applyArtifact(_ event: Event) {
     switch ArtifactCall.parse(event) {
     case .publish(let url, let artifactId, let title):
-      if let i = artifacts.firstIndex(where: { $0.url == url }) {
+      // The short link and the `/code/artifact/<uuid>` link name one page, so either one updates its entry.
+      if let i = artifacts.firstIndex(where: { $0.url == url || (artifactId != nil && $0.artifactId == artifactId) }) {
         artifacts[i].updated = event.t
         if let title { artifacts[i].title = title }
         if artifacts[i].artifactId == nil { artifacts[i].artifactId = artifactId }
@@ -167,20 +163,12 @@ extension SessionFacts {
 
 /// A group's artifact list.
 public enum GroupArtifacts {
-  /// The rows of the live members, the group's chat, and the kept rows of removed sessions, one per artifact,
-  /// newest `updated` first and then by URL. Rows that name the same artifact merge: the row with the latest
-  /// `updated` gives the URL, title, and session, `published` is the earliest, and the merged row is removed
-  /// when its latest removal is at or after its latest update. The result does not depend on the order of the
-  /// inputs or on whether a row is live or kept.
-  public static func list(
-    live: [(session: String, name: String, artifacts: [SessionArtifact])], kept: [GroupArtifact]
-  ) -> [GroupArtifact] {
-    let rows =
-      live.flatMap { member in
-        member.artifacts.map { GroupArtifact($0, session: member.session, sessionName: member.name) }
-      }
-      + kept
-    return components(rows).map(merge).newestFirst
+  /// The rows of the live members, the group's chat, and the group's kept rows, one per artifact, newest
+  /// `updated` first and then by URL. Rows that name the same artifact merge: the row with the latest `updated`
+  /// gives the URL, title, and session, `published` is the earliest, and the merged row is removed when its
+  /// latest removal is at or after its latest update. The result does not depend on the order of the rows.
+  public static func list(_ rows: [GroupArtifact]) -> [GroupArtifact] {
+    components(rows).map(merge).newestFirst
   }
 
   /// The rows grouped by the same-artifact rule. The rule is not transitive, so each group holds every row that

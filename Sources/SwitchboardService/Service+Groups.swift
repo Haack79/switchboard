@@ -205,21 +205,23 @@ extension Service {
     }
   }
 
-  /// The group with the sessions' artifacts added to its kept rows, each row with its session's id and name.
+  /// The sessions' artifacts as group rows, each row with its session's id and name.
+  func artifactRows(of sessions: some Sequence<Entry>) -> [GroupArtifact] {
+    sessions.flatMap { e in
+      e.facts.artifacts.map { GroupArtifact($0, session: e.session.id, sessionName: e.session.name) }
+    }
+  }
+
+  /// The group with the sessions' artifacts added to its kept rows.
   func keepingArtifacts(of sessions: [Entry], in group: SessionGroup) -> SessionGroup {
-    group.keeping(
-      sessions.flatMap { e in
-        e.facts.artifacts.map { GroupArtifact($0, session: e.session.id, sessionName: e.session.name) }
-      })
+    group.keeping(artifactRows(of: sessions))
   }
 
   private func groupSummary(_ id: String, rowFollowups: PlanRowFollowups? = nil) -> GroupSummary {
     var summary = GroupSummary(groups[id]!, sessions: members(id).map(\.id))
     summary.plans = planSummaries(group: id, rowFollowups: rowFollowups)
-    let live = entries.values.filter { artifactGroup(of: $0.session) == id }.map {
-      (session: $0.session.id, name: $0.session.name, artifacts: $0.facts.artifacts)
-    }
-    let artifacts = GroupArtifacts.list(live: live, kept: groups[id]?.artifacts ?? [])
+    let live = artifactRows(of: entries.values.filter { artifactGroup(of: $0.session) == id })
+    let artifacts = GroupArtifacts.list(live + (groups[id]?.keptArtifacts ?? []))
     if !artifacts.isEmpty { summary.artifacts = artifacts }
     return summary
   }

@@ -11,7 +11,7 @@ import Testing
 
   static let before: SessionGroup = {
     var g = SessionGroup(id: "g1", name: "Flags", created: 1)
-    g.artifacts = [
+    g.keptArtifacts = [
       GroupArtifact(
         url: "https://claude.ai/artifact/OlderPage", artifactId: nil, title: "Older", published: 100, updated: 200,
         removed: nil, session: "gone", sessionName: "removed-earlier")
@@ -22,7 +22,7 @@ import Testing
   /// The group as `Service.removal` builds it: its kept rows plus the session's artifacts.
   static let after: SessionGroup = {
     var g = before
-    g.artifacts! += [
+    g.keptArtifacts! += [
       GroupArtifact(
         url: artifactShortURL, artifactId: artifactUUID, title: "Delta Rates", published: 1000, updated: 2000,
         removed: nil, session: session.id, sessionName: session.name)

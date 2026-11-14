@@ -171,6 +171,14 @@ private func delete(_ t: Int64, _ url: String = artifactShortURL) -> Event {
       ])
   }
 
+  @Test func aRepublishAnsweredByTheCodeLinkUpdatesTheEntryOfTheShortLink() {
+    let f = facts([publish(1000), publish(5000, url: artifactCodeURL, title: "Delta Rates v2")])
+
+    #expect(f.artifacts.count == 1)
+    #expect(f.artifacts.map(\.updated) == [5000])
+    #expect(f.artifacts.map(\.title) == ["Delta Rates v2"])
+  }
+
   @Test func aDeleteByTheCodeLinkMatchesTheEntryByItsArtifactId() {
     let f = facts([publish(1000), delete(5000, artifactCodeURL)])
 
@@ -292,8 +300,7 @@ private func delete(_ t: Int64, _ url: String = artifactShortURL) -> Event {
     }
   }
 
-  /// A snapshot that another build saved is replayed in full, so facts from a build without `artifacts` are not
-  /// reused with an empty list.
+  /// A snapshot that another build saved is replayed in full, so its facts are rebuilt with the artifacts.
   @Test func aSnapshotFromAnotherBuildIsReplayedWithItsArtifacts() throws {
     let dir = try tempFolder()
     defer { try? FileManager.default.removeItem(atPath: dir) }

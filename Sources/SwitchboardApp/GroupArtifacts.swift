@@ -54,6 +54,7 @@ struct GroupArtifactsLink: View {
       Button(title) { showing = true }
         .buttonStyle(.link).font(.caption).lineLimit(1)
         .help("Show the artifacts that this group's sessions published")
+        .accessibilityLabel("\(title) in group \(group.name)")
         .accessibilityIdentifier("group-artifacts-\(group.id)")
         .popover(isPresented: $showing, arrowEdge: .bottom) { GroupArtifactList(group: group).frame(width: 420) }
         // `showing` stays true when the link leaves the view because the group has no artifacts. Without the reset,
