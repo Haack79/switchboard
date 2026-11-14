@@ -10,8 +10,8 @@ import Testing
 func readyPR(
   draft: Bool = false, headSha: String = samplePRHead, base: String = "main", defaultBranch: String? = "main",
   mergeable: Mergeable? = .mergeable, reviewDecision: ReviewDecision? = nil, verdicts: [Review] = [],
-  checks: String? = "SUCCESS", mergedBase: Int? = nil, queue: TrunkQueueState? = nil, reviewRequests: [String]? = nil,
-  trunkConfig: Bool? = false, mergeQueue: Bool? = false
+  checks: String? = "SUCCESS", mergedBase: Int? = nil, queue: TrunkQueueState? = nil, reviewRequests: [String]? = [],
+  trunkConfig: Bool? = false, mergeQueue: Bool? = false, codeOwnerRequests: [String]? = []
 ) -> PullRequest {
   var pr = samplePR(
     draft: draft, headSha: headSha, base: base, defaultBranch: defaultBranch, mergeable: mergeable,
@@ -19,6 +19,7 @@ func readyPR(
     reviewRequests: reviewRequests)
   pr.trunkConfig = trunkConfig
   pr.mergeQueue = mergeQueue
+  pr.codeOwnerRequests = codeOwnerRequests
   pr.reviewDecisionRead = true
   return pr
 }
@@ -794,9 +795,15 @@ extension MergeAttentionTests {
       #expect(line(v, .reviewers)?.details == ["@PostHog/team-flags"])
     }
 
-    @Test(arguments: [[String]?.none, []])
-    func noCodeOwnerRequestGivesNoReviewersRow(_ requests: [String]?) throws {
-      #expect(line(verdict(try summaryFacts(ownedPR(nil, requests: requests))), .reviewers) == nil)
+    @Test func noCodeOwnerRequestGivesNoReviewersRow() throws {
+      #expect(line(verdict(try summaryFacts(ownedPR(nil, requests: []))), .reviewers) == nil)
+    }
+
+    @Test func unreadCodeOwnerRequestsGiveAnAmberReviewersRowWithTheNote() throws {
+      let v = verdict(try summaryFacts(ownedPR(nil, requests: nil)))
+
+      #expect(v.review?.amber == [.reviewers])
+      #expect(line(v, .reviewers)?.details == ["sbd hasn't read the review requests yet."])
     }
 
     // Review threads

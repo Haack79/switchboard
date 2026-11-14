@@ -27,6 +27,7 @@ private func reviewedSession(
     title: "Fix it", headSha: "h1", reviewDecision: .approved,
     verdicts: [Review(author: "stamphog", state: "APPROVED", commit: "h1")], reviewRequests: [], trunkConfig: false,
     reviewDecisionRead: true, mergeQueue: false)
+  pr.codeOwnerRequests = []
   pr.mergeDetails = details
   var summary = PRSummary(pr)
   summary.mergeMethod = .merge

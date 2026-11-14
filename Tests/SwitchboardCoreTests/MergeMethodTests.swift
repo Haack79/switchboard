@@ -19,6 +19,7 @@ private func landablePR(
   pr.trunkConfig = trunkConfig
   pr.mergeQueue = mergeQueue
   pr.inMergeQueue = inMergeQueue
+  pr.codeOwnerRequests = []
   pr.reviewDecisionRead = true
   pr.mergeDetails = MergeDetails()
   return pr

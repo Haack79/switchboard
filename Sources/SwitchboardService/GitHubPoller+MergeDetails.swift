@@ -13,10 +13,11 @@ extension GitHubPoller {
   /// when a read without them finds an open thread. A failed chunk keeps
   /// its last reads. Returns the first failure.
   func readMergeDetails(_ sessions: [Watched], now: Int64, stats: inout Stats) -> String? {
-    var due: [String: Bool] = [:]
+    var wantsThreadComments: [String: Bool] = [:]
     var decisions: Set<String> = []
     for s in sessions {
-      guard let id = tracked[s.id]?.prId, due[id] == nil, let read = prs[id], let pr = shown(id, last: s.facts.pr)
+      guard let id = tracked[s.id]?.prId, wantsThreadComments[id] == nil, let read = prs[id],
+        let pr = shown(id, last: s.facts.pr)
       else { continue }
       let cached = mergeDetails[id].flatMap { $0.head == pr.headSha ? $0 : nil }
       var facts = s.facts
@@ -24,16 +25,17 @@ extension GitHubPoller {
       if Attention.atMergeDecision(facts) {
         decisions.insert(id)
         if (cached?.read ?? .min) < read.polled {
-          due[id] = cached.map { $0.details.mayHaveOpenThreads } ?? true
+          wantsThreadComments[id] = cached.map { $0.details.mayHaveOpenThreads } ?? true
         }
       } else if cached == nil, BoardColumn.wantsNudgeDetails(pr) {
-        due[id] = false
+        wantsThreadComments[id] = false
       }
     }
     var failure: String?
-    readDetails(due.filter(\.value).map(\.key), threads: true, now: now, stats: &stats, failure: &failure)
+    readDetails(
+      wantsThreadComments.filter(\.value).map(\.key), threads: true, now: now, stats: &stats, failure: &failure)
     let read = readDetails(
-      due.filter { !$0.value }.map(\.key), threads: false, now: now, stats: &stats, failure: &failure)
+      wantsThreadComments.filter { !$0.value }.map(\.key), threads: false, now: now, stats: &stats, failure: &failure)
     let again = read.filter { id in
       guard decisions.contains(id), let details = mergeDetails[id]?.details else { return false }
       return details.openThreads > 0 && details.threadDetails == nil

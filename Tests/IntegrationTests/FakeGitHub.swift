@@ -221,6 +221,8 @@ final class FakeGitHub {
     for id in prs.keys {
       if prs[id]!["isMergeQueueEnabled"] == nil { prs[id]!["isMergeQueueEnabled"] = false }
       if prs[id]!["isInMergeQueue"] == nil { prs[id]!["isInMergeQueue"] = false }
+      // Nor the review requests, which GitHub answers as an empty list when nobody is asked.
+      if prs[id]!["reviewRequests"] == nil { prs[id]!["reviewRequests"] = ["totalCount": 0, "nodes": []] }
       // Nor do they hold the fields that the merge details query reads.
       for (key, value) in [
         "additions": 12, "deletions": 3, "changedFiles": 2, "reviewThreads": ["totalCount": 0, "nodes": []],

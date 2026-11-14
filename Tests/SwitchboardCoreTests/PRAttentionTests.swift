@@ -307,7 +307,8 @@ private let readTheReply = Verdict(state: .needsYou, reason: "read its last repl
     let comments = [
       PRComment(id: "IC_gh", author: "github-actions[bot]", createdAt: "2026-10-24T00:00:00Z"), trunkComment(),
     ]
-    var pr = samplePR(reviewDecision: .approved, verdicts: verdicts, checks: "SUCCESS")
+    var pr = samplePR(reviewDecision: .approved, verdicts: verdicts, checks: "SUCCESS", reviewRequests: [])
+    pr.codeOwnerRequests = []
     pr.mergeDetails = MergeDetails()
     let f = try prFacts(pr, comments: comments)
 
@@ -342,7 +343,9 @@ private let readTheReply = Verdict(state: .needsYou, reason: "read its last repl
         id: "IC_dp", author: "deployment-status-posthog[bot]", createdAt: "2026-10-24T00:00:00Z", body: "deployed"),
     ]
     var pr = samplePR(
-      reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED", on: samplePRHead)], checks: "SUCCESS")
+      reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED", on: samplePRHead)], checks: "SUCCESS",
+      reviewRequests: [])
+    pr.codeOwnerRequests = []
     pr.trunkConfig = false
     pr.mergeQueue = false
     pr.mergeDetails = MergeDetails()

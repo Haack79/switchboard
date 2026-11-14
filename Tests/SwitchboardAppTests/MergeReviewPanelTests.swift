@@ -34,6 +34,7 @@ func reviewedPR(
     title: "Fix the chart", headSha: reviewHead, reviewDecision: .approved, verdicts: verdicts, checks: "SUCCESS",
     reviewRequests: reviewRequests, trunkConfig: method == .trunk, reviewDecisionRead: true,
     mergeQueue: method == .mergeQueue)
+  pr.codeOwnerRequests = []
   pr.mergeDetails = details
   return pr
 }

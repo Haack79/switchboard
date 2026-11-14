@@ -139,11 +139,15 @@ public struct MergeReview: Codable, Equatable, Sendable {
   public var noReviewRequired: Bool
   /// Whether sbd read the PR's merge details.
   public var detailsRead: Bool
+  /// Whether sbd read both the review requests and the code owner requests.
+  /// nil in either means the poll did not read it.
+  public var requestsRead: Bool
   /// nil until sbd reads the PR's merge details.
   public var threads: Threads?
   public var testGaps: [String]
   public var codeOwnerGap: CodeOwnerGap?
-  /// The open review requests, as logins and team slugs.
+  /// The open review requests that `codeOwnerGap` doesn't name, as logins
+  /// and team slugs.
   public var pendingReviewers: [String]
   public var changesRequestedBy: [String]
   /// The rows that need a look, in panel order.
@@ -152,6 +156,7 @@ public struct MergeReview: Codable, Equatable, Sendable {
   public init(_ pr: PullRequest) {
     let details = pr.mergeDetails
     let detailsRead = details != nil
+    let requestsRead = pr.reviewRequests != nil && pr.codeOwnerRequests != nil
     let reviews = details?.reviews ?? []
     let approvals = pr.verdicts.filter(\.isApproval)
       .sorted { ($0.submittedAt ?? "") > ($1.submittedAt ?? "") }
@@ -174,11 +179,12 @@ public struct MergeReview: Codable, Equatable, Sendable {
     } else {
       codeOwnerGap = nil
     }
-    let pendingReviewers = pr.reviewRequests ?? []
+    let pendingReviewers = (pr.reviewRequests ?? []).filter { !Self.names(codeOwnerGap, $0) }
     let changesRequestedBy = pr.changesRequestedBy
     self.approvals = approvals
     self.noReviewRequired = noReviewRequired
     self.detailsRead = detailsRead
+    self.requestsRead = requestsRead
     threads = details.map {
       Threads(
         total: $0.threads, read: $0.threadsRead, open: $0.openThreads,
@@ -197,10 +203,27 @@ public struct MergeReview: Codable, Equatable, Sendable {
       case .threads:
         return details.map(\.mayHaveOpenThreads) ?? true
       case .reviewers:
-        return !pendingReviewers.isEmpty || codeOwnerGap != nil || !changesRequestedBy.isEmpty
+        return !requestsRead || !pendingReviewers.isEmpty || codeOwnerGap != nil || !changesRequestedBy.isEmpty
       case .testPlan:
         return !testGaps.isEmpty
       }
+    }
+  }
+
+  /// Whether `gap` names `request`, a login or a team slug. GitHub lists a
+  /// code owner request among the review requests too, where a team has no
+  /// organization prefix.
+  private static func names(_ gap: CodeOwnerGap?, _ request: String) -> Bool {
+    let owners: [String] =
+      switch gap {
+      case .waiting(let groups): groups.flatMap { $0 }
+      case .requested(let requests): requests
+      case nil: []
+      }
+    let request = request.lowercased()
+    return owners.contains { owner in
+      let owner = owner.lowercased()
+      return owner == "@" + request || owner.hasSuffix("/" + request)
     }
   }
 
@@ -226,6 +249,7 @@ public struct MergeReview: Codable, Equatable, Sendable {
   }
 
   private static let notRead = "sbd hasn't read the review details yet."
+  private static let requestsNotRead = "sbd hasn't read the review requests yet."
 
   /// The approval row's note while sbd hasn't read the review details. nil otherwise.
   public var approvalNote: String? { detailsRead ? nil : Self.notRead }
@@ -304,7 +328,8 @@ public struct MergeReview: Codable, Equatable, Sendable {
 
   private var reviewersDetails: [String] {
     let facts = reviewerFacts
-    guard let first = facts.first else { return [] }
-    return [first.names] + facts.dropFirst().map { "\($0.headline): \($0.names)" }
+    let note = requestsRead ? [] : [Self.requestsNotRead]
+    guard let first = facts.first else { return note }
+    return [first.names] + facts.dropFirst().map { "\($0.headline): \($0.names)" } + note
   }
 }

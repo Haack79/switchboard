@@ -27,7 +27,7 @@ private func apply(_ method: MergeMethod, to pr: inout PullRequest) {
 
 /// A ready PR #42 that GitHub approved, with `verdicts` and `details`.
 private func approved(
-  _ verdicts: [Review] = [onHead], details: MergeDetails? = greenDetails, reviewRequests: [String]? = nil,
+  _ verdicts: [Review] = [onHead], details: MergeDetails? = greenDetails, reviewRequests: [String]? = [],
   method: MergeMethod = .merge
 ) -> PullRequest {
   var pr = readyPR(reviewDecision: .approved, verdicts: verdicts, reviewRequests: reviewRequests)
@@ -115,6 +115,21 @@ private let amberShapes: [GuardShape] = [
       [sampleVerdict("stamphog", "APPROVED", on: "c0")],
       details: MergeDetails(threadDetails: [], reviews: [reviewDetail("stamphog", on: "c0", commitsSince: nil)])),
     amber: [.approval]),
+  GuardShape(label: "review requests not read", pr: approved(reviewRequests: nil), amber: [.reviewers]),
+  GuardShape(
+    label: "code owner requests not read",
+    pr: {
+      var pr = approved()
+      pr.codeOwnerRequests = nil
+      return pr
+    }(), amber: [.reviewers]),
+  GuardShape(
+    label: "neither request list read",
+    pr: {
+      var pr = approved(reviewRequests: nil)
+      pr.codeOwnerRequests = nil
+      return pr
+    }(), amber: [.reviewers]),
   GuardShape(label: "a pending user review request", pr: approved(reviewRequests: ["bob"]), amber: [.reviewers]),
   GuardShape(
     label: "a pending team review request", pr: approved(reviewRequests: ["PostHog/team-flags"]),

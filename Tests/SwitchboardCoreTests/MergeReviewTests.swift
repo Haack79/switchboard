@@ -157,7 +157,7 @@ private let carolOnHead = sampleVerdict("carol", "APPROVED", on: samplePRHead)
   }
 }
 
-// MARK: - Stage 3: the panel's rows
+// MARK: - The panel's rows
 
 /// A ready PR that GitHub approved, with `verdicts` and merge details that
 /// show every thread read and resolved and no test gaps.
@@ -372,8 +372,52 @@ extension MergeReviewTests {
       #expect(MergeReview(pr).amber == [.reviewers])
     }
 
+    @Test func reviewRequestsThatWereNotReadMakeTheReviewersRowAmber() {
+      var pr = approvedPR([headApproval])
+      pr.codeOwnerRequests = []
+      pr.reviewRequests = nil
+
+      let review = MergeReview(pr)
+
+      #expect(review.amber == [.reviewers])
+      #expect(!review.requestsRead)
+      #expect(review.lines.last?.details == ["sbd hasn't read the review requests yet."])
+    }
+
+    @Test func codeOwnerRequestsThatWereNotReadMakeTheReviewersRowAmber() {
+      var pr = approvedPR([headApproval])
+      pr.reviewRequests = []
+      pr.codeOwnerRequests = nil
+
+      let review = MergeReview(pr)
+
+      #expect(review.amber == [.reviewers])
+      #expect(!review.requestsRead)
+      #expect(review.lines.last?.details == ["sbd hasn't read the review requests yet."])
+    }
+
+    @Test func emptyRequestListsLeaveTheReviewersRowGreen() {
+      var pr = approvedPR([headApproval])
+      pr.reviewRequests = []
+      pr.codeOwnerRequests = []
+
+      #expect(MergeReview(pr).requestsRead)
+      #expect(MergeReview(pr).amber.isEmpty)
+    }
+
+    @Test func unreadRequestsAddTheNoteAfterTheFactsThatWereRead() {
+      var pr = approvedPR([headApproval])
+      pr.reviewRequests = ["bob"]
+      pr.codeOwnerRequests = nil
+
+      let details = MergeReview(pr).lines.last?.details
+
+      #expect(details == ["bob", "sbd hasn't read the review requests yet."])
+    }
+
     @Test func noApprovalsWithAReviewDecisionThatWasNotReadMakeTheApprovalRowAmber() {
-      var pr = samplePR(checks: "SUCCESS", reviewDecisionRead: nil)
+      var pr = samplePR(checks: "SUCCESS", reviewRequests: [], reviewDecisionRead: nil)
+      pr.codeOwnerRequests = []
       pr.mergeDetails = MergeDetails()
 
       #expect(MergeReview(pr).amber == [.approval])
@@ -484,6 +528,33 @@ extension MergeReviewTests {
       #expect(review.amber == [.reviewers])
     }
 
+    /// GitHub lists a code owner request among the review requests too, with
+    /// a team's bare slug.
+    @Test func aRequestedCodeOwnerIsNotNamedAgainAsAReviewRequest() throws {
+      var pr = ownedPR(nil, requests: ["@PostHog/team-flags", "@alice"])
+      pr.reviewRequests = ["team-flags", "Alice", "bob"]
+      let review = MergeReview(pr)
+
+      #expect(review.pendingReviewers == ["bob"])
+      let row = try #require(review.lines.first { $0.row == .reviewers })
+      #expect(row.title == "Code owners still requested")
+      #expect(row.details == ["@PostHog/team-flags, @alice", "Reviews still requested: bob"])
+    }
+
+    @Test func aWaitingCodeOwnerIsNotNamedAgainAsAReviewRequest() {
+      var pr = ownedPR([["@PostHog/team-flags"]], requests: [])
+      pr.reviewRequests = ["team-flags"]
+
+      #expect(MergeReview(pr).pendingReviewers.isEmpty)
+    }
+
+    @Test func aReviewRequestWhoseSlugEndsLikeACodeOwnerTeamIsStillNamed() {
+      var pr = ownedPR(nil, requests: ["@PostHog/flags"])
+      pr.reviewRequests = ["flags", "team-flags"]
+
+      #expect(MergeReview(pr).pendingReviewers == ["team-flags"])
+    }
+
     @Test func pendingReviewRequestsAreNamedInTheReviewersRow() throws {
       var pr = approvedPR([headApproval])
       pr.reviewRequests = ["bob", "PostHog/team-flags"]
@@ -520,6 +591,26 @@ extension MergeReviewTests {
       let text = try #require(rowText(MergeReview(approvedPR([approval("stamphog", on: "c0")])), .approval))
 
       #expect(text.contains("an earlier commit"), "\(text)")
+    }
+
+    /// `sb triage` prints these lines, and they are all it shows of an
+    /// approval's body or an open thread.
+    @Test func theApprovalAndThreadDetailLinesSayWhoWhereAndWhat() throws {
+      let note = MergeDetails.ReviewDetail.Note(
+        path: "a.swift", line: 3, excerpt: "Nit: a comment here.",
+        url: "https://github.com/acme/widgets/pull/42#discussion_r3002")
+      var thread = threadDetail(rootId: 1001, path: "values.yaml")
+      thread.bot = true
+      let details = MergeDetails(
+        threads: 1, threadsRead: 1, openThreads: 1, threadDetails: [thread],
+        reviews: [reviewDetail("stamphog", on: "c0", commitsSince: 2, body: "Looks good.", notes: [note])])
+      let review = MergeReview(approvedPR([approval("stamphog", on: "c0")], details: details))
+
+      let approvalRow = try #require(review.lines.first { $0.row == .approval })
+      let threadsRow = try #require(review.lines.first { $0.row == .threads })
+
+      #expect(approvalRow.details == ["stamphog, 2 commits earlier, 1 inline comment: Looks good."])
+      #expect(threadsRow.details == ["values.yaml:3, ann (bot), no reply: Why not use a guard?"])
     }
 
     @Test func theRowsKeepMarkdownCharactersUnescaped() throws {

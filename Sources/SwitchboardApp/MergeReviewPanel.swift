@@ -133,7 +133,7 @@ private struct ApprovalRow: View {
           InlineText(plain: note.excerpt, links: false).font(.callout).lineLimit(2).textSelection(.enabled)
           if let url = MergeReviewPanel.link(note.url) {
             Link("Open on GitHub", destination: url).font(.caption)
-              .accessibilityLabel("Open \(approval.author)'s comment on GitHub")
+              .accessibilityLabel("Open on GitHub, \(approval.author)'s comment at \(note.place)")
           }
         }
         .padding(.leading, 10)
@@ -145,7 +145,7 @@ private struct ApprovalRow: View {
       }
       if let url = MergeReviewPanel.link(approval.url) {
         Link("Open the review on GitHub", destination: url).font(.caption)
-          .accessibilityLabel("Open \(approval.author)'s review on GitHub")
+          .accessibilityLabel("Open the review on GitHub, by \(approval.author)")
       }
     }
     .accessibilityElement(children: .contain)
@@ -175,7 +175,7 @@ private struct ThreadRow: View {
         .textSelection(.enabled)
       if let url = MergeReviewPanel.link(thread.url) {
         Link("Open on GitHub", destination: url).font(.caption)
-          .accessibilityLabel("Open \(thread.author)'s thread on GitHub")
+          .accessibilityLabel("Open on GitHub, \(thread.author)'s thread at \(thread.place)")
       }
       ForEach(drafts, id: \.number) { DraftEntry(session: session, item: item, draft: $0) }
     }
