@@ -405,14 +405,14 @@ public final class Service {
         let now = try queue.sync { try clockRequest(request.args) }
         if request.args["advance"] != nil { tick() }
         return .success(now)
-      case "followup-add", "followup-ls", "followup-start", "followup-rm", "followup-import", "pr-merged":
+      case "followup-add", "followup-ls", "followup-start", "followup-rm", "followup-import":
         return .success(try followupRequest(request.op, request.args))
       case "importable":
         let all = request.args["all"]?.bool ?? false
         return .success(try JSON(encoding: importList(all: all, repo: request.args["repo"]?.string)))
       case "import":
         return .success(try JSON(encoding: importSessions(request.args)))
-      case "triage", "choose", "reply", "summary-set":
+      case "triage", "choose", "reply", "summary-set", "item-context":
         return try triageRequest(request.op, request.args)
       case "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard":
         return try decisionRequest(request.op, request.args)
