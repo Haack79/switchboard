@@ -15,10 +15,10 @@ struct AccountRow: Identifiable, Equatable {
   var disabledReason: String? { signedOut ? "New sessions can't use it until it signs in." : nil }
 }
 
-/// The toolbar control that names the account for new sessions, with its use
-/// of its 5-hour and weekly limits. Its popover lists every account's limits
-/// and when each resets, and a click on an account makes it the one for new
-/// sessions.
+/// The toolbar item for the account that new sessions use. Its tooltip names
+/// the account and its use of its 5-hour and weekly limits. Its popover lists
+/// every account's limits and when each resets, and a click on an account
+/// makes it the one for new sessions.
 struct AccountMenu: View {
   @EnvironmentObject var model: BoardModel
 
@@ -26,17 +26,16 @@ struct AccountMenu: View {
     if Self.shows(accounts: model.accounts, usage: model.usage) {
       let rows = Self.rows(accounts: model.accounts, usage: model.usage)
       let active = rows.first { $0.account.active }
+      let needsYou = Self.needsYou(active)
       Button {
         model.showingAccounts.toggle()
       } label: {
         // The name and usage text would push New Session into the overflow at 1024 pt. The tooltip shows them.
-        Label(Self.label(active), systemImage: "gauge.with.dots.needle.50percent")
-          .labelStyle(.iconOnly)
-          .foregroundStyle(Self.needsYou(active) ? AttentionState.needsYou.color : .primary)
+        Label("Account", systemImage: needsYou ? "exclamationmark.triangle" : "gauge.with.dots.needle.50percent")
+          .foregroundStyle(needsYou ? AttentionState.needsYou.color : .primary)
       }
       .help(Self.help(active))
-      .accessibilityLabel("Account")
-      .accessibilityValue(active == nil ? "" : Self.label(active))
+      .accessibilityValue(active == nil ? "" : Self.summary(active))
       .popover(isPresented: $model.showingAccounts, arrowEdge: .bottom) {
         AccountList(rows: rows)
       }
@@ -53,16 +52,21 @@ struct AccountMenu: View {
     !accounts.isEmpty && (!usage.isEmpty || accounts.count > 1)
   }
 
-  /// Whether the label takes the needs-you color: a limit is spent, or the
-  /// read failed with no earlier limits. An account that sbd has not read yet
-  /// does not need the user.
-  static func needsYou(_ row: AccountRow?) -> Bool {
-    guard let reading = row?.usage else { return false }
-    return reading.budget().isSpent || reading.failedWithoutLimits
+  /// Whether the toolbar item shows the needs-you symbol and color: a limit is
+  /// spent, or the read failed with no earlier limits. An account that sbd has
+  /// not read yet does not need the user.
+  static func needsYou(_ row: AccountRow?) -> Bool { status(row) != nil }
+
+  /// Why the account needs the user, or nil when it does not.
+  static func status(_ row: AccountRow?) -> String? {
+    guard let reading = row?.usage else { return nil }
+    if reading.failedWithoutLimits { return "usage read failed" }
+    if reading.budget().isSpent { return "limit spent" }
+    return nil
   }
 
-  /// The toolbar text: the account's name, its session percent when the
-  /// reading has a session limit, and its highest weekly percent.
+  /// The start of the tooltip and VoiceOver text: the account's name, its session
+  /// percent when the reading has a session limit, and its highest weekly percent.
   static func label(_ row: AccountRow?) -> String {
     guard let row else { return "Account" }
     guard let usage = row.usage, !usage.limits.isEmpty else { return row.account.name }
@@ -72,9 +76,15 @@ struct AccountMenu: View {
     return parts.joined(separator: " · ")
   }
 
-  /// The toolbar item's tooltip: the label, then what the item does.
+  /// The label, then why the account needs the user when it does. VoiceOver
+  /// reads it as the toolbar item's value.
+  static func summary(_ row: AccountRow?) -> String {
+    [label(row), status(row)].compactMap { $0 }.joined(separator: ", ")
+  }
+
+  /// The toolbar item's tooltip: the summary, then what the item does.
   static func help(_ row: AccountRow?) -> String {
-    "\(label(row)). The Claude account for new sessions, and every account's plan usage, read every few minutes."
+    "\(summary(row)). The Claude account for new sessions, and every account's plan usage, read every few minutes."
   }
 
   static func limitRow(_ limit: UsageLimit, now: Int64 = nowMs()) -> String {
