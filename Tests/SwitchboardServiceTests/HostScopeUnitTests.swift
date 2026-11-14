@@ -1120,7 +1120,8 @@ private func cliOutput(_ answer: Response) throws -> (status: Int?, stdout: Data
     try withSessions(sbPath: builtSb) { service in
       try HostServer.listen(service: service, host: "mini").run()
       // A `get` starts the lookups of the checkout and its origin, and `repositoryRead` changes when they end.
-      let read = waitUntil(seconds: 10) {
+      // The lookups run on the global queue, which a parallel test run keeps busy.
+      let read = waitUntil(seconds: 40) {
         _ = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
         return service.queue.sync { service.checkoutLookups.isEmpty && service.repositoryLookups.isEmpty }
       }

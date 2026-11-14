@@ -322,6 +322,7 @@ public final class Service {
     }
     markInterruptedPosts()
     seedParentMarks(now: nowMs())
+    migrateReadState()
     try? refreshManagerGuide()
     try? refreshChatGuides()
     // A summary that was running when sbd stopped never finished.
@@ -601,6 +602,8 @@ public final class Service {
       return try JSON(encoding: summary(id, for: origin))
     case "ack":
       return try acknowledgeRequest(args)
+    case ChatActivity.readEvent:
+      return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
       return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
@@ -611,6 +614,8 @@ public final class Service {
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "manager-pin":
+      return try managerPin(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
@@ -1123,6 +1128,7 @@ public final class Service {
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
+    if session.kind.showsAsChat { recordRead(id, 0) }
     try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
@@ -2260,6 +2266,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
+    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {
@@ -2307,6 +2314,11 @@ public final class Service {
         state: verdict.state, acknowledged: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
         facts: facts, created: s.created)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
+    }
+    if s.kind == .manager {
+      out.pinned = s.pinned
+      // Last, because the archive rule reads the rest of the summary.
+      if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
     }
     return out
   }
