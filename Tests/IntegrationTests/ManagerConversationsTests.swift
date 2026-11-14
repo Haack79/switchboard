@@ -1058,7 +1058,8 @@ import Testing
     #expect(spawn["inputSchema"]?["properties"]?["wait"] != nil)
   }
 
-  @Test func spawnWithWaitDoneSetsASessionWaitOnTheCaller() throws {
+  /// A conversation hands the wait to the operator (`OperatorHandoffTests`).
+  @Test func spawnWithWaitDoneSetsASessionWaitThatTheOperatorHoldsForTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
@@ -1067,35 +1068,39 @@ import Testing
 
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
 
-    let waits = try sbd.get(c.id).waits
-    #expect(waits.count == 1)
-    let wait = try #require(waits.first)
+    #expect(try sbd.get(c.id).waits.isEmpty)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    #expect(op.waits.count == 1)
+    let wait = try #require(op.waits.first)
     #expect(wait.kind == .session)
     #expect(wait.session?.id == kid.id)
     #expect(wait.state == .done)
+    #expect(wait.handedFrom?.id == c.id)
     #expect(try sbd.get(kid.id).waits.isEmpty)
   }
 
-  @Test func theChildReachingDoneResumesTheCallerOnce() throws {
+  @Test func theChildReachingDoneResumesTheOperatorOnceAndNotTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
     var args = try spawnArgs(sbd, "kid")
     args["wait"] = "done"
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
-    try #require(try sbd.get(c.id).waits.count == 1)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    try #require(op.waits.count == 1)
     try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply == "Done: hello" }
 
     try sbd.sb("done", kid.id)
 
-    let resumed = try sbd.waitFor(c.id, "the resumed turn", timeout: 30) {
-      $0.lastReply == "Done: Switchboard: kid to reach Done: it did."
+    let resumed = try sbd.waitFor(op.id, "the operator's resumed turn", timeout: 30) {
+      $0.lastReply == "Done: Switchboard: kid to reach Done: it did. For Manager conversation \"\(c.name)\"."
     }
     #expect(resumed.waits.isEmpty)
     try sbd.sb("undone", kid.id)
     try sbd.sb("done", kid.id)
     Thread.sleep(forTimeInterval: 1)
-    #expect(try sbd.sbdMessages(c.id).count == 1)
+    #expect(try sbd.sbdMessages(op.id).count == 1)
+    #expect(try sbd.sbdMessages(c.id).isEmpty)
   }
 
   @Test func spawnWithoutWaitSetsNoWait() throws {

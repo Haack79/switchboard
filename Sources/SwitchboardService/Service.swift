@@ -451,7 +451,7 @@ public final class Service {
   /// on the state queue.
   func prepared(_ request: Request, _ body: () throws -> JSON) throws -> JSON {
     let hostRead = try readHost(for: request)
-    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try lookup(request.args) }) {
+    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try messaged(request) }) {
       settle(id)
     }
     if Service.waitsForMCP.contains(request.op) { awaitMCPServers(for: request) }
@@ -475,6 +475,14 @@ public final class Service {
       if let hostRead { install(hostRead.snapshot, onHost: hostRead.host) }
       return try body()
     }
+  }
+
+  /// The session whose claude `request` can message: the session it names, or
+  /// the operator for a `resolve-wait` of a wait that a conversation handed it.
+  private func messaged(_ request: Request) throws -> String {
+    let id = try lookup(request.args)
+    guard request.op == "resolve-wait" else { return id }
+    return try openWait(id, request.args["wait"]?.string).holder
   }
 
   /// For a request that acts on a session on a host: waits for the host, then reads its panes and processes.

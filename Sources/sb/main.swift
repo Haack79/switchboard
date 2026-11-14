@@ -89,8 +89,13 @@ let usage = """
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
          [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
+         [--here]
                                   wait on a PR, a deploy, another session, or a
-                                  time. Inside a session, the session is optional
+                                  time. Inside a session, the session is optional.
+                                  A wait that Claude sets in a Manager
+                                  conversation and that resumes goes to the
+                                  operator, unless it reads the conversation's
+                                  own PR. --here keeps it on the conversation
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -98,7 +103,9 @@ let usage = """
                                   can't be reached, and 1 when it is cleared. The
                                   session doesn't resume. The timeout and Ctrl-C
                                   clear the wait
-    wait <session> --clear [--id W]
+    wait [<session>] --clear [--id W]
+                                  clear the waits, and a conversation's waits
+                                  that went to the operator
     wait <session> --resolve <what happened> [--id W]
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos

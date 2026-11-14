@@ -44,6 +44,19 @@ public struct Wait: Codable, Equatable, Sendable {
       case .date, .manual: ["until"]
       }
     }
+
+    /// What a wait of this kind does when it resolves, unless the request says otherwise.
+    var defaultThen: Then { self == .manual ? .notify : .resume }
+
+    /// Whether a wait of this kind on `pr` reads the session that holds it. A PR kind with no
+    /// repository reads that session's own repository, and a `ci` wait on it reads the session's
+    /// checked-out branch.
+    func readsWaiter(pr: PullRequest?) -> Bool {
+      switch self {
+      case .session, .date, .manual: false
+      case .ci, .review, .botReview, .approval, .queue, .merge, .deploy: pr?.repository == nil
+      }
+    }
   }
 
   /// What happens when the wait resolves.
@@ -142,6 +155,11 @@ public struct Wait: Codable, Equatable, Sendable {
   /// Needs you. It is nil for a `date` wait, for a manual wait, whose `until`
   /// serves instead, and for a wait that sbd has not stamped yet.
   public var recheck: Int64?
+  /// The Manager conversation that set the wait, when sbd stored it on the operator instead.
+  public var handedFrom: SessionTarget?
+
+  /// Whether the wait's resolution reads the session that holds it.
+  var readsWaiter: Bool { kind.readsWaiter(pr: pr) }
 
   /// The time after which a review or a queue change counts.
   public var countsAfter: Int64 { since ?? created }
@@ -227,6 +245,7 @@ public struct Wait: Codable, Equatable, Sendable {
   /// The message that resumes the session when the wait resolves with `resume`.
   public func message(outcome: String) -> String {
     var text = "Switchboard: " + Wait.sentence(outcomeLine(outcome))
+    if let handedFrom { text += " For Manager conversation \"\(handedFrom.name)\"." }
     if kind != .manual, let note { text += " Your note: " + Wait.sentence(note) }
     return text
   }

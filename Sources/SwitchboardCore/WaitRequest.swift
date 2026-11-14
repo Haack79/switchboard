@@ -36,7 +36,7 @@ public struct WaitRequest: Codable, Equatable, Sendable {
     let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
     var wait = Wait(
       id: id, kind: kind, who: who, service: service, note: trimmed?.isEmpty == false ? trimmed : nil,
-      by: try Author(parsing: by), created: now, then: kind == .manual ? .notify : .resume)
+      by: try Author(parsing: by), created: now, then: kind.defaultThen)
     if let then {
       guard let value = Wait.Then(rawValue: then) else { throw APIError("then is resume or notify, not \(then)") }
       wait.then = value
@@ -81,4 +81,17 @@ public struct WaitRequest: Codable, Equatable, Sendable {
     }
     return value
   }
+}
+
+/// Whether sbd stores the wait that `request` describes on the operator instead of `namedSession`.
+/// It does when the wait resolves the same way there and only the recipient of the message changes:
+/// the named session is a Manager conversation, Claude set the wait, it resumes, `here` is not set, and
+/// its resolution reads nothing of the waiter. sbd also keeps a `session` wait whose target is the
+/// operator, which this function can't see.
+public func handsOff(_ request: WaitRequest, namedSession: Session, here: Bool) -> Bool {
+  guard namedSession.kind == .manager, !here, request.by == Author.claude.rawValue,
+    let kind = Wait.Kind(rawValue: request.kind ?? Wait.Kind.manual.rawValue)
+  else { return false }
+  guard (request.then.flatMap(Wait.Then.init(rawValue:)) ?? kind.defaultThen) == .resume else { return false }
+  return !kind.readsWaiter(pr: request.target.flatMap(Wait.PullRequest.init(parsing:)))
 }

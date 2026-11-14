@@ -28,11 +28,15 @@ func waitCommand(_ a: Args) {
     guard let seconds = TimeInterval(text), seconds > 0 else { die("--timeout needs a positive number of seconds") }
     return seconds
   }
+  let session = a.positional.first ?? ProcessInfo.processInfo.environment["SB_SESSION_ID"]
   if clearing {
-    var extra: [String: JSON] = [:]
-    if let id = a.values["--id"] { extra["wait"] = .string(id) }
-    if let resolve { extra["outcome"] = .string(resolve) }
-    return sessionCommand(resolve == nil ? "clear-wait" : "resolve-wait", a, extra: extra)
+    guard let session else { die("wait needs a session") }
+    var args: [String: JSON] = ["session": .string(session)]
+    if let id = a.values["--id"] { args["wait"] = .string(id) }
+    if let resolve { args["outcome"] = .string(resolve) }
+    let result = call(resolve == nil ? "clear-wait" : "resolve-wait", args)
+    if a.json { printJSON(result) } else { printSession(summary(result)) }
+    return
   }
   var args: [String: JSON] = [:]
   for (flag, key) in waitFlags {
@@ -40,14 +44,17 @@ func waitCommand(_ a: Args) {
   }
   if !words.isEmpty { args["note"] = .string(words) }
   if args.isEmpty { die("wait needs a note, --kind, --clear, or --resolve") }
-  guard let session = a.positional.first ?? ProcessInfo.processInfo.environment["SB_SESSION_ID"] else {
-    die("wait needs a session")
-  }
+  guard let session else { die("wait needs a session") }
   args["session"] = .string(session)
   args["by"] = .string(author.rawValue)
+  if a.switches.contains("--here") { args["here"] = true }
   if block { BlockingWait(session: session).run(args, timeout: timeout) }
   let result = call("wait", args)
-  if a.json { printJSON(result) } else { printSession(summary(result)) }
+  if a.json { return printJSON(result) }
+  let holder = summary(result)
+  printSession(holder)
+  // sbd appends the new wait, so the last wait is the one this command set.
+  if holder.waits.last?.handedFrom != nil { print("the operator follows this through") }
 }
 
 /// `sb note <session> <text>` adds a note, and `--todo` makes it a to-do.

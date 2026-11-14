@@ -161,6 +161,7 @@ public struct MCPToolServer: Sendable {
       }
       var request = try JSON(encoding: wait).object ?? [:]
       request["session"] = try sessionOrCaller(args, scoped)
+      if let here = args["here"]?.bool { request["here"] = .bool(here) }
       return try client.call("wait", request)
     case "clear_wait":
       var request = pick(args, ["wait"])
