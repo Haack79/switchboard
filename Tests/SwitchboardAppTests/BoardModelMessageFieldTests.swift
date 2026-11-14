@@ -57,7 +57,7 @@ import Testing
 
   /// Whether `place` draws the session's `SessionView`. A selected chat or Manager draws it only while the
   /// Terminal toggle is on. The Inbox in terminal mode draws it for any session with a Claude terminal.
-  static func showsTerminalView(_ kind: Kind, at place: Place) -> Bool {
+  nonisolated static func showsTerminalView(_ kind: Kind, at place: Place) -> Bool {
     switch place {
     case .selection: return kind.hasClaudeTerminal && kind.toggle != false
     case .inboxTerminal: return kind.hasClaudeTerminal
@@ -66,7 +66,7 @@ import Testing
   }
 
   /// Every kind and place where no `SessionView` shows.
-  static let untargeted: [(Kind, Place)] = Kind.allCases.flatMap { kind in
+  nonisolated static let untargeted: [(Kind, Place)] = Kind.allCases.flatMap { kind in
     Place.allCases.filter { !showsTerminalView(kind, at: $0) }.map { (kind, $0) }
   }
 
