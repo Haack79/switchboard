@@ -210,7 +210,7 @@ private final class FolderHold {
     let result = try #require(response["result"], Comment(rawValue: response.text))
     #expect(queued(result).isEmpty, Comment(rawValue: result.text))
     let reason = try #require(skipped(result, a.id)?["reason"]?.string, Comment(rawValue: result.text))
-    #expect(reason.contains(insideRefusal("sb rm --worktree", a.id)), Comment(rawValue: reason))
+    #expect(reason.contains(insideRefusal("sb rm --worktree", a)), Comment(rawValue: reason))
     #expect(try sbd.removal(a.id) == nil)
     #expect(try sbd.intact(a))
     #expect(Processes.exists(claude), "sbd ended a's claude")

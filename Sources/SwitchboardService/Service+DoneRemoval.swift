@@ -210,7 +210,7 @@ extension Service {
     func skip(_ name: String, _ reason: String) -> Result<RemovalTarget, Skipped> {
       .failure(Skipped(skip: .init(id: id, name: name, reason: reason)))
     }
-    guard let e = entries[id] else { return skip(id, "\(id) no longer exists") }
+    guard let e = entries[id] else { return skip(removedNames[id] ?? id, "\(mention(id)) no longer exists") }
     let s = e.session
     if let removal = s.removal {
       return skip(

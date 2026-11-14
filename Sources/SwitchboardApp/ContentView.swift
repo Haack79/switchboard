@@ -109,7 +109,7 @@ struct ContentView: View {
       ) { offer in
         Button("Clean Up", role: .destructive) { model.cleanup(offer.session) }
       } message: { offer in
-        Text(offer.message)
+        Text(model.sessionNames.replacingIDs(in: offer.message))
       }
     }
     .toolbar {
@@ -152,7 +152,7 @@ struct ContentView: View {
     ) { session, todos in
       Button(todos.button("Delete"), role: .destructive) { model.deleteDone(session, resolve: todos.ids) }
     } message: { session, todos in
-      Text(todos.message(before: BoardModel.deletePlan(session).message))
+      Text(model.sessionNames.replacingIDs(in: todos.message(before: BoardModel.deletePlan(session).message)))
     }
     .sheet(item: $model.newSession) {
       NewSessionView(request: $0).environmentObject(model)
@@ -164,8 +164,9 @@ struct ContentView: View {
       SessionSearchView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      DoneRemovalSheet().environmentObject(model)
+      DoneRemovalSheet().environmentObject(model).sessionLinks(model)
     }
+    .sessionLinks(model)
   }
 }
 
@@ -182,7 +183,7 @@ struct WarningBanner<Action: View>: View {
   var body: some View {
     HStack {
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-      Text(text).lineLimit(2).textSelection(.enabled)
+      InlineText(plain: text).lineLimit(2).textSelection(.enabled)
       Spacer()
       action()
     }
@@ -208,29 +209,7 @@ struct Sidebar: View {
     let activeAccount = model.activeAccountFolder
     let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
     List(selection: model.sidebarSelection) {
-      if !model.managers.isEmpty {
-        Section {
-          ForEach(model.managers) { manager in
-            SessionRow(session: manager, activeAccount: activeAccount, hoverCard: model.hoverCard)
-              .clickAnchor(manager.id)
-              .tag(manager.id)
-              .contextMenu { DeleteSelectedMenuItem(id: manager.id, count: removableSelection) }
-          }
-        } header: {
-          HStack {
-            Text("Manager")
-            Spacer()
-            Button {
-              model.openManager(new: true)
-            } label: {
-              Image(systemName: "plus")
-            }
-            .buttonStyle(.borderless)
-            .help("Start a Manager conversation")
-            .accessibilityLabel("New Manager conversation")
-          }
-        }
-      }
+      ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       ForEach(model.sidebarGroups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
@@ -427,24 +406,64 @@ struct DeleteButton: View {
 struct ManagerButton: View {
   @EnvironmentObject var model: BoardModel
 
-  private var waiting: SessionSummary? { model.waitingManager }
-  private var needsYou: Bool { waiting != nil }
-
-  private var tooltip: String {
-    if let waiting { return "\(waiting.name) needs you: \(waiting.reason) (⇧⌘M)" }
-    return model.managers.isEmpty
-      ? "Start a session that manages the others through sb (⇧⌘M)" : "Open the latest Manager conversation (⇧⌘M)"
-  }
-
   var body: some View {
+    let managers = model.managers
+    let star = ManagerStar(managers)
     Button {
       model.openManager()
     } label: {
-      Label("Manager", systemImage: needsYou ? "star.fill" : "star")
-        .foregroundStyle(needsYou ? AttentionState.needsYou.color : .primary)
+      Label("Manager", systemImage: star == .outline ? "star" : "star.fill")
+        .foregroundStyle(star.color)
     }
-    .accessibilityValue(needsYou ? AttentionState.needsYou.title : "")
-    .help(tooltip)
+    .accessibilityValue(star.value)
+    .help(tooltip(star, managers))
+  }
+
+  private func tooltip(_ star: ManagerStar, _ managers: [SessionSummary]) -> String {
+    switch star {
+    case .needsMe:
+      guard let waiting = model.waitingManager, let reason = ChatMark(waiting).needsMeReason else {
+        return "A Manager conversation needs you (⇧⌘M)"
+      }
+      return "\(waiting.name) needs you: \(reason) (⇧⌘M)"
+    case .unread: return "A Manager conversation has unread replies (⇧⌘M)"
+    case .outline:
+      return managers.isEmpty
+        ? "Start a session that manages the others through sb (⇧⌘M)" : "Open the latest Manager conversation (⇧⌘M)"
+    }
+  }
+}
+
+/// How the toolbar star looks: orange while a conversation waits on the
+/// user, blue while one has unread replies, and an outline otherwise.
+enum ManagerStar: Equatable {
+  case needsMe, unread, outline
+
+  init(_ managers: [SessionSummary]) {
+    let marks = managers.map(ChatMark.init)
+    if marks.contains(where: { $0.needsMeReason != nil }) {
+      self = .needsMe
+    } else if marks.contains(where: { if case .unread = $0 { true } else { false } }) {
+      self = .unread
+    } else {
+      self = .outline
+    }
+  }
+
+  var color: Color {
+    switch self {
+    case .needsMe: AttentionState.needsYou.color
+    case .unread: .accentColor
+    case .outline: .primary
+    }
+  }
+
+  var value: String {
+    switch self {
+    case .needsMe: AttentionState.needsYou.title
+    case .unread: "Unread replies"
+    case .outline: ""
+    }
   }
 }
 
@@ -737,11 +756,7 @@ private struct LaneLabel: View {
         .font(.caption).foregroundStyle(.secondary)
       if let group {
         HStack {
-          Button("Chat") { model.openChat(group.id) }
-            .buttonStyle(.link).font(.caption)
-            .help(
-              model.chat(of: group.id) == nil
-                ? "Start a chat that manages this group's sessions" : "Open this group's chat")
+          GroupChatButton(group: group)
           Button("Delete") { model.requestDeleteGroup(group) }
             .buttonStyle(.link).font(.caption)
             .help(group.sessions.isEmpty ? "Delete this group" : "Delete this group and move its sessions to Ungrouped")
@@ -919,8 +934,7 @@ struct GroupSuggestionList: View {
   @EnvironmentObject var model: BoardModel
 
   var body: some View {
-    let names = Dictionary(model.allBoard.map { ($0.id, $0.name) }) { first, _ in first }
-    let name = { (id: String) in names[id] ?? id }
+    let names = model.sessionNames
     ScrollView {
       VStack(alignment: .leading, spacing: 8) {
         ForEach(model.shownSuggestions) { s in
@@ -928,9 +942,10 @@ struct GroupSuggestionList: View {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "lightbulb").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-              Text("\(action): \(s.sessions.map(name).joined(separator: ", "))")
+              Text("\(action): \(s.sessions.map(names.name).joined(separator: ", "))")
                 .fontWeight(.medium)
-              Text([s.reason, s.staying(name)].compactMap { $0 }.joined(separator: ". "))
+              // The ids stay in, so that `InlineText` draws each one as a linked name.
+              InlineText(plain: [s.reason, s.staying()].compactMap { $0 }.joined(separator: ". "))
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -1008,7 +1023,7 @@ struct BoardCard: View {
     let process = s.waitsToStart ? "not started" : !s.runsClaude ? "docket review" : s.live ? "running" : "stopped"
     let parts = [
       s.board.map { "\($0.column.title) \(ago($0.since))" }, process, s.board == nil ? ago(s.since) : nil,
-      s.acknowledged == true ? "acknowledged" : nil,
+      s.acknowledged == true ? "acknowledged" : nil, s.requested == true ? "requested" : nil,
     ]
     return parts.compactMap { $0 }.joined(separator: " · ")
   }
@@ -1044,9 +1059,9 @@ struct BoardCard: View {
               }
             }
           }
-          Text(s.boardLine).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+          InlineText(plain: s.boardLine, links: false).font(.caption).foregroundStyle(.secondary).lineLimit(2)
           if let note = s.backNote {
-            Text(note).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+            InlineText(plain: note, links: false).font(.caption2).foregroundStyle(.orange).lineLimit(2)
           }
           CleanupNote(session: s)
           MergeNote(session: s)

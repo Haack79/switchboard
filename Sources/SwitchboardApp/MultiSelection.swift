@@ -26,7 +26,10 @@ extension BoardModel {
   /// The number of multi-selected sessions that a work-scope plan can delete. sbd skips the others.
   var removableSelectionCount: Int { multiSelected.filter(\.isRemovableWork).count }
 
-  private var sidebarRows: [SessionSummary] { managers + sidebarGroups.flatMap { $0.rows.map(\.session) } }
+  private var sidebarRows: [SessionSummary] {
+    let c = conversations
+    return c.pinned + c.active + c.archived + sidebarGroups.flatMap { $0.rows.map(\.session) }
+  }
 
   /// Sets `multiSelection` to `ids`, the ids that are still listed after a refresh or a filter change. One id
   /// left becomes `selection`, as the sidebar's set with one id makes it. With two or more left and no

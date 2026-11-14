@@ -39,6 +39,14 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var prompts = 0
   public var lastReply: String?
   public var lastActivity: Int64 = 0
+  /// The number of replies that claude finished in the main session. Only a
+  /// chat's or a Manager conversation's summary shows it.
+  public var replies = 0
+  /// The replies that the user read, from `chat-read` events. It is nil for a
+  /// session that has no `chat-read` event, which sbd migrates at startup.
+  public var repliesRead: Int?
+  /// The time of the last reply or of the last prompt that the user sent.
+  public var lastMessageAt: Int64?
   /// When claude last reported SessionStart.
   public var lastStart: Int64?
   /// The transcript that the last SessionStart named, in the account that
@@ -146,6 +154,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var reviewRequest: ReviewRequestAttempt?
   /// The Inbox item that the user acknowledged during this turn.
   public var acknowledgment: Acknowledgment?
+  /// The rule's Inbox item that the user last answered with a message.
+  public var request: InboxRequest?
   /// Claude Code's permission mode, as the last main-session hook or launch
   /// reported it. SessionStart carries none, so a launch without a mode
   /// leaves it unknown until the next hook.
@@ -204,6 +214,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     let d = event.data
     if SessionFacts.activityKinds.contains(event.kind) { lastActivity = max(lastActivity, event.t) }
     let userPrompt = isUserPrompt(event)
+    let turnWasRunning = turnRunning
     // Only an acknowledgment needs the snapshot. Startup replay applies every event, so most events skip it.
     let promptsBefore = acknowledgment == nil ? nil : openPrompts
     applyWait(event, userPrompt: userPrompt)
@@ -353,6 +364,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     default:
       break
     }
+    applyReplies(event, userPrompt: userPrompt)
     applyCards(event, userPrompt: userPrompt)
     applyTriage(event)
     applyMergeBrief(event)
@@ -360,6 +372,26 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     applyDraftReplies(event)
     applyAutoContinue(event, userPrompt: userPrompt)
     applyAcknowledgment(event, promptsBefore: promptsBefore)
+    applyRequest(event, userPrompt: userPrompt, turnEnded: turnWasRunning && !turnRunning)
+  }
+
+  /// A reply is a main-session Stop with a message. A `chat-read` event marks
+  /// replies read up to its count. The count read never exceeds the replies
+  /// and never goes down.
+  private mutating func applyReplies(_ event: Event, userPrompt: Bool) {
+    switch event.kind {
+    case "Stop" where !event.fromSubagent:
+      guard let message = event.data["last_assistant_message"]?.string, !message.isEmpty else { return }
+      replies += 1
+      lastMessageAt = event.t
+    case "UserPromptSubmit" where userPrompt:
+      lastMessageAt = event.t
+    case ChatActivity.readEvent:
+      let read = min(event.data["replies"]?.int ?? replies, replies)
+      repliesRead = max(repliesRead ?? 0, read)
+    default:
+      break
+    }
   }
 
   private mutating func startTurn(_ t: Int64) {
@@ -386,6 +418,14 @@ extension SessionFacts {
     guard let ended = jobsEndedAt else { return false }
     return now - ended < Attention.jobReportMs
   }
+
+  /// Whether a background job runs, or claude may still report one that exited.
+  public func jobsRunning(now: Int64) -> Bool { jobs > 0 || mayReportJob(now: now) }
+
+  /// Whether a subagent runs that sent an event within `Attention.subagentQuietMs`.
+  public func subagentsRunning(now: Int64) -> Bool {
+    !subagents.isEmpty && now - (lastSubagentEvent ?? 0) <= Attention.subagentQuietMs
+  }
 }
 
 /// What decided a verdict.
@@ -406,6 +446,9 @@ public struct Verdict: Equatable, Sendable {
   public var source: VerdictSource = .rule
   /// True when `Attention.shown` moved an acknowledged Inbox verdict to Waiting.
   public var acknowledged = false
+  /// True when `Attention.requested` holds a rule verdict in Waiting while
+  /// the session works on the user's request.
+  public var requested = false
   /// What the session's card offers for a rule that knows the next step.
   public var options: [TriageOption] = []
   /// What the user should read before deciding.
@@ -451,6 +494,17 @@ public enum Attention {
   /// `stateOf` gives another session's last state, which the dependency
   /// rules read for the session of a stack base.
   public static func evaluate(
+    _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState? = { _ in nil }
+  ) -> Verdict {
+    let verdict = unheld(session, facts, now: now, stateOf: stateOf)
+    // A held verdict is Waiting. The hold comes after `readyForReview`, which would turn it into Ready for review.
+    // While sbd can't read the host, the hold must not move the kept state either.
+    return facts.unread != nil ? verdict : requested(verdict, facts, now: now)
+  }
+
+  /// The verdict without the hold of the user's request, which a new
+  /// request records.
+  public static func unheld(
     _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState? = { _ in nil }
   ) -> Verdict {
     var facts = facts
@@ -512,14 +566,12 @@ public enum Attention {
     if now - facts.lastActivity > staleAfterMs, !needsPRAction(facts) {
       return Verdict(state: .stale, reason: "idle for \((now - facts.lastActivity) / dayMs) days")
     }
-    if !facts.subagents.isEmpty, now - (facts.lastSubagentEvent ?? 0) <= subagentQuietMs,
-      case .other = classify(facts.lastReply ?? "")
-    {
+    if facts.subagentsRunning(now: now), case .other = classify(facts.lastReply ?? "") {
       let n = facts.subagents.count
       return Verdict(state: .waiting, reason: "waiting on \(n) subagent\(n == 1 ? "" : "s")")
     }
     // A question still needs the user's answer while a job runs.
-    if facts.jobs > 0 || facts.mayReportJob(now: now), !classify(facts.lastReply ?? "").isQuestion {
+    if facts.jobsRunning(now: now), !classify(facts.lastReply ?? "").isQuestion {
       let reason =
         facts.jobs > 0
         ? "waiting on \(facts.jobs) background job\(facts.jobs == 1 ? "" : "s")"

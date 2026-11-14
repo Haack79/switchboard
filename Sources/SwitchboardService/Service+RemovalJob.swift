@@ -24,8 +24,8 @@ extension Service {
   /// The refusal for a removal of a session that `followup start` is starting or `merge` is merging, or nil. It
   /// runs on the state queue.
   func busyRefusal(_ id: String) -> APIError? {
-    if starting.contains(id) { return APIError("\(id) is starting") }
-    if merging.contains(id) { return APIError("\(id) is merging its PR") }
+    if starting.contains(id) { return APIError("\(mention(id)) is starting") }
+    if merging.contains(id) { return APIError("\(mention(id)) is merging its PR") }
     return nil
   }
 

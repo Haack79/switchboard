@@ -89,6 +89,8 @@ public struct Session: Codable, Equatable, Sendable {
   public var docket: DocketSession?
   /// The id of the group whose chat this session is. A chat belongs to no group.
   public var chat: String?
+  /// True for a Manager conversation that the user pinned to the top of the sidebar.
+  public var pinned: Bool?
   /// True when every launch starts claude in auto mode, so a resumed session
   /// keeps it. Otherwise sbd passes no permission mode, and Claude's settings
   /// choose one. Nil in a session that an older sbd stored.
@@ -264,6 +266,10 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var kind: SessionKind = .work
   /// The id of the group whose chat this session is.
   public var chat: String?
+  /// A chat's or a Manager conversation's replies and unread count. It is nil for a work session.
+  public var activity: ChatActivity?
+  /// True for a pinned Manager conversation.
+  public var pinned: Bool?
   public var followup: Followup?
   /// When the session was added, in ms since the epoch. An imported
   /// follow-up was added on the date of its line.
@@ -301,6 +307,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// True when the user acknowledged the session's Inbox item, which moves
   /// it to Waiting until its reason changes or a new turn starts.
   public var acknowledged: Bool?
+  /// True while the session works on a message that the user sent to answer
+  /// its rule's Inbox item, which holds it in Waiting.
+  public var requested: Bool?
   /// True while the session's start of claude waits behind the live cap.
   public var queued: Bool?
   /// Claude Code's permission mode, such as `default` or `auto`, or nil when
@@ -383,6 +392,18 @@ public enum Pane: String, Sendable {
 
 public func nowMs() -> Int64 {
   Clock.now()
+}
+
+/// The first line of the text that has more than spaces, trimmed. It reads no further than that line.
+public func firstLine(_ text: String) -> String? {
+  var rest = text[...]
+  while !rest.isEmpty {
+    let end = rest.firstIndex(where: \.isNewline) ?? rest.endIndex
+    let line = rest[..<end].trimmingCharacters(in: .whitespaces)
+    if !line.isEmpty { return line }
+    rest = end == rest.endIndex ? "" : rest[rest.index(after: end)...]
+  }
+  return nil
 }
 
 /// The text on one line, cut to `max` characters with an ellipsis.

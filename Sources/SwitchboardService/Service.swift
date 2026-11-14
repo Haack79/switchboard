@@ -106,6 +106,8 @@ public final class Service {
   static let checkoutRetryMs: Int64 = 60_000
 
   var entries: [String: Entry] = [:]
+  /// The name of each session that sbd removed, by id, as `removed_sessions` records it.
+  var removedNames: [String: String] = [:]
   /// The follow-ups that `followup start` is starting.
   var starting: Set<String> = []
   /// The sessions whose PR `merge` is merging.
@@ -307,6 +309,7 @@ public final class Service {
       entries[session.id] = e
       if !replay.uncertain.isEmpty { uncertain[session.id] = replay.uncertain }
     }
+    for r in try store.removedSessions() { removedNames[r.id] = r.name }
     for s in try store.claudeSessions() { remembered[s.id] = s }
     for g in try store.groups() { groups[g.id] = g }
     for p in try store.plans() { plans[p.id] = p }
@@ -318,6 +321,7 @@ public final class Service {
     }
     markInterruptedPosts()
     seedParentMarks(now: nowMs())
+    migrateReadState()
     try? refreshManagerGuide()
     try? refreshChatGuides()
     // A summary that was running when sbd stopped never finished.
@@ -532,6 +536,8 @@ public final class Service {
       return .object(ping)
     case "ls":
       return try JSON(encoding: summaries().filter { $0.state != .notStarted })
+    case "removed-ls":
+      return try JSON(encoding: store.removedSessions())
     case "get":
       return try JSON(encoding: summary(try lookup(args)))
     case "terminals":
@@ -548,7 +554,15 @@ public final class Service {
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
       // A sender that sbd no longer knows, or the session itself, goes unrecorded.
       let from = (try? lookup(["session": args["from"] ?? .null])).flatMap { $0 == id ? nil : $0 }
-      return ["delivery": .string(try send(id, text, trigger: from == nil ? .send : .session, from: from).rawValue)]
+      // A message from another session, such as the Manager, doesn't hold the session for the user.
+      let fromSession = args["from"] != nil || args["insideClaude"]?.bool == true
+      // claude's prompt shows an attached image as `[Image #n]` after the text, so the request keeps the text alone.
+      let typed = (Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      let request = fromSession ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
+      let delivery = try send(id, text, trigger: from == nil ? .send : .session, from: from)
+      if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
+      return ["delivery": .string(delivery.rawValue)]
     case "dependency-resolved":
       return try dependencyResolved(args)
     case "stop":
@@ -567,6 +581,8 @@ public final class Service {
       return try JSON(encoding: summary(id))
     case "ack":
       return try acknowledgeRequest(args)
+    case ChatActivity.readEvent:
+      return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
       return try waitRequest(op, args)
     case "note", "remove-note", "resolve-note":
@@ -579,6 +595,8 @@ public final class Service {
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "manager-pin":
+      return try managerPin(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
@@ -1016,12 +1034,23 @@ public final class Service {
       prefix: config.branchPrefix, name: args.name, exists: { branchOrFolderTaken(repo, $0, at: site) })
   }
 
+  /// A session id that no live session has and no removed session had, so an old mention of a removed
+  /// session never names a new one. It runs on the state queue.
+  func newSessionID() -> String {
+    var generator = SystemRandomNumberGenerator()
+    return newSessionID(using: &generator)
+  }
+
+  func newSessionID(using generator: inout some RandomNumberGenerator) -> String {
+    shortId("s", taken: Set(entries.keys).union(removedNames.keys), using: &generator)
+  }
+
   /// `configure` changes the session before its first launch.
   func create(
     _ args: NewSession, _ folder: (cwd: String, branch: String?, repo: String?),
     configure: (inout Session) -> Void = { _ in }
   ) throws -> SessionSummary {
-    let id = shortId("s", taken: entries.keys)
+    let id = newSessionID()
     var session = Session(
       id: id, name: args.name ?? args.branch ?? (folder.cwd as NSString).lastPathComponent, cwd: folder.cwd,
       branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model ?? config.model,
@@ -1046,6 +1075,7 @@ public final class Service {
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
+    if session.kind.showsAsChat { recordRead(id, 0) }
     try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
@@ -1056,6 +1086,13 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+  }
+
+  /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
+  /// removed it. An id with neither stays bare. It runs on the state queue.
+  func mention(_ id: String) -> String {
+    guard let name = entries[id]?.session.name ?? removedNames[id] else { return id }
+    return sessionMention(name: name, id: id)
   }
 
   func paneName(_ id: String, _ pane: Pane) -> String { "\(id)-\(pane.rawValue)" }
@@ -1522,7 +1559,9 @@ public final class Service {
           check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
           folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
       }
-      if let kept = released.keptMessage(id, remoteBranch: removesRemoteBranch) { throw APIError(kept) }
+      if let kept = released.keptMessage(queue.sync { mention(id) }, remoteBranch: removesRemoteBranch) {
+        throw APIError(kept)
+      }
       return [
         "removed": .string(id), "worktree_removed": .bool(released.worktree),
         "branch_removed": .bool(released.branch), "remote_branch_removed": .bool(released.remoteBranch),
@@ -1560,7 +1599,7 @@ public final class Service {
       return ReleasedFiles(worktree: false)
     }
     try awaitSite(site)
-    let released = try releaseInScope("the removal of \(id)", at: site) { scope in
+    let released = try releaseInScope("the removal of \(entry.session.mention)", at: site) { scope in
       let check = try checkBeforeRemoval(
         entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
       let stopped = try stopAndCheckAgain(
@@ -1568,7 +1607,7 @@ public final class Service {
         scope: scope)
       return try release(check, stopped, scope.site)
     }
-    let notice = runner == .job ? released.keptMessage(id, remoteBranch: remoteBranch) : nil
+    let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
     try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
     return released
   }
@@ -1658,11 +1697,11 @@ public final class Service {
       guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
         !merging.contains(session.id)
       else {
-        throw APIError("\(session.id) changed while it was being removed")
+        throw APIError("\(session.mention) changed while it was being removed")
       }
       // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
       try store.checkDeletable(
-        session: session.id,
+        session: session.id, name: session.name,
         resolving: checkTodos(session.id, resolving: removalResolving(session.id, resolving, for: runner)),
         onHost: session.host)
       install(fresh, of: session)
@@ -1686,15 +1725,16 @@ public final class Service {
     var keptRemoteBranch: (any Error)?
 
     /// The sentence that names the branch or remote branch that stayed after
-    /// the session's removal, or nil when none stayed. `remoteBranch` says
-    /// whether the removal asked for the remote branch.
-    func keptMessage(_ id: String, remoteBranch: Bool) -> String? {
+    /// the session's removal, or nil when none stayed. `mention` names the
+    /// session. `remoteBranch` says whether the removal asked for the remote
+    /// branch.
+    func keptMessage(_ mention: String, remoteBranch: Bool) -> String? {
       if let kept = keptBranch {
         let remote = remoteBranch ? " It also kept the remote branch." : ""
-        return "Removed \(id) and its worktree, and kept \(kept.name): \(kept.error)\(remote)"
+        return "Removed \(mention) and its worktree, and kept \(kept.name): \(kept.error)\(remote)"
       }
       return keptRemoteBranch.map {
-        "Removed \(id), its worktree, and its local branch, and kept the remote branch: \($0)"
+        "Removed \(mention), its worktree, and its local branch, and kept the remote branch: \($0)"
       }
     }
   }
@@ -1766,7 +1806,7 @@ public final class Service {
       guard !starting.contains(session.id), !merging.contains(session.id),
         entries[session.id]?.session.cwd == session.cwd
       else {
-        throw APIError("\(session.id) changed while it was being removed")
+        throw APIError("\(session.mention) changed while it was being removed")
       }
       // A to-do can arrive while the panes stop. The record stays. The refusal names what rm already removed.
       let removed = [
@@ -1775,7 +1815,7 @@ public final class Service {
       ].compactMap { $0 }
       let kept =
         removed.isEmpty
-        ? "Kept \(session.id)" : "Removed \(englishList(removed)) of \(session.id) and kept the session"
+        ? "Kept \(session.mention)" : "Removed \(englishList(removed)) of \(session.mention) and kept the session"
       var stayed = ""
       if let keptBranch = released.keptBranch {
         stayed = " It kept \(keptBranch.name): \(keptBranch.error)"
@@ -1840,7 +1880,7 @@ public final class Service {
   func worktreeRepo(_ session: Session, at site: any SessionSite) throws -> String {
     guard let repo = session.repo else {
       throw APIError(
-        "\(session.id) runs in \(session.cwd), and sbd didn't make a worktree for it. Remove the session without the worktree instead."
+        "\(session.mention) runs in \(session.cwd), and sbd didn't make a worktree for it. Remove the session without the worktree instead."
       )
     }
     if site.machine.isFolder(repo) { return repo }
@@ -1858,10 +1898,11 @@ public final class Service {
     if mains.count == 1 { return mains[0] }
     if mains.count > 1 {
       throw APIError(
-        "\(session.id)'s repo \(repo) is gone, and \(mains.joined(separator: " and ")) both list its worktree.")
+        "\(session.mention)'s repo \(repo) is gone, and \(mains.joined(separator: " and ")) both list its worktree."
+      )
     }
     throw APIError(
-      "\(session.id)'s repo \(repo) is gone, and no known checkout lists \(session.cwd) as a worktree. Remove the session without the worktree instead."
+      "\(session.mention)'s repo \(repo) is gone, and no known checkout lists \(session.cwd) as a worktree. Remove the session without the worktree instead."
     )
   }
 
@@ -2333,6 +2374,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
+    if s.kind.showsAsChat { out.activity = ChatActivity(e.facts) }
     let shown = Triage.itemAndDecisions(e.facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {
@@ -2357,6 +2399,7 @@ public final class Service {
     out.docket = s.docket.map { DocketSummary($0, e.facts.docket) }
     out.mergeError = e.facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
+    if verdict.requested { out.requested = true }
     out.permissionMode = e.facts.permissionMode
     out.pr?.mergeMethod = e.facts.mergeMethod
     if verdict.state == .readyToMerge, let since = e.facts.readyToMergeSince { out.since = since }
@@ -2380,6 +2423,11 @@ public final class Service {
         state: verdict.state, acknowledged: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
         facts: e.facts, created: s.created)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: e.facts.pr, branch: e.branch) }
+    }
+    if s.kind == .manager {
+      out.pinned = s.pinned
+      // Last, because the archive rule reads the rest of the summary.
+      if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
     }
     return out
   }
