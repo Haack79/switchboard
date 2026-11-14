@@ -9,6 +9,7 @@ extension BoardModel {
     Binding(
       get: { self.showsMultiSelection ? self.multiSelection : Set(self.selection.map { [$0] } ?? []) },
       set: { ids in
+        ShellSelfTest.trace("sidebar set \(ids.sorted())")
         if ids.count > 1 {
           if self.multiSelection != ids { self.multiSelection = ids }
           return

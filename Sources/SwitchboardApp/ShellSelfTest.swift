@@ -109,6 +109,9 @@ enum ShellSelfTest {
       return model.showsMultiSelection ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
     case "click-delete-selected":
       return click(anchor: "delete-selected", modifiers: [], throughWindow: false)
+    case "selection":
+      let rows = tables(in: window?.contentView ?? NSView()).map { "\(Array($0.selectedRowIndexes))" }
+      return "selection \(model.selection ?? "nil") multi \(model.multiSelection.sorted()) table \(rows)"
     case "sheet":
       switch model.doneRemoval {
       case nil: return "none"
@@ -241,6 +244,16 @@ enum ShellSelfTest {
   }
 
   private static func log(_ text: String) { FileHandle.standardError.write(Data("shelltest: \(text)\n".utf8)) }
+
+  /// Logs `text` with the modifier flags of the event that AppKit is handling and of the keyboard, while
+  /// SB_SHELL_TEST runs.
+  static func trace(_ text: @autoclosure () -> String) {
+    guard folder != nil else { return }
+    let current = NSApp.currentEvent.map { "\($0.type.rawValue)/\($0.modifierFlags.rawValue)" } ?? "none"
+    // bin/test-gui reads a command's result from the last "shelltest: " line, so a trace has its own prefix.
+    FileHandle.standardError.write(
+      Data("shelltrace: \(text()) currentEvent=\(current) modifierFlags=\(NSEvent.modifierFlags.rawValue)\n".utf8))
+  }
 }
 
 extension View {

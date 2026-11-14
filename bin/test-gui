@@ -784,7 +784,10 @@ check_multiselect() {
   # so the first row is clicked first.
   wait_for 10 row_clicked click-row "$first" || fail "the app could not click the row of $first: $result"
   wait_for 5 shows "$first" || fail "clicking the row of $first did not show it: $(app where)"
+  app selection >/dev/null
   wait_for 10 row_clicked cmd-click "$second" || fail "the app could not ⌘-click the row of $second: $result"
+  sleep 1
+  app selection >/dev/null
   wait_for 5 detail_is "2 sessions selected" || fail "the detail pane does not show 2 sessions selected: $(app detail)"
   app snapshot "$shots/multiselect.png" >/dev/null
   result=$(app click-delete-selected)
