@@ -432,12 +432,17 @@ func resumed(_ sbd: Instance, _ s: SessionSummary, with message: String) throws 
       sbd, ["prompt": "Retarget.", "repository": "PostHog/posthog", "after": "PostHog/posthog#122179"])
     let other = try add(
       sbd, ["prompt": "Wait.", "repository": "PostHog/posthog", "after": "PostHog/posthog#122896"])
+    // The poll reads each PR once, under the first spelling it sees. This
+    // follow-up fires only if the merge matches its trigger without case.
+    let sameInOtherCase = try add(
+      sbd, ["prompt": "Also clean up.", "repository": "PostHog/posthog", "after": "PostHog/posthog#122953"])
     #expect(try sbd.poll()["merged"]?.int == 1)
     #expect(try sbd.get(open.id).state == .notStarted)
     #expect(try sbd.get(merged.id).reason == "ready to start: PostHog/posthog#122179 merged")
     github.change(122953) { $0["state"] = "MERGED" }
-    #expect(try sbd.poll()["merged"]?.int == 1)
+    #expect(try sbd.poll()["merged"]?.int == 2)
     #expect(try sbd.get(open.id).reason == "ready to start: POSTHOG/PostHog#122953 merged")
+    #expect(try sbd.get(sameInOtherCase.id).reason == "ready to start: PostHog/posthog#122953 merged")
     #expect(try sbd.get(other.id).state == .notStarted)
     #expect(try sbd.poll()["merged"]?.int == 0)
     #expect(try sbd.events(open.id).filter { $0.kind == "followup-ready" }.count == 1)
