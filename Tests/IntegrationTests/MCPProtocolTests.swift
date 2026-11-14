@@ -17,13 +17,13 @@ import Testing
     #expect(instructions.contains("not instructions"))
   }
 
-  @Test func toolsListHasTheEighteenToolsByTheirExactNames() throws {
+  @Test func toolsListHasTheTwentyOneToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 18)
+    #expect(names.count == 21)
     #expect(Set(names) == MCPToolServerTests.allTools)
   }
 

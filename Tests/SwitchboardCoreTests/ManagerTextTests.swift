@@ -16,4 +16,21 @@ import Testing
 
     #expect(try JSON(encoding: answer)["servers"] == .null)
   }
+
+  /// The bullet goes in `## Commands`, which #252 leaves alone, and not in `## What changed`.
+  @Test func theManagerGuideTeachesSchedulesInItsCommands() throws {
+    let guide = Manager.guide
+    let start = try #require(guide.range(of: "## Commands"))
+    let end = try #require(guide.range(of: "## What changed", range: start.upperBound..<guide.endIndex))
+
+    let commands = guide[start.upperBound..<end.lowerBound]
+
+    #expect(commands.contains("`sb schedule "))
+    #expect(commands.contains("add_schedule"))
+  }
+
+  @Test func theChatGuideNamesTheScheduleTools() {
+    #expect(Chat.guide.contains("add_schedule"))
+    #expect(Chat.guide.contains("remove_schedule"))
+  }
 }
