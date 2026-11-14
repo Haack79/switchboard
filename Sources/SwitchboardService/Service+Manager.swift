@@ -58,7 +58,7 @@ extension Service {
     case stopping
   }
 
-  private var managerSessions: [Session] { entries.values.map(\.session).filter { $0.manager == true } }
+  private var managerSessions: [Session] { entries.values.map(\.session).filter { $0.kind == .manager } }
 
   /// The `manager-ls` request: every conversation, newest activity first.
   func managerList() -> [SessionSummary] {
@@ -83,7 +83,7 @@ extension Service {
 
   /// Names an untitled conversation after the first line of its first prompt.
   func nameConversation(_ id: String, prompt: String?) throws {
-    guard entries[id]?.session.manager == true, entries[id]?.session.name == Manager.untitled else { return }
+    guard entries[id]?.session.kind == .manager, entries[id]?.session.name == Manager.untitled else { return }
     let name = Manager.name(fromPrompt: prompt ?? "")
     guard name != Manager.untitled else { return }
     try update(id) { $0.name = name }

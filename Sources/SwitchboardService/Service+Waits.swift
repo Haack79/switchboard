@@ -12,18 +12,7 @@ extension Service {
     let open = entries[id]?.session.waits ?? []
     switch op {
     case "wait":
-      try refuseNotStarted(entries[id]!.session)
-      let request = try JSONCoding.convert(args, to: WaitRequest.self)
-      var wait = try request.makeWait(id: shortId("w", taken: open.map(\.id)), waiter: id, now: nowMs()) { ref in
-        let other = try lookup(["session": .string(ref)])
-        return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
-      }
-      if wait.kind == .ci && wait.pr == nil {
-        wait.headSha = try? checkedOutBranch(entries[id]!.session, at: site(of: id)).tip
-      }
-      wait = config.recheck.stamped(wait)
-      try update(id) { $0.waits = open + [wait] }
-      record(id, "wait", ["wait": try JSON(encoding: wait)])
+      return try JSON(encoding: summary(setWait(args, waiter: id).waiter))
     case "clear-wait":
       let cleared = try args["wait"]?.string.map { [try openWait(id, $0).id] } ?? open.map(\.id)
       if !cleared.isEmpty {
@@ -39,6 +28,26 @@ extension Service {
       throw APIError("unknown request \(op)")
     }
     return try JSON(encoding: summary(id))
+  }
+
+  /// Builds the wait that `args` describe, stores it on `waiter`, and records
+  /// the `wait` event. It returns the session that holds the wait, and the wait.
+  func setWait(_ args: JSON, waiter: String) throws -> (waiter: String, wait: Wait) {
+    let session = entries[waiter]!.session
+    try refuseNotStarted(session)
+    let open = session.waits ?? []
+    let request = try JSONCoding.convert(args, to: WaitRequest.self)
+    var wait = try request.makeWait(id: shortId("w", taken: open.map(\.id)), waiter: waiter, now: nowMs()) { ref in
+      let other = try lookup(["session": .string(ref)])
+      return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
+    }
+    if wait.kind == .ci && wait.pr == nil {
+      wait.headSha = try? checkedOutBranch(session, at: site(of: waiter)).tip
+    }
+    wait = config.recheck.stamped(wait)
+    try update(waiter) { $0.waits = open + [wait] }
+    record(waiter, "wait", ["wait": try JSON(encoding: wait)])
+    return (waiter, wait)
   }
 
   /// The open waits of these kinds, with their sessions. A poller calls it on

@@ -1072,6 +1072,11 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
+  /// The text of a local launch's `--append-system-prompt`, or nil to pass none.
+  func appendedSystemPrompt(for session: Session) -> String? {
+    config.triage.systemPrompt.isEmpty ? nil : config.triage.systemPrompt
+  }
+
   /// Starts claude in the session's Claude pane. A launch resumes the
   /// conversation when its transcript exists, and starts it otherwise.
   /// `prompt` becomes the first prompt. The pane runs only claude, so the pane
@@ -1103,8 +1108,8 @@ public final class Service {
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
     if let mode { args += ["--permission-mode", mode] }
-    if local, !config.triage.systemPrompt.isEmpty {
-      args += ["--append-system-prompt", config.triage.systemPrompt]
+    if local, let system = appendedSystemPrompt(for: session) {
+      args += ["--append-system-prompt", system]
     }
     // `--` keeps a prompt that starts with a dash from reading as an option.
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
