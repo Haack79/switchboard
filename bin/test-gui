@@ -34,7 +34,7 @@
 # account folder is empty, so the rows are sbd's folder scan plus the built-ins.
 # It checks the rows, Down, Tab, Return, keypad Enter, Esc, held Tab, Return, and
 # Enter, and what Claude got.
-# The multiselect check ⌘-clicks two rows in the sidebar through the app's ShellSelfTest commands, checks that
+# The multiselect check clicks one row and ⌘-clicks another in the sidebar through the app's ShellSelfTest commands, checks that
 # the detail pane shows "2 sessions selected", clicks Delete 2 Sessions…, and checks that the confirmation opens
 # and that sbd still lists both sessions.
 # Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, multiselect). With
@@ -778,9 +778,13 @@ check_multiselect() {
   SB_SELECT="$first" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
   app_pid=$!
   wait_for 60 shows "$first" || fail "the app did not select $first: $(app where)"
-  # The sidebar can build the row a moment after the click scrolls it into view, so the click is retried.
-  cmd_clicked() { result=$(app cmd-click "$second"); [[ $result == "clicked at "* ]]; }
-  wait_for 10 cmd_clicked || fail "the app could not ⌘-click the row of $second: $result"
+  # The sidebar can build a row a moment after the click scrolls it into view, so each click is retried.
+  row_clicked() { result=$(app "$1" "$2"); [[ $result == "clicked at "* ]]; }
+  # SB_SELECT selects the first session in the model only. A ⌘-click extends the sidebar table's own selection,
+  # so the first row is clicked first.
+  wait_for 10 row_clicked click-row "$first" || fail "the app could not click the row of $first: $result"
+  wait_for 5 shows "$first" || fail "clicking the row of $first did not show it: $(app where)"
+  wait_for 10 row_clicked cmd-click "$second" || fail "the app could not ⌘-click the row of $second: $result"
   wait_for 5 detail_is "2 sessions selected" || fail "the detail pane does not show 2 sessions selected: $(app detail)"
   app snapshot "$shots/multiselect.png" >/dev/null
   result=$(app click-delete-selected)

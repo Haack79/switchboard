@@ -15,8 +15,9 @@ import SwiftUI
 /// `NavShortcuts` to the menu bar as a US keyboard types it, and reports the title of the menu item that ran.
 /// `mouse <3|4>` posts a press of mouse button 4 or 5 (button numbers 3 and 4) over the window to the app's
 /// event queue, so it passes through the app's event monitors as a real press does. `where` reports the place
-/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `cmd-click <session>` ⌘-clicks
-/// the session's sidebar row with mouse events at the row's place in the window. `detail` reports
+/// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `click-row <session>` and
+/// `cmd-click <session>` click and ⌘-click the session's sidebar row with mouse events at the row's place in
+/// the window. `detail` reports
 /// "N sessions selected" while the detail pane shows the multi-selection, else the place that the window shows.
 /// `click-delete-selected` clicks Delete N Sessions… in the detail pane the same way. `sheet` reports the removal
 /// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`.
@@ -100,6 +101,8 @@ enum ShellSelfTest {
       return "posted"
     case "where":
       return "\(model.location.place)"
+    case "click-row":
+      return click(anchor: rest, modifiers: [], throughWindow: true)
     case "cmd-click":
       return click(anchor: rest, modifiers: .command, throughWindow: true)
     case "detail":
