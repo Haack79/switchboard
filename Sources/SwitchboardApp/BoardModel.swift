@@ -14,12 +14,12 @@ enum MainView {
 /// state in memory and answers in a few milliseconds.
 @MainActor
 final class BoardModel: ObservableObject {
-  /// The sessions that the org filter shows. Every list, count, badge, and
-  /// action target reads this. A lookup of a session that a shown session
+  /// The sessions that the org filter shows and sbd's removal job does not hold. Every list, count, badge,
+  /// and action target reads this. A lookup of a session that a shown session
   /// names, such as a card's asker or a parent, reads `allSessions` or
   /// `allBoard`, because that session may be hidden.
-  var sessions: [SessionSummary] { allSessions.filter(orgFilter.shows) }
-  /// Every session that sbd lists, whatever the org filter says.
+  var sessions: [SessionSummary] { allSessions.filter { !$0.isBeingRemoved && orgFilter.shows($0) } }
+  /// Every session that sbd lists, whatever the org filter says, including the sessions that the removal job holds.
   @Published private(set) var allSessions: [SessionSummary] = []
   /// The GitHub orgs whose sessions the app shows. The installed app saves it.
   @Published var orgFilter: OrgFilter {
@@ -58,9 +58,11 @@ final class BoardModel: ObservableObject {
   @Published var cleaningUp: Set<String> = []
   /// The Delete All sheet's confirmation, or nil while the sheet doesn't ask.
   @Published var doneRemoval: DoneRemoval?
-  /// The Delete All sheet's progress, or nil while no confirmed Delete All runs or shows its result.
-  @Published var doneRemovalProgress: DoneRemovalProgress?
-  var showingDoneRemoval: Bool { doneRemoval != nil || doneRemovalProgress != nil }
+  /// The branches that sbd's removal job kept after it forgot their sessions, read with `removal-notices` in each refresh.
+  @Published var removalNotices: [RemovalNotice] = []
+  /// The failed removals whose Retry or Keep is on its way to sbd.
+  @Published var answeringRemovals: Set<String> = []
+  var showingDoneRemoval: Bool { doneRemoval != nil }
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup
   }
@@ -282,6 +284,9 @@ final class BoardModel: ObservableObject {
     return allSessions + allFollowups.filter { !ids.contains($0.id) }
   }
 
+  /// `allBoard` without the sessions that sbd's removal job holds.
+  var listedBoard: [SessionSummary] { allBoard.filter { !$0.isBeingRemoved } }
+
   /// The ids of the sessions and follow-ups that the org filter shows.
   var shownIDs: Set<String> { Set(board.map(\.id)) }
 
@@ -292,8 +297,8 @@ final class BoardModel: ObservableObject {
     orgFilter.isAll ? shownIDs : Set(board.filter { OrgFilter.key(of: $0) != nil }.map(\.id))
   }
 
-  /// The org filter's menu rows, counted over every session.
-  var orgEntries: [OrgFilter.Entry] { orgFilter.entries(allBoard) }
+  /// The org filter's menu rows, counted over every session that the removal job does not hold.
+  var orgEntries: [OrgFilter.Entry] { orgFilter.entries(listedBoard) }
 
   /// The groups that the Board shows: all of them under All Orgs, else each
   /// group that is empty or has a member that the filter shows.
@@ -312,15 +317,15 @@ final class BoardModel: ObservableObject {
   }
 
   /// How many sessions and follow-ups the org filter hides.
-  var hiddenCount: Int { allBoard.count - board.count }
+  var hiddenCount: Int { listedBoard.count - board.count }
   /// How many hidden sessions would be in the Inbox.
-  var hiddenNeedingYou: Int { allBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
+  var hiddenNeedingYou: Int { listedBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
 
   /// Adds the session's org to the filter when the filter hides it, so a
   /// session that the app opens never stays out of sight.
   func showOrg(of id: String) {
     // An insert of a key that the filter already holds still publishes. `apply` calls this every second.
-    guard !orgFilter.isAll, let s = allBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
+    guard !orgFilter.isAll, let s = listedBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
       let key = OrgFilter.key(of: s)
     else { return }
     orgFilter.insert(key)
@@ -380,7 +385,7 @@ final class BoardModel: ObservableObject {
   var repoLabels: [String: String] { RepoLabels.labels(board) }
 
   /// The sessions and the follow-ups that wait to start, as the org filter shows them.
-  var board: [SessionSummary] { allBoard.filter(orgFilter.shows) }
+  var board: [SessionSummary] { listedBoard.filter(orgFilter.shows) }
 
   var selected: SessionSummary? { board.first { $0.id == selection } }
 
@@ -421,6 +426,7 @@ final class BoardModel: ObservableObject {
         followups: readFollowups ? { try client.call("followup-ls", as: [SessionSummary].self) } : nil)
       let accounts = readFollowups ? try? client.accounts() : nil
       let groups = try? client.call("group-ls", as: GroupList.self).groups
+      let notices = try? client.call("removal-notices", as: [RemovalNotice].self)
       let suggestions = readFollowups ? try? client.call("group-suggest", as: [GroupSuggestion].self) : nil
       let proposals = readFollowups ? try? client.call("plan-proposals", as: [PlanProposal].self) : nil
       let issues = readFollowups ? try? client.call("issues", as: IssueList.self) : nil
@@ -432,6 +438,7 @@ final class BoardModel: ObservableObject {
         if let proposals, self.planProposals != proposals { self.planProposals = proposals }
         if let issues, self.issueList != issues { self.issueList = issues }
         if let usage, self.usage != usage { self.usage = usage }
+        if let notices, self.removalNotices != notices { self.removalNotices = notices }
         self.apply(result, followups: more)
       }
     }
@@ -497,7 +504,8 @@ final class BoardModel: ObservableObject {
   /// with its place in the last refresh's Inbox, not with its last state.
   func sessionsToNotify(_ list: [SessionSummary]) -> [SessionSummary] {
     list.filter { s in
-      guard Triage.needsYou(s), let last = lastSeen[s.id], !Triage.needsYou(last), orgFilter.shows(s)
+      guard Triage.needsYou(s), !s.isBeingRemoved, let last = lastSeen[s.id], !Triage.needsYou(last),
+        orgFilter.shows(s)
       else { return false }
       // A follow-up that starts passes through Needs you until its first
       // prompt. Only a follow-up that fired and is still unstarted notifies.
@@ -735,7 +743,7 @@ final class BoardModel: ObservableObject {
   /// Sends an answer to an item once. `answering` holds the item's id until
   /// sbd replies. `remove` takes the item out of its list when sbd takes the
   /// answer.
-  private func answer(
+  func answer(
     _ id: String, in answering: ReferenceWritableKeyPath<BoardModel, Set<String>>, _ op: String,
     _ args: [String: JSON], on queue: DispatchQueue? = nil, remove: @escaping (BoardModel) -> Void
   ) {
@@ -1212,31 +1220,11 @@ final class BoardModel: ObservableObject {
       name: s.name, worktree: s.repo == nil ? nil : s.cwd, branch: branch)
   }
 
-  /// The request that the icon sends: the same `rm` as the trash dialog, with the worktree, the
-  /// branch, and the remote branch on. The branch is on only for a merged PR, because sbd
-  /// refuses the whole delete for a branch with no merged PR.
-  nonisolated static func deleteRequest(_ s: SessionSummary, resolve: [String] = []) -> [String: JSON] {
-    let plan = deletePlan(s)
-    return resolving(
-      [
-        "session": .string(s.id), "worktree": .bool(plan.worktree != nil), "branch": .bool(plan.branch != nil),
-        "remote_branch": .bool(plan.branch != nil),
-      ], resolve)
-  }
-
-  /// Deletes a Done session with everything `deletePlan` names. sbd runs the safety checks of `rm`.
+  /// Hands a Done session to sbd's removal job, which deletes everything `deletePlan` names after the
+  /// safety checks of `rm`. The request runs on `worker`, in order with the other actions.
   func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    let plan = Self.deletePlan(s)
-    let item = RemovalPlan.Item(
-      id: s.id, name: s.name, pr: s.pr?.number, worktree: plan.worktree, branch: plan.branch,
-      remoteBranch: plan.branch != nil)
-    removeSessions(
-      [item], args: Self.deleteRequest(s, resolve: resolve), request: .rm,
-      finished: { result in
-        self.actionError = result.skipped.first.map { "rm: \($0.reason)" }
-        self.deleting.remove(s.id)
-      })
+    queueRemovals([s.id], resolve: resolve, finally: { self.deleting.remove(s.id) })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.

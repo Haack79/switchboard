@@ -8,40 +8,6 @@ enum DoneRemoval: Equatable {
   case confirming(RemovalPlan)
 }
 
-/// The Delete All sheet's progress: the app removes the sessions one at a
-/// time, and the sheet shows what happened.
-enum DoneRemovalProgress: Equatable {
-  case removing(RemovalPlan, done: Int)
-  case finished(RemovalResult)
-}
-
-/// The request that removes one Done session.
-enum DoneRemovalRequest {
-  /// The Done delete icon's `rm`. Its arguments come from `deleteRequest`
-  /// and name one session's own branch.
-  case rm
-  /// Delete All's confirmed `rm-done`. sbd checks again that the session is
-  /// still a removable Done session.
-  case rmDone
-
-  /// An `rm` that succeeds reports the session as removed.
-  func send(_ id: String, _ args: [String: JSON], _ send: (String, [String: JSON]) throws -> JSON) throws
-    -> RemovalResult
-  {
-    var args = args
-    switch self {
-    case .rm:
-      args["session"] = .string(id)
-      _ = try send("rm", args)
-      return RemovalResult(removed: [id], skipped: [], partial: [])
-    case .rmDone:
-      args["confirmed"] = true
-      args["targets"] = [.string(id)]
-      return try JSONCoding.convert(try send("rm-done", args), to: RemovalResult.self)
-    }
-  }
-}
-
 enum DoneRemovalText {
   static func title(_ plan: RemovalPlan) -> String {
     switch plan.remove.count {
@@ -51,10 +17,13 @@ enum DoneRemovalText {
     }
   }
 
-  static func progress(done: Int, total: Int) -> String { "Removing \(min(done + 1, total)) of \(total)…" }
+  static func removing(_ count: Int) -> String { count == 1 ? "Removing 1 session…" : "Removing \(count) sessions…" }
 
-  static func summary(removed: Int, skipped: Int) -> String {
-    skipped == 0 ? "Removed \(removed)" : "Removed \(removed), skipped \(skipped)"
+  static func notices(_ count: Int) -> String { count == 1 ? "1 delete notice" : "\(count) delete notices" }
+
+  /// The banner's text for the sessions that a delete left in place, or nil when it left none.
+  static func skipped(_ skips: [RemovalPlan.Skip]) -> String? {
+    skips.isEmpty ? nil : "Not deleted: " + skips.map { "\($0.name): \($0.reason)" }.joined(separator: "; ")
   }
 
   static func deletes(_ item: RemovalPlan.Item) -> String {
@@ -67,20 +36,28 @@ enum DoneRemovalText {
 }
 
 extension BoardModel {
-  /// The arguments of the Done delete icon's `rm`: the worktree, and the
+  /// The arguments of Delete All's plan and of every `rm-queue` from the app: the worktree, and sbd adds the
   /// branch and the remote branch when the PR merged.
   nonisolated static let doneRemovalArgs: [String: JSON] = ["worktree": true, "remote_branch": true]
+
+  /// The `rm-queue` that hands the Done sessions `ids` to sbd's removal job. `resolve` holds the ids of the
+  /// open to-dos that the confirmation showed.
+  nonisolated static func queueRequest(_ ids: [String], resolve: [String] = []) -> [String: JSON] {
+    var args = doneRemovalArgs
+    args["scope"] = .string(RemovalScope.done.rawValue)
+    args["targets"] = .array(ids.map(JSON.string))
+    return resolving(args, resolve)
+  }
 
   nonisolated static let unreadOrgReason = "sbd hasn't read its org yet"
   nonisolated static let hiddenOrgReason = "hidden by the org filter"
   nonisolated static let unlistedReason = "no longer listed"
-  nonisolated static let rmTakesOneReason = "rm takes one session"
 
   /// Why Delete All may not remove the session now, or nil when it may.
   func removalRefusal(_ id: String) -> String? {
     if removableIDs.contains(id) { return nil }
     if shownIDs.contains(id) { return Self.unreadOrgReason }
-    return allBoard.contains { $0.id == id } ? Self.hiddenOrgReason : Self.unlistedReason
+    return listedBoard.contains { $0.id == id } ? Self.hiddenOrgReason : Self.unlistedReason
   }
 
   /// Asks sbd which Done sessions it would remove and which it would skip.
@@ -111,71 +88,37 @@ extension BoardModel {
       finally: { if self.doneRemoval == .checking { self.doneRemoval = nil } })
   }
 
-  /// Removes the plan's sessions one request at a time, so the sheet can show
-  /// progress. sbd checks each session again. A session that fails its
-  /// checks, or left Done, is skipped, and the rest continue.
+  /// Closes the sheet and hands the plan's sessions to sbd's removal job in one `rm-queue`, off `worker`,
+  /// so the request never waits behind a slow action. The app leaves out a session that `removalRefusal`
+  /// refuses at that moment, because a filter change after the plan can hide it.
   func removeDone(_ plan: RemovalPlan) {
     guard case .confirming = doneRemoval else { return }
-    doneRemovalProgress = .removing(plan, done: 0)
     doneRemoval = nil
-    removeSessions(
-      plan.remove, args: Self.doneRemovalArgs, request: .rmDone,
-      progress: { self.doneRemovalProgress = .removing(plan, done: $0) },
-      finished: { removed in
-        var result = RemovalResult(removed: [], skipped: plan.skip, partial: [])
-        result.add(removed)
-        self.doneRemovalProgress = .finished(result)
-      })
-  }
-
-  /// Removes `sessions` one request at a time, in order. `args` are the `rm`
-  /// arguments that every request takes. A request that fails skips its
-  /// session, and the rest continue. After the last reply, `finished` gets
-  /// what sbd removed, kept, and skipped. Then the removed sessions lose the
-  /// selection, and the board refreshes.
-  ///
-  /// `.rm` takes one session and refuses a longer list, because its
-  /// arguments name one session's branch. It runs on `worker`, after the
-  /// requests queued before it.
-  /// `.rmDone` requests run off `worker`, so a long Delete All doesn't hold
-  /// up other requests. Before each `.rmDone` request, the app skips a
-  /// session that `removalRefusal` refuses at that moment, because a filter
-  /// change after the plan can hide it. `progress` gets the number of
-  /// sessions handled so far.
-  func removeSessions(
-    _ sessions: [RemovalPlan.Item], args: [String: JSON], request: DoneRemovalRequest,
-    progress: (@MainActor @Sendable (Int) -> Void)? = nil,
-    finished: @escaping @MainActor @Sendable (RemovalResult) -> Void
-  ) {
-    let send = send
-    let queue = request == .rm ? worker : DispatchQueue.global(qos: .userInitiated)
-    queue.async {
-      var result = RemovalResult(removed: [], skipped: [], partial: [])
-      for (n, item) in sessions.enumerated() {
-        let refusal: String? =
-          switch request {
-          case .rm: sessions.count > 1 ? Self.rmTakesOneReason : nil
-          case .rmDone: DispatchQueue.main.sync { MainActor.assumeIsolated { self.removalRefusal(item.id) } }
-          }
-        if let refusal {
-          result.skipped.append(.init(id: item.id, name: item.name, reason: refusal))
-        } else {
-          do {
-            result.add(try request.send(item.id, args, send))
-          } catch {
-            result.skipped.append(.init(id: item.id, name: item.name, reason: "\(error)"))
-          }
-        }
-        if let progress { DispatchQueue.main.async { MainActor.assumeIsolated { progress(n + 1) } } }
-      }
-      DispatchQueue.main.async {
-        MainActor.assumeIsolated { [result] in
-          finished(result)
-          self.deselect(result.removed)
-          self.refresh(followups: true)
-        }
+    var targets: [String] = []
+    var refused: [RemovalPlan.Skip] = []
+    for item in plan.remove {
+      if let reason = removalRefusal(item.id) {
+        refused.append(.init(id: item.id, name: item.name, reason: reason))
+      } else {
+        targets.append(item.id)
       }
     }
+    queueRemovals(targets, refused: refused, on: .global(qos: .userInitiated))
+  }
+
+  /// Sends one `rm-queue` for `ids`. The banner names each session in `refused` and each session that sbd
+  /// skipped. sbd lists a queued session as held, so the refresh after the reply hides it.
+  func queueRemovals(
+    _ ids: [String], resolve: [String] = [], refused: [RemovalPlan.Skip] = [], on queue: DispatchQueue? = nil,
+    finally: (() -> Void)? = nil
+  ) {
+    perform(
+      "rm-queue", Self.queueRequest(ids, resolve: resolve), on: queue,
+      then: { value in
+        let skipped = (try? JSONCoding.convert(value, to: RemovalQueued.self))?.skipped ?? []
+        self.actionError = DoneRemovalText.skipped(refused + skipped)
+      },
+      finally: finally)
   }
 }
 
@@ -203,15 +146,12 @@ struct DoneRemovalSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      if let progress = model.doneRemovalProgress {
-        progressView(progress)
-      } else if let confirmation = model.doneRemoval {
+      if let confirmation = model.doneRemoval {
         confirmationView(confirmation)
       }
     }
     .padding()
     .frame(width: 520)
-    .interactiveDismissDisabled(isRemoving)
   }
 
   @ViewBuilder private func confirmationView(_ confirmation: DoneRemoval) -> some View {
@@ -251,34 +191,6 @@ struct DoneRemovalSheet: View {
           .disabled(plan.remove.isEmpty)
       }
     }
-  }
-
-  @ViewBuilder private func progressView(_ progress: DoneRemovalProgress) -> some View {
-    switch progress {
-    case .removing(let plan, let done):
-      ProgressView(value: Double(done), total: Double(max(plan.remove.count, 1))) {
-        Text(DoneRemovalText.progress(done: done, total: plan.remove.count))
-      }
-    case .finished(let result):
-      Text(DoneRemovalText.summary(removed: result.removed.count, skipped: result.skipped.count)).font(.headline)
-      ScrollView {
-        VStack(alignment: .leading, spacing: 8) {
-          SkipList(title: "Removed, with something kept", skips: result.partial)
-          SkipList(title: "Skipped", skips: result.skipped)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      .frame(maxHeight: 360)
-      HStack {
-        Spacer()
-        Button("Done") { model.doneRemovalProgress = nil }.keyboardShortcut(.defaultAction)
-      }
-    }
-  }
-
-  private var isRemoving: Bool {
-    if case .removing = model.doneRemovalProgress { return true }
-    return false
   }
 }
 

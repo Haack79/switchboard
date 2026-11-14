@@ -47,27 +47,22 @@ import Testing
     }
   }
 
-  @Test func asksForTheWorktreeTheBranchAndTheRemoteBranchOfAMergedPR() {
-    let request = BoardModel.deleteRequest(done())
-    #expect(
-      request == [
-        "session": "s1", "worktree": true, "branch": true, "remote_branch": true,
-      ])
+  /// sbd adds the branch and the remote branch when the PR merged, and leaves out the worktree of a session
+  /// that it made no worktree for.
+  @Test func queuesTheSessionWithTheWorktreeAndTheRemoteBranch() {
+    let request = BoardModel.queueRequest(["s1"])
+    #expect(request == ["scope": "done", "targets": ["s1"], "worktree": true, "remote_branch": true])
   }
 
   @Test func keepsTheBranchWhenThePRIsNotMerged() {
-    let request = BoardModel.deleteRequest(done(pr: .closed))
-    #expect(request["worktree"] == true)
-    #expect(request["branch"] == false)
-    #expect(request["remote_branch"] == false)
+    #expect(BoardModel.deletePlan(done(pr: .closed)).branch == nil)
     #expect(BoardModel.deletePlan(done(pr: nil)).branch == nil)
   }
 
   @Test func removesOnlyTheSessionWhenSbdMadeNoWorktree() {
-    let request = BoardModel.deleteRequest(done(repo: nil, branch: nil))
-    #expect(request == ["session": "s1", "worktree": false, "branch": false, "remote_branch": false])
     let plan = BoardModel.deletePlan(done(repo: nil, branch: nil))
     #expect(plan.worktree == nil)
+    #expect(plan.branch == nil)
   }
 
   @Test func namesEverythingItDeletesInTheConfirmation() {

@@ -11,34 +11,6 @@ import os
       id: "s1", name: "one", pr: 7, worktree: worktree, branch: branch, remoteBranch: remoteBranch)
   }
 
-  // MARK: summary
-
-  @Test func summaryNamesTheRemovedAndTheSkipped() {
-    #expect(DoneRemovalText.summary(removed: 9, skipped: 2) == "Removed 9, skipped 2")
-  }
-
-  @Test func summaryLeavesOutTheSkippedWhenNoneWereSkipped() {
-    #expect(DoneRemovalText.summary(removed: 1, skipped: 0) == "Removed 1")
-  }
-
-  // MARK: progress
-
-  @Test(arguments: [(0, 9, "Removing 1 of 9…"), (2, 9, "Removing 3 of 9…"), (8, 9, "Removing 9 of 9…")])
-  func progressShowsTheSessionBeingRemoved(_ done: Int, _ total: Int, _ expected: String) {
-    #expect(DoneRemovalText.progress(done: done, total: total) == expected)
-  }
-
-  @Test func progressNeverCountsPastTheTotal() {
-    #expect(DoneRemovalText.progress(done: 9, total: 9) == "Removing 9 of 9…")
-  }
-
-  @Test func progressEndsWithAnEllipsisCharacter() {
-    let text = DoneRemovalText.progress(done: 2, total: 9)
-
-    #expect(text.hasSuffix("\u{2026}"))
-    #expect(!text.contains("..."))
-  }
-
   // MARK: deletes
 
   @Test func deletesOnlyTheSessionWithoutAWorktree() {
@@ -109,88 +81,185 @@ import os
   }
 }
 
-final class SentArgs: Sendable {
-  private let sent = OSAllocatedUnfairLock<[[String: JSON]]>(initialState: [])
-  var value: [[String: JSON]] { sent.withLock { $0 } }
-  func append(_ args: [String: JSON]) { sent.withLock { $0.append(args) } }
+final class SentRequests: Sendable {
+  private let sent = OSAllocatedUnfairLock<[(op: String, args: [String: JSON])]>(initialState: [])
+  var value: [(op: String, args: [String: JSON])] { sent.withLock { $0 } }
+  var ops: [String] { value.map(\.op) }
+  func append(_ op: String, _ args: [String: JSON]) { sent.withLock { $0.append((op, args)) } }
+  /// The `rm-queue` requests, in the order they were sent.
+  var queues: [[String: JSON]] { value.filter { $0.op == "rm-queue" }.map(\.args) }
 }
 
+/// A reply to `rm-queue` that queues every target.
+func queuedEveryTarget(_ args: [String: JSON]) throws -> JSON {
+  try JSON(encoding: RemovalQueued(queued: args["targets"]?.array?.compactMap(\.string) ?? [], skipped: []))
+}
+
+func removalItem(_ id: String) -> RemovalPlan.Item {
+  .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
+}
+
+/// Delete N in the Delete All sheet hands every planned session to sbd's removal job in one request and
+/// closes the sheet at once.
 @MainActor
 @Suite struct BoardModelDoneRemoval {
-  @Test func removesOneSessionPerRequestAndSkipsARequestThatFails() async {
-    let sent = SentArgs()
+  static let plan = RemovalPlan(
+    remove: ["a", "b", "c"].map(removalItem), skip: [.init(id: "d", name: "d", reason: "has uncommitted files")])
+
+  func confirmingModel(_ sent: SentRequests) -> BoardModel {
     let model = appliedModel(["a", "b", "c", "d"].map { needsItem($0, state: .done) })
     model.send = { op, args in
-      #expect(op == "rm-done")
-      sent.append(args)
-      let id = args["targets"]?.array?.first?.string ?? ""
-      if id == "b" { throw Refusal(description: "the socket closed") }
-      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
-    let plan = RemovalPlan(
-      remove: ["a", "b", "c"].map { .init(id: $0, name: $0, pr: nil, worktree: nil, branch: nil, remoteBranch: false) },
-      skip: [.init(id: "d", name: "d", reason: "has uncommitted files")])
-    model.doneRemoval = .confirming(plan)
-    model.selection = "a"
+    model.doneRemoval = .confirming(Self.plan)
+    return model
+  }
 
-    model.removeDone(plan)
-    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
+  @Test func deleteNSendsOneRmQueueWithEveryPlannedID() async {
+    let sent = SentRequests()
+    let model = confirmingModel(sent)
 
-    guard case .finished(let result) = model.doneRemovalProgress else {
-      Issue.record("Delete All did not finish")
-      return
+    model.removeDone(Self.plan)
+    await settle { !sent.queues.isEmpty }
+
+    #expect(sent.queues.count == 1)
+    #expect(sent.queues.first?["targets"]?.array?.compactMap(\.string) == ["a", "b", "c"])
+  }
+
+  @Test func deleteNSendsNothingButTheRmQueue() async {
+    let sent = SentRequests()
+    let model = confirmingModel(sent)
+
+    model.removeDone(Self.plan)
+    await settle { !sent.queues.isEmpty }
+
+    #expect(!sent.ops.contains("rm-done"))
+    #expect(!sent.ops.contains("rm"))
+  }
+
+  @Test func deleteNQueuesWithDeleteAllsScopeAndArguments() async throws {
+    let sent = SentRequests()
+    let model = confirmingModel(sent)
+
+    model.removeDone(Self.plan)
+    await settle { !sent.queues.isEmpty }
+
+    let args = try #require(sent.queues.first)
+    #expect(args["scope"] == .string("done"))
+    #expect(args["worktree"] == .bool(true))
+    #expect(args["remote_branch"] == .bool(true))
+    #expect(args["confirmed"] == nil)
+  }
+
+  @Test func deleteNClosesTheSheetAtOnce() {
+    let model = confirmingModel(SentRequests())
+
+    model.removeDone(Self.plan)
+
+    #expect(model.doneRemoval == nil)
+    #expect(!model.showingDoneRemoval)
+    #expect(!model.presentingSheet)
+  }
+
+  @Test func aRefusedRmQueueShowsTheBanner() async {
+    let model = appliedModel(["a", "b", "c", "d"].map { needsItem($0, state: .done) })
+    model.send = { op, _ in
+      if op == "rm-queue" { throw Refusal(description: "the socket closed") }
+      return .null
     }
-    #expect(result.removed == ["a", "c"])
-    #expect(result.skipped.map(\.id) == ["d", "b"])
-    #expect(result.skipped.last?.reason == "the socket closed")
-    #expect(model.selection == nil)
-    #expect(sent.value.map { $0["targets"]?.array?.compactMap(\.string) ?? [] } == [["a"], ["b"], ["c"]])
-    for args in sent.value {
-      #expect(args["confirmed"] == .bool(true))
-      #expect(args["worktree"] == .bool(true))
-      #expect(args["remote_branch"] == .bool(true))
-    }
+    model.doneRemoval = .confirming(Self.plan)
+
+    model.removeDone(Self.plan)
+    await settle { model.actionError != nil }
+
+    #expect(model.actionError?.contains("the socket closed") == true)
+    #expect(!model.showingDoneRemoval)
   }
 }
 
-@MainActor final class Finished: Sendable {
-  var result: RemovalResult?
-}
-
-/// Delete All runs off `worker`. The Done delete icon's `rm` runs on `worker`, in order with the other actions.
+/// Delete All's `rm-queue` runs off `worker`. The Done delete icon's `rm-queue` runs on `worker`, in order with
+/// the other actions.
 @MainActor
 @Suite struct DoneRemovalQueues {
-  func item(_ id: String) -> RemovalPlan.Item {
-    .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
-  }
-
-  @Test func deleteAllFinishesWhileWorkerIsBusy() async {
+  @Test func deleteNIsSentWhileWorkerIsBusy() async {
+    let sent = SentRequests()
     let model = appliedModel([needsItem("d", state: .done)])
     let gate = DispatchSemaphore(value: 0)
     model.send = { op, args in
       if op == "hold" { gate.wait() }
-      let id = args["targets"]?.array?.first?.string ?? ""
-      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
     model.perform("hold", [:])
-    let plan = RemovalPlan(remove: [item("d")], skip: [])
+    let plan = RemovalPlan(remove: [removalItem("d")], skip: [])
     model.doneRemoval = .confirming(plan)
 
     model.removeDone(plan)
-    #expect(model.presentingSheet)
-    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
-    gate.signal()
+    await settle { !sent.queues.isEmpty }
+    let sentWhileHeld = sent.queues.count
 
-    #expect(model.doneRemovalProgress == .finished(RemovalResult(removed: ["d"], skipped: [], partial: [])))
+    gate.signal()
+    #expect(sentWhileHeld == 1)
+  }
+
+  @Test func theIconsDeleteSendsRmQueueForTheOneSession() async throws {
+    let sent = SentRequests()
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([needsItem("e", state: .done), done])
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
+    }
+
+    model.deleteDone(done)
+    await settle { !sent.queues.isEmpty }
+
+    let args = try #require(sent.queues.first)
+    #expect(sent.queues.count == 1)
+    #expect(args["targets"]?.array?.compactMap(\.string) == ["d"])
+    #expect(args["scope"] == .string("done"))
+  }
+
+  @Test func theIconsDeleteSendsNoRm() async {
+    let sent = SentRequests()
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([done])
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
+    }
+
+    model.deleteDone(done)
+    await settle { !sent.queues.isEmpty }
+
+    #expect(!sent.ops.contains("rm"))
+  }
+
+  /// The confirmation lists the open to-dos that the delete resolves, and `rm-queue` checks them as `rm` does.
+  @Test func theIconsDeletePassesTheToDosItResolves() async throws {
+    let sent = SentRequests()
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([done])
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
+    }
+
+    model.deleteDone(done, resolve: ["t1", "t2"])
+    await settle { !sent.queues.isEmpty }
+
+    let args = try #require(sent.queues.first)
+    #expect(args["resolve"]?.array?.compactMap(\.string) == ["t1", "t2"])
   }
 
   @Test func theIconsDeleteRunsInOrderWithTheOtherActions() async {
-    let sent = SentArgs()
+    let sent = SentRequests()
     let done = needsItem("d", state: .done)
     let model = appliedModel([done])
-    model.send = { op, _ in
-      sent.append(["op": .string(op)])
-      return .null
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
 
     model.perform("before", [:])
@@ -198,47 +267,50 @@ final class SentArgs: Sendable {
     model.perform("after", [:])
     await settle { sent.value.count >= 3 }
 
-    #expect(sent.value.prefix(3).map { $0["op"]?.string } == ["before", "rm", "after"])
+    #expect(Array(sent.ops.prefix(3)) == ["before", "rm-queue", "after"])
   }
 
-  @Test func aFailedIconDeleteShowsTheBannerAndKeepsTheSelection() async {
+  @Test func anIconDeleteThatSbdSkipsShowsTheReasonAndKeepsTheSelection() async throws {
+    let sent = SentRequests()
     let done = needsItem("d", state: .done)
     let model = appliedModel([done])
-    model.send = { op, _ in
-      if op == "rm" { throw Refusal(description: "has uncommitted files") }
+    model.send = { op, args in
+      sent.append(op, args)
+      guard op == "rm-queue" else { return .null }
+      return try JSON(
+        encoding: RemovalQueued(queued: [], skipped: [.init(id: "d", name: "d", reason: "has uncommitted files")]))
+    }
+    model.selection = "d"
+
+    model.deleteDone(done)
+    await settle { model.actionError != nil }
+
+    #expect(!sent.queues.isEmpty)
+    #expect(model.actionError?.contains("has uncommitted files") == true)
+    #expect(model.selection == "d")
+  }
+
+  @Test func aRefusedIconDeleteShowsTheBannerAndKeepsTheSelection() async {
+    let sent = SentRequests()
+    let done = needsItem("d", state: .done)
+    let model = appliedModel([done])
+    model.send = { op, args in
+      sent.append(op, args)
+      if op == "rm-queue" { throw Refusal(description: "sbd is busy") }
       return .null
     }
     model.selection = "d"
 
     model.deleteDone(done)
-    await settle { model.deleting.isEmpty }
+    await settle { model.actionError != nil }
 
-    #expect(model.actionError == "rm: has uncommitted files")
+    #expect(!sent.queues.isEmpty)
+    #expect(model.actionError?.contains("sbd is busy") == true)
     #expect(model.selection == "d")
-  }
-
-  @Test func rmRefusesMoreThanOneSessionAndSendsNothing() async {
-    let sent = SentArgs()
-    let model = appliedModel(["a", "b"].map { needsItem($0, state: .done) })
-    model.send = { op, _ in
-      sent.append(["op": .string(op)])
-      return .null
-    }
-    let finished = Finished()
-
-    model.removeSessions(
-      [item("a"), item("b")], args: ["worktree": true], request: .rm, finished: { finished.result = $0 })
-    await settle { finished.result != nil }
-
-    #expect(!sent.value.contains { $0["op"] == "rm" })
-    #expect(finished.result?.removed == [])
-    #expect(finished.result?.skipped.map(\.id) == ["a", "b"])
-    #expect(finished.result?.skipped.allSatisfy { $0.reason == BoardModel.rmTakesOneReason } == true)
   }
 }
 
-/// Delete All sends `confirmed: true` only for sessions that the org filter
-/// shows at the moment of the send.
+/// Delete All queues only the sessions that the org filter shows at the moment of the send.
 @MainActor
 @Suite struct DoneRemovalOrgFilterTests {
   nonisolated static let done = [
@@ -246,9 +318,7 @@ final class SentArgs: Sendable {
     orgSession("lo", nil, state: .done), orgSession("un", nil, read: nil, state: .done),
   ]
 
-  func item(_ id: String) -> RemovalPlan.Item {
-    .init(id: id, name: id, pr: nil, worktree: nil, branch: nil, remoteBranch: false)
-  }
+  func item(_ id: String) -> RemovalPlan.Item { removalItem(id) }
 
   func skip(_ id: String) -> RemovalPlan.Skip { .init(id: id, name: id, reason: "has uncommitted files") }
 
@@ -258,36 +328,26 @@ final class SentArgs: Sendable {
     return model
   }
 
-  /// A `send` that records every request, answers the check with `plan`, and removes each confirmed target.
-  /// `beforeAnswer` runs on the main actor after a confirmed request is recorded and before it is answered.
-  func recordingSend(
-    _ sent: SentArgs, plan: RemovalPlan, beforeAnswer: (@MainActor @Sendable (String) -> Void)? = nil
-  ) -> @Sendable (String, [String: JSON]) throws -> JSON {
+  /// A `send` that records every request, queues every target of `rm-queue`, and answers anything else with `plan`.
+  func recordingSend(_ sent: SentRequests, plan: RemovalPlan) -> @Sendable (String, [String: JSON]) throws -> JSON {
     { op, args in
-      sent.append(args)
-      guard args["confirmed"] == .bool(true) else { return try JSON(encoding: plan) }
-      let id = args["targets"]?.array?.first?.string ?? ""
-      if let beforeAnswer { DispatchQueue.main.sync { MainActor.assumeIsolated { beforeAnswer(id) } } }
-      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : try JSON(encoding: plan)
     }
   }
 
-  func confirmedTargets(_ sent: SentArgs) -> [String] {
-    sent.value.filter { $0["confirmed"] == .bool(true) }.flatMap { $0["targets"]?.array?.compactMap(\.string) ?? [] }
-  }
-
-  func confirm(_ model: BoardModel, _ plan: RemovalPlan) async -> RemovalResult? {
+  /// Confirms `plan` and returns the targets of every `rm-queue` that Delete N sent.
+  func confirm(_ model: BoardModel, _ plan: RemovalPlan, _ sent: SentRequests) async -> [String] {
     model.doneRemoval = .confirming(plan)
     model.removeDone(plan)
-    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
-    guard case .finished(let result) = model.doneRemovalProgress else { return nil }
-    return result
+    await settle { !sent.queues.isEmpty }
+    return sent.queues.flatMap { $0["targets"]?.array?.compactMap(\.string) ?? [] }
   }
 
   // MARK: The plan
 
   @Test func aPlanShowsOnlyTheSessionsThatTheFilterShows() async throws {
-    let sent = SentArgs()
+    let sent = SentRequests()
     let model = model(OrgFilter(keys: ["posthog"]))
     let plan = RemovalPlan(remove: [item("ph"), item("hk"), item("un")], skip: [skip("lo"), skip("ph2")])
     model.send = recordingSend(sent, plan: plan)
@@ -306,7 +366,7 @@ final class SentArgs: Sendable {
   }
 
   @Test func aFilteredPlanKeepsSbdsSkipsForShownSessions() async throws {
-    let sent = SentArgs()
+    let sent = SentRequests()
     let model = model(OrgFilter(keys: ["posthog"]))
     let plan = RemovalPlan(remove: [], skip: [skip("ph"), skip("un"), skip("hk")])
     model.send = recordingSend(sent, plan: plan)
@@ -324,7 +384,7 @@ final class SentArgs: Sendable {
   }
 
   @Test func aPlanDropsAnIdThatTheBoardDoesNotList() async throws {
-    let sent = SentArgs()
+    let sent = SentRequests()
     let model = model(OrgFilter())
     let plan = RemovalPlan(remove: [item("ph"), item("ghost")], skip: [skip("phantom"), skip("lo")])
     model.send = recordingSend(sent, plan: plan)
@@ -342,38 +402,20 @@ final class SentArgs: Sendable {
 
   // MARK: The sends
 
-  @Test func confirmingAfterAFilterChangeThatHidesAPlannedIdNeverSendsIt() async throws {
-    let sent = SentArgs()
+  @Test func confirmingAfterAFilterChangeThatHidesAPlannedIdNeverQueuesIt() async throws {
+    let sent = SentRequests()
     let model = model(OrgFilter())
     let plan = RemovalPlan(remove: [item("ph"), item("hk"), item("lo")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
     model.orgFilter = OrgFilter(keys: ["posthog"])
-    let result = try #require(await confirm(model, plan))
+    let targets = await confirm(model, plan, sent)
 
-    #expect(confirmedTargets(sent) == ["ph"])
-    #expect(result.removed == ["ph"])
-    #expect(result.skipped.map(\.id) == ["hk", "lo"])
-    #expect(result.skipped.allSatisfy { $0.reason == BoardModel.hiddenOrgReason })
+    #expect(targets == ["ph"])
   }
 
-  @Test func aFilterChangeBetweenTwoSendsSkipsTheSecondId() async throws {
-    let sent = SentArgs()
-    let model = model(OrgFilter())
-    let plan = RemovalPlan(remove: [item("ph"), item("hk")], skip: [])
-    model.send = recordingSend(sent, plan: plan) { id in
-      if id == "ph" { model.orgFilter = OrgFilter(keys: ["posthog"]) }
-    }
-
-    let result = try #require(await confirm(model, plan))
-
-    #expect(confirmedTargets(sent) == ["ph"])
-    #expect(result.skipped.map(\.id) == ["hk"])
-    #expect(result.skipped.first?.reason == BoardModel.hiddenOrgReason)
-  }
-
-  @Test func aSessionWhoseOrgBecomesKnownAndHiddenWhileTheSheetIsOpenIsSkipped() async throws {
-    let sent = SentArgs()
+  @Test func aSessionWhoseOrgBecomesKnownAndHiddenWhileTheSheetIsOpenIsNeverQueued() async throws {
+    let sent = SentRequests()
     let model = model(OrgFilter(keys: ["posthog"]))
     let plan = RemovalPlan(remove: [item("ph"), item("un")], skip: [])
     model.send = recordingSend(sent, plan: plan)
@@ -382,41 +424,36 @@ final class SentArgs: Sendable {
       .success([
         orgSession("ph", "PostHog/posthog", state: .done), orgSession("un", "haacked/late", state: .done),
       ]), followups: nil)
-    let result = try #require(await confirm(model, plan))
+    let targets = await confirm(model, plan, sent)
 
-    #expect(confirmedTargets(sent) == ["ph"])
-    #expect(result.skipped.map(\.id) == ["un"])
+    #expect(targets == ["ph"])
   }
 
-  @Test func aSessionWhoseOrgIsUnknownIsNeverSentUnderAFilter() async throws {
-    let sent = SentArgs()
+  @Test func aSessionWhoseOrgIsUnknownIsNeverQueuedUnderAFilter() async throws {
+    let sent = SentRequests()
     let model = model(OrgFilter(keys: ["posthog"]))
     let plan = RemovalPlan(remove: [item("ph"), item("un")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
-    let result = try #require(await confirm(model, plan))
+    let targets = await confirm(model, plan, sent)
 
     #expect(model.shownIDs.contains("un"))
-    #expect(confirmedTargets(sent) == ["ph"])
-    #expect(result.skipped.map(\.id) == ["un"])
-    #expect(result.skipped.first?.reason == BoardModel.unreadOrgReason)
+    #expect(targets == ["ph"])
   }
 
-  @Test func anIdThatTheBoardDoesNotListIsNeverSent() async throws {
-    let sent = SentArgs()
+  @Test func anIdThatTheBoardDoesNotListIsNeverQueued() async throws {
+    let sent = SentRequests()
     let model = model(OrgFilter())
     let plan = RemovalPlan(remove: [item("ghost"), item("ph")], skip: [])
     model.send = recordingSend(sent, plan: plan)
 
-    let result = try #require(await confirm(model, plan))
+    let targets = await confirm(model, plan, sent)
 
-    #expect(confirmedTargets(sent) == ["ph"])
-    #expect(result.skipped.map(\.id) == ["ghost"])
-    #expect(result.skipped.first?.reason == BoardModel.unlistedReason)
+    #expect(targets == ["ph"])
   }
 
-  @Test func underAllOrgsTheRequestsMatchTheUnfilteredOnes() async throws {
-    let sent = SentArgs()
+  @Test func underAllOrgsOneRmQueueTakesEveryPlannedSession() async throws {
+    let sent = SentRequests()
     let model = model(OrgFilter())
     let plan = RemovalPlan(remove: Self.done.map { item($0.id) }, skip: [])
     model.send = recordingSend(sent, plan: plan)
@@ -428,19 +465,10 @@ final class SentArgs: Sendable {
       return
     }
     #expect(shown == plan)
-    let result = try #require(await confirm(model, shown))
+    let targets = await confirm(model, shown, sent)
 
-    #expect(sent.value.first == BoardModel.doneRemovalArgs)
-    #expect(
-      sent.value.dropFirst().map { $0["targets"]?.array?.compactMap(\.string) ?? [] } == [
-        ["ph"], ["hk"], ["lo"], ["un"],
-      ])
-    for args in sent.value.dropFirst() {
-      #expect(args["confirmed"] == .bool(true))
-      #expect(args["worktree"] == .bool(true))
-      #expect(args["remote_branch"] == .bool(true))
-    }
-    #expect(result.removed == ["ph", "hk", "lo", "un"])
-    #expect(result.skipped.isEmpty)
+    #expect(sent.value.first?.args == BoardModel.doneRemovalArgs)
+    #expect(sent.queues.count == 1)
+    #expect(targets == ["ph", "hk", "lo", "un"])
   }
 }

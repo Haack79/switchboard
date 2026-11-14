@@ -12,8 +12,10 @@ struct TriageDetail: View {
   enum Pane { case terminal, summary }
 
   /// An unstarted follow-up and a docket row have no terminals, so they show their summary whatever the toggle says.
+  /// A failed removal shows its summary too, because the summary holds Retry and Keep.
   static func pane(for session: SessionSummary, showingTerminal: Bool) -> Pane {
-    showingTerminal && !session.waitsToStart && session.runsClaude ? .terminal : .summary
+    showingTerminal && !session.waitsToStart && session.runsClaude && session.removal?.state != .failed
+      ? .terminal : .summary
   }
 
   /// The PR that the bar links to, with the code owners of that PR. A docket
@@ -39,7 +41,10 @@ struct TriageDetail: View {
       } else {
         ScrollView {
           VStack(alignment: .leading, spacing: 14) {
-            if let item = session.triage {
+            if session.removal?.state == .failed {
+              FailedRemovalActions(session: session)
+              reply
+            } else if let item = session.triage {
               DecisionCard(session: session, item: item, step: $step)
             } else {
               working

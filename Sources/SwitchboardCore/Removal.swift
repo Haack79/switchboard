@@ -78,6 +78,9 @@ extension SessionSummary {
 
   /// A Done session that the Done delete icon and Delete All may remove.
   public var isRemovableDone: Bool { state == .done && isRemovableWork }
+
+  /// True while sbd's removal job holds the session. The app leaves such a session out of every list.
+  public var isBeingRemoved: Bool { removal?.holdsSession == true }
 }
 
 /// A session's place in sbd's removal job, stored in the session's JSON.

@@ -65,14 +65,7 @@ struct ContentView: View {
   }
 
   private var isShowingDoneRemoval: Binding<Bool> {
-    Binding(
-      get: { model.showingDoneRemoval },
-      set: {
-        if !$0 {
-          model.doneRemoval = nil
-          model.doneRemovalProgress = nil
-        }
-      })
+    Binding(get: { model.showingDoneRemoval }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
   private var isConfirmingCleanup: Binding<Bool> {
@@ -334,6 +327,7 @@ struct Sidebar: View {
         .padding(8)
         .help("Create an empty group on the Board (⇧⌘G)")
         .accessibilityIdentifier("sidebar-new-group")
+        RemovalStatusView()
       }
     }
     .overlay {

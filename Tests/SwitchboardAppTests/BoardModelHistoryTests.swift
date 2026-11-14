@@ -450,12 +450,17 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
   @Test func deletingTheSelectedDoneSessionReplacesItsEntry() async throws {
     let done = needsItem("d", state: .done)
     let model = appliedModel(sessions(["b", "c"]) + [done])
-    model.send = { _, _ in .null }
+    let sent = SentRequests()
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
+    }
     try selectBetween(model, "c", "d", "b")
     let before = model.history.entries.count
 
     model.deleteDone(done)
-    await settle { model.selection == nil }
+    await settle { !sent.queues.isEmpty }
+    model.apply(.success(sessions(["b", "c"]) + [removalSession("d", .queued, state: .done)]), followups: nil)
 
     #expect(model.selection == nil)
     #expect(model.history.entries.count == before)
@@ -482,23 +487,39 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
 
   @Test func deleteAllDoneThatRemovesTheSelectedSessionReplacesItsEntry() async throws {
     let model = appliedModel(sessions(["b", "c"]) + [needsItem("d", state: .done)])
-    model.send = { _, args in
-      let id = args["targets"]?.array?.first?.string ?? ""
-      return try JSON(encoding: RemovalResult(removed: [id], skipped: [], partial: []))
+    let sent = SentRequests()
+    model.send = { op, args in
+      sent.append(op, args)
+      return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
     try selectBetween(model, "c", "d", "b")
     let before = model.history.entries.count
-    let plan = RemovalPlan(
-      remove: [.init(id: "d", name: "d", pr: nil, worktree: nil, branch: nil, remoteBranch: false)], skip: [])
+    let plan = RemovalPlan(remove: [removalItem("d")], skip: [])
     model.doneRemoval = .confirming(plan)
 
     model.removeDone(plan)
-    await settle { if case .finished = model.doneRemovalProgress { true } else { false } }
+    await settle { !sent.queues.isEmpty }
+    model.apply(.success(sessions(["b", "c"]) + [removalSession("d", .queued, state: .done)]), followups: nil)
 
     #expect(model.selection == nil)
     #expect(model.history.entries.count == before)
     #expect(model.history.current == at(.board))
     #expect(model.canGoForward)
+    #expect(model.history.current == model.location)
+  }
+
+  /// A refresh that lists the selected session as held by sbd's removal job hides it. The user did not navigate.
+  @Test(arguments: [Removal.State.queued, .running])
+  func aRefreshThatHoldsTheSelectedSessionReplacesItsEntry(_ state: Removal.State) throws {
+    let model = appliedModel(sessions(["b", "c", "d"]))
+    try selectBetween(model, "c", "d", "b")
+    let before = model.history.entries.count
+
+    model.apply(.success(sessions(["b", "c"]) + [removalSession("d", state)]), followups: nil)
+
+    #expect(model.selection == nil)
+    #expect(model.history.entries.count == before)
+    #expect(model.history.current == at(.board))
     #expect(model.history.current == model.location)
   }
 
