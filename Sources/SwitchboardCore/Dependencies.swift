@@ -144,10 +144,10 @@ public enum Dependencies {
   /// environment names, punctuation, and `and`, `or`, `then`, or `both`, and
   /// ends at the first other word.
   static let environmentList = try! NSRegularExpression(
-    pattern: #"\bdeploy\w*\s+to\b((?:\W|\b(?:and|or|then|both)\b|\b(?:prod-us|prod-eu|prod|dev)\b)*)"#,
+    pattern: #"\bdeploy\w*\s+to\b((?:\W|\b(?:and|or|then|both)\b|"# + environmentNames + ")*)",
     options: [.caseInsensitive])
-  static let environmentName = try! NSRegularExpression(
-    pattern: #"\b(?:prod-us|prod-eu|prod|dev)\b"#, options: [.caseInsensitive])
+  static let environmentName = try! NSRegularExpression(pattern: environmentNames, options: [.caseInsensitive])
+  private static let environmentNames = #"\b(?:prod-us|prod-eu|prod|dev)\b"#
 
   /// The PRs that the body's `Depends on` lines name, in order and without
   /// repeats. `#N` names a PR in `repo`. A line that mentions a deploy makes
