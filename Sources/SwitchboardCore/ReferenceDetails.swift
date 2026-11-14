@@ -200,3 +200,9 @@ public struct ReferenceCache: Sendable {
     }
   }
 }
+
+extension ReferenceDetails {
+  /// The end of sbd's `ref-details` refusal when GitHub has no such item or the token can't see it. The app reads
+  /// a refusal that ends with it as "not found".
+  public static let notFoundText = "not found, or your GitHub token can't see it"
+}

@@ -123,7 +123,7 @@ private func session(pr prRepo: String?, repository: String?, read: Bool? = true
     #expect(links(hosted).isEmpty)
   }
 
-  /// `sessionLinks` turns a false `openSessionLink` into `.systemAction`. `OpenURLAction.Result`
+  /// `inlineLinks` turns a false `openSessionLink` into `.systemAction`. `OpenURLAction.Result`
   /// is not comparable, so the test checks `openSessionLink` on each link that a reference draws.
   @Test(arguments: [
     "Fix #1 first.",

@@ -1,12 +1,33 @@
 import AppKit
 
+/// What a hover card sits below: a whole view, or one part of it, such as one
+/// reference in a text.
+struct HoverAnchor: Equatable {
+  let view: NSView
+  /// Names one hover target inside `view`, or nil for the whole view.
+  let part: Int?
+  /// Where the part sits in `view`'s coordinates. Nil means the view's bounds.
+  let rect: NSRect?
+
+  init(view: NSView, part: Int? = nil, rect: NSRect? = nil) {
+    self.view = view
+    self.part = part
+    self.rect = rect
+  }
+
+  /// Two anchors are the same target when they name the same part of the same
+  /// view. The rect is placement data only: SwiftUI records it again on each
+  /// draw, so an enter and its exit can carry different rects.
+  static func == (a: HoverAnchor, b: HoverAnchor) -> Bool { a.view === b.view && a.part == b.part }
+}
+
 /// Draws the hover card that `HoverCard` decides to show.
 @MainActor
 protocol HoverCardPresenter: AnyObject {
-  func show(_ id: String, below anchor: NSView)
+  func show(_ id: String, below anchor: HoverAnchor)
   func hide()
   /// Measures and places the card again below `anchor`, after its contents changed or its tile was rebuilt.
-  func refresh(below anchor: NSView)
+  func refresh(below anchor: HoverAnchor)
 }
 
 /// Decides when a session tile's hover card shows. The card opens after the
@@ -14,20 +35,23 @@ protocol HoverCardPresenter: AnyObject {
 /// the tile or on the card, and closes `grace` after the pointer leaves both.
 /// A model update leaves the card open unless the session is no longer shown.
 /// A rebuilt tile replaces its anchor view. The new anchor keeps the card.
+/// A mouse down closes the card, except one in `clickableWindow`.
 @MainActor
 final class HoverCard {
   typealias Schedule = @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> () -> Void
 
   private(set) var shown: String?
+  /// The window of a card whose links take clicks. A mouse down in it keeps the card open.
+  weak var clickableWindow: NSWindow?
   private let presenter: HoverCardPresenter
   private let delay: TimeInterval
   private let grace: TimeInterval
   private let schedule: Schedule
   private let buttonsPressed: () -> Bool
 
-  private var hovered: (id: String, anchor: NSView)?
+  private var hovered: (id: String, anchor: HoverAnchor)?
   /// The anchor that the open card sits below.
-  private var anchor: NSView?
+  private var anchor: HoverAnchor?
   private var onCard = false
   /// A tile whose card a click or key closed. It shows again only after the pointer leaves it.
   private var suppressed: String?
@@ -52,7 +76,7 @@ final class HoverCard {
     return { timer.invalidate() }
   }
 
-  func entered(_ id: String, anchor: NSView) {
+  func entered(_ id: String, anchor: HoverAnchor) {
     hovered = (id, anchor)
     // A tile under the card can report an enter while the pointer is on the card.
     if onCard, shown != nil, shown != id { return }
@@ -66,8 +90,8 @@ final class HoverCard {
     after(delay) { [weak self] in self?.open(id, below: anchor) }
   }
 
-  func exited(_ id: String, anchor: NSView) {
-    guard hovered?.anchor === anchor else { return }
+  func exited(_ id: String, anchor: HoverAnchor) {
+    guard hovered?.anchor == anchor else { return }
     hovered = nil
     if suppressed == id { suppressed = nil }
     if shown == nil { cancel() } else if !onCard { closeAfterGrace() }
@@ -75,8 +99,8 @@ final class HoverCard {
 
   /// A tile's anchor joined a window. SwiftUI replaces a tile's anchor when it
   /// rebuilds the tile. The new anchor gets no enter event while the pointer rests on it.
-  func appeared(_ id: String, anchor: NSView, pointerInside: Bool) {
-    if shown == id, self.anchor?.window == nil {
+  func appeared(_ id: String, anchor: HoverAnchor, pointerInside: Bool) {
+    if shown == id, self.anchor?.view.window == nil {
       adopt(anchor)
       if pointerInside { hovered = (id, anchor) }
       if pointerInside || onCard { cancel() }
@@ -85,10 +109,11 @@ final class HoverCard {
     if pointerInside { entered(id, anchor: anchor) }
   }
 
-  func disappeared(anchor: NSView) {
-    let wasHovered = hovered?.anchor === anchor
+  /// `anchor`'s view left its window, and every part of the view left with it.
+  func disappeared(anchor: HoverAnchor) {
+    let wasHovered = hovered?.anchor.view === anchor.view
     if wasHovered { hovered = nil }
-    guard wasHovered || anchor === self.anchor else { return }
+    guard wasHovered || anchor.view === self.anchor?.view else { return }
     // A pending open targets the hovered anchor, which can no longer show a card.
     if shown == nil { cancel() } else if !onCard { closeAfterGrace() }
   }
@@ -110,6 +135,12 @@ final class HoverCard {
     }
   }
 
+  /// A mouse down in `window` closes the card unless `window` is `clickableWindow`.
+  func mouseDown(in window: NSWindow?) {
+    if let window, window === clickableWindow { return }
+    interrupt()
+  }
+
   /// A mouse down, a scroll, or a key closes the card at once, as it closes a native tooltip.
   func interrupt() {
     suppressed = hovered?.id
@@ -118,22 +149,29 @@ final class HoverCard {
   }
 
   func sessionsChanged(shown ids: Set<String>) {
-    guard let shown, let anchor else { return }
-    if ids.contains(shown) { presenter.refresh(below: anchor) } else { close() }
+    guard let shown else { return }
+    if ids.contains(shown) { refreshShown() } else { close() }
+  }
+
+  /// Measures and places the open card again, after its contents changed.
+  func refreshShown() {
+    guard shown != nil, let anchor else { return }
+    presenter.refresh(below: anchor)
   }
 
   /// Shows the card for `id` without a pointer, for a snapshot.
-  func pin(_ id: String, below anchor: NSView) { open(id, below: anchor) }
+  func pin(_ id: String, below anchor: HoverAnchor) { open(id, below: anchor) }
 
-  private func open(_ id: String, below anchor: NSView) {
+  private func open(_ id: String, below anchor: HoverAnchor) {
     cancel()
     shown = id
     self.anchor = anchor
     presenter.show(id, below: anchor)
   }
 
-  private func adopt(_ anchor: NSView) {
-    guard anchor !== self.anchor else { return }
+  /// Places the card below `anchor` when it is another target or sits at another rect.
+  private func adopt(_ anchor: HoverAnchor) {
+    guard anchor != self.anchor || anchor.rect != self.anchor?.rect else { return }
     self.anchor = anchor
     presenter.refresh(below: anchor)
   }

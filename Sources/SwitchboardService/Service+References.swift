@@ -12,7 +12,7 @@ extension Service {
     guard let github else { throw APIError("GitHub polling is off, so sbd can't read \(ref.repo)#\(ref.number)") }
     switch references.answer(ref.key, read: { github.readReference(ref) }) {
     case .found(let details): return details
-    case .notFound: throw APIError("\(ref.repo)#\(ref.number) not found, or your GitHub token can't see it")
+    case .notFound: throw APIError("\(ref.repo)#\(ref.number) \(ReferenceDetails.notFoundText)")
     case .failed(let message): throw APIError(message)
     }
   }

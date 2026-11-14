@@ -162,9 +162,9 @@ struct ContentView: View {
       SessionSearchView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).sessionLinks(model) }
+      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).inlineLinks(model) }
     }
-    .sessionLinks(model)
+    .inlineLinks(model)
   }
 }
 

@@ -65,47 +65,57 @@ final class HoverCardAnchorView: PointerTrackingView {
   /// The tile's button gets every click.
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-  override func mouseEntered(with event: NSEvent) { card?.entered(id, anchor: self) }
-  override func mouseExited(with event: NSEvent) { card?.exited(id, anchor: self) }
+  private var anchor: HoverAnchor { HoverAnchor(view: self) }
+
+  override func mouseEntered(with event: NSEvent) { card?.entered(id, anchor: anchor) }
+  override func mouseExited(with event: NSEvent) { card?.exited(id, anchor: anchor) }
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     guard window != nil else {
-      card?.disappeared(anchor: self)
+      card?.disappeared(anchor: anchor)
       return
     }
     // The view has no frame until SwiftUI lays it out.
     DispatchQueue.main.async { [weak self] in
       guard let self, let window = self.window, let card = self.card else { return }
       let pointer = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-      card.appeared(self.id, anchor: self, pointerInside: self.visibleRect.contains(pointer))
+      card.appeared(self.id, anchor: self.anchor, pointerInside: self.visibleRect.contains(pointer))
       if self.pinned {
         // A card in a lazy stack can appear before it has its final frame.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
           guard let self, self.window != nil else { return }
-          self.card?.pin(self.id, below: self)
+          self.card?.pin(self.id, below: self.anchor)
         }
       }
     }
   }
 }
 
-/// Draws the hover card in a borderless panel below the tile. The panel is a
-/// child window of the tile's window and never takes key focus. It reads the
-/// session from the model, so the card's text follows each update.
+/// Draws the hover card in a borderless panel below its anchor. The panel is a
+/// child window of the anchor's window and never takes key focus. `content`
+/// draws the card for an id, and a card that reads the model follows each
+/// update.
 @MainActor
 final class HoverCardPanel: HoverCardPresenter {
-  weak var model: BoardModel?
   /// Reports when the pointer enters or leaves the card.
   var onPointer: (Bool) -> Void = { _ in }
+  /// Reports the panel once it exists.
+  var onPanel: (NSPanel) -> Void = { _ in }
+  private let content: (String) -> AnyView
   private var panel: NSPanel?
-  private var hosting: NSHostingView<AnyView>?
-  private weak var anchor: NSView?
+  /// A link in a card takes the click that reaches its panel, which is never key.
+  private var hosting: FirstClickHostingView<AnyView>?
+  private var anchor: HoverAnchor?
 
-  func show(_ id: String, below anchor: NSView) {
-    guard let model, let window = anchor.window else { return }
+  init(content: @escaping (String) -> AnyView) {
+    self.content = content
+  }
+
+  func show(_ id: String, below anchor: HoverAnchor) {
+    guard let window = anchor.view.window else { return }
     let panel = self.panel ?? makePanel()
-    hosting?.rootView = AnyView(HoverCardView(model: model, id: id))
+    hosting?.rootView = content(id)
     self.anchor = anchor
     ChildPanel.attach(panel, to: window)
     place()
@@ -115,19 +125,20 @@ final class HoverCardPanel: HoverCardPresenter {
   func hide() {
     guard let panel else { return }
     ChildPanel.detach(panel)
+    anchor = nil
     // A hidden card stops observing the model.
     hosting?.rootView = AnyView(EmptyView())
   }
 
-  func refresh(below anchor: NSView) {
+  func refresh(below anchor: HoverAnchor) {
     self.anchor = anchor
     // SwiftUI draws the new text on its next update.
     DispatchQueue.main.async { [weak self] in self?.place() }
   }
 
-  /// Below the tile, or above it when the screen has no room below.
+  /// Below the anchor, or above it when the screen has no room below.
   private func place() {
-    guard let anchor, let window = anchor.window, let panel, let hosting else { return }
+    guard let anchor, let window = anchor.view.window, let panel, let hosting else { return }
     let size = hosting.fittingSize
     let (tile, screen) = ChildPanel.frames(of: anchor, in: window)
     let x = max(screen.minX, min(tile.minX, screen.maxX - size.width))
@@ -138,12 +149,13 @@ final class HoverCardPanel: HoverCardPresenter {
 
   private func makePanel() -> NSPanel {
     let container = HoverCardTrackingView { [weak self] inside in self?.onPointer(inside) }
-    let hosting = NSHostingView(rootView: AnyView(EmptyView()))
+    let hosting = FirstClickHostingView(rootView: AnyView(EmptyView()))
     hosting.autoresizingMask = [.width, .height]
     container.addSubview(hosting)
     let panel = ChildPanel.make(contentView: container)
     self.panel = panel
     self.hosting = hosting
+    onPanel(panel)
     return panel
   }
 }
@@ -166,20 +178,27 @@ private final class HoverCardTrackingView: PointerTrackingView {
 extension HoverCard {
   /// The card for the app: a panel that reads `model`.
   static func panel(for model: BoardModel) -> HoverCard {
-    let panel = HoverCardPanel()
-    panel.model = model
+    let panel = HoverCardPanel { [weak model] id in
+      guard let model else { return AnyView(EmptyView()) }
+      return AnyView(HoverCardView(model: model, id: id))
+    }
     let card = HoverCard(presenter: panel)
     panel.onPointer = { [weak card] inside in if inside { card?.enteredCard() } else { card?.exitedCard() } }
     return card
   }
 
-  /// Closes the card on any click, scroll, or key, and when the app goes to the background.
-  /// The monitor passes each event on unchanged. The click therefore still reaches the tile.
+  /// Closes the card on a click outside `clickableWindow`, on any scroll or key, and when the app goes to the
+  /// background. The monitor passes each event on unchanged. The click therefore still reaches the tile.
   func closeOnEvents() {
     _ = NSEvent.addLocalMonitorForEvents(
       matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown]
     ) { [weak self] event in
-      MainActor.assumeIsolated { self?.interrupt() }
+      MainActor.assumeIsolated {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: self?.mouseDown(in: event.window)
+        default: self?.interrupt()
+        }
+      }
       return event
     }
     _ = NotificationCenter.default.addObserver(
@@ -230,9 +249,16 @@ struct HoverCardBody: View {
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(12)
-    .frame(width: Self.width, alignment: .leading)
-    .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .windowBackgroundColor)))
-    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+    .hoverCardFrame()
+  }
+}
+
+extension View {
+  /// The padding, width, background, and border of a hover card.
+  func hoverCardFrame() -> some View {
+    padding(12)
+      .frame(width: HoverCardBody.width, alignment: .leading)
+      .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .windowBackgroundColor)))
+      .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
   }
 }

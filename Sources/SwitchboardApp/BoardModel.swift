@@ -32,6 +32,12 @@ final class BoardModel: ObservableObject {
   @Published var showingOrgFilter = false
   /// Decides when a session tile's hover card shows. Tests replace it.
   var hoverCard: HoverCard?
+  /// Decides when a reference's hover card shows. Tests replace it.
+  var referenceCard: HoverCard?
+  /// The details of each reference whose card opened, by `GitHubRef.key`.
+  @Published var referenceDetails: [String: ReferenceLoad] = [:]
+  /// The keys whose `ref-details` request has not answered yet.
+  var referencesInFlight: Set<String> = []
   /// Why sbd can't be reached, or nil while it answers.
   @Published var unreachable: String?
   /// The last failed action, shown until the next one succeeds.
@@ -280,6 +286,7 @@ final class BoardModel: ObservableObject {
     self.orgFilterStore = orgFilterStore
     self.orgFilter = orgFilterStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
     hoverCard = HoverCard.panel(for: self)
+    referenceCard = HoverCard.referencePanel(for: self)
   }
 
   /// Clears a selection that the org filter hides, closes the hover card of a session that is no longer
@@ -425,6 +432,7 @@ final class BoardModel: ObservableObject {
   func start() {
     guard timer == nil else { return }
     hoverCard?.closeOnEvents()
+    referenceCard?.closeOnEvents()
     if Bundle.main.bundleIdentifier != nil {
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
