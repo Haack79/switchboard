@@ -86,10 +86,10 @@ final class Field {
 }
 
 /// A model whose requests wait until the test signals the semaphore. The
-/// counter counts the requests that reach sbd.
+/// counter counts the requests that reach sbd. The model applies `list` when it is given.
 @MainActor
-func heldModel() -> (BoardModel, DispatchSemaphore, Counter) {
-  let model = offlineModel()
+func heldModel(_ list: [SessionSummary]? = nil) -> (BoardModel, DispatchSemaphore, Counter) {
+  let model = list.map { appliedModel($0) } ?? offlineModel()
   let release = DispatchSemaphore(value: 0)
   let requests = Counter()
   model.send = { _, _ in
