@@ -112,6 +112,7 @@ private func ref(_ body: String) throws -> PRRef {
     ("Depends on #5 (deployed, service:ai-gateway)", "ai-gateway"),
     ("Depends on #5 (deployed; service: duckgres)", "duckgres"),
     ("Depends on #5 deployed, service: Hoghooks2", "Hoghooks2"),
+    ("Depends on #5 deployed to prod, service: statuspage-metrics-api.", "statuspage-metrics-api"),
   ])
   func serviceNameStopsAtTheFirstCharacterOutsideThePattern(_ body: String, _ service: String) throws {
     #expect(try ref(body).service == service)
@@ -143,6 +144,13 @@ private func ref(_ body: String) throws -> PRRef {
     ("Depends on #5 (deployed to dev, prod-us and prod-eu)", [.dev, .prodUS, .prodEU]),
     ("Depends on #5 (deployed to dev & prod-us)", [.dev, .prodUS]),
     ("Depends on #5 (Deployed to dev, service: feature-flags)", [.dev]),
+    ("Depends on #5 (deployed to dev, prod-us, and prod-eu)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev/prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev + prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev, then prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to both dev and prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 deployed to `dev` and **prod**", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to prod), see the dev runbook", [.prodUS, .prodEU]),
   ])
   func deployToNamesTheEnvironments(_ body: String, _ environments: [DeployEnvironment]) throws {
     #expect(try ref(body).environments == environments)

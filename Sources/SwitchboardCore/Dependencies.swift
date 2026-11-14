@@ -136,15 +136,18 @@ public enum Dependencies {
   static let prRef = try! NSRegularExpression(
     pattern: #"https?://github\.com/[\w.-]+/[\w.-]+/pull/[0-9]+|(?:[\w.-]+/[\w.-]+)?#[0-9]+"#)
 
-  /// `service: <name>` on a deploy line.
+  /// `service: <name>` on a deploy line. The name ends on a letter, digit, or
+  /// underscore, so a period that ends the sentence is not part of it.
   static let serviceName = try! NSRegularExpression(
-    pattern: #"\bservice:\s*([A-Za-z0-9][\w.-]*)"#, options: [.caseInsensitive])
-  /// `deploy… to <environments>` on a deploy line, with the environments
-  /// joined by commas, `and`, or `&`.
+    pattern: #"\bservice:\s*([A-Za-z0-9](?:[\w.-]*[A-Za-z0-9_])?)"#, options: [.caseInsensitive])
+  /// `deploy… to <environments>` on a deploy line. The list runs over
+  /// environment names, punctuation, and `and`, `or`, `then`, or `both`, and
+  /// ends at the first other word.
   static let environmentList = try! NSRegularExpression(
-    pattern:
-      #"\bdeploy\w*\s+to\s+((?:prod-us|prod-eu|prod|dev)\b(?:\s*(?:,|&|\band\b)\s*(?:prod-us|prod-eu|prod|dev)\b)*)"#,
+    pattern: #"\bdeploy\w*\s+to\b((?:\W|\b(?:and|or|then|both)\b|\b(?:prod-us|prod-eu|prod|dev)\b)*)"#,
     options: [.caseInsensitive])
+  static let environmentName = try! NSRegularExpression(
+    pattern: #"\b(?:prod-us|prod-eu|prod|dev)\b"#, options: [.caseInsensitive])
 
   /// The PRs that the body's `Depends on` lines name, in order and without
   /// repeats. `#N` names a PR in `repo`. A line that mentions a deploy makes
@@ -161,7 +164,7 @@ public enum Dependencies {
       guard dependsOnLine.firstMatch(in: text, range: whole) != nil else { continue }
       let deploy = text.range(of: "deploy", options: .caseInsensitive) != nil
       let service = deploy ? capture(serviceName, in: text) : nil
-      let environments = deploy ? capture(environmentList, in: text).map(environments(in:)) : nil
+      let environments = deploy ? capture(environmentList, in: text).flatMap(environments(in:)) : nil
       for match in prRef.matches(in: text, range: whole) {
         guard let range = Range(match.range, in: text), let pr = Wait.PullRequest(parsing: String(text[range])) else {
           continue
@@ -189,10 +192,14 @@ public enum Dependencies {
     return String(text[range])
   }
 
-  /// The environments of a list that `environmentList` matched.
-  private static func environments(in list: String) -> [DeployEnvironment] {
-    let names = list.lowercased().split(whereSeparator: { ",& ".contains($0) }).filter { $0 != "and" }
-    return DeployEnvironment.ordered(names.flatMap { DeployEnvironment.named(String($0)) ?? [] })
+  /// The environments of a list that `environmentList` matched, or nil when
+  /// it names none.
+  private static func environments(in list: String) -> [DeployEnvironment]? {
+    let names = environmentName.matches(in: list, range: NSRange(list.startIndex..., in: list)).compactMap {
+      Range($0.range, in: list).map { list[$0].lowercased() }
+    }
+    let found = names.flatMap { DeployEnvironment.named($0) ?? [] }
+    return found.isEmpty ? nil : DeployEnvironment.ordered(found)
   }
 
   /// Both lists' environments. A nil list means both prod regions, so a union

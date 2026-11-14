@@ -55,11 +55,11 @@ extension GitHubPoller {
     }
   }
 
-  /// Reads the state file of each service that a deploy wait names, once per
-  /// `deployMs`, and at once for a wait set since the last read. For each
-  /// environment of each wait, it compares the commit that the environment
-  /// runs with the PR's merge commit, and reads the sync job of the charts run
-  /// that deploys that commit.
+  /// Reads the state file of each service that a deploy target names, once
+  /// per `deployMs`, and at once for a target that appeared since the last
+  /// read. For each environment of each target, it compares the commit that
+  /// the environment runs with the PR's merge commit, and reads the sync job
+  /// of the charts run that deploys that commit.
   func checkDeploys(_ targets: [DeployTarget], all: Bool, now: Int64, stats: inout Stats) throws {
     let services = Set(targets.map(\.service))
     let ids = Set(targets.map(\.id))

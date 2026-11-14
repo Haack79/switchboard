@@ -198,7 +198,7 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
   @Test func bodyRefToTheStackBaseMergesIntoTheStackEdge() throws {
     let github = try FakeGitHub()
     stack(github)
-    body(github, "Depends on #122953 (deployed)")
+    body(github, "Depends on #122953 (deployed to dev, service: feature-flags)")
     let sbd = try Instance.withGitHub(github)
     let base = try sbd.session(in: posthog, branch: baseBranch, folder: "base")
     let top = try sbd.session(in: posthog, branch: dependentBranch, folder: "top")
@@ -208,7 +208,8 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
     #expect(
       try sbd.edges(top.id) == [
         Dependency(
-          via: .stack, repo: posthog, number: 122953, base: baseBranch, deploy: true, state: .open, session: base.id)
+          via: .stack, repo: posthog, number: 122953, base: baseBranch, deploy: true, state: .open, session: base.id,
+          service: "feature-flags", environments: [.dev])
       ])
   }
 
@@ -387,6 +388,36 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
       try sbd.messagesFromSbd(s.id) == ["Switchboard: #122179 deployed to prod, so #122896 no longer waits on it."])
   }
 
+  /// The deploy comment decides a PostHog/posthog edge in the environments
+  /// that its line names, not in both prod regions.
+  @Test func deployCommentEdgeToDevHoldsWhileDevIsPending() throws {
+    let github = try FakeGitHub()
+    let deployed = try #require(
+      FakeGitHub.recorded("github-bodies.json").first { $0["id"]?.string == deployComment }?["body"]?.string)
+    let devPending = deployed.split(separator: "\n", omittingEmptySubsequences: false).map {
+      $0.contains("**dev**") ? "| **dev** | :hourglass_flowing_sand: Pending |  |  |" : String($0)
+    }.joined(separator: "\n")
+    github.edit(comment: deployComment, body: devPending, at: "2026-10-23T22:30:00Z")
+    body(github, "Depends on #122179 (deployed to dev)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+    try sbd.pollTwice()
+    #expect(
+      try sbd.edges(s.id) == [
+        Dependency(
+          via: .body, repo: posthog, number: 122179, deploy: true, state: .merged, deployed: false,
+          environments: [.dev])
+      ])
+    #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+
+    github.edit(comment: deployComment, body: deployed, at: "2026-10-23T22:34:45Z")
+    try sbd.poll(all: true)
+
+    try sbd.waitFor("the resume message") { try !sbd.messagesFromSbd(s.id).isEmpty }
+    #expect(
+      try sbd.messagesFromSbd(s.id) == ["Switchboard: #122179 deployed to dev, so #122896 no longer waits on it."])
+  }
+
   @Test func failedReadAfterARestartKeepsTheEdgeAndStillResumesTheSession() throws {
     let github = try FakeGitHub()
     body(github, "Depends on #122953")
@@ -500,6 +531,7 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
     #expect(held.state == .readyForReview)
     #expect(held.reason.contains("waits on the deploy of \(docsLabel)"))
     #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+    #expect(try sbd.sb("get", s.id).contains("  depends: \(docsLabel) merged, deploy of feature-flags to dev\n"))
 
     github.route(DeployPollerTests.jobsPath, try deploys.flagsJobs())
     try pollAfterTheDeployInterval(sbd)
@@ -547,8 +579,13 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
 
   /// Each case sets up a service whose deploy of #20992 can't finish as the
   /// line names it.
-  @Test(arguments: ["another repository", "no state file", "failed sync", "merge off the deployed branch"])
-  func serviceEdgeThatCantResolveNeedsYou(_ problem: String) throws {
+  @Test(arguments: [
+    ("another repository", "duckgres deploys from PostHog/duckgres"),
+    ("no state file", "no state/no-such-service.yaml"),
+    ("failed sync", "the deploy to prod-eu failed"),
+    ("merge off the deployed branch", "doesn't deploy from"),
+  ])
+  func serviceEdgeThatCantResolveNeedsYou(_ problem: String, _ expected: String) throws {
     let github = try FakeGitHub()
     let deploys = DeployPollerTests()
     merge(github, 20992)
@@ -579,12 +616,45 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
 
     let edge = try #require(try sbd.edges(s.id)?.first)
     let reason = try #require(edge.problem)
+    #expect(reason.contains(expected))
     #expect(edge.deployed != true)
     let after = try sbd.get(s.id)
     #expect(after.state == .needsYou)
     #expect(after.reason == oneLine("\(docsLabel) can't resolve: \(reason)"))
+    #expect(try sbd.sb("get", s.id).contains("  depends: \(docsLabel) merged, deploy of \(service); \(reason)\n"))
     sleep(1)
     #expect(try sbd.messagesFromSbd(s.id).isEmpty)
+  }
+
+  /// A problem lasts only until a later read of the service decides the
+  /// deploy. A rerun sync that succeeds resumes the session.
+  @Test func serviceEdgeRecoversWhenTheFailedSyncSucceeds() throws {
+    let github = try FakeGitHub()
+    let deploys = DeployPollerTests()
+    merge(github, 20992)
+    try deploys.serveFeatureFlags(
+      github, jobs: try deploys.flagsJobs([DeployPollerTests.prodEUSync: ("completed", "failure")]),
+      repository: docs)
+    body(github, "Depends on PostHog/posthog.com#20992 (deployed, service: feature-flags)")
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: posthog, branch: dependentBranch)
+
+    try pollEdges(sbd)
+
+    #expect(try sbd.edges(s.id)?.first?.problem != nil)
+    #expect(try sbd.get(s.id).state == .needsYou)
+
+    github.route(DeployPollerTests.jobsPath, try deploys.flagsJobs())
+    try pollAfterTheDeployInterval(sbd)
+
+    try sbd.waitFor("the resume message") { try !sbd.messagesFromSbd(s.id).isEmpty }
+    #expect(
+      try sbd.messagesFromSbd(s.id) == [
+        "Switchboard: \(docsLabel) deployed to prod, so #122896 no longer waits on it."
+      ])
+    let edge = try #require(try sbd.edges(s.id)?.first)
+    #expect(edge.problem == nil)
+    #expect(edge.deployed == true)
   }
 
   @Test func serviceFromAnotherRepositoryNamesThatRepository() throws {
@@ -615,7 +685,7 @@ private func pollAfterTheDeployInterval(_ sbd: Instance) throws {
     try pollEdges(sbd)
 
     let edge = try #require(try sbd.edges(s.id)?.first)
-    #expect(edge.problem != nil)
+    #expect(edge.problem?.contains("service: <name>") == true)
     #expect(edge.deployed != true)
     let after = try sbd.get(s.id)
     #expect(after.state == .needsYou)
