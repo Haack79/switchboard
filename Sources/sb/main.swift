@@ -510,6 +510,10 @@ func printSession(_ s: SessionSummary) {
     )
   }
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
+  for a in (s.artifacts ?? []).sorted(by: { ($1.updated, $0.url) < ($0.updated, $1.url) }) {
+    let when = a.removed.map { "removed \(ago($0)) ago" } ?? "updated \(ago(a.updated)) ago"
+    print("  artifact: \(a.title)  \(a.url)  (\(when))".printable)
+  }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printWaitsAndNotes(s)

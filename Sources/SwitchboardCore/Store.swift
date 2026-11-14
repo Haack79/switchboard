@@ -10,12 +10,17 @@ public struct SessionRemoval: Equatable, Sendable {
   public var todos: [ResolvedTodo]
   /// The host of a session on a remote host, which `removed_host_sessions` records.
   public var host: String?
+  /// The group to save in the same transaction, with the session's artifacts added to its kept rows.
+  public var group: SessionGroup?
 
-  public init(id: String, name: String, todos: [ResolvedTodo] = [], host: String? = nil) {
+  public init(
+    id: String, name: String, todos: [ResolvedTodo] = [], host: String? = nil, group: SessionGroup? = nil
+  ) {
     self.id = id
     self.name = name
     self.todos = todos
     self.host = host
+    self.group = group
   }
 }
 
@@ -67,7 +72,8 @@ public final class Store {
   /// to-dos, and records the session's `name` and the time in
   /// `removed_sessions`, in one transaction. A failure leaves all of it as it
   /// was. For a session on `host`, the same transaction records it in
-  /// `removed_host_sessions`.
+  /// `removed_host_sessions`. The same transaction saves `group` when the
+  /// removal has one.
   public func delete(session removal: SessionRemoval) throws {
     try transaction { try deleteRows(removal) }
   }
@@ -83,6 +89,7 @@ public final class Store {
   }
 
   private func deleteRows(_ removal: SessionRemoval) throws {
+    if let group = removal.group { try save(group: group) }
     for todo in removal.todos { try insert(todo) }
     try run("DELETE FROM sessions WHERE id = ?", [removal.id])
     try run("DELETE FROM events WHERE session = ?", [removal.id])

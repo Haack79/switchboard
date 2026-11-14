@@ -195,9 +195,35 @@ extension Service {
     entries.values.map(\.session).filter { $0.group == group }.sorted { $0.id < $1.id }
   }
 
+  /// The group whose artifact list shows the session's artifacts: a work session's group, or the group whose
+  /// chat it is. The Manager has none.
+  func artifactGroup(of session: Session) -> String? {
+    switch session.kind {
+    case .work: session.group
+    case .chat: session.chat
+    case .manager: nil
+    }
+  }
+
+  /// The group with the sessions' artifacts added to its kept rows, each row with its session's id and name.
+  func keepingArtifacts(of sessions: [Entry], in group: SessionGroup) -> SessionGroup {
+    let rows = sessions.flatMap { e in
+      e.facts.artifacts.map { GroupArtifact($0, session: e.session.id, sessionName: e.session.name) }
+    }
+    guard !rows.isEmpty else { return group }
+    var kept = group
+    kept.artifacts = (group.artifacts ?? []) + rows
+    return kept
+  }
+
   private func groupSummary(_ id: String, rowFollowups: PlanRowFollowups? = nil) -> GroupSummary {
     var summary = GroupSummary(groups[id]!, sessions: members(id).map(\.id))
     summary.plans = planSummaries(group: id, rowFollowups: rowFollowups)
+    let live = entries.values.filter { artifactGroup(of: $0.session) == id }.map {
+      (session: $0.session.id, name: $0.session.name, artifacts: $0.facts.artifacts)
+    }
+    let artifacts = GroupArtifacts.list(live: live, kept: groups[id]?.artifacts ?? [])
+    if !artifacts.isEmpty { summary.artifacts = artifacts }
     return summary
   }
 
@@ -232,7 +258,9 @@ extension Service {
     }
     try place(suggestion.sessions, in: id)
     if let merged = suggestion.merge?.group, members(merged).isEmpty {
-      try saveGroup(groups[id]!.absorbing(groups[merged]!, now: nowMs()))
+      // The merged group's chat keeps its group id after `deleteGroup`, so its artifacts would show on no group.
+      let chats = entries.values.filter { $0.session.chat == merged }.sorted { $0.session.id < $1.session.id }
+      try saveGroup(keepingArtifacts(of: chats, in: groups[id]!.absorbing(groups[merged]!, now: nowMs())))
       try movePlans(from: merged, to: id)
       try deleteGroup(merged)
     }

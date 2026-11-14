@@ -2193,6 +2193,7 @@ public final class Service {
     }
     if !e.facts.dependencies.isEmpty { out.dependencies = e.facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
+    if !e.facts.artifacts.isEmpty { out.artifacts = e.facts.artifacts }
     out.docket = s.docket.map { DocketSummary($0, e.facts.docket) }
     out.mergeError = e.facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }

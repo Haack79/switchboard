@@ -13,6 +13,8 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// The normalized config folder of the Claude account that the group's
   /// sessions run under, or nil when they use the account Switchboard picks.
   public var account: String?
+  /// The artifacts of the group's removed sessions, or nil in a group that an older sbd stored.
+  public var artifacts: [GroupArtifact]?
 
   /// The longest description, in characters.
   public static let descriptionLimit = 280
@@ -49,9 +51,10 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// description. Without one, it takes `other`'s, or a line that names both
   /// groups when neither has one. When both have one, `other`'s becomes a
   /// note at `now`, so no text is lost. This group keeps its account and
-  /// never takes `other`'s.
+  /// never takes `other`'s. It adds `other`'s kept artifact rows after its own.
   public func absorbing(_ other: SessionGroup, now: Int64) -> SessionGroup {
     var kept = self
+    if let theirs = other.artifacts, !theirs.isEmpty { kept.artifacts = (artifacts ?? []) + theirs }
     for var note in other.notes {
       if kept.notes.contains(where: { $0.id == note.id }) { note.id = shortId("n", taken: kept.notes.map(\.id)) }
       kept.notes.append(note)
@@ -80,6 +83,8 @@ public struct GroupSummary: Codable, Equatable, Sendable, Identifiable {
   public var sessions: [String]
   /// The plans attached to the group, or nil when it has none.
   public var plans: [PlanSummary]?
+  /// The artifacts of the group's sessions, its chat, and its removed sessions, newest first, or nil when it has none.
+  public var artifacts: [GroupArtifact]?
 
   public init(_ group: SessionGroup, sessions: [String]) {
     id = group.id

@@ -41,9 +41,11 @@ extension MCPToolServer {
   static let allTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions with their state, reason, PR, waits, and notes. The sessions that need the user come first."),
+      "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."
+    ),
     Tool(
-      "get_session", "Shows one session, with its group's name and description.", ["session": session],
+      "get_session", "Shows one session, with its group's name and description, and its artifacts.",
+      ["session": session],
       required: ["session"]),
     Tool(
       "read_reply", "Reads the session's last reply from its transcript, as Markdown.", ["session": session],
@@ -126,7 +128,8 @@ extension MCPToolServer {
         "todo": boolean("Adds a to-do. The user must resolve it before the session can be deleted."),
       ], required: ["session", "text"]),
     Tool(
-      "list_groups", "Lists the groups with their descriptions, sessions, and notes, then the sessions in no group."),
+      "list_groups",
+      "Lists the groups with their descriptions, sessions, notes, and artifacts, then the sessions in no group."),
     Tool(
       "add_group", "Adds a group.",
       [

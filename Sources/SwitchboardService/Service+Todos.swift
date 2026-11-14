@@ -86,12 +86,17 @@ extension Service {
 
   /// What deleting the session writes. Both `forgetSession` and the `rm`
   /// path's `checkDeletable` get it here, so the check runs the statements
-  /// that the delete runs. It throws as `checkTodos` does. It runs on the
-  /// state queue.
+  /// that the delete runs. A session with artifacts whose artifact group
+  /// exists adds them to that group's kept rows. It throws as `checkTodos`
+  /// does. It runs on the state queue.
   func removal(_ id: String, resolving: Set<String>) throws -> SessionRemoval {
     let todos = try checkTodos(id, resolving: resolving)
-    guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
-    return SessionRemoval(id: id, name: session.name, todos: todos, host: session.host)
+    guard let entry = entries[id] else { throw APIError("no session \(id)") }
+    let session = entry.session
+    let group =
+      entry.facts.artifacts.isEmpty
+      ? nil : artifactGroup(of: session).flatMap { groups[$0] }.map { keepingArtifacts(of: [entry], in: $0) }
+    return SessionRemoval(id: id, name: session.name, todos: todos, host: session.host, group: group)
   }
 
   /// The one function that deletes a session record. It refuses unless
@@ -101,12 +106,17 @@ extension Service {
   /// session's name in `removed_sessions`, and `removedNames` gets it only
   /// after the delete commits. For a session on a host, the same
   /// transaction records it in `removed_host_sessions`, so the spool cut may
-  /// remove its leftover lines. It runs on the state queue.
+  /// remove its leftover lines. The same transaction saves the session's
+  /// artifact group with the session's artifacts kept on it, and `groups`
+  /// gets that record only after the delete commits. It runs on the state
+  /// queue.
   func forgetSession(_ id: String, resolving: Set<String>) throws {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     // Only a merged PR leaves marks. Other removals skip the summary.
     let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil
-    try store.delete(session: removal(id, resolving: resolving))
+    let record = try removal(id, resolving: resolving)
+    try store.delete(session: record)
+    if let group = record.group { groups[group.id] = group }
     removedNames[id] = session.name
     if let removed { markAddressedIssues(removed) }
     entries[id] = nil
