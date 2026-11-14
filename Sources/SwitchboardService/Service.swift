@@ -1596,9 +1596,7 @@ public final class Service {
               throw APIError("\(session.mention) changed while it was being removed")
             }
             // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
-            try store.checkDeletable(
-              session: session.id, name: session.name, resolving: checkTodos(session.id, resolving: resolving),
-              onHost: session.host)
+            try store.checkDeletable(session: removal(session.id, resolving: resolving))
             install(fresh, of: session)
             try scope.require()
             if session.host != nil { removing.insert(session.id) }
@@ -2239,6 +2237,7 @@ public final class Service {
     }
     if !e.facts.dependencies.isEmpty { out.dependencies = e.facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
+    if !e.facts.artifacts.isEmpty { out.artifacts = e.facts.artifacts }
     out.docket = s.docket.map { DocketSummary($0, e.facts.docket) }
     out.mergeError = e.facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }

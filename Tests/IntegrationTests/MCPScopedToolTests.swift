@@ -205,4 +205,26 @@ import Testing
     #expect(!result.isError)
     #expect(try sbd.get(s.member.id).waits.compactMap(\.session?.id) == [peer.id])
   }
+
+  // MARK: Artifacts
+
+  /// A scoped server's `list_groups` carries its group's artifacts and no other group's.
+  @Test func aScopedListGroupsCarriesOnlyTheScopesArtifacts() throws {
+    let sbd = try Instance()
+    let s = try scope(sbd)
+    let outsidePage = "https://claude.ai/artifact/OutsidePage"
+    try sbd.postArtifactHook(s.member.id)
+    try sbd.postArtifactHook(
+      s.outside.id, input: ["file_path": "/tmp/outside.html"],
+      response: Instance.artifactResponse(
+        url: outsidePage, artifactId: "55555555-1111-2222-3333-444444444444", title: "Outside"))
+    let mcp = try MCPClient(sbd, group: s.group.id)
+
+    let result = try mcp.call("list_groups")
+
+    let groups = try #require(result.json?["groups"]?.array)
+    #expect(groups.compactMap { $0["id"]?.string } == [s.group.id])
+    #expect(groups.first?["artifacts"]?.array?.compactMap { $0["url"]?.string } == [artifactPageURL])
+    #expect(!result.text.contains(outsidePage))
+  }
 }
