@@ -31,6 +31,13 @@ import os
     #expect(AccountMenu.label(nil) == "Account")
   }
 
+  @Test func theTooltipStartsWithTheLabel() {
+    let reading = AccountUsage(name: "automation", folder: "/a", limits: limits)
+    #expect(
+      AccountMenu.help(row(reading)).hasPrefix("automation · 5h 52% · wk 64%. The Claude account for new sessions"))
+    #expect(AccountMenu.help(nil).hasPrefix("Account. "))
+  }
+
   @Test func onlyASpentLimitOrAFailedReadNeedsTheUser() {
     let spent = [UsageLimit(kind: "session", label: "Session (5h)", percent: 100, resetsAt: nil)]
     #expect(!AccountMenu.needsYou(nil))

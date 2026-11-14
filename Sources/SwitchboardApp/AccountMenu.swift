@@ -29,14 +29,14 @@ struct AccountMenu: View {
       Button {
         model.showingAccounts.toggle()
       } label: {
-        HStack(spacing: 4) {
-          Image(systemName: "gauge.with.dots.needle.50percent")
-          Text(Self.label(active))
-          Image(systemName: "chevron.down").imageScale(.small)
-        }
-        .foregroundStyle(Self.needsYou(active) ? AttentionState.needsYou.color : .primary)
+        // The name and usage text would push New Session into the overflow at 1024 pt. The tooltip shows them.
+        Label(Self.label(active), systemImage: "gauge.with.dots.needle.50percent")
+          .labelStyle(.iconOnly)
+          .foregroundStyle(Self.needsYou(active) ? AttentionState.needsYou.color : .primary)
       }
-      .help("The Claude account for new sessions, and every account's plan usage, read every few minutes")
+      .help(Self.help(active))
+      .accessibilityLabel("Account")
+      .accessibilityValue(active == nil ? "" : Self.label(active))
       .popover(isPresented: $model.showingAccounts, arrowEdge: .bottom) {
         AccountList(rows: rows)
       }
@@ -70,6 +70,11 @@ struct AccountMenu: View {
     if let session = usage.sessionPercent { parts.append("5h \(Int(session.rounded()))%") }
     parts.append("wk \(Int(usage.weeklyPercent.rounded()))%")
     return parts.joined(separator: " · ")
+  }
+
+  /// The toolbar item's tooltip: the label, then what the item does.
+  static func help(_ row: AccountRow?) -> String {
+    "\(label(row)). The Claude account for new sessions, and every account's plan usage, read every few minutes."
   }
 
   static func limitRow(_ limit: UsageLimit, now: Int64 = nowMs()) -> String {
