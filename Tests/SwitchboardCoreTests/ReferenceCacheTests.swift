@@ -46,7 +46,7 @@ struct TTLCase: CustomTestStringConvertible, Sendable {
   var testDescription: String { name }
 }
 
-/// The TTLs that the plan's Decisions state: 60 s for an open item, 10 min for a merged or closed item, 10 min for
+/// The TTLs: 60 s for an open item, 10 min for a merged or closed item, 10 min for
 /// "not found", and 30 s for any other error.
 private let ttlCases = [
   TTLCase(name: "open issue", answer: .found(details(kind: "issue", state: "open")), ttl: 60 * second),

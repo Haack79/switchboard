@@ -254,8 +254,8 @@ public struct PullRequest: Codable, Equatable, Sendable {
   }
 
   /// Whether the head commit's checks ended in failure or error.
-  public var checksFailed: Bool { checks == "FAILURE" || checks == "ERROR" }
-  public var checksPassed: Bool { checks == "SUCCESS" }
+  public var checksFailed: Bool { ChecksRollup(checks) == .failed }
+  public var checksPassed: Bool { ChecksRollup(checks) == .passed }
 
   /// Whether the PR is open, not a draft, and approved.
   public var isApproved: Bool { status == .approved }
@@ -342,7 +342,24 @@ public struct PullRequest: Codable, Equatable, Sendable {
   public var awaitsReview: Bool { ready && !reviewSatisfied }
 
   /// Whether the head commit's checks have not finished.
-  public var checksRunning: Bool { checks == "PENDING" || checks == "EXPECTED" }
+  public var checksRunning: Bool { ChecksRollup(checks) == .running }
+}
+
+/// What a commit's `statusCheckRollup.state` from GitHub says about its checks.
+public enum ChecksRollup: Equatable, Sendable {
+  case passed
+  case failed
+  case running
+
+  /// nil for a state that says none of these, and for no state.
+  public init?(_ state: String?) {
+    switch state {
+    case "SUCCESS"?: self = .passed
+    case "FAILURE"?, "ERROR"?: self = .failed
+    case "PENDING"?, "EXPECTED"?: self = .running
+    default: return nil
+    }
+  }
 }
 
 /// The change requests that a PR's author answered.

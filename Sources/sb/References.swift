@@ -11,11 +11,15 @@ func refCommand(_ a: Args) {
   if bare, repo == nil { die("#N needs --repo owner/name") }
   if !bare, repo != nil { die("--repo names the repository of #N, so it does not go with \(text)") }
   let result = call("ref-details", ["ref": .string((repo ?? "") + text)])
+  let details: ReferenceDetails
+  switch decode(result, as: ReferenceReply.self) {
+  case .found(let found): details = found
+  case .notFound(let repo, let number): die("\(repo)#\(number) not found, or your GitHub token can't see it")
+  }
   if a.json {
     printJSON(result)
     return
   }
-  let details = decode(result, as: ReferenceDetails.self)
   print("\(details.repo)#\(details.number) \(details.kind.rawValue) \(details.state.rawValue)")
   print(details.title)
   let about = [

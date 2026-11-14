@@ -55,13 +55,13 @@ private final class ManualScheduler {
 }
 
 @MainActor
-private final class RecordingPresenter: HoverCardPresenter {
-  private(set) var shows: [(id: String, anchor: HoverAnchor)] = []
+private final class RecordingPresenter<ID: Hashable & Sendable>: HoverCardPresenter {
+  private(set) var shows: [(id: ID, anchor: HoverAnchor)] = []
   private(set) var hides = 0
   private(set) var refreshAnchors: [HoverAnchor] = []
   var refreshes: Int { refreshAnchors.count }
 
-  func show(_ id: String, below anchor: HoverAnchor) { shows.append((id, anchor)) }
+  func show(_ id: ID, below anchor: HoverAnchor) { shows.append((id, anchor)) }
   func hide() { hides += 1 }
   func refresh(below anchor: HoverAnchor) { refreshAnchors.append(anchor) }
 }
@@ -72,26 +72,35 @@ private final class MouseButtons {
 
 /// A hover card controller with a recording presenter, a manual scheduler, and tile anchors for A and B.
 @MainActor
-private final class Fixture {
-  let presenter: RecordingPresenter
+private final class CardFixture<ID: Hashable & Sendable> {
+  let presenter: RecordingPresenter<ID>
   let scheduler: ManualScheduler
   let buttons: MouseButtons
-  let card: HoverCard
+  let card: HoverCard<ID>
   let a = HoverAnchor(view: NSView())
   let b = HoverAnchor(view: NSView())
 
   init() {
-    let presenter = RecordingPresenter()
+    let presenter = RecordingPresenter<ID>()
     let scheduler = ManualScheduler()
     let buttons = MouseButtons()
     self.presenter = presenter
     self.scheduler = scheduler
     self.buttons = buttons
-    card = HoverCard(
+    card = HoverCard<ID>(
       presenter: presenter, delay: delay, grace: grace, schedule: { scheduler.schedule($0, $1) },
       buttonsPressed: { buttons.pressed })
   }
+}
 
+/// The session card's fixture. Its ids are session ids.
+private typealias Fixture = CardFixture<String>
+/// The reference card's fixture.
+private typealias ReferenceFixture = CardFixture<ReferenceCardID>
+
+private func cardID(_ text: String) -> ReferenceCardID { ReferenceCardID(ref: GitHubRef(parsing: text)!) }
+
+extension CardFixture where ID == String {
   /// Rests the pointer on tile A until its card shows.
   func openA() {
     card.entered("A", anchor: a)
@@ -147,9 +156,10 @@ private final class Fixture {
     }
 
     @Test func theDefaultDelayIsHalfASecond() {
-      let presenter = RecordingPresenter()
+      let presenter = RecordingPresenter<String>()
       let scheduler = ManualScheduler()
-      let card = HoverCard(presenter: presenter, schedule: { scheduler.schedule($0, $1) }, buttonsPressed: { false })
+      let card = HoverCard<String>(
+        presenter: presenter, schedule: { scheduler.schedule($0, $1) }, buttonsPressed: { false })
       card.entered("A", anchor: HoverAnchor(view: NSView()))
 
       scheduler.fire(0.25)
@@ -184,9 +194,10 @@ private final class Fixture {
     }
 
     @Test func theDefaultGraceIsAQuarterSecond() {
-      let presenter = RecordingPresenter()
+      let presenter = RecordingPresenter<String>()
       let scheduler = ManualScheduler()
-      let card = HoverCard(presenter: presenter, schedule: { scheduler.schedule($0, $1) }, buttonsPressed: { false })
+      let card = HoverCard<String>(
+        presenter: presenter, schedule: { scheduler.schedule($0, $1) }, buttonsPressed: { false })
       let anchor = HoverAnchor(view: NSView())
       card.entered("A", anchor: anchor)
       scheduler.fire(0.5)
@@ -837,7 +848,7 @@ private final class Fixture {
   }
 
   /// The reference card holds links, so a mouse down inside it must not close it before the link fires. The
-  /// session card closes on any click, as it did before the reference card.
+  /// session card closes on any click.
   @MainActor
   @Suite struct Clicks {
     private func window() -> NSWindow {
@@ -918,13 +929,13 @@ private final class Fixture {
 
     init() { hover.view = view }
 
-    private func move(_ f: Fixture, _ x: CGFloat?) {
-      hover.moved(to: x.map { CGPoint(x: $0, y: 7) }, in: entries, card: f.card)
+    private func move(_ f: ReferenceFixture, _ x: CGFloat?, in entries: [ReferenceRects.Entry]? = nil) {
+      hover.moved(to: x.map { CGPoint(x: $0, y: 7) }, in: entries ?? self.entries, card: f.card)
     }
 
     /// Each enter restarts the card's delay, so a pointer that kept moving on a reference would never open it.
     @Test func movingWithinOneReferenceStartsTheDelayOnce() {
-      let f = Fixture()
+      let f = ReferenceFixture()
 
       move(f, 5)
       move(f, 30)
@@ -933,28 +944,65 @@ private final class Fixture {
     }
 
     @Test func restingOnAReferenceOpensItsCard() {
-      let f = Fixture()
+      let f = ReferenceFixture()
 
       move(f, 5)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown == "o/r#1")
+      #expect(f.card.shown?.ref.key == "o/r#1")
       #expect(f.presenter.shows.first?.anchor.part == 1)
     }
 
+    /// The card shows the reference as the text wrote it.
     @Test func movingToAnotherReferenceOpensItsCardWhenTheDelayEnds() {
-      let f = Fixture()
+      let f = ReferenceFixture()
       move(f, 5)
       f.scheduler.fire(delay)
 
       move(f, 70)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown == "O/R#2")
+      #expect(f.card.shown?.ref.repo == "O/R")
+      #expect(f.card.shown?.ref.number == 2)
+    }
+
+    /// The card's header links to the URL's kind of page, so the card keeps the form of the reference.
+    @Test func aPullRequestURLOpensACardThatKeepsItsForm() {
+      let f = ReferenceFixture()
+      let pull = [
+        ReferenceRects.Entry(
+          ref: GitHubRef(parsing: "https://github.com/o/r/pull/9")!, part: 0,
+          rect: CGRect(x: 0, y: 0, width: 40, height: 14))
+      ]
+
+      move(f, 5, in: pull)
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown?.ref.isPull == true)
+    }
+
+    /// Two references to one item, in another case or form, are one card, so moving between them keeps it open.
+    @Test func movingToAnotherReferenceToTheSameItemKeepsTheCard() {
+      let f = ReferenceFixture()
+      let same = [
+        ReferenceRects.Entry(
+          ref: GitHubRef(parsing: "o/r#1")!, part: 0, rect: CGRect(x: 0, y: 0, width: 40, height: 14)),
+        ReferenceRects.Entry(
+          ref: GitHubRef(parsing: "https://github.com/O/R/pull/1")!, part: 1,
+          rect: CGRect(x: 60, y: 0, width: 40, height: 14)),
+      ]
+      move(f, 5, in: same)
+      f.scheduler.fire(delay)
+
+      move(f, 70, in: same)
+      f.scheduler.flush()
+
+      #expect(f.presenter.shows.count == 1)
+      #expect(f.presenter.hides == 0)
     }
 
     @Test func movingBetweenTheReferencesOpensNoCard() {
-      let f = Fixture()
+      let f = ReferenceFixture()
       move(f, 5)
 
       move(f, 50)
@@ -964,7 +1012,7 @@ private final class Fixture {
     }
 
     @Test func leavingTheTextClosesTheCardWhenTheGraceEnds() {
-      let f = Fixture()
+      let f = ReferenceFixture()
       move(f, 5)
       f.scheduler.fire(delay)
 
@@ -982,7 +1030,7 @@ private final class Fixture {
         contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [], backing: .buffered, defer: true)
       window.isReleasedWhenClosed = false
       defer { withExtendedLifetime(window) {} }
-      let f = Fixture()
+      let f = ReferenceFixture()
       view.card = f.card
       view.hover = hover
       window.contentView = view
@@ -993,7 +1041,7 @@ private final class Fixture {
       move(f, 5)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown == "o/r#1")
+      #expect(f.card.shown?.ref.key == "o/r#1")
     }
   }
 }
@@ -1091,62 +1139,30 @@ private final class Fixture {
   @Test func anUpdateLeavesAnOpenReferenceCardOpen() {
     let model = offlineModel()
     model.apply(.success([session("A"), session("B")]), followups: nil)
-    let f = Fixture()
+    let f = ReferenceFixture()
     model.referenceCard = f.card
-    f.card.entered("o/r#1", anchor: f.a)
+    f.card.entered(cardID("o/r#1"), anchor: f.a)
     f.scheduler.fire(delay)
 
     model.apply(.success([session("B")]), followups: nil)
     f.scheduler.flush()
 
-    #expect(f.card.shown == "o/r#1")
+    #expect(f.card.shown == cardID("o/r#1"))
     #expect(f.presenter.hides == 0)
-  }
-
-  /// The answer changes the card's height, so the open card is measured again under its reference.
-  @Test func anAnswerForTheOpenReferenceMeasuresItsCardAgain() async {
-    let model = offlineModel()
-    model.send = { _, _ in throw APIError("network down") }
-    let f = Fixture()
-    model.referenceCard = f.card
-    f.card.entered("O/R#1", anchor: f.a)
-    f.scheduler.fire(delay)
-    let before = f.presenter.refreshes
-
-    model.loadReference(GitHubRef(parsing: "o/r#1")!)
-    await settle { model.referenceDetails["o/r#1"] == .failed("network down") }
-
-    #expect(f.presenter.refreshes == before + 2)
-    #expect(f.presenter.refreshAnchors.last?.view === f.a.view)
-  }
-
-  @Test func anAnswerForAnotherReferenceLeavesTheOpenCardAlone() async {
-    let model = offlineModel()
-    model.send = { _, _ in throw APIError("network down") }
-    let f = Fixture()
-    model.referenceCard = f.card
-    f.card.entered("o/r#1", anchor: f.a)
-    f.scheduler.fire(delay)
-    let before = f.presenter.refreshes
-
-    model.loadReference(GitHubRef(parsing: "o/r#2")!)
-    await settle { model.referenceDetails["o/r#2"] == .failed("network down") }
-
-    #expect(f.presenter.refreshes == before)
   }
 
   @Test func aFilterChangeLeavesAnOpenReferenceCardOpen() {
     let model = orgFilterModel(OrgFilter())
     model.apply(.success([orgSession("A", "haacked/switchboard")]), followups: nil)
-    let f = Fixture()
+    let f = ReferenceFixture()
     model.referenceCard = f.card
-    f.card.entered("o/r#1", anchor: f.a)
+    f.card.entered(cardID("o/r#1"), anchor: f.a)
     f.scheduler.fire(delay)
 
     model.orgFilter = posthogOnly
     f.scheduler.flush()
 
-    #expect(f.card.shown == "o/r#1")
+    #expect(f.card.shown == cardID("o/r#1"))
     #expect(f.presenter.hides == 0)
   }
 

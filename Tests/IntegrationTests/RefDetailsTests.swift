@@ -2,10 +2,10 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-// These tests need FakeGitHub to answer the `reference` query (`repository { issueOrPullRequest(number:) }`):
-// `putReference(_:)` adds an item, each request is logged with kind "reference" and the id "owner/name#N", an unknown
-// repository answers `repository: null`, an unknown number answers `issueOrPullRequest: null`, and `reply(...)`
-// still replaces the next answer.
+// These tests need FakeGitHub to answer the `reference` query (`repository { issueOrPullRequest(number:) }`).
+// `putReference(_:)` adds an item. Each request is logged with kind "reference" and the id "owner/name#N".
+// An unknown repository answers `repository: null`. An unknown number answers `issueOrPullRequest: null`.
+// `reply(...)` still replaces the next answer.
 
 private let widgets = "acme/widgets"
 private let ledger = "acme/ledger"
@@ -143,19 +143,22 @@ extension FakeGitHub {
     #expect(github.fetches.count == 2)
   }
 
+  /// The op answers "not found" as data, and `sb ref` turns it into an error.
   @Test func notFoundAnswersWithAMessageAndIsCachedFor10Minutes() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withGitHub(github)
     github.putReference(FakeGitHub.FakeReference(repo: widgets, number: 1))
 
     let first = try sbd.refRefusal("acme/widgets#99")
+    let reply = try sbd.client.call("ref-details", ["ref": "acme/widgets#99"])
     try sbd.advanceClock(61_000)
     let cached = try sbd.refRefusal("acme/widgets#99")
     let fetchedOnce = github.fetches.count
     try sbd.advanceClock(540_000)
     _ = try sbd.refRefusal("acme/widgets#99")
 
-    #expect(first.lowercased().contains("not found"))
+    #expect(first.contains("acme/widgets#99 not found"))
+    #expect(reply == ["notFound": true, "repo": "acme/widgets", "number": 99])
     #expect(cached == first)
     #expect(fetchedOnce == 1)
     #expect(github.fetches.count == 2)

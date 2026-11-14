@@ -446,7 +446,7 @@ struct SessionRow: View {
   /// The active account's folder. The hover card names the session's account only when it differs.
   let activeAccount: String
   var repo: String? = nil
-  var hoverCard: HoverCard? = nil
+  var hoverCard: HoverCard<String>? = nil
   @Environment(\.backgroundProminence) private var prominence
 
   var body: some View {

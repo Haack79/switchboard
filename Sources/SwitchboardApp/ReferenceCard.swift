@@ -3,8 +3,9 @@ import SwiftUI
 import SwitchboardCore
 
 /// What a reference's hover card says. Before the first answer it has the
-/// header from the reference and a loading line. After a failure it has the
-/// header and the error.
+/// header from the reference and a loading line. When GitHub has no such item
+/// it has the header and `notFound`. After a failure it has the header and the
+/// error.
 struct ReferenceCardContent: Equatable {
   enum Tone: Equatable {
     case green, purple, red, gray
@@ -47,17 +48,14 @@ struct ReferenceCardContent: Equatable {
     self.sessions = ReferenceSessions.matching(ref, in: sessions).map { Row(id: $0.id, name: $0.name, state: $0.state) }
     switch load {
     case nil, .loading?: loading = true
-    case .failed(let error)?: message = error.hasSuffix(ReferenceDetails.notFoundText) ? Self.notFound : error
+    case .notFound?: message = Self.notFound
+    case .failed(let error)?: message = error
     case .loaded(let d)?:
       repo = d.repo
       number = d.number
       title = d.title
       chip = Self.chip(d)
-      let meta = [
-        d.author.map { "by \($0)" },
-        Self.ago("opened", d.createdAt, now: now),
-        Self.ago("updated", d.updatedAt, now: now),
-      ].compactMap { $0 }
+      let meta = (d.author.map { ["by \($0)"] } ?? []) + ages(opened: d.createdAt, updated: d.updatedAt, now: now)
       self.meta = meta.isEmpty ? nil : meta.joined(separator: " · ")
       labels = Array(d.labels.prefix(Self.maxLabels))
       extraLabels = d.labels.count - labels.count
@@ -76,17 +74,13 @@ struct ReferenceCardContent: Equatable {
     }
   }
 
-  private static func ago(_ verb: String, _ time: String?, now: Int64) -> String? {
-    time.flatMap(Transcript.milliseconds).map { "\(verb) \(SwitchboardCore.ago($0, now: now)) ago" }
-  }
-
   private static func prLines(_ d: ReferenceDetails) -> [String] {
     let checks: String? =
-      switch d.checks {
-      case "SUCCESS"?: "Checks passing"
-      case "FAILURE"?, "ERROR"?: "Checks failing"
-      case "PENDING"?, "EXPECTED"?: "Checks running"
-      default: nil
+      switch ChecksRollup(d.checks) {
+      case .passed?: "Checks passing"
+      case .failed?: "Checks failing"
+      case .running?: "Checks running"
+      case nil: nil
       }
     let review: String? =
       switch d.reviewDecision {
@@ -107,14 +101,21 @@ struct ReferenceCardContent: Equatable {
 }
 
 /// A reference's hover card. It asks sbd for the details each time it opens,
-/// and shows the last answer until the new one comes.
+/// and shows the last answer until the new one comes. It observes the model
+/// for its session rows.
 struct ReferenceCardView: View {
   @ObservedObject var model: BoardModel
+  @ObservedObject var store: ReferenceStore
   let ref: GitHubRef
 
+  init(model: BoardModel, ref: GitHubRef) {
+    self.model = model
+    store = model.references
+    self.ref = ref
+  }
+
   var body: some View {
-    let c = ReferenceCardContent(
-      ref, load: model.referenceDetails[ref.key], sessions: model.allSessions, now: nowMs())
+    let c = ReferenceCardContent(ref, load: store.details[ref.key], sessions: model.allSessions, now: nowMs())
     VStack(alignment: .leading, spacing: 8) {
       VStack(alignment: .leading, spacing: 2) {
         Text(header(c)).font(.caption).foregroundStyle(.secondary)
@@ -189,24 +190,18 @@ extension ReferenceCardContent.Tone {
   }
 }
 
-extension HoverCard {
-  /// The reference card for the app. Its panel takes clicks, so a link in the
-  /// card fires before the card would close.
-  static func referencePanel(for model: BoardModel) -> HoverCard {
-    let panel = HoverCardPanel { [weak model] id in
-      guard let model, let ref = GitHubRef(parsing: id) else { return AnyView(EmptyView()) }
-      return AnyView(ReferenceCardView(model: model, ref: ref).inlineLinks(model))
-    }
-    let card = HoverCard(presenter: panel)
-    panel.onPointer = { [weak card] inside in if inside { card?.enteredCard() } else { card?.exitedCard() } }
-    panel.onPanel = { [weak card] window in card?.clickableWindow = window }
-    return card
-  }
+/// The reference card's id. Two references to one item are one card, whatever case or form each was written in. The
+/// card shows the reference that opened it.
+struct ReferenceCardID: Hashable, Sendable {
+  let ref: GitHubRef
+
+  static func == (a: ReferenceCardID, b: ReferenceCardID) -> Bool { a.ref.key == b.ref.key }
+  func hash(into hasher: inout Hasher) { hasher.combine(ref.key) }
 }
 
-extension GitHubRef {
-  /// The reference card's id: `owner/name#N` in the case the text wrote it,
-  /// so the card's header shows the repository as written before the details
-  /// come. `GitHubRef(parsing:)` reads it back.
-  var cardID: String { "\(repo)#\(number)" }
+/// `opened <ago> ago` and `updated <ago> ago`, each left out when its ISO 8601 time is missing or doesn't parse.
+func ages(opened: String?, updated: String?, now: Int64 = nowMs()) -> [String] {
+  [("opened", opened), ("updated", updated)].compactMap { verb, time in
+    time.flatMap(Transcript.milliseconds).map { "\(verb) \(ago($0, now: now)) ago" }
+  }
 }

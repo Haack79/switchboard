@@ -138,7 +138,7 @@ private struct ReferenceRectsKey: EnvironmentKey {
 }
 
 private struct ReferenceCardKey: EnvironmentKey {
-  static let defaultValue: HoverCard? = nil
+  static let defaultValue: HoverCard<ReferenceCardID>? = nil
 }
 
 extension EnvironmentValues {
@@ -165,7 +165,7 @@ extension EnvironmentValues {
   }
 
   /// The card that opens while the pointer rests on a reference in `InlineText`.
-  var referenceCard: HoverCard? {
+  var referenceCard: HoverCard<ReferenceCardID>? {
     get { self[ReferenceCardKey.self] }
     set { self[ReferenceCardKey.self] = newValue }
   }
@@ -231,11 +231,12 @@ private struct ReferenceText: View {
   @State private var own = ReferenceRects()
   @State private var hover = ReferenceHover()
   let segments: [InlineText.Segment]
-  let card: HoverCard?
+  let card: HoverCard<ReferenceCardID>?
   let injected: ReferenceRects?
 
   var body: some View {
     let rects = injected ?? own
+    let text = self.text
     text
       .background {
         text.textRenderer(ReferenceRenderer(rects: rects))
@@ -294,14 +295,14 @@ private struct ReferenceRenderer: TextRenderer {
 @MainActor
 final class ReferenceHover {
   weak var view: ReferenceAnchorView?
-  private var current: (id: String, anchor: HoverAnchor)?
+  private var current: (id: ReferenceCardID, anchor: HoverAnchor)?
 
   /// Reports a reference only when the pointer reaches another one, or when
   /// the one under it moved, because each enter restarts the card's delay.
-  func moved(to point: CGPoint?, in entries: [ReferenceRects.Entry], card: HoverCard?) {
+  func moved(to point: CGPoint?, in entries: [ReferenceRects.Entry], card: HoverCard<ReferenceCardID>?) {
     guard let card, let view else { return }
     let next = point.flatMap { point in entries.first { $0.rect.contains(point) } }
-      .map { (id: $0.ref.cardID, anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect)) }
+      .map { (id: ReferenceCardID(ref: $0.ref), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect)) }
     if next?.anchor == current?.anchor, next?.anchor.rect == current?.anchor.rect { return }
     let previous = current
     current = next
@@ -319,7 +320,7 @@ final class ReferenceHover {
 private struct ReferenceAnchor: NSViewRepresentable {
   let hover: ReferenceHover
   let rects: ReferenceRects
-  let card: HoverCard?
+  let card: HoverCard<ReferenceCardID>?
 
   func makeNSView(context: Context) -> ReferenceAnchorView {
     let view = ReferenceAnchorView()
@@ -336,7 +337,7 @@ private struct ReferenceAnchor: NSViewRepresentable {
 }
 
 final class ReferenceAnchorView: NSView {
-  weak var card: HoverCard?
+  weak var card: HoverCard<ReferenceCardID>?
   weak var hover: ReferenceHover?
   var rects: ReferenceRects?
 
@@ -359,7 +360,7 @@ final class ReferenceAnchorView: NSView {
       guard let self, self.window != nil, let card = self.card, card.shown == nil,
         let entry = self.rects?.entries.first(where: { $0.key == key })
       else { return }
-      card.pin(entry.ref.cardID, below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
+      card.pin(ReferenceCardID(ref: entry.ref), below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
     }
   }
 }

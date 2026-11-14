@@ -28,7 +28,7 @@ struct ReferenceItem: CustomTestStringConvertible, Sendable {
 
   var url: String { "https://github.com/\(repo)/\(pull ? "pull" : "issues")/\(number)" }
 
-  /// The `issueOrPullRequest` node, with only the fields that the plan's reference query selects.
+  /// The `issueOrPullRequest` node, with only the fields that `GitHub.referenceQuery` selects.
   var node: JSON {
     var node: [String: JSON] = [
       "__typename": .string(pull ? "PullRequest" : "Issue"), "number": .number(Double(number)),
@@ -68,8 +68,8 @@ struct ReferenceItem: CustomTestStringConvertible, Sendable {
   }
 }
 
-/// The details as sbd sends them, without the keys whose value is null. The plan states the reply's JSON, and an
-/// absent key and a null mean the same thing to the app.
+/// The details as sbd sends them, without the keys whose value is null. An absent key and a null mean the
+/// same thing to the app.
 func wire(_ details: ReferenceDetails) throws -> [String: JSON] {
   try #require(try JSON(encoding: details).object).filter { $0.value != .null }
 }
@@ -85,7 +85,7 @@ private func parsed(_ item: ReferenceItem) throws -> ReferenceDetails {
 
 private let twelveLabels = (1...12).map { "label-\($0)" }
 
-/// The PR shapes of Risk 4.
+/// The PR shapes that every source must describe the same way.
 private let pullItems = [
   ReferenceItem(
     name: "open PR", pull: true, checks: "PENDING", reviewDecision: "REVIEW_REQUIRED", mergeable: "MERGEABLE"),
@@ -104,7 +104,7 @@ private let pullItems = [
   ReferenceItem(name: "PR with 12 labels", pull: true, labels: twelveLabels),
 ]
 
-/// The issue shapes of Risk 4.
+/// The issue shapes that every source must describe the same way.
 private let issueItems = [
   ReferenceItem(name: "open issue", pull: false),
   ReferenceItem(name: "closed issue", pull: false, state: "CLOSED"),
@@ -299,7 +299,7 @@ private let issueItems = [
     #expect(decoded == details)
   }
 
-  /// The reply that the plan shows for `ref-details` decodes, `null` fields included.
+  /// A `ref-details` reply that writes its nil fields as `null` decodes.
   @Test func thePlansExampleReplyDecodes() throws {
     let text = """
       {"repo":"haacked/switchboard","number":283,"kind":"issue","title":"Issue and PR links",\
@@ -314,7 +314,28 @@ private let issueItems = [
     #expect(try wire(details)["kind"] == "issue")
   }
 
-  // MARK: Parity (Risk 4)
+  /// A found item's reply is its details, with no wrapper, so `sb ref --json` prints the details.
+  @Test(arguments: pullItems + issueItems)
+  func aFoundReplyIsTheDetails(_ item: ReferenceItem) throws {
+    let details = try parsed(item)
+    let direct = try JSON(encoding: details)
+
+    let reply = try JSON(encoding: ReferenceReply.found(details))
+
+    #expect(reply == direct)
+    #expect(try JSONCoding.convert(reply, to: ReferenceReply.self) == .found(details))
+  }
+
+  @Test func aNotFoundReplyNamesTheItemAndSurvivesAJSONRoundTrip() throws {
+    let reply = ReferenceReply.notFound(repo: "acme/widgets", number: 7)
+
+    let encoded = try JSON(encoding: reply)
+
+    #expect(encoded == ["notFound": true, "repo": "acme/widgets", "number": 7])
+    #expect(try JSONCoding.convert(encoded, to: ReferenceReply.self) == reply)
+  }
+
+  // MARK: Parity
 
   /// A session's PR and a fetch of the same PR agree on every field that both hold. Only the fetch reads
   /// `updatedAt`.

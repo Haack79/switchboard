@@ -5,7 +5,7 @@ import SwitchboardCore
 extension View {
   /// Shows the session's hover card while the pointer rests on this view. The
   /// card's text is also the view's VoiceOver hint, which no hover card gives.
-  func hoverCard(_ session: SessionSummary, activeAccount: String, card: HoverCard?, pinned: Bool = false)
+  func hoverCard(_ session: SessionSummary, activeAccount: String, card: HoverCard<String>?, pinned: Bool = false)
     -> some View
   {
     background(HoverCardAnchor(id: session.id, card: card, pinned: pinned))
@@ -28,7 +28,7 @@ private struct HoverCardHint: ViewModifier {
 /// therefore stays open.
 private struct HoverCardAnchor: NSViewRepresentable {
   let id: String
-  let card: HoverCard?
+  let card: HoverCard<String>?
   let pinned: Bool
 
   func makeNSView(context: Context) -> HoverCardAnchorView {
@@ -58,7 +58,7 @@ class PointerTrackingView: NSView {
 
 final class HoverCardAnchorView: PointerTrackingView {
   var id = ""
-  weak var card: HoverCard?
+  weak var card: HoverCard<String>?
   /// SB_HOVER names this tile, so its card opens without a pointer.
   var pinned = false
 
@@ -95,27 +95,36 @@ final class HoverCardAnchorView: PointerTrackingView {
 /// Draws the hover card in a borderless panel below its anchor. The panel is a
 /// child window of the anchor's window and never takes key focus. `content`
 /// draws the card for an id, and a card that reads the model follows each
-/// update.
+/// update. The panel places itself again whenever the card changes size.
 @MainActor
-final class HoverCardPanel: HoverCardPresenter {
-  /// Reports when the pointer enters or leaves the card.
-  var onPointer: (Bool) -> Void = { _ in }
-  /// Reports the panel once it exists.
-  var onPanel: (NSPanel) -> Void = { _ in }
-  private let content: (String) -> AnyView
-  private var panel: NSPanel?
+final class HoverCardPanel<ID: Hashable & Sendable>: HoverCardPresenter {
+  /// The card that hears the pointer enter and leave the panel.
+  weak var card: HoverCard<ID>?
+  /// The panel once it exists. Tests read its frame.
+  private(set) var panel: NSPanel?
+  private let clickable: Bool
+  private let content: (ID) -> AnyView
   /// A link in a card takes the click that reaches its panel, which is never key.
   private var hosting: FirstClickHostingView<AnyView>?
   private var anchor: HoverAnchor?
 
-  init(content: @escaping (String) -> AnyView) {
+  /// A clickable panel is its card's `clickableWindow`, so a click on a link in it does not close the card.
+  init(clickable: Bool, content: @escaping (ID) -> AnyView) {
+    self.clickable = clickable
     self.content = content
   }
 
-  func show(_ id: String, below anchor: HoverAnchor) {
+  func show(_ id: ID, below anchor: HoverAnchor) {
     guard let window = anchor.view.window else { return }
     let panel = self.panel ?? makePanel()
-    hosting?.rootView = content(id)
+    hosting?.rootView = AnyView(
+      content(id)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGSize.self) {
+          $0.size
+        } action: { [weak self] _ in
+          self?.placeLater()
+        })
     self.anchor = anchor
     ChildPanel.attach(panel, to: window)
     place()
@@ -132,7 +141,11 @@ final class HoverCardPanel: HoverCardPresenter {
 
   func refresh(below anchor: HoverAnchor) {
     self.anchor = anchor
-    // SwiftUI draws the new text on its next update.
+    placeLater()
+  }
+
+  /// Places the panel after SwiftUI's current update, which may still change the card.
+  private func placeLater() {
     DispatchQueue.main.async { [weak self] in self?.place() }
   }
 
@@ -148,14 +161,16 @@ final class HoverCardPanel: HoverCardPresenter {
   }
 
   private func makePanel() -> NSPanel {
-    let container = HoverCardTrackingView { [weak self] inside in self?.onPointer(inside) }
+    let container = HoverCardTrackingView { [weak self] inside in
+      if inside { self?.card?.enteredCard() } else { self?.card?.exitedCard() }
+    }
     let hosting = FirstClickHostingView(rootView: AnyView(EmptyView()))
     hosting.autoresizingMask = [.width, .height]
     container.addSubview(hosting)
     let panel = ChildPanel.make(contentView: container)
     self.panel = panel
     self.hosting = hosting
-    onPanel(panel)
+    if clickable { card?.clickableWindow = panel }
     return panel
   }
 }
@@ -176,14 +191,11 @@ private final class HoverCardTrackingView: PointerTrackingView {
 }
 
 extension HoverCard {
-  /// The card for the app: a panel that reads `model`.
-  static func panel(for model: BoardModel) -> HoverCard {
-    let panel = HoverCardPanel { [weak model] id in
-      guard let model else { return AnyView(EmptyView()) }
-      return AnyView(HoverCardView(model: model, id: id))
-    }
+  /// A card drawn in a `HoverCardPanel`.
+  static func panel(clickable: Bool, content: @escaping (ID) -> AnyView) -> HoverCard {
+    let panel = HoverCardPanel<ID>(clickable: clickable, content: content)
     let card = HoverCard(presenter: panel)
-    panel.onPointer = { [weak card] inside in if inside { card?.enteredCard() } else { card?.exitedCard() } }
+    panel.card = card
     return card
   }
 
@@ -204,6 +216,18 @@ extension HoverCard {
     _ = NotificationCenter.default.addObserver(
       forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.interrupt() } }
+  }
+}
+
+extension BoardModel {
+  /// The session card, and the reference card, whose links take clicks. Each reads the model.
+  func makeHoverCards() {
+    hoverCard = HoverCard<String>.panel(clickable: false) { [weak self] id in
+      self.map { AnyView(HoverCardView(model: $0, id: id)) } ?? AnyView(EmptyView())
+    }
+    referenceCard = HoverCard<ReferenceCardID>.panel(clickable: true) { [weak self] id in
+      self.map { AnyView(ReferenceCardView(model: $0, ref: id.ref).inlineLinks($0)) } ?? AnyView(EmptyView())
+    }
   }
 }
 

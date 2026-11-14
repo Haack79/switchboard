@@ -70,7 +70,7 @@ public struct GitHubRef: Equatable, Hashable, Sendable {
   public var isPull: Bool { form == .pullURL }
 
   /// The lowercased `owner/name#123`. GitHub compares repository names without case.
-  public var key: String { "\(repo.lowercased())#\(number)" }
+  public var key: String { InboxIssue.id(repo, number) }
 
   /// The item's page. An issue URL reaches a pull request too, because GitHub redirects it.
   public var url: URL {
@@ -94,17 +94,26 @@ extension GitHubRef {
   /// before the number, and no `.` or `..` segment. The number has no leading
   /// zero, and the owner and name pass `isLinkableRepo`.
   public init?(linkableURL text: String) {
-    guard let scheme = text.range(of: "://") else { return nil }
+    guard let scheme = text.range(of: "://"), ["http", "https"].contains(text[..<scheme.lowerBound].lowercased()),
+      URL(string: text) != nil
+    else { return nil }
     let host = text[scheme.upperBound...]
     guard host.prefix(11).lowercased() == "github.com/" else { return nil }
     let path = host.dropFirst(10).prefix { $0 != "?" && $0 != "#" }
-    let segments = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+    let segments = Array(path.split(separator: "/", omittingEmptySubsequences: false).dropFirst())
     guard segments.count >= 4, segments.prefix(4).allSatisfy({ !$0.isEmpty }),
       !segments.contains(where: { $0 == "." || $0 == ".." }), !path.contains("%"), !path.contains("\\"),
-      segments.dropFirst(3).first?.first != "0",
-      let ref = GitHubRef(url: text), Self.isLinkableRepo(ref.repo)
+      segments[3].first != "0"
     else { return nil }
-    self = ref
+    let form: Form
+    switch segments[2] {
+    case "issues": form = .issueURL
+    case "pull": form = .pullURL
+    default: return nil
+    }
+    let repo = "\(segments[0])/\(segments[1])"
+    guard Self.isLinkableRepo(repo), let number = Issues.number(String(segments[3])) else { return nil }
+    self.init(repo: repo, number: number, form: form)
   }
 
   /// The link for this reference written as `text`: the text itself when it
@@ -151,7 +160,7 @@ extension GitHubRef {
     guard digits.first != "0", let number = Issues.number(digits), TokenBoundary.allowedAfter(end, s) else {
       return nil
     }
-    // Every scalar that `Issues.validRepo` allows, so that `a/b/c#1` reads as one token and fails.
+    // The token extends back over every scalar that `Issues.validRepo` allows, so `a/b/c#1` reads as one token and fails.
     var start = hash
     while start > range.lowerBound, isRepoScalar(s[start - 1]) { start -= 1 }
     guard start == 0 || TokenBoundary.allowedBefore(s[start - 1]) else { return nil }

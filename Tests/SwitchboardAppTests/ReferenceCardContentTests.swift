@@ -282,11 +282,20 @@ private func session(_ id: String, pr: (repo: String, number: Int)? = nil, issue
       #expect(!c.loading)
     }
 
-    /// sbd's not-found refusal names the item. The card says it in its own words.
     @Test func notFoundSaysTheTokenMayNotSeeIt() {
-      let c = content(.failed("haacked/switchboard#283 not found, or your GitHub token can't see it"))
+      let c = content(.notFound)
 
       #expect(c.message == "Not found, or your GitHub token can't see it.")
+      #expect(c.repo == "haacked/switchboard")
+      #expect(c.number == 283)
+      #expect(!c.loading)
+    }
+
+    /// Only a not-found answer gets the card's own words. An error that mentions "not found" is shown as sbd wrote it.
+    @Test func anErrorThatSaysNotFoundShowsItsMessage() {
+      let error = "haacked/switchboard#283 not found, or your GitHub token can't see it"
+
+      #expect(content(.failed(error)).message == error)
     }
 
     @Test func aLoadedCardHasNoMessage() throws {

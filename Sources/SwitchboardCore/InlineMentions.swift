@@ -28,13 +28,9 @@ public struct InlineMentions: Sendable {
     var isURL = false
 
     static func reference(_ range: Range<Int>, _ ref: GitHubRef?, isURL: Bool = false) -> Span {
-      Span(range: range, mention: InlineMentions.linksReferences ? ref.map(Mention.reference) : nil, isURL: isURL)
+      Span(range: range, mention: ref.map(Mention.reference), isURL: isURL)
     }
   }
-
-  /// When false, every reference stays plain text, and URLs still keep session ids in them unchanged. A hotfix
-  /// can turn it off to stop linking references without a revert.
-  static let linksReferences = true
 
   private let names: SessionNames
   /// The `owner/name` that a bare `#123` refers to, or nil when the text
@@ -51,7 +47,7 @@ public struct InlineMentions: Sendable {
   /// link run is never split, and it is one reference when its link names a
   /// GitHub issue or pull request. A run with no mention comes back as it was.
   public func pieces(_ text: MarkdownText) -> [Piece] {
-    // Every run's scalars, so that the boundary rules read the real neighbor
+    // This collects every run's scalars, so the boundary rules read the real neighbor
     // even when it sits in a link, code, or image run.
     var scalars: [Unicode.Scalar] = []
     var bounds: [Range<Int>] = []
@@ -64,7 +60,10 @@ public struct InlineMentions: Sendable {
     for (run, range) in zip(text.runs, bounds) {
       let references = references(in: run, range, scalars)
       let urls = references.filter(\.isURL)
-      let candidates = names.spans(in: run, range, scalars).filter { !Self.overlaps($0.range, urls) } + references
+      let candidates =
+        names.spans(in: run, range, scalars).filter { span in
+          !urls.contains { $0.range.overlaps(span.range) }
+        } + references
       let spans = Self.merged(candidates, from: range.lowerBound).compactMap { span in
         span.mention.map { (range: span.range, mention: $0) }
       }
@@ -91,17 +90,6 @@ public struct InlineMentions: Sendable {
     return GitHubRef(linkableURL: link).map { [Span.reference(range, $0)] } ?? []
   }
 
-  /// Whether `range` overlaps one of `urls`, which are in order and do not overlap each other.
-  private static func overlaps(_ range: Range<Int>, _ urls: [Span]) -> Bool {
-    var low = 0
-    var high = urls.count
-    while low < high {
-      let mid = (low + high) / 2
-      if urls[mid].range.upperBound <= range.lowerBound { low = mid + 1 } else { high = mid }
-    }
-    return low < urls.count && urls[low].range.lowerBound < range.upperBound
-  }
-
   /// The spans to keep, in order: the earliest start wins, a longer span wins
   /// at the same start, and a span that overlaps a kept one is dropped.
   static func merged(_ candidates: [Span], from start: Int) -> [Span] {
@@ -126,7 +114,6 @@ public struct InlineMentions: Sendable {
     case .reference(let ref):
       var piece = plainPiece(covered, run)
       piece.mention = mention
-      // A link run keeps its own link.
       if piece.run.link == nil { piece.run.link = ref.link(writtenAs: piece.run.text) }
       return piece
     }

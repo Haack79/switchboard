@@ -6,13 +6,13 @@ extension Service {
   /// The `ref-details` request. It answers from a session's PR, then from the Issues cache, then from sbd's cache of
   /// earlier reads, and only then reads the item from GitHub. It runs off the state queue, because a read waits on
   /// GitHub.
-  func referenceDetails(_ args: JSON) throws -> ReferenceDetails {
+  func referenceDetails(_ args: JSON) throws -> ReferenceReply {
     let ref = try Self.reference(args)
-    if let local = queue.sync(execute: { localReferenceDetails(ref) }) { return local }
+    if let local = queue.sync(execute: { localReferenceDetails(ref) }) { return .found(local) }
     guard let github else { throw APIError("GitHub polling is off, so sbd can't read \(ref.repo)#\(ref.number)") }
     switch references.answer(ref.key, read: { github.readReference(ref) }) {
-    case .found(let details): return details
-    case .notFound: throw APIError("\(ref.repo)#\(ref.number) \(ReferenceDetails.notFoundText)")
+    case .found(let details): return .found(details)
+    case .notFound: return .notFound(repo: ref.repo, number: ref.number)
     case .failed(let message): throw APIError(message)
     }
   }

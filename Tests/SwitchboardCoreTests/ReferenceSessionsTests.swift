@@ -4,12 +4,15 @@ import Testing
 
 private let switchboardRepo = "haacked/switchboard"
 
-private func session(_ id: String, pr: PRSummary? = nil, issues: [SessionIssue] = []) -> SessionSummary {
+private func session(
+  _ id: String, pr: PRSummary? = nil, issues: [SessionIssue] = [], repository: String? = nil
+) -> SessionSummary {
   var s = SessionSummary(
     id: id, name: id, cwd: "/tmp", repo: nil, branch: nil, claudeSessionId: id, state: .working, reason: "",
     since: 0, lastActivity: 0, live: true, claudePid: nil, attached: false, lastReply: nil, waits: [], notes: [],
     pr: pr)
   s.issues = issues.isEmpty ? nil : issues
+  s.repository = repository
   return s
 }
 
@@ -56,8 +59,22 @@ private func matching(_ text: String, _ sessions: [SessionSummary]) throws -> [S
     #expect(try matching("haacked/switchboard#283", [session]).isEmpty)
   }
 
-  /// A session issue whose repository sbd does not know names no repository, so no reference can name it.
-  @Test func issueWithNoRepoDoesNotMatch() throws {
+  /// A session issue with no repository, as a branch name gives, is in the session's repository, as the Issues list
+  /// counts it.
+  @Test func issueWithNoRepoMatchesInTheSessionsRepository() throws {
+    let s = session("s1", issues: [issue(283, in: nil)], repository: "Haacked/Switchboard")
+
+    #expect(try matching("haacked/switchboard#283", [s]) == ["s1"])
+  }
+
+  @Test func issueWithNoRepoInASessionOfAnotherRepositoryDoesNotMatch() throws {
+    let s = session("s1", issues: [issue(283, in: nil)], repository: "haacked/dotfiles")
+
+    #expect(try matching("haacked/switchboard#283", [s]).isEmpty)
+  }
+
+  /// With no repository on the issue or the session, no reference can name the issue.
+  @Test func issueWithNoRepoInASessionWithNoRepositoryDoesNotMatch() throws {
     #expect(try matching("haacked/switchboard#283", [session("s1", issues: [issue(283, in: nil)])]).isEmpty)
   }
 

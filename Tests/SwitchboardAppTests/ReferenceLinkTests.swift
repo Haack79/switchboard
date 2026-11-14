@@ -17,7 +17,7 @@ private func session(pr prRepo: String?, repository: String?, read: Bool? = true
   return s
 }
 
-/// Risk 9: in a view about session S, bare `#N` resolves against `S.pr?.repo ?? S.repository`.
+/// In a view about session S, bare `#N` resolves against `S.pr?.repo ?? S.repository`.
 @Suite struct ReferenceRepoTests {
   /// A view whose host never sets `referenceRepo` draws bare `#N` as plain text.
   @Test func theEnvironmentValueStartsNil() {

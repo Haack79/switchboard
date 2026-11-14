@@ -219,7 +219,7 @@ private struct IssueDetail: View {
           if let url = URL(string: issue.url) {
             Link(destination: url) { Text(verbatim: issue.ref) }
           }
-          Text("opened \(ago(isoMs(issue.createdAt))) ago · updated \(ago(isoMs(issue.updatedAt))) ago")
+          Text(verbatim: ages(opened: issue.createdAt, updated: issue.updatedAt).joined(separator: " · "))
             .foregroundStyle(.secondary)
         }
         .font(.caption)

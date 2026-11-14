@@ -65,7 +65,7 @@ private func inReadingOrder(_ entries: [ReferenceRects.Entry]) -> Bool {
   }
 }
 
-/// Stage 5's hosted proof that hover detection can work in the real `Text`. Row (a) is the control: when it fails,
+/// Hosted proof that hover detection works in the real `Text`. Row (a) is the control: when it fails,
 /// the harness is wrong, not the API, and the rows after it say nothing.
 @MainActor
 @Suite(.enabled(if: hasRenderer, "TextRenderer needs macOS 15"))
@@ -239,7 +239,7 @@ struct InlineTextHoverTests {
   }
 }
 
-/// Risk 7: tagging each reference for the renderer must keep its link. These rows count and read the `AXLink`s and
+/// Tagging each reference for the renderer must keep its link. These rows count and read the `AXLink`s and
 /// never press one, because pressing a `Text` link crashes the test process.
 @MainActor
 @Suite struct InlineTextHoverLinkTests {

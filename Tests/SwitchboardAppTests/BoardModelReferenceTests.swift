@@ -113,7 +113,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
 
     model.loadReference(ref)
 
-    #expect(model.referenceDetails[ref.key] == .loading)
+    #expect(model.references.details[ref.key] == .loading)
   }
 
   @Test func theAnswerReplacesLoading() async throws {
@@ -124,9 +124,9 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     model.loadReference(ref)
 
     sbd.release()
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
-    #expect(model.referenceDetails[ref.key] == .loaded(try decoded(prReply)))
+    #expect(model.references.details[ref.key] == .loaded(try decoded(prReply)))
   }
 
   /// Parity with the op: the app reads sbd's real reply shape, with nil fields left out.
@@ -137,9 +137,9 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let model = model(sbd)
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
-    #expect(model.referenceDetails[ref.key] == .loaded(try decoded(reply)))
+    #expect(model.references.details[ref.key] == .loaded(try decoded(reply)))
   }
 
   @Test func aPRAnswerKeepsItsReviewAndMergeability() async throws {
@@ -148,9 +148,9 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let model = model(sbd)
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
-    guard case .loaded(let details)? = model.referenceDetails[ref.key] else {
+    guard case .loaded(let details)? = model.references.details[ref.key] else {
       Issue.record("no loaded details")
       return
     }
@@ -160,13 +160,24 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
 
   @Test func aRefusalStoresItsMessage() async {
     let sbd = FakeSbd()
-    sbd.reply(.refusal("o/r#7 not found, or your GitHub token can't see it"))
+    sbd.reply(.refusal("GitHub answered 502"))
     let model = model(sbd)
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
-    #expect(model.referenceDetails[ref.key] == .failed("o/r#7 not found, or your GitHub token can't see it"))
+    #expect(model.references.details[ref.key] == .failed("GitHub answered 502"))
+  }
+
+  @Test func aNotFoundReplyStoresNotFound() async throws {
+    let sbd = FakeSbd()
+    sbd.reply(.answer(try json(#"{"notFound":true,"number":7,"repo":"o/r"}"#)))
+    let model = model(sbd)
+
+    model.loadReference(ref)
+    await settle { model.references.details[ref.key] != .loading }
+
+    #expect(model.references.details[ref.key] == .notFound)
   }
 
   /// The card shows the error. The window's banner is for actions the user took.
@@ -176,7 +187,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let model = model(sbd)
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
     #expect(model.actionError == nil)
   }
@@ -186,15 +197,15 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     sbd.reply(.answer(try json(prReply)), .answer(try json(issueReply)))
     let model = model(sbd)
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
-    try #require(model.referenceDetails[ref.key] == .loaded(try decoded(prReply)))
+    await settle { model.references.details[ref.key] != .loading }
+    try #require(model.references.details[ref.key] == .loaded(try decoded(prReply)))
     sbd.hold()
     defer { sbd.release() }
 
     model.loadReference(ref)
     await settle { sbd.calls.count == 2 }
 
-    #expect(model.referenceDetails[ref.key] == .loaded(try decoded(prReply)))
+    #expect(model.references.details[ref.key] == .loaded(try decoded(prReply)))
   }
 
   @Test func aRefreshReplacesTheLoadedValueWithTheNewAnswer() async throws {
@@ -203,12 +214,12 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let newer = try decoded(issueReply)
     let model = model(sbd)
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] == .loaded(newer) }
+    await settle { model.references.details[ref.key] == .loaded(newer) }
 
-    #expect(model.referenceDetails[ref.key] == .loaded(newer))
+    #expect(model.references.details[ref.key] == .loaded(newer))
   }
 
   @Test func oneLoadSendsOneRequest() async throws {
@@ -217,7 +228,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let model = model(sbd)
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
     await idle()
 
     #expect(sbd.calls.count == 1)
@@ -247,7 +258,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     model.loadReference(ref)
     model.loadReference(ref)
     sbd.release()
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
     model.loadReference(ref)
     await settle { sbd.calls.count == 2 }
@@ -261,10 +272,10 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let answer = try decoded(prReply)
     let model = model(sbd)
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] != .loading }
+    await settle { model.references.details[ref.key] != .loading }
 
     model.loadReference(ref)
-    await settle { model.referenceDetails[ref.key] == .loaded(answer) }
+    await settle { model.references.details[ref.key] == .loaded(answer) }
 
     #expect(sbd.calls.count == 2)
   }
@@ -309,15 +320,15 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
 
     for r in refs { model.loadReference(r) }
     await settle { sbd.calls.count == refs.count }
-    await settle { !model.referenceDetails.values.contains(.loading) }
+    await settle { !model.references.details.values.contains(.loading) }
     await idle()
 
-    #expect(model.referenceDetails.count <= 500)
+    #expect(model.references.details.count <= 500)
   }
 }
 
 /// The reference card asks sbd once each time it opens. A card that asked from `body` would ask again on every
-/// model update, because each answer publishes and runs `body` again.
+/// model or store update, because each answer publishes and runs `body` again.
 @MainActor
 @Suite struct ReferenceCardLoadTests {
   /// Hosts the card in a window that is never shown, and draws it once.
@@ -341,7 +352,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let model = model(sbd)
 
     let window = host(model, ref)
-    await settle { model.referenceDetails[ref.key].map { $0 != .loading } == true }
+    await settle { model.references.details[ref.key].map { $0 != .loading } == true }
     await idle()
 
     #expect(sbd.calls.count == 1)
@@ -353,7 +364,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     sbd.reply(.answer(try json(prReply)), .answer(try json(prReply)), .answer(try json(prReply)))
     let model = model(sbd)
     let window = host(model, ref)
-    await settle { model.referenceDetails[ref.key].map { $0 != .loading } == true }
+    await settle { model.references.details[ref.key].map { $0 != .loading } == true }
     try #require(sbd.calls.count == 1)
 
     model.apply(.success([needsItem("a"), needsItem("b")]), followups: nil)
@@ -368,12 +379,49 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     sbd.reply(.answer(try json(prReply)), .answer(try json(prReply)), .answer(try json(prReply)))
     let model = model(sbd)
     let first = host(model, ref)
-    await settle { model.referenceDetails[ref.key].map { $0 != .loading } == true }
+    await settle { model.references.details[ref.key].map { $0 != .loading } == true }
 
     let second = host(model, ref)
     await settle { sbd.calls.count == 2 }
 
     #expect(sbd.calls.count == 2)
     withExtendedLifetime((first, second)) {}
+  }
+}
+
+/// The panel measures the card when it shows it. An answer makes the card taller, and the panel must grow with it.
+@MainActor
+@Suite struct ReferenceCardPlacementTests {
+  @Test func thePanelGrowsWhenTheAnswerComes() async throws {
+    _ = NSApplication.shared
+    let sbd = FakeSbd()
+    // The card's own task may ask again after the first answer.
+    sbd.reply(.answer(try json(prReply)), .answer(try json(prReply)))
+    let model = model(sbd)
+    let window = NSWindow(
+      contentRect: NSRect(x: 200, y: 200, width: 400, height: 300), styleMask: [.titled], backing: .buffered,
+      defer: false)
+    window.isReleasedWhenClosed = false
+    let anchor = NSView(frame: NSRect(x: 20, y: 250, width: 40, height: 14))
+    window.contentView?.addSubview(anchor)
+    let presenter = HoverCardPanel<ReferenceCardID>(clickable: true) { id in
+      AnyView(ReferenceCardView(model: model, ref: id.ref))
+    }
+    presenter.show(ReferenceCardID(ref: ref), below: HoverAnchor(view: anchor))
+    defer { presenter.hide() }
+    let panel = try #require(presenter.panel)
+    let loading = panel.frame.height
+    try #require(loading > 0)
+
+    model.loadReference(ref)
+    await settle {
+      panel.contentView?.layoutSubtreeIfNeeded()
+      panel.displayIfNeeded()
+      return panel.frame.height > loading
+    }
+
+    #expect(model.references.details[ref.key] == .loaded(try decoded(prReply)))
+    #expect(panel.frame.height > loading)
+    withExtendedLifetime(window) {}
   }
 }

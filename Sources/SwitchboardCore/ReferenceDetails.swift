@@ -184,9 +184,11 @@ public struct ReferenceCache: Sendable {
 
   public mutating func store(_ answer: Answer, for key: String, now: Int64) {
     entries[key] = (answer, now)
-    entries = entries.filter { now - $0.value.stored <= Self.maxAgeMs }
+    if entries.values.contains(where: { now - $0.stored > Self.maxAgeMs }) {
+      entries = entries.filter { now - $0.value.stored <= Self.maxAgeMs }
+    }
     if entries.count > Self.maxEntries,
-      let oldest = entries.filter({ $0.key != key }).min(by: { $0.value.stored < $1.value.stored })?.key
+      let oldest = entries.lazy.filter({ $0.key != key }).min(by: { $0.value.stored < $1.value.stored })?.key
     {
       entries[oldest] = nil
     }
@@ -201,8 +203,36 @@ public struct ReferenceCache: Sendable {
   }
 }
 
-extension ReferenceDetails {
-  /// The end of sbd's `ref-details` refusal when GitHub has no such item or the token can't see it. The app reads
-  /// a refusal that ends with it as "not found".
-  public static let notFoundText = "not found, or your GitHub token can't see it"
+/// sbd's `ref-details` reply. A found item is its details. An item that GitHub does not have, or that the token
+/// can't see, is `{"notFound": true, "repo": …, "number": …}`. A failed read is the op's error, not a reply.
+public enum ReferenceReply: Equatable, Sendable {
+  case found(ReferenceDetails)
+  case notFound(repo: String, number: Int)
+}
+
+extension ReferenceReply: Codable {
+  private enum NotFoundKeys: String, CodingKey {
+    case notFound, repo, number
+  }
+
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: NotFoundKeys.self)
+    if try c.decodeIfPresent(Bool.self, forKey: .notFound) == true {
+      self = .notFound(repo: try c.decode(String.self, forKey: .repo), number: try c.decode(Int.self, forKey: .number))
+    } else {
+      self = .found(try ReferenceDetails(from: decoder))
+    }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    switch self {
+    case .found(let details):
+      try details.encode(to: encoder)
+    case .notFound(let repo, let number):
+      var c = encoder.container(keyedBy: NotFoundKeys.self)
+      try c.encode(true, forKey: .notFound)
+      try c.encode(repo, forKey: .repo)
+      try c.encode(number, forKey: .number)
+    }
+  }
 }

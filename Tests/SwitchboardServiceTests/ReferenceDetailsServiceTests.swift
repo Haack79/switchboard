@@ -10,7 +10,7 @@ import os
 
 private let repo = "acme/widgets"
 
-/// The reference query as the plan writes it. The control tests send it through the poller, so the harness is
+/// A reference query written out in full. The control tests send it through the poller, so the harness is
 /// proven before any `ref-details` result is read.
 private let planQuery = """
   query($o: String!, $n: String!, $num: Int!) { rateLimit { cost } repository(owner: $o, name: $n) {
@@ -39,7 +39,7 @@ private func issueNode(_ number: Int, title: String = "Fetched title", in repo: 
 
 /// GitHub's GraphQL endpoint on 127.0.0.1, for the reference query only. It answers each connection on its own
 /// thread, so requests overlap as they do against GitHub. It reads the item from the variables `o`, `n`, and `num`,
-/// as the plan's query names them, and records each request.
+/// as `GitHub.referenceQuery` names them, and records each request.
 private final class FakeReferenceAPI {
   struct Logged {
     /// The lowercase owner/name#N that the variables name.
@@ -305,7 +305,7 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
 
   // MARK: Harness controls
 
-  /// The poller reaches the fake and reads the plan's query. A failure here is the harness, not `ref-details`.
+  /// The poller reaches the fake and reads the written-out query. A failure here is the harness, not `ref-details`.
   @Test func controlThePollerReachesTheFake() throws {
     let h = try Harness()
     h.api.put(7, issueNode(7))
@@ -457,21 +457,28 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
     let h = try Harness()
     h.api.put(1, issueNode(1))
 
-    #expect(try h.refusal("acme/widgets#7").lowercased().contains("not found"))
+    #expect(try h.details("acme/widgets#7") == ["notFound": true, "repo": "acme/widgets", "number": 7])
   }
 
   @Test func aRepositoryThatGitHubDoesNotHaveIsNotFound() throws {
     let h = try Harness()
 
-    #expect(try h.refusal("acme/missing#7").lowercased().contains("not found"))
+    #expect(try h.details("acme/missing#7") == ["notFound": true, "repo": "acme/missing", "number": 7])
+  }
+
+  /// The reply names the item as the request wrote it.
+  @Test func notFoundNamesTheItemAsWritten() throws {
+    let h = try Harness()
+
+    #expect(try h.details("Acme/Missing#7")["repo"] == "Acme/Missing")
   }
 
   @Test func notFoundIsCached() throws {
     let h = try Harness()
     h.api.put(1, issueNode(1))
-    let first = try h.refusal("acme/widgets#7")
+    let first = try h.details("acme/widgets#7")
 
-    let second = try h.refusal("acme/widgets#7")
+    let second = try h.details("acme/widgets#7")
 
     #expect(second == first)
     #expect(h.api.requests.count == 1)
@@ -584,7 +591,7 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
     #expect(h.api.requests.count == 1)
   }
 
-  // MARK: Concurrent fetches (Risk 5)
+  // MARK: Concurrent fetches
 
   /// 20 fetches of different items run at once, and GitHub answers one of them 401. Every call answers, and the
   /// refresh runs gh a few times at most. A warm-up fetch first stores a token, because 20 callers that find no
