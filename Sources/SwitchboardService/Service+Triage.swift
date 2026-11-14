@@ -10,6 +10,8 @@ extension Service {
       return handle(try queue.sync { try chooseRequest(args) })
     case "summary-set":
       return .success(try queue.sync { try setSummary(args) })
+    case "item-context":
+      return .success(try itemContext(args))
     default:
       return .success(try reply(args))
     }
@@ -50,9 +52,10 @@ extension Service {
       guard let key = args["option"]?.string else { throw APIError("name an option, by number or label") }
       option = try item.option(key)
     }
-    // Claude Code may not approve its own prompt or act on its own PR.
-    if args["insideClaude"]?.bool == true, item.source == .card || option.action.needsClick {
-      throw APIError("choose answers a prompt or acts on a PR for you, so it doesn't run inside Claude Code")
+    // Claude Code may not approve its own prompt, act on its own PR, or answer the operator's report for the user.
+    if args["insideClaude"]?.bool == true, item.source == .card || item.source == .report || option.action.needsClick {
+      throw APIError(
+        "choose answers a prompt or a report, or acts on a PR, for you, so it doesn't run inside Claude Code")
     }
     let session = JSON.string(id)
     // The ref lets `send` record that the user's message answered a rule's item. `send` drops it for a choice
@@ -114,6 +117,28 @@ extension Service {
     let text = findTranscript().flatMap { Transcript.tail($0, on: machine).lastReply }
     guard let reply = text ?? hooked else { throw APIError("\(id) has no reply yet") }
     return ["session": .string(id), "reply": .string(reply), "source": .string(text == nil ? "hook" : "transcript")]
+  }
+
+  /// The `item-context` request: the transcript steps that lead up to the
+  /// session's current item, as `ItemContext`. `steps` counts the steps
+  /// before the anchor, from 1 to `ItemContext.maxSteps`. Like `chatLog`'s
+  /// assistant-only read, it returns only Claude's steps, so it serves any
+  /// session. It reads the transcript off the state queue.
+  private func itemContext(_ args: JSON) throws -> JSON {
+    let (id, ref, anchor, findTranscript, machine) = try queue.sync {
+      () -> (String, String?, TranscriptAnchor, () -> String?, any Machine) in
+      let id = try lookup(args)
+      let item = summary(id).triage
+      let facts = entries[id]!.facts
+      let anchor = TranscriptAnchor.of(item: item, facts: facts)
+      return (id, item?.ref, anchor, transcriptFinder(id), try site(of: id).machine)
+    }
+    let steps = min(max(args["steps"]?.int ?? ItemContext.defaultSteps, 1), ItemContext.maxSteps)
+    let read = findTranscript().map { Transcript.context($0, anchor: anchor, steps: steps, on: machine) }
+    return try JSON(
+      encoding: ItemContext(
+        session: id, ref: ref, anchor: anchor.kind, anchored: read?.anchored ?? false, more: read?.more ?? false,
+        steps: read?.steps ?? []))
   }
 
   /// Runs on the state queue. It returns a function that finds the session's

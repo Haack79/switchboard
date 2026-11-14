@@ -23,15 +23,21 @@ extension BoardModel {
   func requestListFocus() { listFocusRequests += 1 }
 
   /// Closes the search panel and selects `id` as a sidebar click does, even when the session has an Inbox
-  /// item. A work session's collapsed section opens, and so does the archive for an archived conversation, so
-  /// the sidebar shows the selected row.
+  /// item.
   func openFromSearch(_ id: String) {
     showingSearch = false
     guard let session = board.first(where: { $0.id == id }) else { return }
+    showInSidebar(session)
+  }
+
+  /// Selects the session as a sidebar click does. A work session's collapsed section opens, and so does the
+  /// archive for an archived conversation, so the sidebar shows the selected row.
+  func showInSidebar(_ session: SessionSummary) {
     if session.kind == .work { collapsed.remove(session.state) }
     if session.activity?.archived == true { showingArchive = true }
-    selection = id
-    requestListFocus()
+    selection = session.id
+    // A list focus request would take keyboard focus from an open sheet's fields.
+    if !presentingSheet { requestListFocus() }
   }
 
   /// The focused Board card while the Board still shows it, else the first card, as the Inbox falls back to
@@ -93,6 +99,17 @@ extension BoardModel {
     focusTerminal()
   }
 
+  /// Shows the session's whole conversation: a chat's messages, or another session's terminal.
+  func openTranscript(_ session: SessionSummary) {
+    switch session.transcriptTarget {
+    case .chat:
+      showingTerminal = false
+      selection = session.id
+    case .terminal: openInboxTerminal()
+    case nil: break
+    }
+  }
+
   /// Clears the terminal focus request while it still names `id`.
   func releaseTerminalFocus(_ id: String) {
     if terminalFocus == id { terminalFocus = nil }
@@ -145,5 +162,19 @@ extension BoardModel {
     return BoardLayout(
       columns: MergeBoard.columns, lanes: lanes, done: board.filter(MergeBoard.isDone),
       grid: BoardGrid(lanes: lanes.map { $0.cells.map { $0.map(\.id) } }))
+  }
+}
+
+/// Where "Open in transcript" shows a session's whole conversation.
+enum TranscriptTarget: Equatable {
+  case chat
+  case terminal
+}
+
+extension SessionSummary {
+  /// A chat's messages, or the terminal of another session that runs claude.
+  var transcriptTarget: TranscriptTarget? {
+    guard runsClaude, !waitsToStart else { return nil }
+    return kind.showsAsChat ? .chat : .terminal
   }
 }

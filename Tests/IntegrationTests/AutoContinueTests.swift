@@ -20,9 +20,9 @@ extension Instance {
     try events(id).filter { $0.kind == "auto-continue" }
   }
 
-  /// The messages that sbd sent to the session on its own.
-  func sbdMessages(_ id: String) throws -> [Event] {
-    try events(id).filter { $0.kind == "sent" && $0.data["by"]?.string == "sbd" }
+  /// The messages that sbd sent to the session on its own, after the event `after`.
+  func sbdMessages(_ id: String, after: Int64 = 0) throws -> [Event] {
+    try events(id, after: after).filter { $0.kind == "sent" && $0.data["by"]?.string == "sbd" }
   }
 }
 

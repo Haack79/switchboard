@@ -33,4 +33,21 @@ import Testing
     #expect(Chat.guide.contains("add_schedule"))
     #expect(Chat.guide.contains("remove_schedule"))
   }
+
+  @Test func theOperatorIsNamedOperator() {
+    #expect(Manager.operatorName == "Operator")
+  }
+
+  @Test func theOperatorPromptSaysToCheckTheOperatorBeforeItReArmsALoop() {
+    #expect(Manager.operatorPrompt.contains("`sb get \(Manager.operatorName)`"), "\(Manager.operatorPrompt)")
+  }
+
+  @Test func theOperatorPromptSaysToReportWithTheReportToolAndNeedsYou() {
+    #expect(Manager.operatorPrompt.contains("`report`"), "\(Manager.operatorPrompt)")
+    #expect(Manager.operatorPrompt.contains("`needsYou`"), "\(Manager.operatorPrompt)")
+  }
+
+  @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
+    #expect(Manager.operatorPrompt.contains("CLAUDE.md"), "\(Manager.operatorPrompt)")
+  }
 }

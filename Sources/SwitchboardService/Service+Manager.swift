@@ -37,17 +37,115 @@ extension Service {
     }
   }
 
-  /// A new conversation loads only the switchboard MCP server. Without a
-  /// name, it takes the first line of `prompt`, or `Manager.untitled` until
-  /// its first prompt names it.
-  private func createManager(name: String?, prompt: String?) throws -> SessionSummary {
+  /// A new conversation, or the operator with `isOperator`, loads only the
+  /// switchboard MCP server. Without a name, it takes the first line of
+  /// `prompt`, or `Manager.untitled` until its first prompt names it.
+  private func createManager(name: String?, prompt: String?, isOperator: Bool = false) throws -> SessionSummary {
     let folder = home.managerFolder
     let named = name ?? prompt.map(Manager.name(fromPrompt:)) ?? Manager.untitled
     return try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
       $0.manager = true
+      if isOperator { $0.isOperator = true }
       $0.mcp = []
       $0.mcpScoped = true
     }
+  }
+
+  /// The `operator` request: sends `text` to the operator, or without text
+  /// opens it. It creates the operator when none exists. The answer is the
+  /// operator's summary, with `delivery` when it took text. `from` names the
+  /// session whose Claude sent the text, so the text doesn't close the
+  /// operator's reports.
+  func operatorRequest(_ args: JSON) -> Response {
+    do {
+      let text = args["text"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+      let (id, created) = try queue.sync { () -> (String, SessionSummary?) in
+        if let id = operatorID() { return (id, nil) }
+        let id = try ensureOperator()
+        return (id, summary(id))
+      }
+      // An open right after the creation could read the starting claude as stopped and launch it again.
+      if let created, text == nil { return .success(try JSON(encoding: created)) }
+      return try openOrSend(id, text, from: args["from"]?.string)
+    } catch {
+      return .failure("\(error)")
+    }
+  }
+
+  /// The operator's id. It creates the operator when none exists, with no
+  /// prompt, so claude starts and the idle stop stops it later. The caller
+  /// holds the state queue, so the lookup and the creation are one step.
+  /// The operator loads only the switchboard MCP server, so its launch
+  /// waits for no shared server.
+  func ensureOperator() throws -> String {
+    if let id = operatorID() { return id }
+    try ensureManagerFolder()
+    return try createManager(name: Manager.operatorName, prompt: nil, isOperator: true).id
+  }
+
+  /// The operator's id, or nil when none exists. When the store holds more
+  /// than one, it is the oldest. sbd logs the others and leaves them as they are.
+  func operatorID() -> String? {
+    let operators = entries.values.map(\.session).filter { $0.kind == .operator }
+      .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
+    guard let oldest = operators.first else { return nil }
+    if operators.count > 1 {
+      let others = operators.dropFirst().map(\.id).joined(separator: ", ")
+      logLine("found more than one operator. Using \(oldest.id), the oldest, and leaving \(others)")
+    }
+    return oldest.id
+  }
+
+  /// Refuses to remove the operator while it has an open wait or an open `needsYou` report, because the
+  /// removal would drop it without a message.
+  func refuseOperatorRemoval(_ id: String) throws {
+    guard let e = entries[id], e.session.kind == .operator else { return }
+    let name = Manager.operatorName
+    let count = e.session.waits?.count ?? 0
+    if count > 0 {
+      let (waits, them) = count == 1 ? ("wait", "it") : ("waits", "them")
+      throw APIError(
+        "the operator has \(count) open \(waits), and removing it would drop \(them). "
+          + "Clear \(them) first with: sb wait \(name) --clear. Then run: sb rm \(name)")
+    }
+    let reports = e.facts.openReports.count
+    if reports > 0 {
+      let (open, them) = reports == 1 ? ("an open report", "it") : ("\(reports) open reports", "them")
+      throw APIError(
+        "the operator has \(open) that needs you, and removing it would drop \(them). "
+          + "Answer or acknowledge \(them) in the Inbox. Then run: sb rm \(name)")
+    }
+  }
+
+  /// The `operator-report` request, which records a report on the operator. Only the operator may make it,
+  /// so `caller` must be the operator's id. `session` names the session that the report is about.
+  func operatorReport(_ args: JSON) throws -> JSON {
+    guard let caller = args["caller"]?.string, let id = operatorID(), caller == id else {
+      throw APIError("only the operator records reports. Send the operator a message with: sb operator <text>")
+    }
+    let text = oneLine(args["text"]?.string ?? "", max: TriageCard.lineLength)
+    guard !text.isEmpty else { throw APIError("a report needs text") }
+    var data: [String: JSON] = ["text": .string(text), "needsYou": .bool(args["needsYou"]?.bool == true)]
+    if let about = args["session"]?.string { data["about"] = .string(try lookup(["session": .string(about)])) }
+    let event = try recordStored(id, OperatorReport.event, .object(data))
+    return try reportRow(OperatorReport(event)!, of: id)
+  }
+
+  /// The `operator-reports` request: the operator's reports, oldest first, each with whether it is open. It
+  /// lists the newest `Event.defaultLimit`, or every one with `all`. Without an operator, the list is empty.
+  func operatorReports(_ args: JSON) throws -> JSON {
+    guard let id = operatorID() else { return [] }
+    let limit = args["all"]?.bool == true ? Int.max : Event.defaultLimit
+    let events = try store.events(session: id, kind: OperatorReport.event, limit: limit, newest: true)
+    return .array(try events.compactMap(OperatorReport.init).map { try reportRow($0, of: id) })
+  }
+
+  /// The report as `sb operator reports` lists it, with `open` and the name of the session that it is about.
+  private func reportRow(_ report: OperatorReport, of id: String) throws -> JSON {
+    var row = try JSON(encoding: report).object ?? [:]
+    row["open"] = .bool(entries[id]!.facts.openReports.contains { $0.id == report.id })
+    if let name = report.about.flatMap({ entries[$0]?.session.name }) { row["aboutName"] = .string(name) }
+    return .object(row)
   }
 
   /// Where a relaunch for changed MCP servers stands.
@@ -58,7 +156,7 @@ extension Service {
     case stopping
   }
 
-  private var managerSessions: [Session] { entries.values.map(\.session).filter { $0.manager == true } }
+  private var managerSessions: [Session] { entries.values.map(\.session).filter { $0.kind == .manager } }
 
   /// The `manager-ls` request: every conversation, newest activity first.
   func managerList() -> [SessionSummary] {
@@ -83,7 +181,7 @@ extension Service {
 
   /// Names an untitled conversation after the first line of its first prompt.
   func nameConversation(_ id: String, prompt: String?) throws {
-    guard entries[id]?.session.manager == true, entries[id]?.session.name == Manager.untitled else { return }
+    guard entries[id]?.session.kind == .manager, entries[id]?.session.name == Manager.untitled else { return }
     let name = Manager.name(fromPrompt: prompt ?? "")
     guard name != Manager.untitled else { return }
     try update(id) { $0.name = name }
@@ -137,12 +235,14 @@ extension Service {
     return out
   }
 
-  /// The `manager-mcp` request: shows a conversation's MCP servers, or
+  /// The `manager-mcp` request: shows the MCP servers of a conversation or the operator, or
   /// changes them with `add`, `rm`, `all`, or `none`. A change applies when
   /// claude can take it, as `applyMCPChanges` describes.
   func managerMCP(_ args: JSON) throws -> JSON {
     guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
-    let id = try managerConversation(ref)
+    let id = try resolveRef(
+      ref, "Manager conversation",
+      entries.values.map(\.session).filter(\.kind.runsInManagerFolder).map { ($0.id, $0.name) })
     let add = args["add"]?.array?.compactMap(\.string) ?? []
     let remove = args["rm"]?.array?.compactMap(\.string) ?? []
     let all = args["all"]?.bool == true

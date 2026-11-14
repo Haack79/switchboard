@@ -36,7 +36,7 @@ public struct WaitRequest: Codable, Equatable, Sendable {
     let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
     var wait = Wait(
       id: id, kind: kind, who: who, service: service, note: trimmed?.isEmpty == false ? trimmed : nil,
-      by: try Author(parsing: by), created: now, then: kind == .manual ? .notify : .resume)
+      by: try Author(parsing: by), created: now, then: kind.defaultThen)
     if let then {
       guard let value = Wait.Then(rawValue: then) else { throw APIError("then is resume or notify, not \(then)") }
       wait.then = value
@@ -81,4 +81,14 @@ public struct WaitRequest: Codable, Equatable, Sendable {
     }
     return value
   }
+}
+
+/// Whether sbd stores `wait` on the operator instead of `namedSession`, the session that the request named.
+/// It does when the wait resolves the same way there and only the recipient of the message changes:
+/// the named session is a Manager conversation, Claude set the wait, it resumes, `here` is not set, its
+/// resolution reads nothing of the waiter, and it is not a `session` wait on the operator, whose id is
+/// `operatorID`.
+public func handsOff(_ wait: Wait, namedSession: Session, here: Bool, operatorID: String?) -> Bool {
+  namedSession.kind == .manager && !here && wait.by == .claude && wait.then == .resume && !wait.readsWaiter
+    && (wait.session.map { $0.id != operatorID } ?? true)
 }

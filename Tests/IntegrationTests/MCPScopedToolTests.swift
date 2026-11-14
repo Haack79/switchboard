@@ -10,7 +10,7 @@ import Testing
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 18)
+    #expect(names.count == MCPToolServerTests.allTools.count - MCPToolServerTests.unscopedOnly.count)
     #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.unscopedOnly))
   }
 

@@ -102,6 +102,81 @@ import Testing
     #expect(model.needsUser.map(\.id) == ["a"])
   }
 
+  // MARK: The operator
+
+  /// The operator, with the newest activity of any session. One that needs
+  /// you has an open prompt, which is what `ChatMark` reads.
+  func operatorItem(_ id: String = "op", state: AttentionState = .needsYou) -> SessionSummary {
+    var s = needsItem(id, manager: true, state: state)
+    s.openPrompt = state == .needsYou
+    s.kind = .operator
+    s.name = Manager.operatorName
+    s.lastActivity = 1_000
+    return s
+  }
+
+  func conversation(_ id: String, state: AttentionState = .working, lastActivity: Int64 = 1) -> SessionSummary {
+    var s = needsItem(id, manager: true, state: state)
+    s.openPrompt = state == .needsYou
+    s.lastActivity = lastActivity
+    return s
+  }
+
+  @Test func managersLeaveOutTheOperatorWithTheNewestActivity() {
+    let model = model([conversation("m1", lastActivity: 1), conversation("m2", lastActivity: 2), operatorItem()])
+
+    #expect(model.managers.map(\.id) == ["m2", "m1"])
+  }
+
+  @Test func waitingManagerIsNilWhenOnlyTheOperatorNeedsYou() {
+    let model = model([conversation("m"), operatorItem(state: .needsYou)])
+
+    #expect(model.waitingManager == nil)
+  }
+
+  @Test func waitingManagerNamesTheConversationWhenItAndTheOperatorNeedYou() {
+    let model = model([operatorItem(state: .needsYou), conversation("m", state: .needsYou)])
+
+    #expect(model.waitingManager?.id == "m")
+  }
+
+  @Test func operatorSessionReturnsTheOperator() {
+    let model = model([conversation("m"), needsItem("a"), operatorItem("op")])
+
+    #expect(model.operatorSession?.id == "op")
+  }
+
+  @Test func operatorSessionIsNilWithoutAnOperator() {
+    let model = model([conversation("m"), needsItem("a")])
+
+    #expect(model.operatorSession == nil)
+  }
+
+  @Test func theOperatorIsInNoSidebarStateGroup() {
+    for state in [AttentionState.working, .needsYou, .waiting] {
+      let model = model([operatorItem(state: state), needsItem("a", state: .working)])
+
+      #expect(!model.sidebarGroups.flatMap { $0.rows.map(\.id) }.contains("op"))
+    }
+  }
+
+  @Test func openOperatorAsksSbdForTheOperatorWithNoText() async {
+    let sent = await firstRequest { $0.openOperator() }
+
+    #expect(sent.op == "operator")
+    #expect(sent.args["text"] == nil)
+  }
+
+  @Test func openOperatorSelectsTheSessionThatSbdNames() async {
+    let model = offlineModel()
+    model.send = { _, _ in ["id": "op"] }
+
+    model.openOperator()
+
+    await settle { model.selection == "op" }
+    #expect(model.selection == "op")
+  }
+
   @Test func movingBetweenNeedsYouAndReadyToMergeDoesNotNotify() {
     #expect(model([needsItem("a")]).sessionsToNotify([needsItem("a", state: .readyToMerge)]).isEmpty)
     #expect(model([needsItem("a", state: .readyToMerge)]).sessionsToNotify([needsItem("a")]).isEmpty)
