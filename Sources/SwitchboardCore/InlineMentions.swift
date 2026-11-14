@@ -60,10 +60,7 @@ public struct InlineMentions: Sendable {
     for (run, range) in zip(text.runs, bounds) {
       let references = references(in: run, range, scalars)
       let urls = references.filter(\.isURL)
-      let candidates =
-        names.spans(in: run, range, scalars).filter { span in
-          !urls.contains { $0.range.overlaps(span.range) }
-        } + references
+      let candidates = names.spans(in: run, range, scalars).filter { !Self.overlaps($0.range, urls) } + references
       let spans = Self.merged(candidates, from: range.lowerBound).compactMap { span in
         span.mention.map { (range: span.range, mention: $0) }
       }
@@ -88,6 +85,18 @@ public struct InlineMentions: Sendable {
     guard run.image == nil, run.style.isDisjoint(with: [.code, .footnote]) else { return [] }
     guard let link = run.link else { return GitHubRef.spans(in: range, s, repo: repo) }
     return GitHubRef(linkableURL: link).map { [Span.reference(range, $0)] } ?? []
+  }
+
+  /// Whether `range` overlaps one of `urls`, which are in order and do not overlap each other. It searches
+  /// `urls` by halves, because a scan of every URL for each session id is quadratic in a long run.
+  private static func overlaps(_ range: Range<Int>, _ urls: [Span]) -> Bool {
+    var low = 0
+    var high = urls.count
+    while low < high {
+      let mid = (low + high) / 2
+      if urls[mid].range.upperBound <= range.lowerBound { low = mid + 1 } else { high = mid }
+    }
+    return low < urls.count && urls[low].range.lowerBound < range.upperBound
   }
 
   /// The spans to keep, in order: the earliest start wins, a longer span wins
