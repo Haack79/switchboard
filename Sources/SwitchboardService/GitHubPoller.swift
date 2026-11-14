@@ -224,7 +224,7 @@ final class GitHubPoller {
         waited.created[id] = max(waited.created[id] ?? 0, ended)
       }
       try readPRs(all: all, now: now, waited: waited, queued: queuedPRs(), stats: &stats)
-      try checkDeploys(interest, all: all, now: now, stats: &stats)
+      try checkDeploys(deployTargets(interest), all: all, now: now, stats: &stats)
     } catch {
       failure = "\(error)"
       logLine("github: \(error)")

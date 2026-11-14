@@ -25,24 +25,30 @@ extension GitHubPoller {
     var chartsCommits: [String: String] = [:]
     /// The state-deploy.yml run on each charts commit.
     var runs: [String: (id: Int, url: String)] = [:]
-    /// The environments that each wait's last check decided, by wait id.
+    /// The environments that each target's last check decided, by target id.
     var progress: [String: [DeployEnvironment: EnvironmentDeploy]] = [:]
   }
 
-  /// An open deploy wait that names a service, with its merged PR.
-  private struct ServiceWait {
-    var wait: Wait
+  /// A merged PR whose deploy of a service the poller checks.
+  struct DeployTarget {
+    var id: String
     var service: String
     var pr: PullRequest
     var merge: String
+    var environments: [DeployEnvironment]
+    /// When the target appeared. A state file read before then doesn't decide it.
+    var since: Int64
   }
 
-  private func serviceWaits(_ interest: Interest) -> [ServiceWait] {
+  /// The open deploy waits that name a service and whose PR merged.
+  func deployTargets(_ interest: Interest) -> [DeployTarget] {
     interest.waits.compactMap { session, wait in
       guard wait.kind == .deploy, let service = wait.service, let id = prId(of: wait, session: session.id),
         let pr = prs[id]?.pr, pr.state == .merged, let merge = pr.mergeCommit
       else { return nil }
-      return ServiceWait(wait: wait, service: service, pr: pr, merge: merge)
+      return DeployTarget(
+        id: wait.id, service: service, pr: pr, merge: merge, environments: wait.deployEnvironments,
+        since: wait.created)
     }
   }
 
@@ -51,13 +57,12 @@ extension GitHubPoller {
   /// environment of each wait, it compares the commit that the environment
   /// runs with the PR's merge commit, and reads the sync job of the charts run
   /// that deploys that commit.
-  func checkDeploys(_ interest: Interest, all: Bool, now: Int64, stats: inout Stats) throws {
-    let waits = serviceWaits(interest)
-    let services = Set(waits.map(\.service))
-    let ids = Set(waits.map(\.wait.id))
+  func checkDeploys(_ targets: [DeployTarget], all: Bool, now: Int64, stats: inout Stats) throws {
+    let services = Set(targets.map(\.service))
+    let ids = Set(targets.map(\.id))
     deploys.files = deploys.files.filter { services.contains($0.key) }
     deploys.progress = deploys.progress.filter { ids.contains($0.key) }
-    if waits.isEmpty {
+    if targets.isEmpty {
       deploys.ancestry = [:]
       deploys.chartsCommits = [:]
       deploys.runs = [:]
@@ -65,11 +70,11 @@ extension GitHubPoller {
     }
     var failure: Error?
     for service in services.sorted() {
-      let group = waits.filter { $0.service == service }
+      let group = targets.filter { $0.service == service }
       let checked = deploys.files[service]?.checked
       guard
         all || GitHub.elapsed(since: checked, settings.deployMs, now: now)
-          || group.contains(where: { $0.wait.created > checked ?? 0 })
+          || group.contains(where: { $0.since > checked ?? 0 })
       else { continue }
       // A failure stops only this service's check. The poll reports the first one.
       do {
@@ -81,22 +86,22 @@ extension GitHubPoller {
     if let failure { throw failure }
   }
 
-  private func checkService(_ service: String, _ group: [ServiceWait], now: Int64, stats: inout Stats) throws {
+  private func checkService(_ service: String, _ group: [DeployTarget], now: Int64, stats: inout Stats) throws {
     try readStateFile(service, now: now, stats: &stats)
     guard case .read(let state)? = deploys.files[service]?.file else { return }
     var commits: JSON?
     var jobs: [Int: JSON] = [:]
-    for w in group {
+    for t in group {
       // A compare in the PR's repository would fail.
-      guard state.builds(from: w.pr.repo) else { continue }
+      guard state.builds(from: t.pr.repo) else { continue }
       var environments: [DeployEnvironment: EnvironmentDeploy] = [:]
-      for environment in w.wait.deployEnvironments {
+      for environment in t.environments {
         guard let deployed = state.commit(for: environment) else { continue }
-        let ancestry = try self.ancestry(w.pr.repo, deployed: deployed, merge: w.merge, stats: &stats)
+        let ancestry = try self.ancestry(t.pr.repo, deployed: deployed, merge: t.merge, stats: &stats)
         var run: (id: Int, url: String)?
         var sync: ChartsDeployJobs.State?
         if ancestry == .contains, state.needsSync(in: environment) {
-          run = try self.run(service, w.pr.repo, deployed, commits: &commits, stats: &stats)
+          run = try self.run(service, t.pr.repo, deployed, commits: &commits, stats: &stats)
           if let run {
             let runJobs =
               try jobs[run.id]
@@ -108,22 +113,30 @@ extension GitHubPoller {
         environments[environment] = EnvironmentDeploy(
           state: .of(state, in: environment, ancestry: ancestry, sync: sync), run: run?.url)
       }
-      deploys.progress[w.wait.id] = environments
+      deploys.progress[t.id] = environments
     }
   }
 
   /// What happened to a deploy wait, from its PR and comments, or from the
-  /// last check of its service. A service whose state file the poller read
-  /// before the wait was set keeps the wait open.
+  /// last check of its service.
   func deployOutcome(_ wait: Wait, _ pr: PullRequest, _ comments: [PRComment]) -> String? {
     if let outcome = wait.deployResolution(of: pr, comments: comments) { return outcome }
-    guard pr.state == .merged, let service = wait.service, let read = deploys.files[service],
-      read.checked >= wait.created
+    guard pr.state == .merged, let service = wait.service,
+      let read = serviceRead(service, id: wait.id, since: wait.created)
     else { return nil }
+    return wait.serviceDeployResolution(read.state, pr: pr, environments: read.progress)
+  }
+
+  /// The service's state file and a target's progress from the last check,
+  /// or nil when the poller has no read of the file since `since` or can't
+  /// read it.
+  func serviceRead(_ service: String, id: String, since: Int64) -> (
+    state: ServiceDeployState?, progress: [DeployEnvironment: EnvironmentDeploy]
+  )? {
+    guard let read = deploys.files[service], read.checked >= since else { return nil }
     switch read.file {
-    case .missing: return wait.serviceDeployResolution(nil, pr: pr, environments: [:])
-    case .read(let state):
-      return wait.serviceDeployResolution(state, pr: pr, environments: deploys.progress[wait.id] ?? [:])
+    case .missing: return (nil, [:])
+    case .read(let state): return (state, deploys.progress[id] ?? [:])
     case .unreadable: return nil
     }
   }

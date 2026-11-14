@@ -95,22 +95,44 @@ extension Wait {
     _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
     environments: [DeployEnvironment: EnvironmentDeploy]
   ) -> String? {
-    let name = service ?? ""
-    guard let state else { return "\(Wait.chartsRepository) has no state/\(name).yaml" }
-    if let repository = state.repository, !Dependencies.sameRepo(repository, pr.repo) {
-      return "\(name) deploys from \(repository), not \(pr.repo)"
+    switch ServiceDeployVerdict.of(
+      service: service ?? "", state, pr: pr, environments: deployEnvironments, progress: environments)
+    {
+    case .deployed?: deployedOutcome
+    case .stuck(let reason)?: reason
+    case nil: nil
     }
-    let named = deployEnvironments
-    if let failed = named.first(where: { environments[$0]?.state == .failed }) {
-      return "the deploy to \(failed.rawValue) failed" + (environments[failed]?.run.map { ": \($0)" } ?? "")
-    }
-    if named.contains(where: { environments[$0]?.state == .offBranch }) {
-      return "it merged into \(pr.base), which \(name) doesn't deploy from"
-    }
-    return named.allSatisfy({ environments[$0]?.state == .deployed }) ? deployedOutcome : nil
   }
 
   private var deployedOutcome: String {
     "it deployed to " + deployEnvironments.map(\.rawValue).joined(separator: " and ")
+  }
+}
+
+/// Whether a PR's change reached the environments of a service that
+/// PostHog/charts deploys. nil means the deploy may still finish.
+public enum ServiceDeployVerdict: Equatable, Sendable {
+  case deployed
+  /// The deploy can't finish as named, for the reason given.
+  case stuck(String)
+
+  /// `state` is the parsed state file, or nil when PostHog/charts has no
+  /// state file for `service`. `progress` holds each environment that the
+  /// poller could decide. A missing entry keeps the deploy open.
+  public static func of(
+    service: String, _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
+    environments: [DeployEnvironment], progress: [DeployEnvironment: EnvironmentDeploy]
+  ) -> ServiceDeployVerdict? {
+    guard let state else { return .stuck("\(Wait.chartsRepository) has no state/\(service).yaml") }
+    if let repository = state.repository, !Dependencies.sameRepo(repository, pr.repo) {
+      return .stuck("\(service) deploys from \(repository), not \(pr.repo)")
+    }
+    if let failed = environments.first(where: { progress[$0]?.state == .failed }) {
+      return .stuck("the deploy to \(failed.rawValue) failed" + (progress[failed]?.run.map { ": \($0)" } ?? ""))
+    }
+    if environments.contains(where: { progress[$0]?.state == .offBranch }) {
+      return .stuck("it merged into \(pr.base), which \(service) doesn't deploy from")
+    }
+    return environments.allSatisfy({ progress[$0]?.state == .deployed }) ? .deployed : nil
   }
 }
