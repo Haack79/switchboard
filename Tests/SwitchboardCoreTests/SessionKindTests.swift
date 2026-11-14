@@ -19,10 +19,18 @@ import Testing
     #expect(session(manager: manager, chat: chat).kind == kind)
   }
 
-  @Test func eachKindEncodesAsItsName() throws {
-    let encoded = try JSON(encoding: [SessionKind.work, .manager, .chat])
+  @Test(
+    arguments: [
+      (true, true, nil, SessionKind.operator), (true, nil, nil, .operator), (true, true, "g1", .operator),
+      (false, true, nil, .manager), (nil, true, nil, .manager), (false, nil, nil, .work),
+    ] as [(Bool?, Bool?, String?, SessionKind)])
+  func isOperatorWinsOverTheManagerAndChatFields(
+    _ isOperator: Bool?, _ manager: Bool?, _ chat: String?, _ kind: SessionKind
+  ) {
+    var s = session(manager: manager, chat: chat)
+    s.isOperator = isOperator
 
-    #expect(encoded == ["work", "manager", "chat"])
+    #expect(s.kind == kind)
   }
 
   // MARK: Which sessions a multi-select delete may remove
@@ -60,6 +68,12 @@ import Testing
     #expect(!summary(chat: "g1").isRemovableWork)
   }
 
+  @Test func theOperatorIsNotRemovableWork() {
+    var s = summary(manager: true)
+    s.kind = .operator
+    #expect(!s.isRemovableWork)
+  }
+
   @Test func aFollowupThatHasNotStartedIsNotRemovableWorkInAnyState() {
     for state in AttentionState.allCases {
       #expect(!summary(state: state, followup: Followup(prompt: "p")).isRemovableWork, "\(state)")
@@ -83,8 +97,27 @@ import Testing
     #expect(s.isRemovableDone == (s.isRemovableWork && state == .done))
   }
 
-  @Test(arguments: [(SessionKind.work, false), (.manager, true), (.chat, true)] as [(SessionKind, Bool)])
-  func onlyAManagerConversationAndAGroupChatShowAsAChat(_ kind: SessionKind, _ showsAsChat: Bool) {
+  @Test func eachKindEncodesAsItsName() throws {
+    let encoded = try JSON(encoding: [SessionKind.work, .manager, .chat, .operator])
+
+    #expect(encoded == ["work", "manager", "chat", "operator"])
+  }
+
+  @Test func theOperatorKindDecodesFromItsName() throws {
+    #expect(try JSONCoding.decode([SessionKind].self, from: #"["operator"]"#) == [.operator])
+  }
+
+  @Test(
+    arguments: [(SessionKind.work, false), (.manager, true), (.chat, true), (.operator, true)] as [(SessionKind, Bool)])
+  func onlyAWorkSessionDoesNotShowAsAChat(_ kind: SessionKind, _ showsAsChat: Bool) {
     #expect(kind.showsAsChat == showsAsChat)
+  }
+
+  @Test func theOperatorsLabelIsTheOperator() {
+    #expect(SessionKind.operator.label == "the operator")
+  }
+
+  @Test func theOperatorIsNotSummarized() {
+    #expect(!Triage.summarizes(.operator))
   }
 }

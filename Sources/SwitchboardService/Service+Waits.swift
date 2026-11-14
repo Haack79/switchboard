@@ -6,39 +6,102 @@ import SwitchboardCore
 extension Service {
   /// The `wait`, `clear-wait`, and `resolve-wait` requests. `resolve-wait`
   /// acts on processes, so `handle` settles the session and takes a new
-  /// snapshot first, as for `send`.
+  /// snapshot first, as for `send`. A `clear-wait` or `resolve-wait` that names
+  /// a conversation also reaches the waits that it handed to the operator. The
+  /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared.
   func waitRequest(_ op: String, _ args: JSON) throws -> JSON {
     let id = try lookup(args)
-    let open = entries[id]?.session.waits ?? []
     switch op {
     case "wait":
-      try refuseNotStarted(entries[id]!.session)
-      let request = try JSONCoding.convert(args, to: WaitRequest.self)
-      var wait = try request.makeWait(id: shortId("w", taken: open.map(\.id)), waiter: id, now: nowMs()) { ref in
-        let other = try lookup(["session": .string(ref)])
-        return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
-      }
-      if wait.kind == .ci && wait.pr == nil {
-        wait.headSha = try? checkedOutBranch(entries[id]!.session, at: site(of: id)).tip
-      }
-      wait = config.recheck.stamped(wait)
-      try update(id) { $0.waits = open + [wait] }
-      record(id, "wait", ["wait": try JSON(encoding: wait)])
+      return try JSON(encoding: summary(setWait(args, waiter: id)))
     case "clear-wait":
-      let cleared = try args["wait"]?.string.map { [try openWait(id, $0).id] } ?? open.map(\.id)
-      if !cleared.isEmpty {
-        try update(id) { $0.waits = open.filter { !cleared.contains($0.id) } }
-        record(id, "wait-cleared", ["waits": .array(cleared.map(JSON.string))])
-      }
+      let cleared = try clearWaits(id, args["wait"]?.string)
+      var answer = try JSON(encoding: summary(id)).object ?? [:]
+      answer["cleared"] = .array(cleared.map(JSON.string))
+      return .object(answer)
     case "resolve-wait":
       guard let outcome = args["outcome"]?.string, !outcome.isEmpty else {
         throw APIError("resolve-wait needs an outcome that says what happened")
       }
-      try resolve(id, try openWait(id, args["wait"]?.string), outcome: outcome)
+      let (holder, wait) = try openWait(id, args["wait"]?.string)
+      try resolve(holder, wait, outcome: outcome)
     default:
       throw APIError("unknown request \(op)")
     }
     return try JSON(encoding: summary(id))
+  }
+
+  /// Builds the wait that `args` describe for the session `named`, and stores
+  /// it. When `handsOff` allows it, the operator holds the wait instead, and
+  /// `handedFrom` names `named`. The first such wait creates the operator.
+  /// `here` in `args` keeps the wait on `named`. It records the `wait` event
+  /// on the session that holds the wait, with `from` for a handed-off wait,
+  /// and returns the id of that session. The caller holds the state queue.
+  func setWait(_ args: JSON, waiter named: String) throws -> String {
+    let session = entries[named]!.session
+    try refuseNotStarted(session)
+    let request = try JSONCoding.convert(args, to: WaitRequest.self)
+    // The checks run against `named`, so a conversation still can't wait on itself.
+    var wait = try request.makeWait(id: "", waiter: named, now: nowMs()) { ref in
+      let other = try lookup(["session": .string(ref)])
+      return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
+    }
+    if wait.kind == .ci && wait.pr == nil {
+      wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
+    }
+    var waiter = named
+    let op = operatorID()
+    if handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op) {
+      waiter = try op ?? ensureOperator()
+      wait.handedFrom = Wait.SessionTarget(id: named, name: session.name)
+    }
+    let open = entries[waiter]!.session.waits ?? []
+    wait.id = shortId("w", taken: open.map(\.id))
+    wait = config.recheck.stamped(wait)
+    try update(waiter) { $0.waits = open + [wait] }
+    record(waiter, "wait", try waitEventData(wait))
+    return waiter
+  }
+
+  /// The data of a `wait` or `wait-resolved` event, with `from` naming the
+  /// conversation that handed the wait to the operator.
+  private func waitEventData(_ wait: Wait, _ extra: [String: JSON] = [:]) throws -> JSON {
+    var data = extra
+    data["wait"] = try JSON(encoding: wait)
+    if let from = wait.handedFrom { data["from"] = .string(from.id) }
+    return .object(data)
+  }
+
+  /// The operator's id and the waits on it that the conversation `id` handed
+  /// off, or nil when no operator exists.
+  private func handedOff(from id: String) -> (holder: String, waits: [Wait])? {
+    guard let op = operatorID(), op != id else { return nil }
+    return (op, (entries[op]?.session.waits ?? []).filter { $0.handedFrom?.id == id })
+  }
+
+  /// Clears the waits of `id` and the waits that it handed off, or only the
+  /// one that `waitId` names. It returns the ids it cleared.
+  private func clearWaits(_ id: String, _ waitId: String?) throws -> [String] {
+    if let waitId {
+      let (holder, wait) = try openWait(id, waitId)
+      try drop([wait.id], from: holder, handedFrom: holder == id ? nil : id)
+      return [wait.id]
+    }
+    let own = (entries[id]?.session.waits ?? []).map(\.id)
+    try drop(own, from: id, handedFrom: nil)
+    guard let handed = handedOff(from: id) else { return own }
+    let ids = handed.waits.map(\.id)
+    try drop(ids, from: handed.holder, handedFrom: id)
+    return own + ids
+  }
+
+  /// Removes the waits `ids` from `holder` and records `wait-cleared`.
+  private func drop(_ ids: [String], from holder: String, handedFrom: String?) throws {
+    guard !ids.isEmpty else { return }
+    try update(holder) { $0.waits = ($0.waits ?? []).filter { !ids.contains($0.id) } }
+    var data: [String: JSON] = ["waits": .array(ids.map(JSON.string))]
+    if let handedFrom { data["from"] = .string(handedFrom) }
+    record(holder, "wait-cleared", .object(data))
   }
 
   /// The open waits of these kinds, with their sessions. A poller calls it on
@@ -83,20 +146,25 @@ extension Service {
   private func resolve(_ id: String, _ wait: Wait, outcome: String) throws {
     if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), byUser: false, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
-    record(id, "wait-resolved", ["wait": try JSON(encoding: wait), "outcome": .string(outcome)])
+    record(id, "wait-resolved", try waitEventData(wait, ["outcome": .string(outcome)]))
   }
 
-  /// The wait with this id, or the only open wait when `waitId` is nil.
-  private func openWait(_ id: String, _ waitId: String?) throws -> Wait {
+  /// The session that holds the wait, and the wait: the one with this id, or
+  /// the only open wait when `waitId` is nil. An id that `id` doesn't hold
+  /// can name a wait that `id` handed to the operator.
+  func openWait(_ id: String, _ waitId: String?) throws -> (holder: String, wait: Wait) {
     let open = entries[id]?.session.waits ?? []
     if let waitId {
-      guard let wait = open.first(where: { $0.id == waitId }) else { throw APIError("\(id) has no wait \(waitId)") }
-      return wait
+      if let wait = open.first(where: { $0.id == waitId }) { return (id, wait) }
+      guard let handed = handedOff(from: id), let wait = handed.waits.first(where: { $0.id == waitId }) else {
+        throw APIError("\(id) has no wait \(waitId)")
+      }
+      return (handed.holder, wait)
     }
     guard open.count == 1 else {
       throw APIError(open.isEmpty ? "\(id) has no open wait" : "\(id) has \(open.count) waits, so name one")
     }
-    return open[0]
+    return (id, open[0])
   }
 
   /// v0.1 stored a free-text wait in `waitNote`. This turns it into a manual

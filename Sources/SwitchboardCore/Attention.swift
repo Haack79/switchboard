@@ -185,6 +185,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Set from a `link_down` until the next `link_up`: sbd can't read the session's host, so the events that
   /// would update these facts are not arriving.
   public var unread: UnreadHost?
+  /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
+  public var openReports: [OperatorReport] = []
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -373,6 +375,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     applyAutoContinue(event, userPrompt: userPrompt)
     applyAcknowledgment(event, promptsBefore: promptsBefore)
     applyRequest(event, userPrompt: userPrompt, turnEnded: turnWasRunning && !turnRunning)
+    applyReports(event)
   }
 
   /// A reply is a main-session Stop with a message. A `chat-read` event marks
@@ -458,6 +461,9 @@ public struct Verdict: Equatable, Sendable {
   /// True for the Ready to merge verdict, the only one that asks the user to
   /// merge or enqueue the PR. Its summary says what the PR does.
   public var summarizesPR = false
+  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
+  /// blocking prompts, the operator's Inbox admits only this one.
+  public var byWaitRule = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -548,6 +554,7 @@ public enum Attention {
         state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
     }
     if let v = openPromptVerdict(facts) { return v }
+    if let v = reportVerdict(session, facts) { return v }
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning {
       if let tool = facts.runningTool {
@@ -709,10 +716,23 @@ public enum Attention {
 
   static func call(_ tool: String, _ d: JSON, _ t: Int64) -> ToolCall {
     let input = d["tool_input"]
-    let summary =
-      tool == "AskUserQuestion"
+    return ToolCall(
+      tool: tool, summary: callSummary(tool, input), since: t, id: d["tool_use_id"]?.string, input: input)
+  }
+
+  /// The one-line summary of a call. A question's is its first question.
+  static func callSummary(_ tool: String, _ input: JSON?) -> String {
+    tool == "AskUserQuestion"
       ? (input?["questions"]?.array?.first?["question"]?.string ?? "a question") : toolSummary(tool, input)
-    return ToolCall(tool: tool, summary: summary, since: t, id: d["tool_use_id"]?.string, input: input)
+  }
+
+  /// A call on one line that names its tool once. The summaries of these
+  /// tools leave out the tool's name.
+  static func callLine(_ tool: String, _ input: JSON?) -> String {
+    switch tool {
+    case "Bash", "Agent", "Task", "AskUserQuestion": "\(tool) \(callSummary(tool, input))"
+    default: callSummary(tool, input)
+    }
   }
 
   /// Whether a finished call is this one: by tool_use_id, or by tool name

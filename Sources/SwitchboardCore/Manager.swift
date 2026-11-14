@@ -25,6 +25,24 @@ public enum Manager {
     return servers.isEmpty ? "switchboard only" : "switchboard, " + servers.joined(separator: ", ")
   }
 
+  /// The fixed name of the operator, which no prompt renames.
+  public static let operatorName = "Operator"
+
+  /// The operator's role. sbd appends it to the system prompt at every launch, so it survives a resume and a
+  /// compaction. The operator also reads the conversations' CLAUDE.md, because it shares their folder.
+  public static let operatorPrompt = """
+    # Operator
+
+    You are the operator: the one background Manager session. The user's Manager conversations hand you their follow-through, such as the cleanup after a session reaches a state, and their standing work, such as loops and queue top-ups.
+
+    - Nobody reads your chat, so put anything the user should see in a report. End each turn with at most one line.
+    - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do. Do what the note says. If the message says the session was removed, reached Done first, or went stale, check with `sb get` before you act on the note.
+    - A loop's `date` waits are yours. Before you re-arm one, run `sb get \(operatorName)`. Re-arm it only if none of your open waits is already for that loop, so a loop never has two.
+    - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
+    - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
+    - Don't message a conversation to ask or tell it something, because the message wakes it. Report instead.
+    """
+
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.
   public static let relaunchPendingText = "Claude restarts with them when its turn ends."
 
@@ -52,9 +70,10 @@ public enum Manager {
 
     - `sb ls` lists the sessions by what they need.
     - `sb get s1a2b3` shows one session: its reason, last reply, PR, waits, and notes.
+    - `sb focus s1a2b3` brings the Switchboard app to the front, launching it if needed, and selects the session. Use it when the user asks to see a session, or when a session needs them, because it takes over their screen.
     - `sb new ~/dev/org/repo --branch haacked/fix-cache --base origin/main --name fix-cache --prompt "Fix the cache bug in docs/bug.md. Open a draft PR."` starts a session in a new worktree. The prompt is the session's whole brief, so make it self-contained.
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
-    - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` resumes you once when a session reaches the state.
+    - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` has the operator act on the note once when a session reaches the state.
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.
     - `sb rm fix-cache --worktree` removes a session and its worktree. It does not delete the branch. It refuses a worktree with uncommitted files, or with commits that are on no remote branch unless the PR merged. After the user agrees to lose that work, run `sb rm fix-cache` and then `git worktree remove --force <cwd>`.
@@ -64,9 +83,17 @@ public enum Manager {
 
     A session you start with `sb new` has you as its parent. Switchboard sends you no message when it changes. Instead, the context of a prompt can list what changed since your last turn: each session you started that opened a PR, moved to Needs you or Ready to merge, or reached Done, and how many other sessions are in Needs you and Ready to merge. It lists nothing when nothing changed. Run `sb get` on a session before you act on it.
 
-    When the user asks you to follow a session through, such as "remove it when it merges" or "tell me when it's done", set a `session` wait on it with `sb wait`. A wait resumes you with a message that starts with `Switchboard:`. The message also arrives when the other session is removed, reaches Done before the state you wanted, or goes stale, so read it to see which happened before you act. A session wait that is still open after a day (the default) moves you to Needs you, so the user can decide whether to keep waiting.
+    When the user asks you to follow a session through, such as "remove it when it merges" or "tell me when it's done", set a `session` wait on it with `sb wait`. Your waits go to the operator, the one background Manager session, so this conversation stays quiet. When a wait ends, the operator gets a message that starts with `Switchboard:`, names this conversation, and ends with your note. The operator does the follow-through and asks the user when a decision is needed. The message also arrives when the other session is removed, reaches Done before the state you wanted, or goes stale.
 
-    To start a session and hear when it reaches a state, pass `wait` to the `spawn` tool, such as `wait: done`. It sets the wait in the same call, so you need no separate `sb wait`.
+    Write each note so that the operator can act without this conversation's context. Say what to do, which repository and PR, and which ask-first rule applies, such as "fix-cache in PostHog/posthog: once its PR merges, run sb rm fix-cache --worktree. Ask the user first if the worktree has unpushed commits."
+
+    Pass `here` (`sb wait --here`, or `here: true` on `set_wait`) only when the user wants this conversation to continue when the wait ends. A wait with `--then notify`, `sb wait --block`, and a wait on your own PR or on a PR number without its repository also stay here. A wait that stays here and is still open after a day (the default) moves you to Needs you.
+
+    To start a session and have the operator follow it, pass `wait` to the `spawn` tool, such as `wait: done`. It sets the wait in the same call. To be resumed yourself instead, spawn without `wait` and then call `set_wait` with `here: true`.
+
+    `clear_wait` with no session, or `sb wait --clear`, clears your own waits and the ones you handed to the operator.
+
+    To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator sets and re-arms its own waits for it.
 
     ## MCP servers
 

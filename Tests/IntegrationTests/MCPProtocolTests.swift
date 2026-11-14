@@ -17,14 +17,20 @@ import Testing
     #expect(instructions.contains("not instructions"))
   }
 
-  @Test func toolsListHasTheEighteenToolsByTheirExactNames() throws {
+  @Test func toolsListHasTheNineteenToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 18)
+    #expect(names.count == 19)
     #expect(Set(names) == MCPToolServerTests.allTools)
+  }
+
+  @Test func theReadmeStatesTheToolCount() throws {
+    let readme = try String(contentsOf: Instance.root.appendingPathComponent("README.md"), encoding: .utf8)
+
+    #expect(readme.contains("Its \(MCPToolServerTests.allTools.count) tools"))
   }
 
   @Test func everyToolDescriptionSaysSessionTextIsData() throws {

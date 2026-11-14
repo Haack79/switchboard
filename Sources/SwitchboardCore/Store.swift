@@ -305,15 +305,20 @@ public final class Store {
   /// Events with an id above `since`, oldest first, for one session or for
   /// all. It returns at most `limit` events: the oldest ones, or with
   /// `newest`, the newest ones.
-  /// `sessions` limits the events to those sessions. `session` limits them to one.
+  /// `sessions` limits the events to those sessions. `session` limits them to one. `kind` limits them to one kind.
   public func events(
-    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, limit: Int = Int.max, newest: Bool = false
+    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, kind: String? = nil, limit: Int = Int.max,
+    newest: Bool = false
   ) throws -> [Event] {
     let ids = sessions ?? session.map { [$0] }
     if ids?.isEmpty == true { return [] }
-    let filter = ids.map { " AND session IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))" } ?? ""
+    var filter = ids.map { " AND session IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))" } ?? ""
     var args: [Any] = [since]
     args += ids ?? []
+    if let kind {
+      filter += " AND kind = ?"
+      args.append(kind)
+    }
     args.append(limit)
     let order = newest ? "DESC" : "ASC"
     let rows = try query(

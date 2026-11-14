@@ -106,7 +106,7 @@ extension GitHubPoller {
       guard let key = key(of: pr, session: nil), let id = targets[key]?.prId, prs[id]?.pr.state == .merged else {
         continue
       }
-      stats.merged += service.pullRequestMerged(pr).count
+      stats.merged += service.pullRequestMerged(pr)
     }
   }
 

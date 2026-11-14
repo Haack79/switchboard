@@ -56,6 +56,7 @@ struct SwitchboardApp: App {
           .keyboardShortcut("j")
         Button("Open Manager") { model.openManager() }
           .keyboardShortcut("m", modifiers: [.command, .shift])
+        Button("Open Operator") { model.openOperator() }
         Button("Show Inbox") { model.show(.inbox) }
           .keyboardShortcut("1")
         Button("Show Board") { model.show(.board) }
@@ -126,9 +127,6 @@ struct SwitchboardApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-  /// The session that the user clicked in a notification.
-  static let openSession = Notification.Name("SwitchboardOpenSession")
-
   func applicationDidFinishLaunching(_ notification: Notification) {
     if BackgroundLaunch.applies(to: ProcessInfo.processInfo.environment) {
       BackgroundLaunch.start()
@@ -144,12 +142,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+  /// Launch Services calls this for a `switchboard:` URL, such as one that `sb focus` opens.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    NSApp.activate(ignoringOtherApps: true)
+    urls.forEach(LinkInbox.shared.receive)
+  }
+
   func userNotificationCenter(
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler done: @escaping () -> Void
   ) {
     if let id = response.notification.request.content.userInfo["session"] as? String {
-      NotificationCenter.default.post(name: AppDelegate.openSession, object: id)
+      Task { @MainActor in LinkInbox.shared.receive(SessionLink.url(for: id)) }
     }
     NSApp.activate(ignoringOtherApps: true)
     done()
@@ -165,7 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 }
 
 /// The menu bar item exists while the app runs, unlike the window, so it
-/// handles a click on a notification when the window is closed.
+/// handles a click on a notification or a `switchboard:` URL when the window
+/// is closed.
 struct MenuBarLabel: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.openWindow) private var openWindow
@@ -182,9 +187,10 @@ struct MenuBarLabel: View {
         }
       }
     }
-    .onAppear { model.showWindow = { openWindow(id: "main") } }
-    .onReceive(NotificationCenter.default.publisher(for: AppDelegate.openSession)) { note in
-      if let id = note.object as? String { model.reveal(id) }
+    .onAppear {
+      // Before the attach, because a held URL can open the window.
+      model.showWindow = { openWindow(id: "main") }
+      LinkInbox.shared.attach(model.openExternalLink)
     }
   }
 }
