@@ -1,0 +1,585 @@
+import Foundation
+import SwitchboardCore
+import Testing
+
+/// Every interval and clock move here stays under 30 minutes past a schedule's
+/// creation, so no schedule comes due once sbd fires them.
+@Suite(.blocking(timeLimit: .seconds(120))) struct ScheduleTests {
+  static let thirtyMinutes: Int64 = 1_800_000
+
+  func row(_ text: String) throws -> ScheduleRow { try JSONCoding.decode(ScheduleRow.self, from: text) }
+
+  func rows(_ text: String) throws -> [ScheduleRow] { try JSONCoding.decode([ScheduleRow].self, from: text) }
+
+  /// Adds a schedule through `sb schedule <session> --every <every> <prompt> --json`.
+  func schedule(
+    _ sbd: Instance, _ session: String, every: String = "30m", _ prompt: String = "check the queue",
+    env: [String: String] = [:]
+  ) throws -> ScheduleRow {
+    try row(sbd.sb(["schedule", session, "--every", every, prompt, "--json"], env: env))
+  }
+
+  /// `sb schedule ls [<session>] --json`.
+  func list(_ sbd: Instance, _ session: String? = nil) throws -> [ScheduleRow] {
+    try rows(sbd.sb(["schedule", "ls"] + (session.map { [$0] } ?? []) + ["--json"]))
+  }
+
+  func ids(_ rows: [ScheduleRow]) -> [String] { rows.map(\.schedule.id) }
+
+  // MARK: Adding
+
+  @Test func addingReturnsARowWithTheIntervalTheNextRunAndTheAuthor() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(name: "manager")
+    let before = try sbd.now()
+
+    let r = try row(sbd.sb("schedule", s.id, "--every", "30m", "check the queue", "--json"))
+
+    let after = try sbd.now()
+    #expect(r.session == s.id)
+    #expect(r.name == "manager")
+    #expect(r.schedule.id.hasPrefix("r"))
+    #expect(r.schedule.prompt == "check the queue")
+    #expect(r.schedule.every == ScheduleTests.thirtyMinutes)
+    #expect((before + ScheduleTests.thirtyMinutes...after + ScheduleTests.thirtyMinutes).contains(r.schedule.next))
+    #expect((before...after).contains(r.schedule.created))
+    #expect(r.schedule.by == .you)
+    #expect(r.schedule.paused == nil)
+    #expect(r.schedule.last == nil)
+  }
+
+  @Test func getLsAndScheduleLsShowTheSameSchedule() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let got = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("get", s.id, "--json"))
+    let listed = try JSONCoding.decode([SessionSummary].self, from: sbd.sb("ls", "--json"))
+
+    #expect(got.schedules == [r.schedule])
+    #expect(listed.first { $0.id == s.id }?.schedules == [r.schedule])
+    #expect(try list(sbd).map(\.schedule) == [r.schedule])
+    #expect(try list(sbd, s.id).map(\.schedule) == [r.schedule])
+    #expect(try list(sbd).map(\.session) == [s.id])
+  }
+
+  @Test func aSessionWithNoSchedulesShowsNone() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    #expect(try sbd.get(s.id).schedules == nil)
+    #expect(try list(sbd).isEmpty)
+  }
+
+  @Test func getPrintsAScheduleLine() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let lines = try sbd.sb("get", s.id).split(separator: "\n")
+
+    #expect(lines.contains { $0.contains("schedule:") && $0.contains(r.schedule.id) })
+  }
+
+  @Test func scheduleLsPrintsEachScheduleForAPerson() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id, "look at the flags")
+
+    let out = try sbd.sb("schedule", "ls")
+
+    #expect(out.contains(r.schedule.id))
+    #expect(out.contains("look at the flags"))
+    #expect(out.contains("30m"))
+  }
+
+  @Test func aScheduleThatClaudeSetsIsByClaude() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    let r = try schedule(sbd, s.id, env: ["CLAUDECODE": "1", "SB_SESSION_ID": s.id])
+
+    #expect(r.schedule.by == .claude)
+  }
+
+  @Test func unquotedPromptWordsAreJoined() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    let r = try row(sbd.sb("schedule", s.id, "--every", "30m", "check", "the", "queue", "--json"))
+
+    #expect(r.schedule.prompt == "check the queue")
+  }
+
+  @Test func aSlashCommandPromptIsKeptVerbatim() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    let r = try schedule(sbd, s.id, "/audit-waiting")
+
+    #expect(r.schedule.prompt == "/audit-waiting")
+  }
+
+  @Test func schedulesListInTheOrderOfTheirNextRun() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "a")
+    let b = try sbd.new(name: "b")
+    let later = try schedule(sbd, a.id, every: "2h", "later")
+    let sooner = try schedule(sbd, b.id, every: "30m", "sooner")
+    let soonerOnA = try schedule(sbd, a.id, every: "1h", "sooner on a")
+
+    #expect(try ids(list(sbd)) == [sooner, soonerOnA, later].map(\.schedule.id))
+    #expect(try ids(list(sbd, a.id)) == [soonerOnA, later].map(\.schedule.id))
+  }
+
+  @Test func idsAreUniqueAcrossSessions() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "a")
+    let b = try sbd.new(name: "b")
+
+    let made = try (0..<5).flatMap { i in
+      [try schedule(sbd, a.id, "a \(i)").schedule.id, try schedule(sbd, b.id, "b \(i)").schedule.id]
+    }
+
+    #expect(Set(made).count == made.count)
+    #expect(made.allSatisfy { $0.hasPrefix("r") && $0.count == 6 })
+  }
+
+  @Test func eachChangeRecordsAnEventThatLeavesTheLastActivity() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    try sbd.passIdleStopToSessionEnd(s.id)
+    let before = try sbd.get(s.id).lastActivity
+
+    let r = try schedule(sbd, s.id)
+    try sbd.sb("schedule", "pause", r.schedule.id)
+    try sbd.sb("schedule", "resume", r.schedule.id)
+    try sbd.sb("schedule", "rm", r.schedule.id)
+
+    let kinds = try sbd.events(s.id).map(\.kind)
+    for kind in ["schedule", "schedule-paused", "schedule-resumed", "schedule-removed"] {
+      #expect(kinds.contains(kind), "no \(kind) event in \(kinds)")
+    }
+    #expect(try sbd.get(s.id).lastActivity == before)
+  }
+
+  // MARK: Refusals
+
+  /// Each refusal leaves the session with no schedule.
+  @Test func refusesAnIntervalItCantUse() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    for every in ["30s", "59s", "0m", "soon", "30", "1h30m", "30M", "99999999999999w"] {
+      let r = try sbd.run(["schedule", s.id, "--every", every, "check the queue", "--json"])
+      #expect(r.status != 0, "--every \(every) was accepted")
+    }
+    let missing = try sbd.run(["schedule", s.id, "check the queue", "--json"])
+
+    #expect(missing.status != 0)
+    #expect(try sbd.get(s.id).schedules == nil)
+  }
+
+  @Test func refusesAnIntervalUnderOneMinuteWithTheShortest() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    let r = try sbd.run(["schedule", s.id, "--every", "30s", "check the queue"])
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("the shortest interval is 1m"))
+  }
+
+  @Test func refusesAnEmptyPrompt() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+
+    for prompt in [[""], ["   "], []] {
+      let r = try sbd.run(["schedule", s.id, "--every", "30m"] + prompt + ["--json"])
+      #expect(r.status != 0, "the prompt \(prompt) was accepted")
+    }
+
+    #expect(try sbd.get(s.id).schedules == nil)
+  }
+
+  /// sbd refuses on its own, for a caller such as the MCP server that skips the CLI.
+  @Test func theScheduleRequestRefusesWhatTheCLIRefuses() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let session = JSON.string(s.id)
+
+    let cases: [([String: JSON], String)] = [
+      (["session": session, "every": "30s", "prompt": "check"], "the shortest interval is 1m"),
+      (["session": session, "every": "soon", "prompt": "check"], "every"),
+      (["session": session, "every": "1h30m", "prompt": "check"], "90m"),
+      (["session": session, "prompt": "check"], "every"),
+      (["session": session, "every": "30m"], "prompt"),
+      (["session": session, "every": "30m", "prompt": " \n "], "prompt"),
+      (["session": session, "every": "30m", "prompt": "check", "by": "robot"], "by"),
+    ]
+    for (args, mentions) in cases {
+      let error = failure(sbd, "schedule", args)
+      #expect(error != "no error", "\(args) was accepted")
+      #expect(error.contains(mentions), "\(args) failed with \(error)")
+    }
+
+    #expect(try sbd.get(s.id).schedules == nil)
+  }
+
+  @Test func refusesAnEleventhScheduleOnASession() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "a")
+    let b = try sbd.new(name: "b")
+    for i in 1...10 { _ = try schedule(sbd, a.id, "check \(i)") }
+
+    let r = try sbd.run(["schedule", a.id, "--every", "30m", "check 11", "--json"])
+
+    #expect(r.status != 0)
+    #expect(try list(sbd, a.id).count == 10)
+    #expect(try schedule(sbd, b.id).session == b.id)
+  }
+
+  @Test func refusesAFollowupThatHasNotStarted() throws {
+    let sbd = try Instance()
+    let f = try JSONCoding.decode(
+      SessionSummary.self, from: try sbd.sb("followup", "add", "--json", "--repo", "acme/widgets", "Fix the cache."))
+
+    let r = try sbd.run(["schedule", f.id, "--every", "30m", "check the queue", "--json"])
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("follow-up"))
+    #expect(try sbd.get(f.id).schedules == nil)
+  }
+
+  @Test func refusesASpawnedFollowup() throws {
+    let repos = try Repos()
+    try repos.make("acme/widgets")
+    let sbd = try Instance(config: ["repoRoots": [.string(repos.root)]])
+    let f = try JSONCoding.decode(
+      SessionSummary.self,
+      from: try sbd.sb(
+        ["spawn", "--json", "--repo", "acme/widgets", "--branch", "b1", "--prompt", "hello", "--followup"]))
+
+    let r = try sbd.run(["schedule", f.id, "--every", "30m", "check the queue", "--json"])
+
+    #expect(r.status != 0)
+    #expect(try sbd.get(f.id).schedules == nil)
+  }
+
+  // MARK: Pausing, resuming, removing
+
+  @Test func pausingThenResumingStartsTheIntervalAgain() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let paused = try row(sbd.sb("schedule", "pause", r.schedule.id, "--json"))
+    #expect(paused.schedule.paused == true)
+    #expect(try sbd.get(s.id).schedules?.first?.paused == true)
+
+    try sbd.advanceClock(5 * 60_000)
+    let before = try sbd.now()
+    let resumed = try row(sbd.sb("schedule", "resume", r.schedule.id, "--json"))
+    let after = try sbd.now()
+
+    #expect(resumed.schedule.paused == nil)
+    #expect(
+      (before + ScheduleTests.thirtyMinutes...after + ScheduleTests.thirtyMinutes).contains(resumed.schedule.next))
+    #expect(try sbd.get(s.id).schedules == [resumed.schedule])
+  }
+
+  /// Resuming an active schedule, or pausing a paused one, changes nothing and records no event.
+  @Test func aRepeatedPauseOrResumeChangesNothing() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+    try sbd.advanceClock(5 * 60_000)
+
+    let resumed = try row(sbd.sb("schedule", "resume", r.schedule.id, "--json"))
+    try sbd.sb("schedule", "pause", r.schedule.id)
+    let pausedAgain = try row(sbd.sb("schedule", "pause", r.schedule.id, "--json"))
+
+    #expect(resumed.schedule == r.schedule)
+    #expect(pausedAgain.schedule.paused == true)
+    #expect(pausedAgain.schedule.next == r.schedule.next)
+    let kinds = try sbd.events(s.id).map(\.kind)
+    #expect(kinds.filter { $0 == "schedule-paused" }.count == 1)
+    #expect(!kinds.contains("schedule-resumed"))
+  }
+
+  @Test func removingDeletesTheScheduleAndReturnsIt() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let removed = try row(sbd.sb("schedule", "rm", r.schedule.id, "--json"))
+
+    #expect(removed.schedule == r.schedule)
+    #expect(try list(sbd).isEmpty)
+    #expect(try sbd.get(s.id).schedules == nil)
+  }
+
+  @Test func removingOneScheduleKeepsTheOthers() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let gone = try schedule(sbd, s.id, "gone")
+    let kept = try schedule(sbd, s.id, every: "1h", "kept")
+
+    try sbd.sb("schedule", "rm", gone.schedule.id)
+
+    #expect(try sbd.get(s.id).schedules == [kept.schedule])
+  }
+
+  @Test func removingOrPausingAnUnknownIdFails() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    for args in [["schedule", "rm", "rzzzzz"], ["schedule", "pause", "rzzzzz"], ["schedule", "resume", "rzzzzz"]] {
+      #expect(try sbd.run(args).status != 0, "\(args) succeeded")
+    }
+
+    #expect(try sbd.get(s.id).schedules == [r.schedule])
+  }
+
+  @Test func aRequestThatNamesAnotherSessionFails() throws {
+    let sbd = try Instance()
+    let owner = try sbd.new(name: "owner")
+    let other = try sbd.new(name: "other")
+    let r = try schedule(sbd, owner.id)
+    let id = JSON.string(r.schedule.id)
+
+    let removing = failure(sbd, "remove-schedule", ["schedule": id, "session": .string(other.id)])
+    let pausing = failure(sbd, "pause-schedule", ["schedule": id, "session": .string(other.id)])
+
+    #expect(removing.contains("has no schedule \(r.schedule.id)"), "\(removing)")
+    #expect(pausing.contains("has no schedule \(r.schedule.id)"), "\(pausing)")
+    #expect(try sbd.get(owner.id).schedules == [r.schedule])
+  }
+
+  @Test func aRequestThatNamesTheOwnerSucceeds() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let named: [String: JSON] = ["schedule": .string(r.schedule.id), "session": .string(s.id)]
+
+    let paused = try sbd.client.call("pause-schedule", named, as: ScheduleRow.self)
+    let resumed = try sbd.client.call(
+      "pause-schedule", named.merging(["paused": false]) { $1 }, as: ScheduleRow.self)
+    let removed = try sbd.client.call("remove-schedule", named, as: ScheduleRow.self)
+
+    #expect(paused.schedule.paused == true)
+    #expect(resumed.schedule.paused == nil)
+    #expect(removed.schedule.id == r.schedule.id)
+    #expect(try sbd.get(s.id).schedules == nil)
+  }
+
+  // MARK: Lifetime
+
+  @Test func schedulesSurviveAnSbdRestart() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "a")
+    let b = try sbd.new(name: "b")
+    _ = try schedule(sbd, a.id)
+    let paused = try schedule(sbd, b.id, every: "1h", "paused")
+    try sbd.sb("schedule", "pause", paused.schedule.id)
+    let before = try list(sbd)
+
+    sbd.stopSbd()
+    try sbd.startSbd()
+
+    let after = try list(sbd)
+    #expect(after.map(\.schedule) == before.map(\.schedule))
+    #expect(after.map(\.session) == before.map(\.session))
+  }
+
+  @Test func removingTheSessionRemovesItsSchedules() throws {
+    let sbd = try Instance()
+    let gone = try sbd.new(name: "gone")
+    let kept = try sbd.new(name: "kept")
+    _ = try schedule(sbd, gone.id)
+    let r = try schedule(sbd, kept.id)
+
+    try sbd.sb("rm", gone.id)
+
+    #expect(try list(sbd).map(\.schedule) == [r.schedule])
+  }
+
+  @Test func removingTheOnlyScheduledSessionLeavesTheListEmpty() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    _ = try schedule(sbd, s.id)
+
+    try sbd.sb("rm", s.id)
+
+    #expect(try list(sbd).isEmpty)
+  }
+
+  // MARK: Group scope
+
+  /// Session `a` is in group Flags, `b` in group Billing, and `loose` in no
+  /// group. `caller` is in no group either, as a group chat is in none. Each
+  /// has one schedule.
+  struct Scoped {
+    let sbd: Instance
+    let flags: String
+    let a: ScheduleRow
+    let b: ScheduleRow
+    let loose: ScheduleRow
+    let caller: ScheduleRow
+
+    func args(_ extra: [String: JSON]) -> [String: JSON] {
+      extra.merging(["group": .string(flags), "caller": .string(caller.session)]) { $1 }
+    }
+
+    func call(_ op: String, _ extra: [String: JSON]) throws -> ScheduleRow {
+      try sbd.client.call(op, args(extra), as: ScheduleRow.self)
+    }
+
+    func refusal(_ op: String, _ extra: [String: JSON]) -> String { failure(sbd, op, args(extra)) }
+
+    /// The rows with no scope.
+    func all() throws -> [ScheduleRow] { try sbd.client.call("schedules", as: [ScheduleRow].self) }
+
+    func stored(_ row: ScheduleRow) throws -> [Schedule]? { try sbd.get(row.session).schedules }
+  }
+
+  func scoped() throws -> Scoped {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "a")
+    let b = try sbd.new(name: "b")
+    let loose = try sbd.new(name: "loose")
+    let caller = try sbd.new(name: "caller")
+    let flags = try sbd.client.call(
+      "group-add", ["name": "Flags", "sessions": [.string(a.id)]], as: GroupSummary.self)
+    _ = try sbd.client.call("group-add", ["name": "Billing", "sessions": [.string(b.id)]], as: GroupSummary.self)
+    return Scoped(
+      sbd: sbd, flags: flags.id, a: try schedule(sbd, a.id, "a"), b: try schedule(sbd, b.id, "b"),
+      loose: try schedule(sbd, loose.id, "loose"), caller: try schedule(sbd, caller.id, "caller"))
+  }
+
+  @Test func aScopedListHasOnlyTheGroupsAndTheCallersRows() throws {
+    let s = try scoped()
+
+    let listed = try s.sbd.client.call("schedules", s.args([:]), as: [ScheduleRow].self)
+
+    #expect(Set(listed.map(\.schedule.id)) == [s.a.schedule.id, s.caller.schedule.id])
+  }
+
+  @Test func aScopedListOfAnotherGroupsSessionHasNoRows() throws {
+    let s = try scoped()
+
+    let listed = try? s.sbd.client.call(
+      "schedules", s.args(["session": .string(s.b.session)]), as: [ScheduleRow].self)
+
+    #expect(listed?.isEmpty ?? true)
+  }
+
+  @Test func aScopedRequestActsOnAMembersSchedule() throws {
+    let s = try scoped()
+    let id = JSON.string(s.a.schedule.id)
+
+    let paused = try s.call("pause-schedule", ["schedule": id])
+    let removed = try s.call("remove-schedule", ["schedule": id])
+
+    #expect(paused.schedule.paused == true)
+    #expect(removed.schedule.id == s.a.schedule.id)
+    #expect(try s.stored(s.a) == nil)
+  }
+
+  @Test func aScopedRequestActsOnTheCallersOwnSchedule() throws {
+    let s = try scoped()
+    let id = JSON.string(s.caller.schedule.id)
+
+    let paused = try s.call("pause-schedule", ["schedule": id])
+    let removed = try s.call("remove-schedule", ["schedule": id])
+
+    #expect(paused.schedule.paused == true)
+    #expect(removed.schedule.id == s.caller.schedule.id)
+  }
+
+  @Test func aScopedAddWorksForAMemberAndTheCaller() throws {
+    let s = try scoped()
+
+    let member = try s.call("schedule", ["session": .string(s.a.session), "every": "1h", "prompt": "more"])
+    let own = try s.call("schedule", ["session": .string(s.caller.session), "every": "1h", "prompt": "more"])
+
+    #expect(member.session == s.a.session)
+    #expect(own.session == s.caller.session)
+  }
+
+  /// Another group's session and an ungrouped one are both outside the scope.
+  @Test(arguments: ["b", "loose"])
+  func aScopedRequestRefusesAScheduleOutsideTheGroup(_ which: String) throws {
+    let s = try scoped()
+    let target = which == "b" ? s.b : s.loose
+    let id = JSON.string(target.schedule.id)
+
+    let removing = s.refusal("remove-schedule", ["schedule": id])
+    let pausing = s.refusal("pause-schedule", ["schedule": id])
+
+    #expect(removing.contains("not in group"), "\(removing)")
+    #expect(pausing.contains("not in group"), "\(pausing)")
+    #expect(try s.stored(target) == [target.schedule])
+  }
+
+  @Test(arguments: ["b", "loose"])
+  func aScopedAddRefusesASessionOutsideTheGroup(_ which: String) throws {
+    let s = try scoped()
+    let target = which == "b" ? s.b : s.loose
+
+    let adding = s.refusal("schedule", ["session": .string(target.session), "every": "1h", "prompt": "more"])
+
+    #expect(adding.contains("not in group"), "\(adding)")
+    #expect(try s.stored(target) == [target.schedule])
+  }
+
+  @Test func aScopedRequestRefusesAnUnknownId() throws {
+    let s = try scoped()
+
+    #expect(s.refusal("remove-schedule", ["schedule": "rzzzzz"]) != "no error")
+    #expect(s.refusal("pause-schedule", ["schedule": "rzzzzz"]) != "no error")
+  }
+
+  /// The chat saw `a` in its group, and then `a` left the group.
+  @Test func aScopedRequestRefusesASessionThatLeftTheGroup() throws {
+    let s = try scoped()
+    _ = try s.sbd.client.call("group-move", ["sessions": [.string(s.a.session)], "ungrouped": true])
+    let id = JSON.string(s.a.schedule.id)
+
+    let removing = s.refusal("remove-schedule", ["schedule": id])
+    let pausing = s.refusal("pause-schedule", ["schedule": id])
+    let adding = s.refusal("schedule", ["session": .string(s.a.session), "every": "1h", "prompt": "more"])
+    let listed = try s.sbd.client.call("schedules", s.args([:]), as: [ScheduleRow].self)
+
+    #expect(removing.contains("not in group"), "\(removing)")
+    #expect(pausing.contains("not in group"), "\(pausing)")
+    #expect(adding.contains("not in group"), "\(adding)")
+    #expect(!listed.map(\.schedule.id).contains(s.a.schedule.id))
+    #expect(try s.stored(s.a) == [s.a.schedule])
+  }
+
+  /// A `group` that isn't a group id refuses, so it never reads as no scope.
+  @Test(arguments: [JSON.number(5), .string(""), .bool(true)])
+  func aMalformedScopeRefuses(_ group: JSON) throws {
+    let s = try scoped()
+    let args: [String: JSON] = ["group": group, "caller": .string(s.caller.session)]
+
+    let listing = failure(s.sbd, "schedules", args)
+    let removing = failure(s.sbd, "remove-schedule", args.merging(["schedule": .string(s.b.schedule.id)]) { $1 })
+    let adding = failure(
+      s.sbd, "schedule", args.merging(["session": .string(s.b.session), "every": "1h", "prompt": "more"]) { $1 })
+
+    #expect(listing.contains("group"), "\(listing)")
+    #expect(removing.contains("group"), "\(removing)")
+    #expect(adding.contains("group"), "\(adding)")
+    #expect(try s.stored(s.b) == [s.b.schedule])
+  }
+
+  @Test func anUnscopedListHasEveryRow() throws {
+    let s = try scoped()
+
+    #expect(Set(try s.all().map(\.schedule.id)) == Set([s.a, s.b, s.loose, s.caller].map(\.schedule.id)))
+  }
+}

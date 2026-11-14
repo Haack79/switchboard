@@ -564,6 +564,8 @@ public final class Service {
       return try waitRequest(op, args)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args)
+    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "manager-ls":
@@ -2170,6 +2172,7 @@ public final class Service {
       waits: s.waits ?? [], notes: s.notes ?? [], cards: e.facts.cards,
       openPrompt: e.facts.openPermission != nil || e.facts.openQuestion != nil, pr: e.facts.pr.map(PRSummary.init),
       markedDone: s.done)
+    if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)
       out.repository = out.checkout.flatMap { repository($0, of: s) }

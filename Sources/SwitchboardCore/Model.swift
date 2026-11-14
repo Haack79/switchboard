@@ -69,6 +69,8 @@ public struct Session: Codable, Equatable, Sendable {
   public var waits: [Wait]?
   /// Nil in a session that an older sbd stored.
   public var notes: [Note]?
+  /// Nil when the session has none, and in a session that an older sbd stored.
+  public var schedules: [Schedule]?
   /// The session that added this one, such as the session that captured a follow-up.
   public var parent: String?
   /// True for a Manager conversation. Several can exist.
@@ -249,6 +251,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var lastReply: String?
   public var waits: [Wait]
   public var notes: [Note]
+  /// Nil when the session has none.
+  public var schedules: [Schedule]?
   /// Open and deferred permission prompts and questions, oldest first.
   public var cards: [Card]
   /// True while Claude Code shows a permission or question dialog, with or
