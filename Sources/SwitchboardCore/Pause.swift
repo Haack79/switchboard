@@ -89,6 +89,36 @@ public struct Pause: Codable, Equatable, Sendable {
     return "Switchboard: You were paused by \(byText)\(why).\(because) Continue where you left off."
   }
 
+  /// Reads the `--until` condition as the `wait` request that builds it: `session:<ref>[=<state>]` is a
+  /// `session` wait, a PR (`pr:123`, `#123`, `owner/name#123`, or a PR URL) is a `merge` wait, and a time that
+  /// `Wait.parseTime` reads is a `date` wait. `makeWait` then checks the state, the session, and that the time
+  /// hasn't passed.
+  public static func parseUntil(_ text: String, now: Int64) throws -> WaitRequest {
+    let text = text.trimmingCharacters(in: .whitespaces)
+    let forms = "Use a time such as 2h or 2026-11-15 09:00, a PR such as #123, or session:<name>[=<state>]"
+    guard !text.isEmpty else { throw APIError("--until needs a condition. \(forms)") }
+    // Wait.PullRequest reads a bare number as a PR, so this refusal comes first.
+    if text.allSatisfy({ $0.isASCII && $0.isNumber }) {
+      throw APIError("--until \(text) could be a PR or a time. Write #\(text) for a PR or \(text)m for minutes")
+    }
+    if text.hasPrefix("session:") {
+      let rest = text.dropFirst("session:".count)
+      let parts = rest.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+      guard let ref = parts.first, !ref.isEmpty else {
+        throw APIError("--until \(text) needs a session after session:")
+      }
+      return WaitRequest(
+        kind: Wait.Kind.session.rawValue, target: String(ref), state: parts.dropFirst().first.map(String.init))
+    }
+    let url = URL(string: text).flatMap(\.scheme).map { ["http", "https"].contains($0.lowercased()) } ?? false
+    if text.hasPrefix("pr:") || text.contains("#") || url {
+      guard Wait.PullRequest(parsing: text) != nil else { throw APIError("--until \(text) isn't a PR. \(forms)") }
+      return WaitRequest(kind: Wait.Kind.merge.rawValue, target: text)
+    }
+    guard Wait.parseTime(text, now: now) != nil else { throw APIError("can't read --until \(text). \(forms)") }
+    return WaitRequest(kind: Wait.Kind.date.rawValue, until: text)
+  }
+
   /// The reason on one line, or nil when nothing remains. It refuses text over `reasonLimit`.
   public static func cleanReason(_ text: String?) throws -> String? {
     guard let text else { return nil }

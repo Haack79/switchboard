@@ -3,35 +3,35 @@ import SwitchboardCore
 import Testing
 
 /// The text of a resume that names no message, for a session that you paused without a reason.
-private let defaultResume = "Switchboard: You were paused by you. Continue where you left off."
+let defaultResume = "Switchboard: You were paused by you. Continue where you left off."
 /// The Claude pane's dead message while the session that you paused without a reason stays paused.
 private let pausedPane = "Paused by you. Resume the session to start claude again."
 private let stoppedPane = "Claude stopped. Switchboard resumes it when you open the session or send it a message."
 
-/// These helpers read `pause` and `heldMessages` from the JSON that sb prints, so that this file compiles
+/// These helpers read `pause` and `heldMessages` from the JSON that sb prints, so that the pause tests compile
 /// against a `SessionSummary` without those fields.
 extension Instance {
   /// The `pause` field of `sb get --json`, or nil when the session isn't paused.
-  fileprivate func pauseField(_ id: String) throws -> JSON? {
+  func pauseField(_ id: String) throws -> JSON? {
     let field = try summaryJSON(id)["pause"]
     return field == .null ? nil : field
   }
 
-  fileprivate func heldCount(_ id: String) throws -> Int? { try summaryJSON(id)["heldMessages"]?.int }
+  func heldCount(_ id: String) throws -> Int? { try summaryJSON(id)["heldMessages"]?.int }
 
   /// The session's `started` and `resumed` events after the mark.
-  fileprivate func launchEvents(_ id: String, after mark: Int64) throws -> [Event] {
+  func launchEvents(_ id: String, after mark: Int64) throws -> [Event] {
     try events(id, after: mark).filter { ["started", "resumed"].contains($0.kind) }
   }
 
   /// The prompts that the session's claude reported after the mark, oldest first.
-  fileprivate func promptsSince(_ id: String, after mark: Int64) throws -> [String] {
+  func promptsSince(_ id: String, after mark: Int64) throws -> [String] {
     try events(id, after: mark).filter { $0.kind == "UserPromptSubmit" }.compactMap { $0.data["prompt"]?.string }
   }
 
   /// Waits until the session's claude reported `count` prompts after the mark, and returns them.
   @discardableResult
-  fileprivate func waitForPrompts(_ id: String, after mark: Int64, count: Int, timeout: Double = 30) throws
+  func waitForPrompts(_ id: String, after mark: Int64, count: Int, timeout: Double = 30) throws
     -> [String]
   {
     try waitFor(
@@ -46,25 +46,25 @@ extension Instance {
 
   /// Three ticks, each 6 s apart, which passes the 5 s between the stops of a paused claude, then a moment for
   /// what they started to show.
-  fileprivate func tickThrice() throws {
+  func tickThrice() throws {
     for _ in 0..<3 { try advanceClock(6_000) }
     usleep(500_000)
   }
 
   /// Runs `sb pause <id> --json` with the extra arguments, and returns what it printed.
   @discardableResult
-  fileprivate func pauseJSON(_ id: String, _ more: [String] = [], env: [String: String] = [:]) throws -> JSON {
+  func pauseJSON(_ id: String, _ more: [String] = [], env: [String: String] = [:]) throws -> JSON {
     try #require(JSON.parse(try sb(["pause", id, "--json"] + more, env: env)))
   }
 
   /// A session whose first turn ended, with its claude still running and its pid known.
-  fileprivate func liveIdle(_ name: String = "t", prompt: String = "hello") throws -> SessionSummary {
+  func liveIdle(_ name: String = "t", prompt: String = "hello") throws -> SessionSummary {
     let s = try new(prompt: prompt, name: name)
     return try waitFor(s.id, "\(name)'s first reply") { $0.lastReply != nil && $0.claudePid != nil }
   }
 
   /// A session that you paused after its first turn, once its claude exited.
-  fileprivate func pausedStopped(_ name: String = "t", _ more: [String] = []) throws -> SessionSummary {
+  func pausedStopped(_ name: String = "t", _ more: [String] = []) throws -> SessionSummary {
     let s = try liveIdle(name)
     try pauseJSON(s.id, more)
     return try waitFor(s.id, "\(name)'s claude to exit after the pause") { !$0.live && $0.claudePid == nil }

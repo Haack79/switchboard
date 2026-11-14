@@ -31,9 +31,14 @@ extension Service {
     }
     if by == .claude, let label = session.kind.label { throw APIError("only the user can pause \(label)") }
     try requireRead(id)
+    let now = nowMs()
+    let until = try args["until"]?.string.map { text in
+      try Pause.parseUntil(text, now: now).makeWait(
+        id: shortId("w", taken: waitIds(id)), waiter: id, now: now, findSession: waitTarget)
+    }
     let pause = Pause(
       by: by, from: from.map(pauser), reason: try Pause.cleanReason(args["reason"]?.string),
-      since: session.pause?.since ?? nowMs(), message: args["message"]?.string.flatMap(nonBlank))
+      since: session.pause?.since ?? now, until: until, message: args["message"]?.string.flatMap(nonBlank))
     try update(id) { $0.pause = pause }
     entries[id]?.queuedSince = nil
     entries[id]?.queuedTrigger = nil
@@ -46,6 +51,40 @@ extension Service {
     // A starting claude has no pid to stop yet. The tick stops it once it has one.
     if case .running = claudeState(id) { enforcePause(id, now: nowMs()) }
     return try JSON(encoding: summary(id))
+  }
+
+  /// The ids of the session's open waits and of its pause condition, which a new wait or condition doesn't reuse.
+  func waitIds(_ id: String) -> [String] {
+    let session = entries[id]?.session
+    return (session?.waits ?? []).map(\.id) + [session?.pause?.until?.id].compactMap { $0 }
+  }
+
+  /// The session that a `session` wait or a pause condition names, by id, prefix, or name.
+  func waitTarget(_ ref: String) throws -> Wait.SessionTarget {
+    let other = try lookup(["session": .string(ref)])
+    return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
+  }
+
+  /// The session's pause condition when `waitId` names it.
+  func pauseCondition(_ id: String, _ waitId: String?) -> Wait? {
+    guard let waitId, let until = entries[id]?.session.pause?.until, until.id == waitId else { return nil }
+    return until
+  }
+
+  /// Resumes the session when `wait` is its pause condition, and returns whether it was. A met condition records
+  /// no `wait-resolved`, because the condition isn't one of the session's waits.
+  func resumeOnCondition(_ id: String, _ wait: Wait, outcome: String) throws -> Bool {
+    guard pauseCondition(id, wait.id) != nil else { return false }
+    try unpause(id, outcome: outcome, message: nil, trigger: .wait, by: nil, from: nil)
+    return true
+  }
+
+  /// Refuses a request that names the pause condition as a wait to clear. Only a resume or the condition ends it.
+  func refuseCondition(_ id: String, _ waitId: String) throws {
+    guard pauseCondition(id, waitId) != nil else { return }
+    throw APIError(
+      "\(waitId) is the condition that resumes \(id), not a wait. Resume it with: sb resume \(id), or pause it again without --until"
+    )
   }
 
   /// Stops the paused session's running claude, at most once every `pauseStopMs`. A claude that reported
@@ -75,18 +114,30 @@ extension Service {
   }
 
   /// Ends the session's pause and sends the resume message ahead of the held messages. `outcome` says why it
-  /// resumes, and `message` replaces the pause's text. A stopped claude with nothing held resumes with the
-  /// message as its prompt. Otherwise the message goes to the front of the queue. A claude that still runs
-  /// gets a paste only once it is live and ready. The tick's relaunch for the queue starts claude after it exits.
+  /// resumes, and `message` replaces the pause's text. `by` is nil when sbd resumes the session on its own. A
+  /// stopped claude with nothing held resumes with the message as its prompt. Otherwise the message goes to the
+  /// front of the queue. A claude that still runs gets a paste only once it is live and ready. The tick's
+  /// relaunch for the queue starts claude after it exits. Each open wait's recheck counts from the resume, so
+  /// the time spent paused doesn't make it overdue.
   func unpause(
-    _ id: String, outcome: String?, message: String?, trigger: LaunchTrigger, by: Author, from: String?
+    _ id: String, outcome: String?, message: String?, trigger: LaunchTrigger, by: Author?, from: String?
   ) throws {
     guard let session = entries[id]?.session, let pause = session.pause else { throw APIError("\(id) isn't paused") }
     try requireRead(id)
     try requireFolder(session)
-    try update(id) { $0.pause = nil }
+    let now = nowMs()
+    try update(id) { s in
+      s.pause = nil
+      // A date wait and a manual wait carry their own times.
+      s.waits = s.waits?.map { w in
+        guard w.kind != .date, w.kind != .manual else { return w }
+        var fresh = w
+        fresh.recheck = nil
+        return config.recheck.stamped(fresh, from: now)
+      }
+    }
     entries[id]?.pauseStopAt = nil
-    var data: [String: JSON] = ["pause": try JSON(encoding: pause), "by": .string(by.rawValue)]
+    var data: [String: JSON] = ["pause": try JSON(encoding: pause), "by": .string(by?.rawValue ?? "sbd")]
     if let outcome { data["outcome"] = .string(outcome) }
     if let from { data["from"] = .string(from) }
     record(id, "unpaused", .object(data))

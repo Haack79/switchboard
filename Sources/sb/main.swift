@@ -84,11 +84,15 @@ let usage = """
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
     stop <session>                stop the session's claude
-    pause <session> [--reason R] [--message M]
+    pause <session> [--until WHEN] [--reason R] [--message M]
                                   stop the session's claude and keep it stopped.
                                   Nothing starts it or types into it, and every
                                   message waits until the resume. --message sets
-                                  the text that the resume sends
+                                  the text that the resume sends. --until resumes
+                                  it on its own at a time (2h, 2026-11-15 09:00),
+                                  when a PR merges (#123, pr:owner/name#123, a PR
+                                  URL), or when another session reaches a state
+                                  (session:<name>[=<state>], Done by default)
     resume <session> [--message M]
                                   resume the session's claude. A paused session
                                   gets M, else the pause's message, else a note

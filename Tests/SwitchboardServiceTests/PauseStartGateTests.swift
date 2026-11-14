@@ -56,3 +56,21 @@ extension Service {
     }
   }
 }
+
+/// A new wait or pause condition draws its id from `waitIds`. An ordinary wait with the condition's id would end
+/// the pause when it resolved.
+@Suite struct PauseConditionIdTests {
+  @Test func theTakenIdsHoldTheOpenWaitsAndThePauseCondition() throws {
+    try withService { service, _ in
+      try service.addSession("s1", paused: true)
+      try service.queue.sync {
+        try service.update("s1") { s in
+          s.waits = [Wait(id: "wa", kind: .ci, created: 0)]
+          s.pause?.until = Wait(id: "wb", kind: .date, until: 10, created: 0)
+        }
+      }
+
+      #expect(service.queue.sync { service.waitIds("s1") } == ["wa", "wb"])
+    }
+  }
+}

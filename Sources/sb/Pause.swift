@@ -1,9 +1,10 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb pause <session> [--reason R] [--message M] [--json]`.
+/// `sb pause <session> [--until WHEN] [--reason R] [--message M] [--json]`. sbd reads WHEN on its own clock.
 func pauseCommand(_ a: Args) {
   var extra = whoAsks()
+  if let until = a.values["--until"] { extra["until"] = .string(until) }
   if let reason = a.values["--reason"] { extra["reason"] = .string(reason) }
   if let message = a.values["--message"] { extra["message"] = .string(message) }
   sessionCommand("pause", a, extra: extra)

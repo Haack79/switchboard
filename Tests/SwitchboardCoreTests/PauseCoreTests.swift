@@ -201,3 +201,127 @@ extension PauseCoreTests {
     }
   }
 }
+
+/// The time that the `parseUntil` tests read their conditions at.
+private let parseNow = epochMs(2026, 11, 14, 12, 0, zone: .current)
+private let hourMs: Int64 = 3_600_000
+
+extension PauseCoreTests {
+  @Suite struct ParseUntil {
+    /// The condition that a pause of `waiter` builds from the text. A session ref finds a session whose id and name
+    /// are the ref, so every refusal comes from the parser or from `makeWait`, never from the lookup.
+    func condition(_ text: String, waiter: String = "s1") throws -> Wait {
+      try Pause.parseUntil(text, now: parseNow).makeWait(id: "w1", waiter: waiter, now: parseNow) { ref in
+        Wait.SessionTarget(id: ref, name: ref)
+      }
+    }
+
+    @Test(arguments: [("2h", 2 * hourMs), ("30m", 30 * 60_000), ("1d", 24 * hourMs)] as [(String, Int64)])
+    func aDurationIsADateThatLongFromNow(_ text: String, _ ms: Int64) throws {
+      let wait = try condition(text)
+
+      #expect(wait.kind == .date)
+      #expect(wait.until == parseNow + ms)
+    }
+
+    @Test(arguments: [
+      ("2026-11-15 09:00", epochMs(2026, 11, 15, 9, 0, zone: .current)),
+      ("2026-11-15T09:00", epochMs(2026, 11, 15, 9, 0, zone: .current)),
+      ("2026-11-15T09:00:00Z", epochMs(2026, 11, 15, 9, 0, zone: .gmt)),
+      ("2026-11-15", epochMs(2026, 11, 15, zone: .current)),
+    ])
+    func aTimeIsADate(_ text: String, _ at: Int64) throws {
+      let wait = try condition(text)
+
+      #expect(wait.kind == .date)
+      #expect(wait.until == at)
+    }
+
+    @Test(arguments: [
+      ("#123", Wait.PullRequest(number: 123)), ("pr:123", Wait.PullRequest(number: 123)),
+      ("pr:#123", Wait.PullRequest(number: 123)),
+      ("owner/name#123", Wait.PullRequest(repository: "owner/name", number: 123)),
+      ("pr:owner/name#123", Wait.PullRequest(repository: "owner/name", number: 123)),
+      ("https://github.com/owner/name/pull/123", Wait.PullRequest(repository: "owner/name", number: 123)),
+      ("https://github.com/owner/name/pull/123/files", Wait.PullRequest(repository: "owner/name", number: 123)),
+    ])
+    func aPRIsAMergeCondition(_ text: String, _ pr: Wait.PullRequest) throws {
+      let wait = try condition(text)
+
+      #expect(wait.kind == .merge)
+      #expect(wait.pr == pr)
+    }
+
+    /// A PR without a repository means the paused session's repository, so the condition keeps the repository nil
+    /// rather than leaving out the PR, which would mean the session's own PR.
+    @Test func aPRWithoutARepositoryKeepsItsNumber() throws {
+      let wait = try condition("#123")
+
+      #expect(wait.pr?.repository == nil)
+      #expect(wait.pr?.number == 123)
+    }
+
+    @Test func aSessionWaitsForDoneByDefault() throws {
+      var looked: [String] = []
+
+      let wait = try Pause.parseUntil("session:fix-cache", now: parseNow).makeWait(
+        id: "w1", waiter: "s1", now: parseNow
+      ) { ref in
+        looked.append(ref)
+        return Wait.SessionTarget(id: "k3x9p", name: "fix-cache")
+      }
+
+      #expect(looked == ["fix-cache"])
+      #expect(wait.kind == .session)
+      #expect(wait.session == Wait.SessionTarget(id: "k3x9p", name: "fix-cache"))
+      #expect(wait.state == .done)
+    }
+
+    @Test(arguments: [
+      ("session:fix-cache=needs_you", AttentionState.needsYou), ("session:fix-cache=ready_to_merge", .readyToMerge),
+      ("session:fix-cache=done", .done),
+    ])
+    func aSessionWithAStateWaitsForThatState(_ text: String, _ state: AttentionState) throws {
+      let wait = try condition(text)
+
+      #expect(wait.kind == .session)
+      #expect(wait.session?.name == "fix-cache")
+      #expect(wait.state == state)
+    }
+
+    @Test func aBareNumberIsRefusedWithBothReadings() {
+      do {
+        _ = try condition("30")
+        Issue.record("30 was accepted")
+      } catch {
+        #expect("\(error)".contains("#30"), "\(error)")
+        #expect("\(error)".contains("30m"), "\(error)")
+      }
+    }
+
+    @Test(arguments: [
+      "soon", "", "  ", "session:", "session:=done", "session:x=bogus", "pr:abc", "pr:",
+      "#", "#abc", "#0", "owner/name#abc", "https://example.com/owner/name/pull/123", "2026-11-14 09:00",
+      "2026-11-14 12:00", "2026-11-13T09:00:00Z", "ci:123", "manual",
+    ])
+    func refusesWhatItCantUse(_ text: String) {
+      #expect(throws: (any Error).self, "\(text) was accepted") { try condition(text) }
+    }
+
+    /// `makeWait` refuses a session that waits on itself, so the pause can't wait for the session that it pauses.
+    @Test func aSessionConditionOnTheSessionItselfIsRefused() {
+      #expect(throws: (any Error).self) { try condition("session:s1", waiter: "s1") }
+    }
+
+    @Test(arguments: [
+      ("#123", "#123 merges"), ("owner/name#123", "owner/name#123 merges"),
+      ("session:fix-cache", "fix-cache reaches Done"), ("session:fix-cache=needs_you", "fix-cache reaches Needs you"),
+      ("2026-11-15 09:00", "at 2026-11-15 09:00"),
+    ])
+    func theLineSaysWhenTheParsedConditionResumes(_ text: String, _ phrase: String) throws {
+      let pause = pauseOf(until: try condition(text))
+
+      #expect(pause.line == "Paused by you; resumes when \(phrase)")
+    }
+  }
+}
