@@ -51,10 +51,8 @@ private func session(pr prRepo: String?, repository: String?, read: Bool? = true
 /// These tests count and read the links. `InlineTextTests.References` checks each link's URL.
 @MainActor
 @Suite struct HostedReferenceLink {
-  private func host<V: View>(_ view: V) -> HostedView { HostedView(view) }
-
   @Test func aPlainTextWithNoLinkExposesNoLink() {
-    let hosted = host(InlineText(plain: "Nothing to see"))
+    let hosted = HostedView(InlineText(plain: "Nothing to see"))
 
     #expect(links(hosted).isEmpty)
   }
@@ -65,50 +63,50 @@ private func session(pr prRepo: String?, repository: String?, read: Bool? = true
   @Test func aMarkdownLinkInInlineTextExposesOneLink() {
     let text = MarkdownText([MarkdownText.Run("See "), MarkdownText.Run("docs", link: "https://example.com/docs")])
 
-    let hosted = host(InlineText(text))
+    let hosted = HostedView(InlineText(text))
 
     #expect(links(hosted).count == 1)
   }
 
   @Test func aBareNumberWithAContextExposesOneLink() {
-    let hosted = host(InlineText(plain: "Fix #1 first.").environment(\.referenceRepo, "o/r"))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first.").environment(\.referenceRepo, "o/r"))
 
     #expect(links(hosted).count == 1)
   }
 
   @Test func aBareNumberWithoutAContextExposesNoLink() {
-    let hosted = host(InlineText(plain: "Fix #1 first."))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first."))
 
     #expect(links(hosted).isEmpty)
   }
 
   @Test func theLinkReadsAsTheReferenceAsWritten() {
-    let hosted = host(InlineText(plain: "Fix #1 first.").environment(\.referenceRepo, "o/r"))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first.").environment(\.referenceRepo, "o/r"))
 
     #expect(links(hosted).map(\.label) == ["#1"])
   }
 
   @Test func anOwnerNameReferenceWithoutAContextExposesOneLink() {
-    let hosted = host(InlineText(plain: "See o/r#1."))
+    let hosted = HostedView(InlineText(plain: "See o/r#1."))
 
     #expect(links(hosted).map(\.label) == ["o/r#1"])
   }
 
   /// `ReferenceRepoTests` checks which repository wins when the session has both.
   @Test func theSessionModifierGivesABareNumberALinkFromThePRAlone() {
-    let hosted = host(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: prRepo, repository: nil)))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: prRepo, repository: nil)))
 
     #expect(links(hosted).count == 1)
   }
 
   @Test func theSessionModifierGivesABareNumberALinkFromTheRepositoryAlone() {
-    let hosted = host(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: nil, repository: originRepo)))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: nil, repository: originRepo)))
 
     #expect(links(hosted).count == 1)
   }
 
   @Test func theSessionModifierWithNoRepositoryExposesNoLink() {
-    let hosted = host(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: nil, repository: nil)))
+    let hosted = HostedView(InlineText(plain: "Fix #1 first.").referenceRepo(session(pr: nil, repository: nil)))
 
     #expect(links(hosted).isEmpty)
   }
