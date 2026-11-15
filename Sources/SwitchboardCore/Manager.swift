@@ -37,10 +37,11 @@ public enum Manager {
 
     - Nobody reads your chat, so put anything the user should see in a report. End each turn with at most one line.
     - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do. Do what the note says. If the message says the session was removed, reached Done first, or went stale, check with `sb get` before you act on the note.
-    - A loop's `date` waits are yours. Before you re-arm one, run `sb get \(operatorName)`. Re-arm it only if none of your open waits is already for that loop, so a loop never has two.
+    - Keep a loop as a schedule: `sb schedule \(operatorName) --every 30m "<prompt>"`. sbd keeps it across restarts, so it needs no re-arming. Before you add one, run `sb get \(operatorName)` and add it only if none of your schedules is already for that loop. A loop that still runs from `date` waits follows the same check before you re-arm one, so a loop never has two.
     - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
     - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
     - Don't message a conversation to ask or tell it something, because the message wakes it. Report instead.
+    - You cannot request an MCP server, because nobody reads your chat. When a task needs a server you lack, report it with `needsYou` and name the server.
     """
 
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.
@@ -75,6 +76,7 @@ public enum Manager {
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
     - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` has the operator act on the note once when a session reaches the state.
     - `sb pause fix-cache --reason "free CPU for flag-evals" --until "#1190"` stops a session and keeps it stopped. Switchboard holds every message to it until `sb resume fix-cache` or the `--until` condition: a time such as 2h, a PR such as #1190 merging, or session:<name>[=<state>]. `sb pause --group <group>` pauses each session in a group. To free CPU or to hold work, use `sb pause` and not `sb stop`, because a stopped session moves to Needs you and wakes on the next message.
+    - `sb schedule \(operatorName) --every 30m "<prompt>"` (or `add_schedule` with session `\(operatorName)`) has sbd send the operator the prompt every 30 minutes. Use a schedule for a loop, not `/loop` or a chain of `date` waits, because sbd keeps a schedule across restarts and nobody has to re-arm it.
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.
     - `sb rm fix-cache --worktree` removes a session and its worktree. It does not delete the branch. It refuses a worktree with uncommitted files, or with commits that are on no remote branch unless the PR merged. After the user agrees to lose that work, run `sb rm fix-cache` and then `git worktree remove --force <cwd>`.
@@ -94,11 +96,11 @@ public enum Manager {
 
     `clear_wait` with no session, or `sb wait --clear`, clears your own waits and the ones you handed to the operator.
 
-    To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator sets and re-arms its own waits for it.
+    To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator keeps a loop as a schedule.
 
     ## MCP servers
 
-    This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, or another session. Run `sb manager mcp $SB_SESSION_ID` to see the servers the user can add. Then end your turn and ask the user to run `sb manager mcp <id> add <server>`, or `sb manager mcp <id> --all` for a claude.ai connector such as Slack, with your id from `$SB_SESSION_ID` in place of `<id>`. When your turn ends, claude restarts with the server and resumes this conversation.
+    This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, another session, or a guess. Run `sb manager mcp $SB_SESSION_ID` to see the servers you can name. Then call the `request_mcp_server` tool with `names`, or with `all` for a claude.ai connector such as Slack, and a one-line `reason`. End your turn right after the call. The user allows or denies the request in Switchboard, and a yes in this chat does not count. If the user allows it, claude restarts with the server and resumes this conversation. Do not run `sb manager mcp … add` or `--all` yourself, because Switchboard refuses it inside Claude Code.
 
     ## Testing branches together
 

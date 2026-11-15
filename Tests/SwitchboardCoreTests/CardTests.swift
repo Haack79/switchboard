@@ -683,3 +683,152 @@ func trustCard(_ folder: String = "/w/repo") -> Card { facts(trustLaunch(folder:
     #expect(decoded == expected)
   }
 }
+
+/// The events that end a turn, plus sbd's own `idle`. None of them closes an `mcp` card.
+let mcpCardSurvivors = turnEnds + [event("idle", 4)]
+
+@Suite struct MCPCards {
+  @Test func anMCPRequestEventOpensAnMCPCard() throws {
+    let cards = facts([mcpRequestEvent()]).cards
+
+    let card = try #require(cards.first)
+    #expect(cards.count == 1)
+    #expect(card.id == 9)
+    #expect(card.session == "s1")
+    #expect(card.kind == .mcp)
+    #expect(card.mcpRequest == MCPServerRequest(servers: ["grafana"], reason: "Read the deploy dashboards."))
+  }
+
+  @Test(arguments: ["allowed", "denied"]) func mcpDecidedClosesItsCard(_ decision: String) {
+    #expect(facts([mcpRequestEvent(), mcpDecidedEvent(9, decision)]).cards.isEmpty)
+  }
+
+  @Test func mcpDecidedForAnotherCardLeavesTheCard() {
+    #expect(facts([mcpRequestEvent(), mcpDecidedEvent(99, "allowed")]).cards.map(\.id) == [9])
+  }
+
+  @Test func mcpDecidedClosesOnlyItsOwnCard() {
+    let f = facts([mcpRequestEvent(id: 9), mcpRequestEvent(id: 11, t: 12), mcpDecidedEvent(9, "denied")])
+
+    #expect(f.cards.map(\.id) == [11])
+  }
+
+  /// A `send_decided` that names the card is not the decision that closes it.
+  @Test func anotherKindOfDecisionLeavesTheCard() {
+    let f = facts([mcpRequestEvent(), sendDecided(9, "sent")])
+
+    #expect(f.cards.map(\.id) == [9])
+  }
+
+  /// An `mcp_decided` that names a send card is not the decision that closes it.
+  @Test func anMCPDecisionLeavesAnotherKindOfCard() {
+    let f = facts([sendPending(), mcpDecidedEvent(7, "allowed")])
+
+    #expect(f.cards.map(\.id) == [7])
+  }
+
+  @Test(arguments: mcpCardSurvivors) func anMCPCardSurvivesTheEndOfTheTurn(_ end: Event) {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(), end])
+
+    #expect(f.cards.map(\.id) == [9])
+  }
+
+  @Test(
+    arguments: ["PostToolUse", "PostToolUseFailure"],
+    [
+      tool("request_mcp_server", [:]),
+      tool("mcp__switchboard__request_mcp_server", ["names": ["grafana"], "reason": "Read the deploy dashboards."]),
+    ])
+  func anMCPCardSurvivesItsToolCallFinishing(_ kind: String, _ call: [String: JSON]) {
+    let f = facts([mcpRequestEvent(), event(kind, 11, call)])
+
+    #expect(f.cards.map(\.id) == [9])
+  }
+
+  @Test func theEndOfTheTurnRemovesAPermissionCardAndKeepsAnMCPCard() {
+    let f = facts(permissionTurn() + [mcpRequestEvent(), event("Stop", 11, ["last_assistant_message": "ok"])])
+
+    #expect(f.cards.map(\.kind) == [.mcp])
+  }
+
+  @Test func theNextSessionStartKeepsAnMCPCard() {
+    let f = facts([mcpRequestEvent(), event("SessionStart", 11)])
+
+    #expect(f.cards.map(\.id) == [9])
+  }
+
+  /// The held requests end with sbd, but a request waits in the event log.
+  @Test func aRestartOfSbdKeepsAnMCPCard() {
+    var replay = SessionReplay.replaying(fetchTurn() + [mcpRequestEvent()], session: session())
+
+    replay.restarted()
+
+    #expect(replay.facts.cards.map(\.id) == [9])
+    #expect(replay.facts.cards.first?.hookClosed == false)
+  }
+
+  @Test func replayingTheLogRebuildsAnOpenCard() {
+    let replay = SessionReplay.replaying([mcpRequestEvent(), event("Stop", 11)], session: session())
+
+    #expect(replay.facts.cards.map(\.kind) == [.mcp])
+  }
+
+  @Test func replayingTheLogWithTheDecisionLeavesNoCard() {
+    let replay = SessionReplay.replaying(
+      [mcpRequestEvent(), event("Stop", 11), mcpDecidedEvent(9, "allowed", servers: ["grafana"])], session: session())
+
+    #expect(replay.facts.cards.isEmpty)
+  }
+
+  @Test func anMCPCardOutlivesTheTurn() {
+    #expect(mcpCard().outlivesTurn)
+  }
+
+  @Test func anMCPCardIsNotFindable() {
+    let card = mcpCard()
+
+    #expect(!card.findable)
+    #expect(!DialogWatch.watches(card))
+  }
+
+  @Test(arguments: AllowExtra.allCases) func anMCPCardOffersNoExtra(_ extra: AllowExtra) {
+    #expect(!mcpCard().offers(extra))
+  }
+
+  @Test func anOpenMCPCardNeedsYouWithItsSummary() {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(), event("Stop", 11)])
+
+    let verdict = Attention.evaluate(session(), f, now: 12)
+
+    #expect(verdict.state == .needsYou)
+    #expect(verdict.reason == "add grafana to this conversation")
+  }
+
+  @Test func theReasonOfAnAllRequestSaysEveryServer() {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(nil), event("Stop", 11)])
+
+    #expect(Attention.evaluate(session(), f, now: 12).reason == "load every MCP server in this conversation")
+  }
+
+  @Test func theReasonLeavesOnceTheCardCloses() {
+    let f = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(), event("Stop", 11),
+      mcpDecidedEvent(9, "denied"),
+    ])
+
+    #expect(Attention.evaluate(session(), f, now: 22).reason != "add grafana to this conversation")
+  }
+
+  @Test func anMCPCardIsAnApprovalWithAllowRecommendedAndDeny() {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(), event("Stop", 11)])
+
+    let triage = item(f, now: 12)
+
+    #expect(triage?.source == .card)
+    #expect(triage?.kind == .approval)
+    #expect(triage?.ref == "card:9")
+    #expect(triage?.options.map(\.label) == ["Allow", "Deny"])
+    #expect(triage?.options.map(\.action) == [.allow, .deny])
+    #expect(triage?.options.first?.recommended == true)
+  }
+}

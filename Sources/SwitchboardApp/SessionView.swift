@@ -284,7 +284,7 @@ struct SessionView: View {
         .accessibilityLabel(showsSidePanel ? "Hide Waits and Notes" : "Show Waits and Notes")
         .disabled(!ui.sidePanelFits)
         .help(
-          "Show or hide the session's waits and notes beside the terminals. The panel hides itself, and this button is off, while the view is too narrow for it."
+          "Show or hide the session's waits, schedules, and notes beside the terminals. The panel hides itself, and this button is off, while the view is too narrow for it."
         )
         if CleanupOffer.canCleanUp(session) {
           Button("Clean Up…") { model.confirmingCleanup = session.id }
