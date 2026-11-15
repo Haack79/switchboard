@@ -10,8 +10,8 @@ import Testing
 func readyPR(
   draft: Bool = false, headSha: String = samplePRHead, base: String = "main", defaultBranch: String? = "main",
   mergeable: Mergeable? = .mergeable, reviewDecision: ReviewDecision? = nil, verdicts: [Review] = [],
-  checks: String? = "SUCCESS", mergedBase: Int? = nil, queue: TrunkQueueState? = nil, reviewRequests: [String]? = nil,
-  trunkConfig: Bool? = false, mergeQueue: Bool? = false
+  checks: String? = "SUCCESS", mergedBase: Int? = nil, queue: TrunkQueueState? = nil, reviewRequests: [String]? = [],
+  trunkConfig: Bool? = false, mergeQueue: Bool? = false, codeOwnerRequests: [String]? = []
 ) -> PullRequest {
   var pr = samplePR(
     draft: draft, headSha: headSha, base: base, defaultBranch: defaultBranch, mergeable: mergeable,
@@ -19,8 +19,14 @@ func readyPR(
     reviewRequests: reviewRequests)
   pr.trunkConfig = trunkConfig
   pr.mergeQueue = mergeQueue
+  pr.codeOwnerRequests = codeOwnerRequests
   pr.reviewDecisionRead = true
   return pr
+}
+
+/// A ready PR #42 that alice approved on its head.
+private func greenReadyPR() -> PullRequest {
+  readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED", on: samplePRHead)])
 }
 
 func mergeEvent(_ t: Int64, head: String, _ result: String, error: String? = nil) -> Event {
@@ -170,8 +176,7 @@ extension MergeAttentionTests {
       let comments = [
         PRComment(id: "IC_gh", author: "github-actions[bot]", createdAt: "2026-10-24T00:00:00Z"), trunkBotComment,
       ]
-      let f = try prFacts(
-        readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED")]), comments: comments)
+      let f = try prFacts(withDetails(greenReadyPR(), MergeDetails()), comments: comments)
 
       #expect(verdict(f) == Verdict(state: .readyToMerge, reason: "#42 is ready to merge, approved by alice"))
       #expect(verdict(f).options.map(\.label) == ["Enqueue #42", "Acknowledge"])
@@ -184,9 +189,9 @@ extension MergeAttentionTests {
       let comments = (0..<25).map {
         PRComment(id: "IC_\($0)", author: "github-actions[bot]", createdAt: "2026-10-24T00:00:\(10 + $0)Z")
       }
-      let f = try prFacts(
-        readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("alice", "APPROVED")], trunkConfig: true),
-        comments: comments)
+      var pr = withDetails(greenReadyPR(), MergeDetails())
+      pr.trunkConfig = true
+      let f = try prFacts(pr, comments: comments)
 
       #expect(verdict(f) == Verdict(state: .readyToMerge, reason: "#42 is ready to merge, approved by alice"))
       #expect(verdict(f).options.map(\.label) == ["Enqueue #42", "Acknowledge"])
@@ -391,7 +396,7 @@ private func approvedPR(
 ) -> PullRequest {
   readyPR(
     headSha: headSha, base: base, mergeable: mergeable, reviewDecision: .approved,
-    verdicts: [sampleVerdict("stamphog", "APPROVED")], checks: checks)
+    verdicts: [sampleVerdict("stamphog", "APPROVED", on: headSha)], checks: checks)
 }
 
 /// Details that `GitHub.parseMergeDetails` could give for #42.
@@ -710,70 +715,95 @@ extension MergeAttentionTests {
   }
 }
 
+/// The panel's rows replaced the code owner, review thread, and test plan
+/// callouts. Each case that gave a callout gives an amber row with its words.
 extension MergeAttentionTests {
-  @Suite struct MergeCallouts {
-    @Test func readyPRWithNothingToPauseHasNoCallouts() throws {
-      #expect(verdict(try summaryFacts()).callouts.isEmpty)
+  @Suite struct MergeRows {
+    private func line(_ v: Verdict, _ row: MergeReview.Row) -> MergeReview.Line? {
+      v.review?.lines.first { $0.row == row }
+    }
+
+    @Test func readyPRWithNothingToPauseHasNoCalloutAndNoAmberRow() throws {
+      let v = verdict(try summaryFacts())
+
+      #expect(v.callouts.isEmpty)
+      #expect(v.review?.amber == [])
     }
 
     // Code owners
 
-    @Test func waitingCodeOwnerGroupGivesARequiredCallout() throws {
+    @Test func waitingCodeOwnerGroupGivesARequiredRow() throws {
       let v = verdict(try summaryFacts(ownedPR([["@PostHog/team-flags"]], requests: [])))
 
-      #expect(v.callouts.map(\.kind) == [.warning])
-      #expect(v.callouts.map(\.title) == ["Code owner review still required"])
-      #expect(v.callouts.map { unescaped($0.body) } == ["@PostHog/team-flags"])
+      #expect(v.callouts.isEmpty)
+      #expect(v.review?.amber == [.reviewers])
+      #expect(line(v, .reviewers)?.title == "Code owner review still required")
+      #expect(line(v, .reviewers)?.details == ["@PostHog/team-flags"])
     }
 
-    @Test func requiredCalloutJoinsAGroupsOwnersWithOr() throws {
+    @Test func requiredRowJoinsAGroupsOwnersWithOr() throws {
       let v = verdict(try summaryFacts(ownedPR([["@alice", "@bob"]], requests: [])))
 
-      #expect(v.callouts.map(\.kind) == [.warning])
-      #expect(v.callouts.map(\.title) == ["Code owner review still required"])
-      #expect(v.callouts.map { unescaped($0.body) } == ["@alice or @bob"])
+      #expect(line(v, .reviewers)?.title == "Code owner review still required")
+      #expect(line(v, .reviewers)?.details == ["@alice or @bob"])
     }
 
-    @Test func requiredCalloutNamesEveryWaitingGroup() throws {
+    @Test func requiredRowNamesEveryWaitingGroup() throws {
       let v = verdict(try summaryFacts(ownedPR([["@PostHog/team-flags"], ["@alice", "@bob"]], requests: [])))
 
-      let callout = try #require(v.callouts.first)
-      #expect(callout.title == "Code owner review still required")
-      #expect(unescaped(callout.body).contains("@PostHog/team-flags"))
-      #expect(unescaped(callout.body).contains("@alice or @bob"))
-      #expect(unescaped(callout.body).contains("; "))
+      let names = try #require(line(v, .reviewers)?.details.first)
+      #expect(names.contains("@PostHog/team-flags"))
+      #expect(names.contains("@alice or @bob"))
+      #expect(names.contains("; "))
     }
 
-    @Test func requiredCalloutLeavesOutAnApprovedGroup() throws {
+    @Test func requiredRowLeavesOutAnApprovedGroup() throws {
       let pr = ownedPR(
         [["@PostHog/team-flags"], ["@carol"]], requests: [],
         verdicts: [sampleVerdict("carol", "APPROVED", on: samplePRHead)])
 
       let v = verdict(try summaryFacts(pr))
 
-      #expect(v.callouts.map(\.title) == ["Code owner review still required"])
-      #expect(v.callouts.map { unescaped($0.body) } == ["@PostHog/team-flags"])
+      #expect(line(v, .reviewers)?.title == "Code owner review still required")
+      #expect(line(v, .reviewers)?.details == ["@PostHog/team-flags"])
     }
 
-    @Test func satisfiedCodeOwnersGiveNoCallout() throws {
+    @Test func satisfiedCodeOwnersGiveNoReviewersRow() throws {
       let pr = ownedPR([["@carol"]], requests: [], verdicts: [sampleVerdict("carol", "APPROVED", on: samplePRHead)])
 
-      #expect(verdict(try summaryFacts(pr)).callouts.isEmpty)
+      let v = verdict(try summaryFacts(pr))
+
+      #expect(v.review?.amber == [])
+      #expect(line(v, .reviewers) == nil)
     }
 
-    @Test func openCodeOwnerRequestGivesARequestedCallout() throws {
+    @Test func satisfiedCodeOwnersWithAPendingRequestGiveARequestedRow() throws {
+      let pr = ownedPR(
+        [["@carol"]], requests: ["@carol"], verdicts: [sampleVerdict("carol", "APPROVED", on: samplePRHead)])
+
+      let v = verdict(try summaryFacts(pr))
+
+      #expect(line(v, .reviewers)?.title == "Code owners still requested")
+      #expect(line(v, .reviewers)?.details == ["@carol"])
+    }
+
+    @Test func openCodeOwnerRequestGivesARequestedRow() throws {
       let v = verdict(try summaryFacts(ownedPR(nil, requests: ["@PostHog/team-flags"])))
 
-      let callout = try #require(v.callouts.first)
-      #expect(v.callouts.count == 1)
-      #expect(callout.kind == .warning)
-      #expect(callout.title == "Code owners still requested")
-      #expect(unescaped(callout.body).contains("@PostHog/team-flags"))
+      #expect(v.review?.amber == [.reviewers])
+      #expect(line(v, .reviewers)?.title == "Code owners still requested")
+      #expect(line(v, .reviewers)?.details == ["@PostHog/team-flags"])
     }
 
-    @Test(arguments: [[String]?.none, []])
-    func noCodeOwnerRequestGivesNoCallout(_ requests: [String]?) throws {
-      #expect(verdict(try summaryFacts(ownedPR(nil, requests: requests))).callouts.isEmpty)
+    @Test func noCodeOwnerRequestGivesNoReviewersRow() throws {
+      #expect(line(verdict(try summaryFacts(ownedPR(nil, requests: []))), .reviewers) == nil)
+    }
+
+    @Test func unreadCodeOwnerRequestsGiveAnAmberReviewersRowWithTheNote() throws {
+      let v = verdict(try summaryFacts(ownedPR(nil, requests: nil)))
+
+      #expect(v.review?.amber == [.reviewers])
+      #expect(line(v, .reviewers)?.details == ["sbd hasn't read the review requests yet."])
     }
 
     // Review threads
@@ -785,52 +815,54 @@ extension MergeAttentionTests {
       (150, 100, 3, "At least 3 open review threads"),
       (150, 100, 0, "Not every review thread was read"),
     ])
-    func openThreadsGiveACallout(_ threads: Int, _ read: Int, _ open: Int, _ title: String) throws {
+    func openThreadsGiveAnAmberRow(_ threads: Int, _ read: Int, _ open: Int, _ title: String) throws {
       let v = verdict(try summaryFacts(details: mergeDetails(threads: threads, threadsRead: read, openThreads: open)))
 
-      #expect(v.callouts.map(\.title) == [title])
-      #expect(v.callouts.allSatisfy { $0.kind == .warning })
+      #expect(v.callouts.isEmpty)
+      #expect(line(v, .threads)?.title == title)
+      #expect(v.review?.amber == [.threads])
     }
 
     @Test(arguments: [(150, 100, 3), (150, 100, 0), (3, 2, 1)])
     func unreadThreadsSayHowManyWereRead(_ threads: Int, _ read: Int, _ open: Int) throws {
       let v = verdict(try summaryFacts(details: mergeDetails(threads: threads, threadsRead: read, openThreads: open)))
 
-      #expect(v.callouts.map(\.body) == ["#42 has \(threads) review threads, and sbd read \(read)."])
+      #expect(line(v, .threads)?.details == ["The PR has \(threads) review threads, and sbd read \(read)."])
     }
 
     @Test(arguments: [(0, 0), (4, 4)])
-    func everyThreadReadAndResolvedGivesNoCallout(_ threads: Int, _ read: Int) throws {
+    func everyThreadReadAndResolvedGivesAGreenRow(_ threads: Int, _ read: Int) throws {
       let v = verdict(try summaryFacts(details: mergeDetails(threads: threads, threadsRead: read, openThreads: 0)))
 
-      #expect(v.callouts.isEmpty)
+      #expect(line(v, .threads)?.title == "No open review threads")
+      #expect(line(v, .threads)?.amber == false)
     }
 
-    @Test func calloutNeverSaysZeroOpenThreads() throws {
+    @Test func rowNeverSaysZeroOpenThreads() throws {
       let v = verdict(try summaryFacts(details: mergeDetails(threads: 150, threadsRead: 100, openThreads: 0)))
 
-      #expect(!v.callouts.contains { $0.title.hasPrefix("0 ") || $0.title.contains(" 0 open") })
+      let title = try #require(line(v, .threads)?.title)
+      #expect(!title.hasPrefix("0 ") && !title.contains(" 0 open"))
     }
 
     // Test plan
 
-    @Test func testGapGivesAWarningThatNamesIt() throws {
+    @Test func testGapGivesAnAmberRowThatNamesIt() throws {
       let v = verdict(try summaryFacts(details: mergeDetails(testGaps: ["Not run: the database-backed suites."])))
 
-      let callout = try #require(v.callouts.first)
-      #expect(v.callouts.count == 1)
-      #expect(callout.kind == .warning)
-      #expect(callout.title == "The test plan has gaps")
-      #expect(unescaped(callout.body) == "- Not run: the database-backed suites.")
+      #expect(v.callouts.isEmpty)
+      #expect(v.review?.amber == [.testPlan])
+      #expect(line(v, .testPlan)?.title == "The test plan has gaps")
+      #expect(line(v, .testPlan)?.details == ["Not run: the database-backed suites."])
     }
 
-    @Test func noTestGapGivesNoTestPlanCallout() throws {
-      #expect(verdict(try summaryFacts(details: mergeDetails(testGaps: []))).callouts.isEmpty)
+    @Test func noTestGapGivesNoTestPlanRow() throws {
+      #expect(line(verdict(try summaryFacts(details: mergeDetails(testGaps: []))), .testPlan) == nil)
     }
 
     // Order
 
-    @Test func calloutsComeInOrderMergeFailureCodeOwnersThreadsTestPlan() throws {
+    @Test func rowsComeInPanelOrderAndAMergeFailureStaysACallout() throws {
       var pr = approvedPR()
       pr.author = "haacked"
       pr.codeOwnerRequests = ["@PostHog/team-flags"]
@@ -841,14 +873,10 @@ extension MergeAttentionTests {
 
       let v = verdict(f)
 
-      #expect(v.callouts.count == 4)
-      #expect(
-        Array(v.callouts.prefix(3).map(\.title)) == [
-          "The last merge failed", "Code owners still requested", "1 open review thread",
-        ])
-      #expect(v.callouts.last?.kind == .warning)
-      #expect(v.callouts.last?.title == "The test plan has gaps")
-      #expect(v.callouts.last.map { unescaped($0.body) } == "- Not run: the e2e suite.")
+      #expect(v.callouts.map(\.title) == ["The last merge failed"])
+      #expect(v.review?.lines.map(\.row) == [.approval, .threads, .reviewers, .testPlan])
+      #expect(v.review?.amber == [.threads, .reviewers, .testPlan])
+      #expect(line(v, .testPlan)?.details == ["Not run: the e2e suite."])
     }
 
     @Test func calloutsStayUnderTheCardLimit() throws {

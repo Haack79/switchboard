@@ -12,6 +12,13 @@ struct MessageField: View {
   /// The ref of the Inbox item that the field answers, so sbd can hold the session while it works on the
   /// message.
   var ref: String?
+  /// The field takes keyboard focus, then calls `onFocus`.
+  var takesFocus = false
+  var onFocus: (() -> Void)?
+  /// Runs on an Esc while the draft holds nothing. Without it, the Esc goes on to the views behind the field.
+  var onEmptyEscape: (() -> Void)?
+  /// Runs after sbd accepts a message from this field.
+  var onSent: (() -> Void)?
   @FocusState private var focused: Bool
   /// The paste monitor reads this view's focus here. The draft can't hold it, because several views share one draft.
   @State private var focus = Focus()
@@ -39,9 +46,9 @@ struct MessageField: View {
       }
     }
     .overlay {
-      FileDropTarget(isTargeted: $dropTargeted) { urls in
-        draft.add(paths: urls.map(\.path)).map { URL(fileURLWithPath: $0) }
-      }
+      // A closure, unlike a method reference, differs on each render. SwiftUI then calls `updateNSView`, which
+      // limits the field editor's drag types again after a focus change.
+      FileDropTarget(isTargeted: $dropTargeted) { urls in draft.add(dropped: urls) }
     }
     // A refused paste or drop changes neither the text nor the chips, so VoiceOver would say nothing.
     .onChange(of: draft.error) {
@@ -63,6 +70,14 @@ struct MessageField: View {
       .textFieldStyle(.roundedBorder)
       .focused($focused)
       .onChange(of: focused) { focus.held = focused }
+      .onChange(of: takesFocus, initial: true) {
+        guard takesFocus else { return }
+        // SwiftUI drops a focus change made in the update that inserts the field.
+        DispatchQueue.main.async { [onFocus] in
+          focused = true
+          onFocus?()
+        }
+      }
       // An input method that composes takes Esc to cancel the composition.
       .onKeyPress(phases: .down) { press in
         guard press.key == .escape else {
@@ -73,7 +88,12 @@ struct MessageField: View {
           completion.dismiss(at: draft.text)
           return .handled
         }
-        return !TextInput.isComposing && draft.escape(at: Date()) ? .handled : .ignored
+        guard !TextInput.isComposing else { return .ignored }
+        if let onEmptyEscape, draft.isEmpty {
+          onEmptyEscape()
+          return .handled
+        }
+        return draft.escape(at: Date()) ? .handled : .ignored
       }
       .onKeyPress(keys: [.upArrow, .downArrow, .tab], phases: [.down, .repeat]) { press in
         let slash = self.slash
@@ -181,7 +201,7 @@ struct MessageField: View {
     .accessibilityAction { draft.remove(image.id) }
   }
 
-  private func send() { draft.submit(session, ref: ref, to: model) }
+  private func send() { draft.submit(session, ref: ref, to: model, then: onSent) }
 
   /// The chip's VoiceOver label. Activating the chip removes the image.
   static func chipLabel(_ name: String) -> String { "Image: \(name), remove" }
