@@ -319,6 +319,15 @@ import Testing
     #expect(try sent(s.sbd, s.b.id).isEmpty)
   }
 
+  @Test(arguments: [true, false]) func sbAllowAndDenyPrintTheDecision(allow: Bool) throws {
+    let s = try setup()
+    let id = try open(s)
+
+    let text = try s.sbd.sb(allow ? "allow" : "deny", s.sender.id, "--card", String(id))
+
+    #expect(text.hasPrefix(allow ? "sent" : "cancelled"), "\(text)")
+  }
+
   @Test func chooseSendSendsToTheListedTargets() throws {
     let s = try setup()
     _ = try open(s)

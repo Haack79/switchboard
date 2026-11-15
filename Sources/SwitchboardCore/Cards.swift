@@ -1,8 +1,8 @@
 import Foundation
 
 /// A permission prompt or a question that the main session waits on, or a
-/// group message that it asked for, which the user can answer without
-/// opening the session.
+/// group message or MCP servers that it asked for, which the user can answer
+/// without opening the session.
 public struct Card: Codable, Equatable, Sendable, Identifiable {
   public enum Kind: String, Codable, Sendable {
     case permission
@@ -12,6 +12,8 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
     /// Claude Code's workspace trust dialog, which shows before claude starts
     /// in a folder that its account does not trust.
     case trust
+    /// MCP servers that a Manager conversation asked for, which wait for the user to allow or deny them.
+    case mcp
   }
 
   /// The id of the PermissionRequest event that opened the card.
@@ -34,6 +36,8 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
   public var hookClosed: Bool
   /// The message of a `send` card. Other kinds have none.
   public var send: GroupMessage?
+  /// The request of an `mcp` card. Other kinds have none.
+  public var mcpRequest: MCPServerRequest?
   /// The session's permission mode when the PermissionRequest arrived, such
   /// as `default` or `auto`.
   public var permissionMode: String?
@@ -124,9 +128,15 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
   }
 
   /// Whether the card stays when its turn ends or its hook goes away: a
-  /// deferred question, or a group message, which only a decision closes. A
-  /// trust card stays until claude starts or the trust is answered.
-  public var outlivesTurn: Bool { deferred || kind == .send || kind == .trust }
+  /// deferred question, a group message, or an MCP server request, which only
+  /// a decision closes. A trust card stays until claude starts or the trust
+  /// is answered.
+  public var outlivesTurn: Bool {
+    switch kind {
+    case .send, .trust, .mcp: true
+    case .permission, .question: deferred
+    }
+  }
 
   /// What the user does with the card, in the words of the session's attention reason.
   public var reason: String {
@@ -135,6 +145,7 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
     case .question: "answer: \(summary)"
     case .send: "confirm \(summary)"
     case .trust: "trust the folder \((summary as NSString).abbreviatingWithTildeInPath)"
+    case .mcp: summary
     }
   }
 
@@ -147,7 +158,7 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
     case .permission:
       FileCall(self) != nil
         || tool == "Bash" && input["command"]?.string?.contains(where: { !$0.isWhitespace }) == true
-    case .send, .trust: false
+    case .send, .trust, .mcp: false
     }
   }
 
@@ -358,8 +369,13 @@ extension SessionFacts {
     case "send_pending":
       if let card = Card(groupMessage: event) { cards.append(card) }
     case "send_decided":
-      guard let card else { return }
+      guard let card, cards[card].kind == .send else { return }
       cards.remove(at: card)
+    case "mcp_decided":
+      guard let card, cards[card].kind == .mcp else { return }
+      cards.remove(at: card)
+    case "mcp_request":
+      if let card = Card(mcpRequest: event) { cards.append(card) }
     case "trust_closed":
       exitedAtTrust = true
       if let card { cards.remove(at: card) }

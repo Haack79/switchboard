@@ -356,10 +356,11 @@ public final class Service {
 
   /// `origin` is the socket that the request arrived on. `caller` lets a request that stops a session's
   /// panes refuse a client inside that session. `hookGone` reports whether the client closed its
-  /// connection, which a held PermissionRequest checks while it waits.
+  /// connection, which a held PermissionRequest checks while it waits. A quick ask ends its claude turn when it
+  /// turns true.
   public func handle(
     _ request: Request, origin: RequestOrigin = .mac, caller: Caller = .inProcess,
-    hookGone: @escaping () -> Bool = { false }
+    hookGone: @escaping @Sendable () -> Bool = { false }
   ) -> Response {
     do {
       // A request from a host's socket ends here. It reaches no code below, so it can only be a hook, and
@@ -438,6 +439,9 @@ public final class Service {
         return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])
       case "docket-start":
         return .success(try JSON(encoding: startDocket(request.args)))
+      case "quick-ask":
+        // A quick ask can run claude for minutes. It runs off the state queue.
+        return .success(try quickAsk(request.args, clientGone: hookGone))
       case "usage":
         // `usage` runs off the state queue. The reader takes that queue itself
         // to list the accounts, and a refresh waits on the network.
@@ -599,6 +603,8 @@ public final class Service {
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "manager-mcp-request":
+      return try openMCPRequest(args)
     case "operator-report":
       return try operatorReport(args)
     case "operator-reports":
