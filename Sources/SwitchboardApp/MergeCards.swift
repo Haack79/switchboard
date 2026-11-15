@@ -39,6 +39,26 @@ func mergeBatchTitle(_ sessions: [SessionSummary]) -> String {
   return "Merge All"
 }
 
+/// The batch confirmation's line for the session's PR. A PR whose review has
+/// amber rows names them after "check first". nil without a PR.
+func mergeBatchLine(_ session: SessionSummary) -> String? {
+  guard let pr = session.pr else { return nil }
+  let line = "\(session.mergeVerb) #\(pr.number) \(pr.title) (\(pr.repo))"
+  let amber = (session.triage?.review?.amberLines ?? []).map { Triage.uncapitalized($0.title) }
+  return amber.isEmpty ? line : "\(line); check first: \(amber.joined(separator: ", "))"
+}
+
+/// The batch's heading: how many PRs are ready, and how many of them have
+/// amber review rows. A PR whose item has no review is not counted as amber.
+func mergeBatchHeader(_ sessions: [SessionSummary]) -> String {
+  let header = "\(sessions.count) PRs are ready to merge"
+  switch sessions.filter({ $0.triage?.review?.amberLines.isEmpty == false }).count {
+  case 0: return header
+  case 1: return "\(header), 1 needs a look"
+  case let n: return "\(header), \(n) need a look"
+  }
+}
+
 /// gh's error from a failed merge, or nothing.
 struct MergeNote: View {
   @Environment(\.sessionNames) private var names
@@ -58,7 +78,7 @@ struct MergeNote: View {
 }
 
 /// Merges or enqueues several PRs after one confirmation that lists each of
-/// them with what happens to it.
+/// them with what happens to it and what to check first.
 struct MergeBatch: View {
   @EnvironmentObject var model: BoardModel
   let sessions: [SessionSummary]
@@ -68,18 +88,14 @@ struct MergeBatch: View {
     if sessions.count > 1 {
       let title = mergeBatchTitle(sessions)
       HStack {
-        Text("\(sessions.count) PRs are ready to merge").font(.headline)
+        Text(mergeBatchHeader(sessions)).font(.headline)
         Spacer()
         Button("\(title)…") { confirming = true }
       }
       .confirmationDialog("\(title) \(sessions.count) PRs?", isPresented: $confirming) {
         Button(title) { for s in sessions { model.merge(s.id) } }
       } message: {
-        Text(
-          sessions.compactMap { s in
-            s.pr.map { "\(s.mergeVerb) #\($0.number) \($0.title) (\($0.repo))" }
-          }
-          .joined(separator: "\n"))
+        Text(sessions.compactMap(mergeBatchLine).joined(separator: "\n"))
       }
     }
   }

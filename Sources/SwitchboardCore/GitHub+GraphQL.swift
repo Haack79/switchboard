@@ -220,7 +220,7 @@ extension GitHub {
     let review = { (n: JSON) in
       Review(
         author: login(n["author"]), state: n["state"]?.string ?? "", submittedAt: n["submittedAt"]?.string,
-        commit: n["commit"]?["oid"]?.string, bot: n["author"]?["__typename"]?.string == "Bot" ? true : nil)
+        commit: n["commit"]?["oid"]?.string, bot: isBot(n["author"]) ? true : nil)
     }
     let reviewRequests = node["reviewRequests"].map {
       nodes($0).compactMap { $0["requestedReviewer"].flatMap { $0["login"]?.string ?? $0["slug"]?.string } }
@@ -344,7 +344,7 @@ extension GitHub {
   /// [bot] at the end. GraphQL gives the same login to the app and to a user.
   public static func parseComment(_ node: JSON) -> PRComment? {
     guard let id = node["id"]?.string else { return nil }
-    let bot = node["author"]?["__typename"]?.string == "Bot"
+    let bot = isBot(node["author"])
     return PRComment(
       id: id, author: login(node["author"]) + (bot ? "[bot]" : ""), createdAt: node["createdAt"]?.string ?? "",
       editedAt: node["lastEditedAt"]?.string, edited: node["includesCreatedEdit"]?.bool ?? false,
@@ -364,6 +364,9 @@ extension GitHub {
 
   /// GitHub reports a deleted account's author as null and shows it as ghost.
   static func login(_ author: JSON?) -> String { author?["login"]?.string ?? "ghost" }
+
+  /// Whether the author is a GitHub App.
+  static func isBot(_ author: JSON?) -> Bool { author?["__typename"]?.string == "Bot" }
 
   static func nodes(_ connection: JSON?) -> [JSON] {
     (connection?["nodes"]?.array ?? []).filter { $0 != .null }

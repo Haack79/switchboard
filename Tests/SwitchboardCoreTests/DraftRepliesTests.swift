@@ -912,3 +912,220 @@ extension DraftRepliesTests {
     #expect(json["target"]?["id"]?.int == 1001)
   }
 }
+
+// MARK: - Drafts on the merge card's review threads
+
+/// An open thread that the merge details read showed, whose first comment
+/// is `rootId`. nil gives a thread whose URL names no review comment.
+private func shownThread(_ rootId: Int64?) -> MergeDetails.ThreadDetail {
+  MergeDetails.ThreadDetail(
+    rootId: rootId,
+    url: rootId.map { "https://github.com/acme/widgets/pull/42#discussion_r\($0)" }
+      ?? "https://github.com/acme/widgets/pull/42",
+    path: "a.swift", line: 3, outdated: false, author: "ann", bot: nil, excerpt: "Why not use a guard?",
+    replied: false)
+}
+
+/// The thread that `commentURL` and `resolvedComment` name.
+private let rootThread = shownThread(1001)
+
+/// samplePR's PR #42, ready to merge and approved on its head, with these
+/// open threads shown. `open` is GitHub's count when more threads are open
+/// than the read shows.
+private func reviewedPR(_ threads: [MergeDetails.ThreadDetail], open: Int? = nil) -> PullRequest {
+  var pr = readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("stamphog", "APPROVED", on: samplePRHead)])
+  let count = open ?? threads.count
+  pr.mergeDetails = MergeDetails(threads: count, threadsRead: count, openThreads: count, threadDetails: threads)
+  return pr
+}
+
+/// The Ready to merge item of a session whose card has `drafts`, on a PR
+/// with `threads`, after `more` events. The card's ref is `cardRef`.
+private func readyDrafted(
+  _ drafts: [TriageDraft], threads: [MergeDetails.ThreadDetail] = [rootThread], open: Int? = nil,
+  _ more: [Event] = []
+) throws -> TriageItem {
+  var card = sessionCard
+  card.drafts = drafts
+  let f = facts(
+    [
+      event("UserPromptSubmit", 0, ["prompt": "go"]), try summaryEvent(2, 1, card), stop(3, 2, "Pushed."),
+      try prEvent(3, reviewedPR(threads, open: open)),
+    ] + more)
+  let v = Attention.evaluate(session(), f, now: 1000)
+  try #require(v.state == .readyToMerge, "the fixture gave \(v.state): \(v.reason)")
+  let item = try #require(Triage.item(f, v, kind: .work))
+  try #require(item.source == .session)
+  try #require(item.review != nil)
+  return item
+}
+
+private func draft(_ text: String = draftText, replyTo: String? = commentURL) -> TriageDraft {
+  TriageDraft(label: "Reply to ann", text: text, replyTo: replyTo)
+}
+
+/// `resolvedComment` with another place or kind.
+private func target(
+  repo: String = "acme/widgets", pr: Int = 42, kind: ReplyTarget.Kind = .reviewComment, id: Int64 = 1001,
+  root: Int64 = 1001
+) -> ResolvedTarget {
+  var t = resolvedComment
+  t.target = ReplyTarget(repo: repo, pr: pr, kind: kind, id: id)
+  t.root = root
+  return t
+}
+
+/// Each draft of the item shows in exactly one place: in one shown thread,
+/// or else in the Drafts section, which leaves out `draftNumbers`.
+private func expectEachDraftOnce(_ item: TriageItem, sourceLocation: SourceLocation = #_sourceLocation) throws {
+  let review = try #require(item.review, sourceLocation: sourceLocation)
+  let shown = review.threads?.shown ?? []
+  for d in item.drafts {
+    let holders = shown.filter { $0.drafts.contains(d.number) }.count
+    #expect(holders <= 1, "draft \(d.number) shows on \(holders) threads", sourceLocation: sourceLocation)
+    #expect(
+      (holders == 1) == review.draftNumbers.contains(d.number), "draft \(d.number)", sourceLocation: sourceLocation)
+  }
+  #expect(Set(review.draftNumbers) == Set(shown.flatMap(\.drafts)), sourceLocation: sourceLocation)
+  #expect(Set(shown.flatMap(\.drafts)).isSubset(of: Set(item.drafts.map(\.number))), sourceLocation: sourceLocation)
+}
+
+/// One draft on the card and how it ends up: on the thread with root 1001,
+/// or in the Drafts section.
+enum ThreadDraftCase: String, CaseIterable, Sendable, CustomTestStringConvertible {
+  // The draft's states. Only those with a resolved target can match.
+  case ready, posting, posted, failed, unknown, checking, unresolved, refused, withoutReplyTo
+  // Targets with the thread's root that are not the thread.
+  case anotherRepo, anotherPR, issueCommentWithTheRootsId, reviewWithTheRootsId
+  /// GitHub ignores a repo's case.
+  case theRepoInAnotherCase
+  /// A reply to a later comment of the thread posts to the thread's root.
+  case aReplyToALaterComment
+  /// The thread is the 11th open one, which the panel doesn't show.
+  case beyondTheShownThreads
+  case aThreadWhoseURLDoesNotParse
+
+  var testDescription: String { rawValue }
+
+  var matches: Bool {
+    switch self {
+    case .ready, .posting, .posted, .failed, .unknown, .theRepoInAnotherCase, .aReplyToALaterComment: true
+    default: false
+    }
+  }
+
+  var replyTo: String? {
+    switch self {
+    case .withoutReplyTo: nil
+    case .aReplyToALaterComment: "https://github.com/acme/widgets/pull/42#discussion_r1005"
+    default: commentURL
+    }
+  }
+
+  var threads: [MergeDetails.ThreadDetail] {
+    switch self {
+    case .beyondTheShownThreads: (2001...2010).map { shownThread(Int64($0)) }
+    case .aThreadWhoseURLDoesNotParse: [shownThread(nil)]
+    default: [rootThread]
+    }
+  }
+
+  var open: Int? { self == .beyondTheShownThreads ? 11 : nil }
+
+  func events() throws -> [Event] {
+    switch self {
+    case .ready, .withoutReplyTo, .beyondTheShownThreads, .aThreadWhoseURLDoesNotParse: return [try resolvedEvent(4)]
+    case .posting: return [try resolvedEvent(4), try postingEvent(5)]
+    case .posted: return [try resolvedEvent(4), try postedEvent(5)]
+    case .failed:
+      return [try resolvedEvent(4), try postingEvent(5), outcomeEvent(6, "draft_post_failed", error: loginRefusal)]
+    case .unknown:
+      return [
+        try resolvedEvent(4), try postingEvent(5),
+        outcomeEvent(6, "draft_post_unknown", error: DraftReplies.interrupted),
+      ]
+    case .checking: return []
+    case .unresolved: return [targetEvent(4, ["error": "GitHub has no comment 1001, or gh can't see it"])]
+    case .refused: return [targetEvent(4, ["refused": "GitHub places comment 1001 on acme/widgets#1"])]
+    case .anotherRepo: return [try postingEvent(5, target: target(repo: "acme/gadgets"))]
+    case .anotherPR: return [try postingEvent(5, target: target(pr: 43))]
+    case .issueCommentWithTheRootsId: return [try postingEvent(5, target: target(kind: .issueComment))]
+    case .reviewWithTheRootsId: return [try postingEvent(5, target: target(kind: .review))]
+    case .theRepoInAnotherCase: return [try postingEvent(5, target: target(repo: "Acme/Widgets"))]
+    case .aReplyToALaterComment: return [try resolvedEvent(4, target(id: 1005, root: 1001))]
+    }
+  }
+}
+
+extension DraftRepliesTests {
+  @Test(arguments: ThreadDraftCase.allCases)
+  func aDraftShowsOnTheThreadItAnswersOrElseInTheDraftsSection(_ c: ThreadDraftCase) throws {
+    let item = try readyDrafted([draft(replyTo: c.replyTo)], threads: c.threads, open: c.open, try c.events())
+
+    let review = try #require(item.review)
+    let shown = try #require(review.threads).shown
+    #expect(shown.flatMap(\.drafts) == (c.matches ? [1] : []))
+    #expect(Set(review.draftNumbers) == (c.matches ? [1] : []))
+    #expect(item.drafts.map(\.number) == [1])
+    try expectEachDraftOnce(item)
+  }
+
+  @Test func aMatchedDraftShowsOnItsOwnThreadAndNoOther() throws {
+    let item = try readyDrafted(
+      [draft()], threads: [shownThread(1000), rootThread, shownThread(1002)],
+      [
+        try resolvedEvent(4)
+      ])
+
+    let shown = try #require(item.review?.threads).shown
+    #expect(shown.map(\.drafts) == [[], [1], []])
+  }
+
+  @Test func twoDraftsThatAnswerOneThreadBothShowOnIt() throws {
+    let item = try readyDrafted(
+      [draft("Fixed in abc123."), draft("Also renamed the guard.")],
+      [try resolvedEvent(4), targetEvent(5, number: 2, ["resolved": try JSON(encoding: resolvedComment)])])
+
+    let shown = try #require(item.review?.threads).shown
+    #expect(shown.map(\.drafts) == [[1, 2]])
+    #expect(Set(try #require(item.review).draftNumbers) == [1, 2])
+    try expectEachDraftOnce(item)
+  }
+
+  @Test func draftsOnTwoThreadsAndOneWithoutAThreadEachShowOnce() throws {
+    let second = target(id: 1002, root: 1002)
+    let item = try readyDrafted(
+      [
+        draft("Fixed in abc123."),
+        draft("Renamed it.", replyTo: "https://github.com/acme/widgets/pull/42#discussion_r1002"),
+        draft("Thanks for the review.", replyTo: nil),
+      ], threads: [rootThread, shownThread(1002)],
+      [try resolvedEvent(4), targetEvent(5, number: 2, ["resolved": try JSON(encoding: second)])])
+
+    let shown = try #require(item.review?.threads).shown
+    #expect(shown.map(\.drafts) == [[1], [2]])
+    #expect(Set(try #require(item.review).draftNumbers) == [1, 2])
+    #expect(item.drafts.map(\.number) == [1, 2, 3])
+    try expectEachDraftOnce(item)
+  }
+
+  /// A recorded post gives a draft a target even without `replyTo`. The app
+  /// draws such a draft without a reply field, so it stays in the Drafts section.
+  @Test func aRecordedPostOfADraftWithoutReplyToStaysInTheDraftsSection() throws {
+    let item = try readyDrafted([draft(replyTo: nil)], [try resolvedEvent(4), try postingEvent(5)])
+    try #require(item.drafts.first?.post.target != nil)
+
+    #expect(try #require(item.review).draftNumbers.isEmpty)
+    try expectEachDraftOnce(item)
+  }
+
+  /// The draft's `post` decides the match, not the comment that its `replyTo` names or a recorded
+  /// resolution. A `replyTo` on another PR makes the draft copy-only.
+  @Test func aDraftWhoseReplyToNamesAnotherPRStaysInTheDraftsSection() throws {
+    let item = try readyDrafted(
+      [draft(replyTo: "https://github.com/acme/widgets/pull/43#discussion_r1001")], [try resolvedEvent(4)])
+
+    #expect(try #require(item.review).draftNumbers.isEmpty)
+    try expectEachDraftOnce(item)
+  }
+}

@@ -222,6 +222,9 @@ public struct TriageItem: Codable, Equatable, Sendable {
   /// Messages that the session wrote for the user to send to someone else.
   /// The JSON carries them only in `message.summary`.
   public var drafts: [InboxDraft]
+  /// The "Before you merge" panel of a Ready to merge item. The JSON carries
+  /// it only as `message.review`.
+  public var review: MergeReview?
   public var source: TriageSource
   /// What the user can open after the Summary and the Action. The builder
   /// fills in the card's parts. The service adds the session's fields,
@@ -234,9 +237,10 @@ public struct TriageItem: Codable, Equatable, Sendable {
 
   public init(
     title: String, kind: TriageKind, summary: String, options: [TriageOption] = [], callouts: [Callout] = [],
-    multiSelect: Bool = false, decisions: [PendingDecision] = [], drafts: [InboxDraft] = [], source: TriageSource,
-    ref: String = "", details: TriageDetails = TriageDetails()
+    multiSelect: Bool = false, decisions: [PendingDecision] = [], drafts: [InboxDraft] = [],
+    review: MergeReview? = nil, source: TriageSource, ref: String = "", details: TriageDetails = TriageDetails()
   ) {
+    self.review = review
     self.ref = ref
     self.details = details
     self.title = title
@@ -264,14 +268,16 @@ public struct TriageItem: Codable, Equatable, Sendable {
   private struct Sections: Decodable {
     struct Summary: Decodable { var drafts: [InboxDraft]? }
     var summary: Summary?
+    var review: MergeReview?
     var details: TriageDetails?
   }
 
-  /// An item that an older sbd wrote has no multiSelect, decisions, drafts, or message.
+  /// An item that an older sbd wrote has no multiSelect, decisions, drafts, review, or message.
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let sections = try c.decodeIfPresent(Sections.self, forKey: .message)
     details = sections?.details ?? TriageDetails()
+    review = sections?.review
     drafts = (sections?.summary?.drafts ?? []).enumerated().map { i, draft in
       var draft = draft
       draft.number = i + 1
@@ -468,6 +474,7 @@ public enum Triage {
         item.drafts[i].post = .copyOnly(reason: nil)
       }
     }
+    if let pr = facts.pr { item.review?.attach(drafts: item.drafts, repo: pr.repo, number: pr.number) }
     return item
   }
 
@@ -517,8 +524,11 @@ public enum Triage {
   /// Adds what a rule found after the session wrote its card. The rule's
   /// reason and callouts come before the card's callouts. The rule's options
   /// come after the card's options, except an action the card already offers.
-  /// The card's main option stays the main option.
+  /// The card's main option stays the main option, except a merge option of
+  /// the card while the rule's review has an amber row. The rule's review
+  /// becomes the item's.
   static func addRule(_ verdict: Verdict, to item: inout TriageItem) {
+    if let review = verdict.review { item.review = review }
     let kind: Callout.Kind = verdict.state == .needsYou ? .warning : .info
     item.callouts.insert(contentsOf: [Callout(kind: kind, title: title(verdict.reason))] + verdict.callouts, at: 0)
     let lead = item.primary
@@ -531,6 +541,10 @@ public enum Triage {
       return option
     }
     if let lead, let i = item.options.firstIndex(of: lead) { item.options[i].recommended = true }
+    // A card can offer its own merge option, which would skip the rule's demoted one.
+    if verdict.review?.amber.isEmpty == false {
+      for i in item.options.indices where item.options[i].action == .merge { item.options[i].recommended = false }
+    }
   }
 
   /// Whether the verdict is the one that the session's last reply gives, and
@@ -599,7 +613,7 @@ public enum Triage {
     return TriageItem(
       title: title(verdict.reason), kind: verdict.kind,
       summary: verdict.summary ?? (text.hasSuffix(".") ? text : text + "."),
-      options: verdict.options, callouts: verdict.callouts, source: .rule)
+      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule)
   }
 
   /// The reply's closing section as the summary. An offer's title starts
@@ -705,6 +719,10 @@ public enum Triage {
 
   public static func capitalized(_ text: String) -> String {
     text.prefix(1).uppercased() + text.dropFirst()
+  }
+
+  public static func uncapitalized(_ text: String) -> String {
+    text.prefix(1).lowercased() + text.dropFirst()
   }
 
   // MARK: Order
