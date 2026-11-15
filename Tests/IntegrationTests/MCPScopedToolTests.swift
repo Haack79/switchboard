@@ -10,8 +10,10 @@ import Testing
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == MCPToolServerTests.allTools.count - MCPToolServerTests.unscopedOnly.count)
-    #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.unscopedOnly))
+    let expected = MCPToolServerTests.allTools.subtracting(MCPToolServerTests.unscopedOnly)
+      .subtracting(MCPToolServerTests.managerOnly)
+    #expect(names.count == expected.count)
+    #expect(Set(names) == expected)
   }
 
   /// The tools that a scope leaves out, with arguments that would succeed without one.

@@ -1,7 +1,8 @@
 import SwiftUI
 import SwitchboardCore
 
-/// A permission prompt, a question, a group message, or a folder trust prompt, answered without opening the session.
+/// A permission prompt, a question, a group message, a folder trust prompt, or an MCP server request, answered
+/// without opening the session.
 struct CardView: View {
   /// What the user picked or typed on the card and has not sent. BoardModel keeps one per card, so it outlives the view.
   final class Draft: ObservableObject {
@@ -45,6 +46,7 @@ struct CardView: View {
       case .question: questions
       case .send: groupMessage
       case .trust: trust
+      case .mcp: mcpRequest
       }
       RefusalLabel(refusal: model.cardErrors[card.id])
     }
@@ -99,6 +101,23 @@ struct CardView: View {
       )
       .font(.caption)
       .foregroundStyle(.secondary)
+    }
+  }
+
+  /// Claude wrote the reason. It can quote PR comments or logs, so it shows verbatim and is never read as
+  /// Markdown.
+  private var mcpRequest: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(verbatim: Triage.capitalized(card.summary)).font(.headline)
+      if !compact, let reason = card.mcpRequest?.reason { Self.textBox(reason, maxHeight: 80) }
+      HStack {
+        Button("Allow") { model.answer(card, behavior: "allow") }
+          .buttonStyle(.borderedProminent)
+        Button("Deny") { model.answer(card, behavior: "deny") }
+      }
+      Text(card.mcpRequest?.effect ?? "")
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
   }
 
