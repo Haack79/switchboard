@@ -39,10 +39,15 @@ private func unreachable<T>(_ body: () throws -> T) throws -> T {
   do { return try body() } catch { throw SbdUnreachable(description: "\(error)") }
 }
 
+/// Whether `key` names the item by an id prefix or its whole name.
+public func refMatches(_ key: String, _ item: (id: String, name: String)) -> Bool {
+  item.id.hasPrefix(key) || item.name == key
+}
+
 /// The id that `key` names: an id, a unique id prefix, or a unique name.
 public func resolveRef(_ key: String, _ noun: String, _ items: [(id: String, name: String)]) throws -> String {
   if items.contains(where: { $0.id == key }) { return key }
-  let matches = items.filter { $0.id.hasPrefix(key) || $0.name == key }
+  let matches = items.filter { refMatches(key, $0) }
   guard matches.count == 1 else {
     throw APIError(matches.isEmpty ? "no \(noun) \(key)" : "\(key) matches \(matches.count) \(noun)s")
   }

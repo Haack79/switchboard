@@ -28,17 +28,19 @@ extension MCPToolServer {
   private static func property(_ type: String, _ description: String) -> JSON {
     ["type": .string(type), "description": .string(description)]
   }
-  private static func string(_ description: String) -> JSON { property("string", description) }
+  static func string(_ description: String) -> JSON { property("string", description) }
   private static func integer(_ description: String) -> JSON { property("integer", description) }
   private static func boolean(_ description: String) -> JSON { property("boolean", description) }
   private static func strings(_ description: String) -> JSON {
     ["type": "array", "items": ["type": "string"], "description": .string(description)]
   }
 
-  private static let session = string("A session: an id, a unique id prefix, or a unique name.")
-  private static let group = string("A group: an id, a unique id prefix, or a unique name.")
+  static let session = string("A session: an id, a unique id prefix, or a unique name.")
+  static let group = string("A group: an id, a unique id prefix, or a unique name.")
 
-  static let allTools: [Tool] = [
+  static let allTools = sessionTools + pauseTools
+
+  static let sessionTools: [Tool] = [
     Tool(
       "list_sessions",
       "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."

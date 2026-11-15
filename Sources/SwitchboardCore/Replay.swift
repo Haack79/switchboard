@@ -34,7 +34,8 @@ public struct SessionReplay: Codable, Equatable, Sendable {
     let text = event.data["text"]?.string ?? ""
     switch event.kind {
     case "sent" where Delivery.awaitsDelivered(event):
-      pending.append(text)
+      // A resume message goes ahead of the held messages, as `Service.unpause` puts it.
+      if event.data["first"]?.bool == true { pending.insert(text, at: 0) } else { pending.append(text) }
     case "pasting":
       if let i = pending.firstIndex(of: text) { uncertain.append(pending.remove(at: i)) }
     case "delivered":
