@@ -142,28 +142,32 @@ extension Service {
   /// A scoped MCP server sends `scope`, its group, and `caller`, its own session. Such a request may act only on
   /// a session in that group, on the caller itself, or on that group.
   private func requireInScope(_ target: PauseTarget, _ args: JSON) throws {
-    guard let value = args["scope"], value != .null else { return }
-    guard let scope = value.string else { throw APIError("scope is a group id") }
+    guard let scope = try scope(args) else { return }
     let name = groups[scope]?.name ?? scope
     switch target {
     case .session(let id):
-      guard entries[id]!.session.group == scope || id == args["caller"]?.string else {
-        throw APIError("\(id) is not in group \(name)")
-      }
+      guard inScope(id, scope, args) else { throw APIError("\(id) is not in group \(name)") }
     case .group(let id):
       guard id == scope else { throw APIError("\(groups[id]!.name) is not group \(name)") }
     }
   }
 
+  private func scope(_ args: JSON) throws -> String? {
+    guard let value = args["scope"], value != .null else { return nil }
+    guard let scope = value.string else { throw APIError("scope is a group id") }
+    return scope
+  }
+
+  private func inScope(_ id: String, _ scope: String, _ args: JSON) -> Bool {
+    entries[id]?.session.group == scope || id == args["caller"]?.string
+  }
+
   /// A scoped request's condition may name only a session in the scope's group, or the caller. A ref that
   /// matches no session gets the same refusal, so a group chat can't learn which names exist outside its group.
   private func requireConditionInScope(_ condition: WaitRequest, _ args: JSON) throws {
-    guard let value = args["scope"], value != .null, condition.kind == Wait.Kind.session.rawValue,
-      let ref = condition.target
+    guard condition.kind == Wait.Kind.session.rawValue, let ref = condition.target, let scope = try scope(args)
     else { return }
-    guard let scope = value.string else { throw APIError("scope is a group id") }
-    let other = try? lookup(["session": .string(ref)])
-    guard let other, entries[other]?.session.group == scope || other == args["caller"]?.string else {
+    guard let other = try? lookup(["session": .string(ref)]), inScope(other, scope, args) else {
       throw APIError("--until \(ref) is not in group \(groups[scope]?.name ?? scope)")
     }
   }
@@ -207,18 +211,32 @@ extension Service {
   func enforcePause(_ id: String, now: Int64) {
     guard let e = entries[id], !e.facts.exiting, now - (e.pauseStopAt ?? 0) >= Service.pauseStopMs else { return }
     entries[id]?.pauseStopAt = now
-    // `closeTrust` puts the prompt back when a trust card is open.
-    if !e.facts.hookSinceLaunch, e.facts.trustCard == nil, let prompt = e.facts.lastLaunchPrompt, !prompt.isEmpty,
-      !e.pending.contains(where: { $0.text == prompt })
-    {
-      do {
-        let sent = try recordSent(id, prompt, .queued, byUser: true, from: nil, extra: ["first": true, "held": true])
-        entries[id]?.pending.insert(QueuedMessage(text: prompt, sent: sent), at: 0)
-      } catch {
-        logLine("can't hold the launch prompt of paused \(id): \(error)")
-      }
-    }
+    holdUnreadLaunchPrompt(id, e)
     do { try stop(id, reason: "paused") } catch { logLine("can't stop paused \(id): \(error)") }
+  }
+
+  private func holdUnreadLaunchPrompt(_ id: String, _ e: Entry) {
+    guard !e.facts.hookSinceLaunch,
+      // `closeTrust` puts the prompt back when a trust card is open.
+      e.facts.trustCard == nil,
+      let prompt = e.facts.lastLaunchPrompt, !prompt.isEmpty,
+      !e.pending.contains(where: { $0.text == prompt })
+    else { return }
+    do {
+      try queueFirst(id, prompt, byUser: true, from: nil, extra: ["held": true])
+    } catch {
+      logLine("can't hold the launch prompt of paused \(id): \(error)")
+    }
+  }
+
+  /// Puts the message at the front of the session's queue and records a `first` `sent` event, so a restart of
+  /// sbd rebuilds the same order.
+  private func queueFirst(_ id: String, _ text: String, byUser: Bool, from: String?, extra: [String: JSON] = [:])
+    throws
+  {
+    let sent = try recordSent(
+      id, text, .queued, byUser: byUser, from: from, extra: extra.merging(["first": true]) { $1 })
+    entries[id]?.pending.insert(QueuedMessage(text: text, sent: sent), at: 0)
   }
 
   /// Resumes the session or each paused session of the group that the request names, with the request's
@@ -289,8 +307,7 @@ extension Service {
       _ = try send(id, text, byUser: byUser, trigger: trigger, from: from)
       return
     }
-    let sent = try recordSent(id, text, .queued, byUser: byUser, from: from, extra: ["first": true])
-    entries[id]?.pending.insert(QueuedMessage(text: text, sent: sent), at: 0)
+    try queueFirst(id, text, byUser: byUser, from: from)
     if claudeState(id) == .stopped {
       try launch(id, prompt: nil, trigger: trigger)
     } else {

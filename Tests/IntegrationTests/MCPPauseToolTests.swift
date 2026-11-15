@@ -228,7 +228,12 @@ extension MCPToolServerSuite {
   func aScopedPauseRefusesAnUntilSessionOutsideTheGroup(_ who: String) throws {
     let sbd = try Instance()
     let (s, chat) = try scopeWithChat(sbd)
-    let ref = who == "outside" ? s.outside.name : who == "loose" ? s.loose.name : who
+    let ref: String
+    switch who {
+    case "outside": ref = s.outside.name
+    case "loose": ref = s.loose.name
+    default: ref = who
+    }
     let mcp = try scopedClient(sbd, s, chat: chat)
 
     let result = try mcp.call("pause", ["session": .string(s.member.name), "until": .string("session:\(ref)")])
