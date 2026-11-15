@@ -1,6 +1,5 @@
 import Foundation
 import SwitchboardCore
-import os
 
 /// One-shot `claude -p` turns that sbd runs for itself, such as the triage
 /// summary and the plan update.
@@ -23,39 +22,15 @@ extension Service {
   }
 
   /// Runs `claude` with the arguments and the input on stdin, in the folder,
-  /// ends it after `timeout` seconds, and returns what it printed.
+  /// ends it after `timeout` seconds or once `cancelled` returns true, and
+  /// returns what it printed.
   func runHeadless(
-    _ arguments: [String], input: String, env: [String: String], folder: String, timeout: Double
+    _ arguments: [String], input: String, env: [String: String], folder: String, timeout: Double,
+    cancelled: @escaping @Sendable () -> Bool = { false }
   ) throws -> String {
     guard let claude = findExecutable(config.claude) else { throw APIError("can't find \(config.claude)") }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: claude)
-    p.arguments = arguments
-    p.environment = env
-    p.currentDirectoryURL = URL(fileURLWithPath: folder)
-    let stdin = Pipe()
-    let stdout = Pipe()
-    p.standardInput = stdin
-    p.standardOutput = stdout
-    p.standardError = FileHandle.nullDevice
-    try p.run()
-    let timedOut = OSAllocatedUnfairLock(initialState: false)
-    let limit = DispatchWorkItem {
-      timedOut.withLock { $0 = true }
-      p.terminate()
-    }
-    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: limit)
-    stdin.fileHandleForWriting.write(Data(input.utf8))
-    try? stdin.fileHandleForWriting.close()
-    let output = stdout.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    limit.cancel()
-    if timedOut.withLock({ $0 }) { throw APIError("timed out after \(Int(timeout)) s") }
-    guard p.terminationStatus == 0 else {
-      throw APIError(
-        "claude exited with status \(p.terminationStatus): \(oneLine(String(decoding: output, as: UTF8.self), max: 200))"
-      )
-    }
-    return String(decoding: output, as: UTF8.self)
+    return try Headless.run(
+      claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
+      cancelled: cancelled)
   }
 }
