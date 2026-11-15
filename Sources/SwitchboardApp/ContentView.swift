@@ -46,10 +46,10 @@ struct StateBadge: View {
 
 struct ContentView: View {
   static let windowMinWidth: CGFloat = 900
-
-  /// A view picker segment's label: the view's name, then its count without parentheses. A zero count does not show.
-  static func viewLabel(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) \(count)" : name }
   static let sidebarMinWidth: CGFloat = 240
+
+  /// A view picker segment's label, such as `Inbox 5`. A zero count does not show.
+  static func viewLabel(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) \(count)" : name }
 
   @EnvironmentObject var model: BoardModel
 
@@ -836,8 +836,11 @@ private struct DoneFooter: View {
           .padding(.top, 8)
         } label: {
           HStack {
-            Text("Done and merged").fontWeight(.semibold)
-            Text("\(collapsed.count)").foregroundStyle(.secondary).monospacedDigit()
+            HStack {
+              Text("Done and merged").fontWeight(.semibold)
+              Text("\(collapsed.count)").foregroundStyle(.secondary).monospacedDigit()
+            }
+            .accessibilityElement(children: .combine)
             DeleteAllDoneButton()
           }
         }
