@@ -127,6 +127,10 @@ final class BoardModel: ObservableObject {
   @Published var merging: Set<String> = []
   /// Sessions whose acknowledgment or its undo is on its way to sbd.
   @Published var acknowledging: Set<String> = []
+  /// Sessions whose snooze or unsnooze is on its way to sbd.
+  @Published var snoozing: Set<String> = []
+  /// The session whose snooze end the Pick a Time… sheet asks for.
+  @Published var pickingSnoozeTime: String?
   /// Follow-ups whose start is on its way to sbd. Their Start buttons stay
   /// disabled until sbd replies, because making a worktree can take seconds.
   @Published var starting: Set<String> = []
@@ -591,7 +595,7 @@ final class BoardModel: ObservableObject {
   }
 
   /// The session's Inbox line, with names in place of ids. The menu bar and the notification both show it.
-  func inboxLine(_ s: SessionSummary) -> String { sessionNames.replacingIDs(in: s.triage?.title ?? s.reason) }
+  func inboxLine(_ s: SessionSummary) -> String { sessionNames.replacingIDs(in: s.inboxTitle) }
 
   private func notify(_ s: SessionSummary) {
     guard Bundle.main.bundleIdentifier != nil else { return }
@@ -1081,11 +1085,14 @@ final class BoardModel: ObservableObject {
     }
     perform(
       "ack", args,
-      then: { value in
-        // The user put the item back, so the refresh must not notify about it.
-        if undo, let s = try? JSONCoding.convert(value, to: SessionSummary.self) { self.lastSeen[id] = s }
-      },
+      then: { if undo { self.storeLastSeen(id, reply: $0) } },
       finally: { self.acknowledging.remove(id) })
+  }
+
+  /// Stores sbd's reply to a request by which the user put the session's item
+  /// back in the Inbox. The next refresh then doesn't notify about the item.
+  func storeLastSeen(_ id: String, reply: JSON) {
+    if let s = try? JSONCoding.convert(reply, to: SessionSummary.self) { lastSeen[id] = s }
   }
 
   /// Moves the Inbox's focus to the next item when `id` is the current one,

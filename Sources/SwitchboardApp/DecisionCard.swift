@@ -100,7 +100,7 @@ struct DecisionCard: View {
 
   private var header: some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
-      InlineText(plain: item.title).font(.title3.bold()).textSelection(.enabled)
+      InlineText(plain: session.inboxTitle).font(.title3.bold()).textSelection(.enabled)
       Text(item.kind.rawValue).font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 2)
         .background(Capsule().fill(session.state.color.opacity(0.18)))
         .foregroundStyle(session.state.color)

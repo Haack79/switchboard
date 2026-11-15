@@ -68,6 +68,10 @@ struct ContentView: View {
     Binding(get: { model.doneRemoval != nil }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
+  private var isPickingSnoozeTime: Binding<Bool> {
+    Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
+  }
+
   private var isConfirmingCleanup: Binding<Bool> {
     Binding(get: { model.confirmingCleanup != nil }, set: { if !$0 { model.confirmingCleanup = nil } })
   }
@@ -164,6 +168,9 @@ struct ContentView: View {
     .sheet(isPresented: isShowingDoneRemoval) {
       if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).inlineLinks(model) }
     }
+    .sheet(isPresented: isPickingSnoozeTime) {
+      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
     .inlineLinks(model)
   }
 }
@@ -221,6 +228,7 @@ struct Sidebar: View {
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              SnoozeMenuItems(session: row.session)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -481,6 +489,7 @@ struct SessionRow: View {
         // The sidebar can be too narrow for the badge beside the PR number.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           if let pr = session.pr { QueueBadge(pr: pr) }
+          if let until = session.snoozedUntil { SnoozeMark(until: until) }
           subtitle
         }
         CleanupNote(session: session)
@@ -588,10 +597,13 @@ struct BoardView: View {
                         Group {
                           if drops {
                             BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                              .contextMenu { moveMenu(s.id, from: lane.group?.id) }
                           } else {
                             BoardCard(session: s, keyboardFocused: s.id == ring)
                           }
+                        }
+                        .contextMenu {
+                          SnoozeMenuItems(session: s)
+                          if drops { moveMenu(s.id, from: lane.group?.id) }
                         }
                         .id(s.id)
                       }
@@ -1049,6 +1061,7 @@ struct BoardCard: View {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let pr = s.pr { QueueBadge(pr: pr) }
             if let holder = s.holderBadge { HolderBadge(holder: holder) }
+            if let until = s.snoozedUntil { SnoozeMark(until: until) }
             Text(statusLine)
               .font(.caption2).foregroundStyle(.tertiary)
           }
