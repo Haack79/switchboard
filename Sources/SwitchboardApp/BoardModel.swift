@@ -58,8 +58,10 @@ final class BoardModel: ObservableObject {
   @Published var cleaningUp: Set<String> = []
   /// The Delete All sheet's state, or nil while it is closed.
   @Published var doneRemoval: DoneRemoval?
+  /// The quick-ask panel's state, or nil while it is closed.
+  @Published var quickAsk: QuickAskState?
   var presentingSheet: Bool {
-    newSession != nil || showingImport || showingSearch || doneRemoval != nil || showingIssueSetup
+    newSession != nil || showingImport || showingSearch || doneRemoval != nil || showingIssueSetup || quickAsk != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -241,6 +243,14 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// Sends a quick ask to sbd. Tests replace it.
+  lazy var ask: @Sendable (String, CallCancel) throws -> JSON = { [client = self.client] question, cancel in
+    try client.call("quick-ask", ["question": .string(question)], timeout: QuickAsk.clientTimeout, cancel: cancel)
+  }
+  /// Quick asks run apart from `worker`, because one can take a minute and `worker` runs one action at a time.
+  let quickAskWork = DispatchQueue(label: "switchboard.quick-ask")
+  /// Cancels the running quick ask. Only the ask that holds this token may show its result.
+  var quickAskCancel: CallCancel?
   /// Polls run apart from actions, because an action such as `open` or `new`
   /// can take seconds.
   private let poller = DispatchQueue(label: "switchboard.poll")
@@ -985,12 +995,13 @@ final class BoardModel: ObservableObject {
     focus(id)
   }
 
-  /// Closes the search panel and Recent Places, then shows the session as a
+  /// Closes the search panel, the quick-ask panel, and Recent Places, then shows the session as a
   /// sidebar click does. A session that no refresh has listed yet, such as one
   /// that `sb new` just made or any session at a cold launch, is focused when
   /// a refresh lists it.
   func focus(_ id: String) {
     showingSearch = false
+    closeQuickAsk()
     showingRecentPlaces = false
     focusWait = nil
     if !settleFocus(id) {

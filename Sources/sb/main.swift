@@ -64,6 +64,10 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    ask <question>                answer a question about Switchboard from a
+                                  snapshot of its state. The answer comes from
+                                  claude with no tools, so it changes nothing.
+                                  Ctrl-C ends it
     operator [<text>]             open the operator, the one background Manager
                                   session that follows through on the waits that
                                   conversations hand it, creating it the first
@@ -815,6 +819,8 @@ case "usage":
   usageCommand(a)
 case "manager":
   manager(a)
+case "ask":
+  askCommand(a)
 case "operator":
   operatorCommand(a)
 case "get", "show":

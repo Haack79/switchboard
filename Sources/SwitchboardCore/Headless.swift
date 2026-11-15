@@ -22,6 +22,10 @@ public enum Headless {
     timeout: Double, cancelled: @escaping @Sendable () -> Bool = { false }
   ) throws -> String {
     if cancelled() { throw APIError("cancelled") }
+    // Process raises an Objective-C exception for a NUL. Swift can't catch it, and it would end sbd.
+    if (arguments + Array(env.keys) + Array(env.values)).contains(where: \.hasNul) {
+      throw APIError("claude can't run with a NUL character in its arguments or environment")
+    }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: claude)
     p.arguments = arguments
@@ -38,7 +42,8 @@ public enum Headless {
     try p.run()
     let ending = OSAllocatedUnfairLock<RunEnd?>(initialState: nil)
     let deadline = DispatchTime.now() + timeout
-    let monitor = DispatchSource.makeTimerSource(queue: .global())
+    // A global queue gets no thread while callers wait on every thread of Swift's cooperative pool.
+    let monitor = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "Headless.monitor"))
     monitor.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
     monitor.setEventHandler {
       let reason: RunEnd? = cancelled() ? .cancelled : DispatchTime.now() >= deadline ? .timedOut : nil

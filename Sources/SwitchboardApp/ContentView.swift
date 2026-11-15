@@ -68,6 +68,10 @@ struct ContentView: View {
     Binding(get: { model.doneRemoval != nil }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
+  private var isShowingQuickAsk: Binding<Bool> {
+    Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
+  }
+
   private var isConfirmingCleanup: Binding<Bool> {
     Binding(get: { model.confirmingCleanup != nil }, set: { if !$0 { model.confirmingCleanup = nil } })
   }
@@ -160,6 +164,9 @@ struct ContentView: View {
     }
     .sheet(isPresented: $model.showingSearch) {
       SessionSearchView().environmentObject(model)
+    }
+    .sheet(isPresented: isShowingQuickAsk) {
+      QuickAskView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
       if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).sessionLinks(model) }
