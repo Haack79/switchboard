@@ -20,7 +20,8 @@ struct InboxView: View {
       let hidden = model.hiddenNeedingYou
       ContentUnavailableView {
         Label(
-          model.planProposals.isEmpty ? "Nothing needs you" : "No session needs you", systemImage: "checkmark.circle")
+          Self.emptyTitle(hiddenNeedingYou: hidden, hasPlanProposals: !model.planProposals.isEmpty),
+          systemImage: "checkmark.circle")
       } description: {
         Text(Self.emptyMessage(hiddenNeedingYou: hidden))
       } actions: {
@@ -40,7 +41,14 @@ struct InboxView: View {
     }
   }
 
-  /// The line under the empty Inbox's title. It names the sessions that need the user in orgs the filter hides.
+  /// The empty Inbox's title. It adds "in these orgs" when the org filter hides sessions that need the user.
+  static func emptyTitle(hiddenNeedingYou: Int, hasPlanProposals: Bool) -> String {
+    let subject = hasPlanProposals ? "No session" : "Nothing"
+    return hiddenNeedingYou > 0 ? "\(subject) in these orgs needs you" : "\(subject) needs you"
+  }
+
+  /// The line under the empty Inbox's title. With no hidden sessions that need the user, it says what the Inbox lists.
+  /// Otherwise it gives how many of those sessions the org filter hides.
   static func emptyMessage(hiddenNeedingYou: Int) -> String {
     switch hiddenNeedingYou {
     case 0: "Sessions show here when they need an answer, an approval, or a decision."
