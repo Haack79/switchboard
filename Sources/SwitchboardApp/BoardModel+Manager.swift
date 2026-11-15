@@ -24,7 +24,7 @@ extension BoardModel {
       working: work.count(where: { $0.state == .working }),
       // A child that the org filter hides still counts, because choosing it widens the filter.
       changed: cutoff.map { cutoff in
-        allBoard.filter { $0.parent == conversation.id && $0.since > cutoff }
+        listedBoard.filter { $0.parent == conversation.id && $0.since > cutoff }
           .sorted { ($0.since, $0.id) > ($1.since, $1.id) }
       })
   }

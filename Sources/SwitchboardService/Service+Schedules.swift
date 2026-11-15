@@ -73,10 +73,15 @@ extension Service {
   /// Sends each due schedule's prompt to its session when the session is
   /// free. A schedule whose session is busy stays due and runs once when the
   /// session is free. The tick calls it after it resolves due waits. A
-  /// session marked done keeps its schedules and runs none of them.
+  /// session marked done or paused keeps its schedules and runs none of them.
+  /// A schedule that comes due during the pause stays due and runs once after
+  /// the resume message. A session that the removal job holds runs none of
+  /// them either, because the job may be stopping its claude. Its schedules
+  /// stay due, so Undo lets them run.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
-      !e.session.done && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
+      !e.session.done && Pause.blocker(e.session) == nil && e.session.removal?.holdsSession != true
+        && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
     }
     for id in ids.sorted() {
       guard let session = entries[id]?.session else { continue }

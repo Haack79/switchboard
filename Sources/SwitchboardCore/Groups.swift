@@ -36,15 +36,21 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 
+  /// The text on one line, or nil when nothing remains. It refuses text over `limit` characters.
+  /// The refusal names the text as `noun`.
+  static func cleanLine(_ text: String?, limit: Int, noun: String) throws -> String? {
+    guard let text else { return nil }
+    let clean = collapsingWhitespace(text)
+    guard clean.count <= limit else {
+      throw APIError("\(noun) has at most \(limit) characters, and this one has \(clean.count)")
+    }
+    return clean.isEmpty ? nil : clean
+  }
+
   /// The description with its whitespace runs joined into single spaces, or
   /// nil when nothing remains. It refuses text over `descriptionLimit`.
   public static func cleanDescription(_ text: String?) throws -> String? {
-    guard let text else { return nil }
-    let clean = collapsingWhitespace(text)
-    guard clean.count <= descriptionLimit else {
-      throw APIError("a group description has at most \(descriptionLimit) characters, and this one has \(clean.count)")
-    }
-    return clean.isEmpty ? nil : clean
+    try cleanLine(text, limit: descriptionLimit, noun: "a group description")
   }
 
   /// The group with `rows` added after its kept artifact rows. No rows leave the group unchanged.

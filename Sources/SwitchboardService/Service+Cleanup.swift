@@ -12,71 +12,57 @@ extension Service {
   /// After the worktree is gone, the session records the cleanup whatever
   /// happens to the branch, because its folder is missing. A failed delete
   /// keeps the branch and throws. A caller inside the session is refused
-  /// before anything stops, as `beginPaneStop` describes.
+  /// before anything stops, as `beginPaneStop` describes. So is a session
+  /// that the removal job holds, or that `rm` or another `cleanup` is removing.
   func cleanup(_ args: JSON, caller: Caller) throws -> JSON {
     let command = "sb cleanup"
     let ancestry = try caller.ancestry(command: command)
     let (session, pr, sharedWith): (Session, PullRequest?, String?) = try queue.sync {
       let id = try lookup(args)
       guard !starting.contains(id) else { throw APIError("\(mention(id)) is starting") }
+      if let refusal = removalRefusal(id) { throw refusal }
       let e = entries[id]!
       if e.facts.cleanedUp != nil { throw APIError("\(mention(id)) is already cleaned up") }
       try requireNoTurn(e)
+      guard removing.insert(id).inserted else { throw APIError("\(id) is being deleted") }
       return (e.session, e.facts.pr, sharedSession(e.session))
     }
+    defer { queue.sync { _ = removing.remove(session.id) } }
     let site = self.site(for: session)
     try awaitSite(site)
     var branchName = session.branch ?? ""
-    var worktreeRemoved = false
-    var branchRemoved = false
-    var branchError: Error?
-    do {
-      // On a host, every check and every git command runs on one connection, and the scope's machine refuses
-      // each command once one got no answer.
-      try site.scoped("the cleanup of \(session.id)") { scope in
-        let at = scope.site
-        let (repo, branch, supacode, pr) = try checkCleanup(session, pr: pr, sharedWith: sharedWith, at: at)
-        branchName = branch?.name ?? session.branch ?? ""
-        let fresh = try freshSnapshot(of: session)
-        let stop: PaneStop = try queue.sync {
-          guard let e = entries[session.id], e.session.cwd == session.cwd, !starting.contains(session.id) else {
-            throw APIError(
-              "\(session.mention) changed while it was being cleaned up")
-          }
-          try requireNoTurn(e)
-          install(fresh, of: session)
-          try scope.require()
-          return try beginPaneStop(session.id, ancestry: ancestry, command: command)
+    // On a host, every check and every git command runs on one connection, and the scope's machine refuses
+    // each command once one got no answer. After the worktree is gone, the cleanup is recorded even when the
+    // scope's final check fails.
+    let released = try releaseInScope("the cleanup of \(session.id)", at: site) { scope in
+      let at = scope.site
+      let (repo, branch, supacode, pr) = try checkCleanup(session, pr: pr, sharedWith: sharedWith, at: at)
+      branchName = branch?.name ?? session.branch ?? ""
+      let fresh = try freshSnapshot(of: session)
+      let stop: PaneStop = try queue.sync {
+        guard let e = entries[session.id], e.session.cwd == session.cwd, !starting.contains(session.id) else {
+          throw APIError("\(session.mention) changed while it was being cleaned up")
         }
-        try finishPaneStop(session, stop, command: command)
-        _ = try checkCleanup(session, pr: pr, sharedWith: sharedWith, at: at)
-        try removeWorktree(repo, session.cwd, at: at)
-        worktreeRemoved = true
-        if let branch {
-          do {
-            branchRemoved = try deleteBranch(repo, branch, pr: pr, inMain: supacode, at: at)
-          } catch {
-            branchError = error
-          }
-        }
+        try requireNoTurn(e)
+        install(fresh, of: session)
+        try scope.require()
+        return try beginPaneStop(session.id, ancestry: ancestry, command: command)
       }
-    } catch  where worktreeRemoved {
-      // The branch's step keeps its own error. Only the scope's final check reaches here: the link dropped or a host
-      // command got no answer after the worktree was removed. The cleanup is still recorded.
-      logLine("cleanup \(session.id): \(error)")
+      try finishPaneStop(session, stop, again: "run `\(command)` again")
+      _ = try checkCleanup(session, pr: pr, sharedWith: sharedWith, at: at)
+      return try releaseFiles(
+        session, repo: repo, branch: branch, supacode: supacode, pr: pr, folderGone: false, remoteBranch: nil, at: at)
     }
     queue.sync {
       _ = record(
         session.id, "cleanup",
         [
           "worktree": .string(session.cwd), "branch": .string(branchName),
-          "branch_removed": .bool(branchRemoved),
+          "branch_removed": .bool(released.branch),
         ])
     }
-    if let branchError {
-      throw APIError(
-        "Removed the worktree of \(session.mention), and kept \(branchName): \(branchError)"
-      )
+    if let kept = released.keptBranch {
+      throw APIError("Removed the worktree of \(session.mention), and kept \(branchName): \(kept.error)")
     }
     return ["cleaned": .string(session.id), "worktree": .string(session.cwd), "branch": .string(branchName)]
   }

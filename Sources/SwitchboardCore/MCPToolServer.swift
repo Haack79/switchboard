@@ -139,7 +139,7 @@ public struct MCPToolServer: Sendable {
   }
 
   /// The scope's group at the time of a call, and the group list it came from.
-  private struct Scoped {
+  struct Scoped {
     let group: GroupSummary
     let list: GroupList
   }
@@ -209,6 +209,10 @@ public struct MCPToolServer: Sendable {
       return try client.call("group-suggest", pick(args, ["accept"]))
     case "plan_artifact":
       return try planArtifact(args, scoped)
+    case "pause":
+      return try pause(args, scoped)
+    case "resume":
+      return try resume(args, scoped)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)
@@ -266,7 +270,7 @@ public struct MCPToolServer: Sendable {
     return try session(ref, scoped)["id"] ?? .null
   }
 
-  private func sessionID(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
+  func sessionID(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
     try sessionID(sessionRef(args), scoped)
   }
 
@@ -283,7 +287,7 @@ public struct MCPToolServer: Sendable {
 
   /// The group that `args` names, or the scope's group when it names none. A
   /// scoped server refuses another group.
-  private func groupID(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
+  func groupID(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
     let ref = args["group"]?.string
     guard let scoped else { return ref.map(JSON.string) ?? .null }
     if let ref, try MCPToolServer.find(ref, in: scoped.list).id != scoped.group.id {
@@ -366,7 +370,7 @@ public struct MCPToolServer: Sendable {
     return try client.call("group-move", ["sessions": .array(ids), "ungrouped": true])
   }
 
-  private func pick(_ args: JSON, _ keys: [String]) -> [String: JSON] {
+  func pick(_ args: JSON, _ keys: [String]) -> [String: JSON] {
     (args.object ?? [:]).filter { keys.contains($0.key) }
   }
 

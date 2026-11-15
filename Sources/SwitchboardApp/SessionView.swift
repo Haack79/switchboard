@@ -28,7 +28,12 @@ struct SessionView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      PauseBanner(session: session)
       Divider()
+      if session.removal?.state == .failed {
+        FailedRemovalActions(session: session).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        Divider()
+      }
       CardList(cards: session.cards)
       GeometryReader { geometry in
         let fits = SidePanel.fits(width: geometry.size.width, beside: SessionView.terminalsMinWidth(session))
@@ -249,7 +254,10 @@ struct SessionView: View {
       }
       Spacer()
       HStack {
-        if session.live {
+        if session.pause != nil {
+          Button("Resume") { model.resume(session.id) }
+            .help(PauseBanner.resumeHelp)
+        } else if session.live {
           Button("Stop") { model.stop(session.id) }
             .help(
               "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
@@ -261,6 +269,10 @@ struct SessionView: View {
         } else {
           Button("Resume") { model.resume(session.id) }
             .help("Restart claude in this session. It continues the conversation.")
+        }
+        if session.canPause {
+          Button("Pause") { model.pause(session.id) }
+            .help(PauseBanner.pauseHelp)
         }
         Button(session.markedDone ? "Not Done" : "Done") { model.setDone(session.id, !session.markedDone) }
           .help(

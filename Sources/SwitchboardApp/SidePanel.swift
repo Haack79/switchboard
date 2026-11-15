@@ -22,38 +22,36 @@ struct SidePanel {
   static let noNotes = "No notes."
   static let noArtifacts = "No artifacts."
 
-  let waitsTitle: String
+  let waitsCount: Int
   /// The panel leaves out the Schedules section of a session without a schedule.
   /// Schedules come from `sb schedule` and the MCP tools, so an empty section would offer nothing to do.
   let showsSchedules: Bool
-  let schedulesTitle: String
+  let schedulesCount: Int
   let hasNotes: Bool
-  let notesTitle: String
+  let notesCount: Int
   /// sbd resolves no wait and runs no schedule while the session is marked Done.
   /// Nil unless such a session has an open wait or a schedule.
   let doneCaption: String?
   /// The title counts only the artifacts that no delete removed.
-  let artifactsTitle: String
+  let artifactsCount: Int
   /// True when the session lists any artifact, a removed one included.
   let hasArtifacts: Bool
   let artifacts: [SessionArtifact]
 
   init(_ s: SessionSummary) {
     let schedules = s.schedules ?? []
-    waitsTitle = Self.title("Waits", s.waits.count)
+    waitsCount = s.waits.count
     showsSchedules = !schedules.isEmpty
-    schedulesTitle = Self.title("Schedules", schedules.count)
+    schedulesCount = schedules.count
     hasNotes = !s.notes.isEmpty
-    notesTitle = Self.title("Notes", s.notes.count)
+    notesCount = s.notes.count
     doneCaption =
       s.markedDone && !(s.waits.isEmpty && schedules.isEmpty)
       ? "Waits and schedules don't run on their own while the session is marked Done." : nil
     artifacts = (s.artifacts ?? []).newestFirst
     hasArtifacts = !artifacts.isEmpty
-    artifactsTitle = Self.title("Artifacts", artifacts.count(where: { $0.removed == nil }))
+    artifactsCount = artifacts.count(where: { $0.removed == nil })
   }
-
-  private static func title(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) (\(count))" : name }
 
   /// True when `width` holds the panel beside content that needs `beside` points.
   /// The panel hides otherwise, so it never makes a terminal narrower than its minimum.
@@ -67,7 +65,7 @@ struct SidePanelView: View {
     let panel = SidePanel(session)
     ScrollView {
       VStack(alignment: .leading, spacing: 10) {
-        title(panel.waitsTitle)
+        ListSectionHeader(title: "Waits", count: panel.waitsCount, inset: false)
         if session.waits.isEmpty { Text(SidePanel.noWaits).foregroundStyle(.secondary) }
         ForEach(session.waits, id: \.id) { wait in
           VStack(alignment: .leading, spacing: 2) {
@@ -78,18 +76,18 @@ struct SidePanelView: View {
         }
         if panel.showsSchedules {
           Divider()
-          title(panel.schedulesTitle)
+          ListSectionHeader(title: "Schedules", count: panel.schedulesCount, inset: false)
           ScheduleList(session: session)
         }
         if let caption = panel.doneCaption {
           Text(caption).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         Divider()
-        title(panel.notesTitle)
+        ListSectionHeader(title: "Notes", count: panel.notesCount, inset: false)
         if !panel.hasNotes { Text(SidePanel.noNotes).foregroundStyle(.secondary) }
         NotesList(session: session)
         Divider()
-        title(panel.artifactsTitle)
+        ListSectionHeader(title: "Artifacts", count: panel.artifactsCount, inset: false)
         if !panel.hasArtifacts { Text(SidePanel.noArtifacts).foregroundStyle(.secondary) }
         ForEach(panel.artifacts, id: \.url) { artifact in
           VStack(alignment: .leading, spacing: 2) {
@@ -114,9 +112,5 @@ struct SidePanelView: View {
     .frame(width: SidePanel.width)
     .frame(maxHeight: .infinity, alignment: .top)
     .accessibilityIdentifier("session-side-panel")
-  }
-
-  private func title(_ text: String) -> some View {
-    Text(text).font(.caption.bold()).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
   }
 }

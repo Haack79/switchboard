@@ -48,6 +48,9 @@ public struct Home: Sendable {
   public func sessionFolder(_ id: String) -> String { "\(path)/sessions/\(id)" }
   /// The calls on this Mac's machine and site, which sbd writes when config.json sets `machineLog`.
   public var machineLog: String { "\(path)/mac-machine.log" }
+  /// Where the removal job moves a worktree's folder before it deletes it in
+  /// the background. Each folder is named after its session's id.
+  public var trash: String { "\(path)/trash" }
   /// Where sbd keeps copies of the images sent to a session. Removing the
   /// session removes its session folder, and these with it.
   public func attachmentsFolder(_ id: String) -> String { "\(sessionFolder(id))/attachments" }
@@ -138,6 +141,13 @@ public struct Config: Codable, Equatable, Sendable {
   public var cleanupDeletes: [String] = []
   /// The supacode command, which deletes a worktree that Supacode locked. A test points it at a stub.
   public var supacode = "supacode"
+  /// How long the removal job waits after `rm-queue` before it starts a session, so the app's Undo can bring
+  /// the session back with nothing stopped.
+  public var removalDelaySeconds = 5
+  public static let maxRemovalDelaySeconds = 86_400
+  /// Makes the removal job treat the trash as on another volume than every
+  /// worktree. sbd reads it only with `testClock`.
+  public var testTrashOtherVolume = false
   /// The Claude config folders whose sessions `sb import` lists, or nil for
   /// `ClaudeAccount.discover()`. ~/.claude means Claude's default account.
   public var claudeConfigDirs: [String]?
@@ -163,11 +173,12 @@ public struct Config: Codable, Equatable, Sendable {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
-      cleanupDeletes, supacode
+      cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk
     case issues
     case recheck = "recheckSeconds"
+    case testTrashOtherVolume
   }
 
   public init(from decoder: Decoder) throws {
@@ -220,6 +231,21 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
+    // A bad value keeps the default. Throwing would make sbd ignore all of config.json.
+    switch try c.decodeIfPresent(JSON.self, forKey: .removalDelaySeconds) {
+    case nil, .null:
+      break
+    case let value?:
+      if let seconds = value.int, (0...Self.maxRemovalDelaySeconds).contains(seconds) {
+        removalDelaySeconds = seconds
+      } else {
+        logLine(
+          "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
+            + "\(Self.maxRemovalDelaySeconds)")
+      }
+    }
+    testTrashOtherVolume =
+      try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)
     github = try c.decodeIfPresent(GitHubSettings.self, forKey: .github) ?? d.github
     depot = try c.decodeIfPresent(DepotSettings.self, forKey: .depot) ?? d.depot
