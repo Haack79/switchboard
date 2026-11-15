@@ -223,7 +223,7 @@ extension Service {
       !e.pending.contains(where: { $0.text == prompt })
     else { return }
     do {
-      try queueFirst(id, prompt, byUser: true, from: nil, extra: ["held": true])
+      try queueFirst(id, prompt, by: .you, from: nil, extra: ["held": true])
     } catch {
       logLine("can't hold the launch prompt of paused \(id): \(error)")
     }
@@ -231,11 +231,10 @@ extension Service {
 
   /// Puts the message at the front of the session's queue and records a `first` `sent` event, so a restart of
   /// sbd rebuilds the same order.
-  private func queueFirst(_ id: String, _ text: String, byUser: Bool, from: String?, extra: [String: JSON] = [:])
+  private func queueFirst(_ id: String, _ text: String, by: MessageAuthor, from: String?, extra: [String: JSON] = [:])
     throws
   {
-    let sent = try recordSent(
-      id, text, .queued, byUser: byUser, from: from, extra: extra.merging(["first": true]) { $1 })
+    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["first": true]) { $1 })
     entries[id]?.pending.insert(QueuedMessage(text: text, sent: sent), at: 0)
   }
 
@@ -258,7 +257,7 @@ extension Service {
       if entries[id]!.session.pause != nil {
         try resumeOne(id)
       } else {
-        try launch(id, prompt: text, trigger: .resume)
+        try launch(id, prompt: text, by: MessageAuthor(by), trigger: .resume)
       }
       return try JSON(encoding: summary(id))
     case .group(let group):
@@ -304,12 +303,12 @@ extension Service {
     setClaudeDeadMessage(id, Service.stoppedPaneMessage)
     if let folderGone { throw folderGone }
     let text = pause.resumeText(outcome: outcome, override: message)
-    let byUser = by == .you
+    let author = MessageAuthor(by)
     if claudeState(id) == .stopped, entries[id]!.pending.isEmpty {
-      _ = try send(id, text, byUser: byUser, trigger: trigger, from: from)
+      _ = try send(id, text, by: author, trigger: trigger, from: from)
       return
     }
-    try queueFirst(id, text, byUser: byUser, from: from)
+    try queueFirst(id, text, by: author, from: from)
     if claudeState(id) == .stopped {
       try launch(id, prompt: nil, trigger: trigger)
     } else {

@@ -161,7 +161,9 @@ public struct MCPToolServer: Sendable {
     case "events":
       return try events(args, scoped)
     case "send":
-      var request: [String: JSON] = ["session": try sessionID(args, scoped), "text": args["text"] ?? .null]
+      var request: [String: JSON] = [
+        "session": try sessionID(args, scoped), "text": args["text"] ?? .null, "insideClaude": true,
+      ]
       if let caller { request["from"] = .string(caller) }
       return try client.call("send", request)
     case "send_group":

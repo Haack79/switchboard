@@ -53,9 +53,9 @@ extension Service {
 
   /// The `operator` request: sends `text` to the operator, or without text
   /// opens it. It creates the operator when none exists. The answer is the
-  /// operator's summary, with `delivery` when it took text. `from` names the
-  /// session whose Claude sent the text, so the text doesn't close the
-  /// operator's reports.
+  /// operator's summary, with `delivery` when it took text. `from` and
+  /// `insideClaude` mark text that a Claude Code sent. That text doesn't
+  /// close the operator's reports.
   func operatorRequest(_ args: JSON) -> Response {
     do {
       let text = args["text"]?.string.flatMap { $0.isEmpty ? nil : $0 }
@@ -66,7 +66,7 @@ extension Service {
       }
       // An open right after the creation could read the starting claude as stopped and launch it again.
       if let created, text == nil { return .success(try JSON(encoding: created)) }
-      return try openOrSend(id, text, from: args["from"]?.string)
+      return try openOrSend(id, text, sender: args)
     } catch {
       return .failure("\(error)")
     }

@@ -34,11 +34,13 @@ extension Service {
     }
   }
 
-  /// Sends `text` to the chat, or without text opens it. `from` names the session whose Claude sent the text.
-  func openOrSend(_ id: String, _ text: String?, from: String? = nil) throws -> Response {
+  /// Sends `text` to the chat, or without text opens it. `sender` holds the `from` and `insideClaude` of the
+  /// request that carried the text, which say who wrote it.
+  func openOrSend(_ id: String, _ text: String?, sender: JSON = [:]) throws -> Response {
     var request: [String: JSON] = ["session": .string(id)]
     request["text"] = text.map(JSON.string)
-    request["from"] = from.map(JSON.string)
+    request["from"] = sender["from"]
+    request["insideClaude"] = sender["insideClaude"]
     let response = handle(Request(op: text == nil ? "open" : "send", args: .object(request)))
     guard text != nil, let delivery = response.result?["delivery"] else { return response }
     return .success(try queue.sync { try withDelivery(summary(id), delivery) })
@@ -134,7 +136,7 @@ extension Service {
   func groupDescribed(_ group: String) throws {
     try refreshChatGuide(group)
     guard let id = chatID(group), let e = entries[id], !e.session.done, e.facts.live else { return }
-    _ = try send(id, Chat.describedNotice(groups[group]?.description), byUser: false, trigger: .chat)
+    _ = try send(id, Chat.describedNotice(groups[group]?.description), by: .sbd, trigger: .chat)
   }
 
   /// Marks the group's chat done, because its tools can no longer find the group.

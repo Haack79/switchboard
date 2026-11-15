@@ -1,0 +1,17 @@
+import Foundation
+import SwitchboardCore
+
+extension Service {
+  /// Who wrote a request's message or made its choice. A request comes from a Claude Code when it names a sending
+  /// session in `from`, even one that sbd no longer knows, or when it carries `insideClaude`. Every other request
+  /// comes from the user.
+  static func author(_ args: JSON) -> MessageAuthor {
+    args["from"] != nil || args["insideClaude"]?.bool == true ? .claude : .you
+  }
+
+  /// Refuses a request from a Claude Code that would act for the user. `act` names what the request does.
+  static func refuseClaude(_ args: JSON, _ act: String) throws {
+    guard author(args) == .claude else { return }
+    throw APIError("\(act) for you, so it doesn't run inside Claude Code")
+  }
+}

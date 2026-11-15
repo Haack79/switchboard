@@ -56,6 +56,13 @@ import Testing
     return try #require(JSON.parse(text)?.array, "\(text)")
   }
 
+  /// The operator's last `sent` event for `text` after the event `mark`. Matching on the text keeps an earlier
+  /// message, such as `idleOperator`'s, from standing in for one that sbd never recorded.
+  func sentEvent(_ sbd: Instance, _ op: SessionSummary, _ text: String, after mark: Int64) throws -> Event {
+    let sent = try sbd.events(op.id, after: mark).filter { $0.kind == "sent" }
+    return try #require(sent.last { $0.data["text"]?.string == text }, "\(sent.map(\.data.text))")
+  }
+
   /// The `report` events that any session holds.
   func reportEvents(_ sbd: Instance) throws -> [Event] {
     try sbd.client.call("ls", as: [SessionSummary].self).flatMap { try sbd.events($0.id) }.filter {
@@ -122,9 +129,11 @@ import Testing
     let sbd = try Instance()
     let op = try idleOperator(sbd)
     try reported(sbd, op)
+    let mark = try sbd.lastEventId(op.id)
 
     try sbd.sb("send", "Operator", "yes")
 
+    #expect(try sentEvent(sbd, op, "yes", after: mark).data["by"]?.string == "you")
     #expect(try inboxItem(sbd, op) == nil)
     try sbd.waitFor(op.id, "the reply to yes", timeout: 30) { $0.lastReply == "Done: yes" }
     #expect(try inboxItem(sbd, op) == nil)
@@ -136,9 +145,11 @@ import Testing
     let c = try conversationHelpers.idleConversation(sbd, name: "Queue work", "hello")
     let op = try idleOperator(sbd)
     try reported(sbd, op)
+    let mark = try sbd.lastEventId(op.id)
 
     try sbd.sb(["operator", "yes"], env: ["SB_SESSION_ID": c.id])
 
+    #expect(try sentEvent(sbd, op, "yes", after: mark).data["by"]?.string == "you")
     #expect(try inboxItem(sbd, op) == nil)
     try sbd.waitFor(op.id, "the reply to yes", timeout: 30) { $0.lastReply == "Done: yes" }
     #expect(try inboxItem(sbd, op) == nil)
@@ -155,6 +166,7 @@ import Testing
     let op = try idleOperator(sbd)
     try reported(sbd, op)
     let text = "Keep 10 sessions on the queue."
+    let mark = try sbd.lastEventId(op.id)
 
     switch route {
     case .mcpSend:
@@ -166,8 +178,9 @@ import Testing
       try sbd.sb(["operator", text], env: inside(c.id))
     }
 
-    let sent = try #require(try sbd.events(op.id).last { $0.kind == "sent" })
+    let sent = try sentEvent(sbd, op, text, after: mark)
     #expect(sent.data["from"]?.string == c.id, "\(sent.data.text)")
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
     try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
     #expect(try inboxItem(sbd, op)?.source == .report)
   }
@@ -178,12 +191,98 @@ import Testing
     let op = try idleOperator(sbd)
     try reported(sbd, op)
     let text = "Check the queue again."
+    let mark = try sbd.lastEventId(op.id)
 
     try sbd.sb(["send", "Operator", text], env: inside(op.id))
 
-    let sent = try #require(try sbd.events(op.id).last { $0.kind == "sent" })
+    let sent = try sentEvent(sbd, op, text, after: mark)
     #expect(sent.data["from"]?.string == op.id, "\(sent.data.text)")
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
     try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// How a Claude Code outside Switchboard sends the operator a message. It has `CLAUDECODE` but no
+  /// `SB_SESSION_ID`, so its message carries no `from`.
+  enum OutsideRoute: CaseIterable { case sbSend, sbOperator, mcpSend }
+
+  /// A Claude Code outside a session wrote the message, so it leaves the report open.
+  @Test(arguments: OutsideRoute.allCases) func aClaudeCodeOutsideASessionLeavesTheReportOpen(_ route: OutsideRoute)
+    throws
+  {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+    let text = "Keep 10 sessions on the queue."
+    let mark = try sbd.lastEventId(op.id)
+    let outside = ["CLAUDECODE": "1"]
+
+    switch route {
+    case .sbSend:
+      try sbd.sb(["send", "Operator", text], env: outside)
+    case .sbOperator:
+      try sbd.sb(["operator", text], env: outside)
+    case .mcpSend:
+      let result = try MCPClient(sbd, env: outside).call("send", ["session": "Operator", "text": .string(text)])
+      try #require(!result.isError, "\(result.text)")
+    }
+
+    let sent = try sentEvent(sbd, op, text, after: mark)
+    #expect(sent.data["from"] == nil, "\(sent.data.text)")
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
+    #expect(try inboxItem(sbd, op)?.source == .report)
+    try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// A Claude Code in a removed session still sends `from`. sbd records no `from` for a sender that it no longer
+  /// knows, but the message is still Claude's, so it leaves the report open.
+  @Test func aMessageFromARemovedSessionLeavesTheReportOpen() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    let gone = try sbd.new(name: "gone")
+    try sbd.sb("rm", gone.id)
+    try #require(try !sbd.client.call("ls", as: [SessionSummary].self).contains { $0.id == gone.id })
+    try reported(sbd, op)
+    let text = "Check the queue again."
+    let mark = try sbd.lastEventId(op.id)
+
+    try sbd.sb(["send", "Operator", text], env: inside(gone.id))
+
+    let sent = try sentEvent(sbd, op, text, after: mark)
+    try #require(sent.data["from"] == nil, "\(sent.data.text)")
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
+    #expect(try inboxItem(sbd, op)?.source == .report)
+    try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// An `sb mcp-server` that started before `insideClaude` existed sends `from` alone. sbd still takes the message
+  /// as Claude's, so it leaves the report open.
+  @Test func aSendThatNamesOnlyASenderLeavesTheReportOpen() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+    let text = "Check the queue again."
+    let mark = try sbd.lastEventId(op.id)
+
+    _ = try sbd.client.call("send", ["session": .string(op.id), "text": .string(text), "from": "gone"])
+
+    let sent = try sentEvent(sbd, op, text, after: mark)
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
+    try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// `from` alone marks an ack as Claude's, so sbd refuses it while a report is open.
+  @Test func anAckThatNamesOnlyASenderIsRefused() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+
+    let error = failure(sbd, "ack", ["session": .string(op.id), "from": "gone"])
+
+    #expect(error.contains("inside Claude Code"), Comment(rawValue: error))
     #expect(try inboxItem(sbd, op)?.source == .report)
   }
 
@@ -250,7 +349,7 @@ import Testing
     let sent = try #require(try sbd.events(op.id).last { $0.kind == "sent" })
     #expect(sent.data["text"]?.string == "Yes, merge it.")
     #expect(sent.data["from"] == nil)
-    #expect(sent.data["by"] == nil)
+    #expect(sent.data["by"]?.string == "you")
     #expect(replied.triage == nil)
   }
 
