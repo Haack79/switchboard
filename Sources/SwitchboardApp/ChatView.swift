@@ -50,6 +50,7 @@ struct ChatView: View {
     .onChange(of: pending.last(where: \.failed)) { _, failed in
       if let error = failed?.error { AccessibilityNotification.Announcement("Not sent: \(error)").post() }
     }
+    .referenceRepo(session)
   }
 
   private var emptyText: String {

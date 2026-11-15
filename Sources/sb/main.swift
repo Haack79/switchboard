@@ -330,6 +330,12 @@ let usage = """
     issues source ls              list the sources
     issues team [--label L]... [--person P]...
                                   show or set the labels and logins of your team
+    ref <owner/name#N | URL | #N> [--repo owner/name]
+                                  show an issue or PR: its kind, state, title,
+                                  author, and labels, and a PR's checks, review,
+                                  and mergeability. It reads a session's PR or
+                                  the cached issues first, else GitHub. #N needs
+                                  --repo
 
   Follow-ups, sessions that haven't started:
     followup add <text> [--title T] [--repo owner/name] [--branch B] [--on WHEN]
@@ -981,6 +987,8 @@ case "followup", "followups":
   followup(a)
 case "issues":
   issues(a)
+case "ref":
+  refCommand(a)
 case "poll":
   let result = call("poll", ["all": .bool(a.switches.contains("--all"))], timeout: 300)
   if a.json {
