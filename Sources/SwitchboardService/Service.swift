@@ -610,8 +610,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseOperatorRename(id)
-      try refuseOperatorName(name)
+      try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id))
     case "issue":

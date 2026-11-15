@@ -280,6 +280,19 @@ private struct Lifecycle {
     #expect(named.isEmpty, "this Mac ran \(named.prefix(3)) for the remote worktree")
   }
 
+  /// The refusal comes before sbd makes the worktree on the host.
+  @Test func aNewBranchNamedForTheOperatorIsRefusedBeforeTheBoxMakesAWorktree() throws {
+    let sbd = try Instance.remote()
+    try sbd.makeBoxRepo()
+
+    let refused = try sbd.run(["new", "~/sb-box-repo", "--host", "mini", "--branch", Manager.operatorName])
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("belongs to the background operator"), "\(refused.stderr)")
+    let onBox = (try? FileManager.default.contentsOfDirectory(atPath: "\(sbd.boxHome)/worktrees")) ?? []
+    #expect(onBox.isEmpty, "the box's worktree root holds \(onBox)")
+  }
+
   @Test func aNewBranchUsesTheHostsOwnWorktreeRoot() throws {
     let sbd = try Instance.remote(host: ["worktreeRoot": "~/trees"])
     try sbd.makeBoxRepo()

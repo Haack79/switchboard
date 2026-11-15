@@ -295,7 +295,7 @@ extension Service {
     }
     return try queue.sync {
       var seen = try store.importedLines()
-      let new = items.filter { seen.insert($0.0.key).inserted }
+      let new = items.filter { item, _, _ in seen.insert(item.key).inserted }
       // sbd checks every line before it saves any, so a refused import saves nothing.
       for (_, title, _) in new { try refuseOperatorName(title) }
       var imported: [SessionSummary] = []
