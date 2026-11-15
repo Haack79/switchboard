@@ -15,13 +15,14 @@ enum PillSize {
 }
 
 extension View {
-  /// A capsule badge in `color`. A tinted badge draws the color faintly behind text in the color. A filled badge
+  /// A capsule badge in `color`. A tinted badge draws the color faintly behind text in the color, or behind primary
+  /// text when `plainText` is true, because colored text on its own tint is hard to read in a sentence. A filled badge
   /// draws white text on the solid color, for a count that must stand out.
-  func pill(_ color: Color, size: PillSize = .small, filled: Bool = false) -> some View {
+  func pill(_ color: Color, size: PillSize = .small, filled: Bool = false, plainText: Bool = false) -> some View {
     font(size == .small ? .caption2.bold() : .caption.bold())
       .padding(.horizontal, size == .small ? 5 : 6)
       .padding(.vertical, size == .small ? 1 : 2)
       .background(Capsule().fill(filled ? color : color.opacity(Design.badgeTint)))
-      .foregroundStyle(filled ? .white : color)
+      .foregroundStyle(filled ? AnyShapeStyle(.white) : plainText ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
   }
 }
