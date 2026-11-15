@@ -32,6 +32,11 @@ import Testing
     #expect(TriageDetail.pane(for: session(waitsToStart: false), showingTerminal: true) == .terminal)
   }
 
+  /// The summary holds Retry and Keep.
+  @Test func showsTheSummaryOfAFailedRemovalWhileTerminalIsOn() {
+    #expect(TriageDetail.pane(for: removalSession("f", .failed), showingTerminal: true) == .summary)
+  }
+
   @Test func showsTheSummaryWhileTerminalIsOff() {
     #expect(TriageDetail.pane(for: session(waitsToStart: false), showingTerminal: false) == .summary)
   }

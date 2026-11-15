@@ -6,6 +6,8 @@ import SwitchboardCore
 struct ConversationsSection: View {
   @EnvironmentObject var model: BoardModel
   let activeAccount: String
+  /// The number of multi-selected sessions that the row's Delete item deletes.
+  let removableSelection: Int
 
   var body: some View {
     if !model.managers.isEmpty {
@@ -38,8 +40,11 @@ struct ConversationsSection: View {
   }
 
   private func row(_ s: SessionSummary) -> some View {
-    ConversationRow(session: s, activeAccount: activeAccount, hoverCard: model.hoverCard).tag(s.id)
+    ConversationRow(session: s, activeAccount: activeAccount, hoverCard: model.hoverCard)
+      .clickAnchor(s.id)
+      .tag(s.id)
       .contextMenu {
+        DeleteSelectedMenuItem(id: s.id, count: removableSelection)
         Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
       }
   }

@@ -65,7 +65,7 @@ struct ContentView: View {
   }
 
   private var isShowingDoneRemoval: Binding<Bool> {
-    Binding(get: { model.doneRemoval != nil }, set: { if !$0 { model.doneRemoval = nil } })
+    Binding(get: { model.showingDoneRemoval }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
   private var isPickingSnoozeTime: Binding<Bool> {
@@ -92,7 +92,9 @@ struct ContentView: View {
         if let error = model.actionError {
           WarningBanner(error) { Button("Dismiss") { model.actionError = nil } }
         }
-        if let s = model.selected, let f = s.followup, f.started == nil {
+        if model.showsMultiSelection {
+          MultiSelectionView()
+        } else if let s = model.selected, let f = s.followup, f.started == nil {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
@@ -173,7 +175,7 @@ struct ContentView: View {
       QuickAskView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).inlineLinks(model) }
+      DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
     .sheet(isPresented: isPickingSnoozeTime) {
       if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
@@ -219,8 +221,9 @@ struct Sidebar: View {
   var body: some View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
-    List(selection: $model.selection) {
-      ConversationsSection(activeAccount: activeAccount)
+    let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
+    List(selection: model.sidebarSelection) {
+      ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       OperatorRow(activeAccount: activeAccount)
       ForEach(model.sidebarGroups) { group in
         let state = group.state
@@ -228,7 +231,9 @@ struct Sidebar: View {
           ForEach(group.rows) { row in
             HStack(spacing: 4) {
               SessionRow(
-                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard)
+                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard
+              )
+              .clickAnchor(row.id)
               NotesButton(session: row.session)
               if CleanupOffer.canCleanUp(row.session) { CleanupButton(session: row.session) }
               if row.session.isRemovableDone { DeleteButton(session: row.session) }
@@ -236,6 +241,7 @@ struct Sidebar: View {
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
               SnoozeMenuItems(session: row.session)
+              DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -268,6 +274,13 @@ struct Sidebar: View {
         return .ignored
       }
       model.focusTerminal()
+      return .handled
+    }
+    .onKeyPress(keys: [.delete]) { press in
+      guard press.modifiers.intersection([.command, .option, .control, .shift]) == .command,
+        model.showsMultiSelection, removableSelection > 0, !model.showingDoneRemoval
+      else { return .ignored }
+      model.checkSelectionRemoval()
       return .handled
     }
     .takesListFocus(.sidebar, $focused, model: model)
@@ -325,6 +338,7 @@ struct Sidebar: View {
         .padding(8)
         .help("Create an empty group on the Board (⇧⌘G)")
         .accessibilityIdentifier("sidebar-new-group")
+        RemovalStatusView()
       }
     }
     .overlay {
@@ -361,6 +375,24 @@ struct Sidebar: View {
     Binding(
       get: { !model.collapsed.contains(state) },
       set: { if $0 { model.collapsed.remove(state) } else { model.collapsed.insert(state) } })
+  }
+}
+
+/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
+/// `removableSelectionCount`, which the sidebar reads once for every row.
+struct DeleteSelectedMenuItem: View {
+  @EnvironmentObject var model: BoardModel
+  let id: String
+  let count: Int
+
+  var body: some View {
+    if model.showsMultiSelection, model.multiSelection.contains(id) {
+      Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
+        model.checkSelectionRemoval()
+      }
+      .disabled(count == 0 || model.showingDoneRemoval)
+      Divider()
+    }
   }
 }
 

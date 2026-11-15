@@ -101,9 +101,9 @@ enum TerminalSelfTest {
   /// Sends a left click at `point` in the window's coordinates, as a click of the mouse arrives. A mouse-down can
   /// start a tracking loop that reads events from the queue until a mouse-up arrives. The mouse-up therefore goes
   /// to the queue before the mouse-down goes to the window, so the call returns whether or not such a loop runs.
-  /// Returns false when AppKit makes no event.
+  /// Returns false when AppKit makes no event. With `view`, the mouse-down goes to that view instead of the window.
   @discardableResult
-  static func click(at point: NSPoint, in window: NSWindow) -> Bool {
+  static func click(at point: NSPoint, in window: NSWindow, on view: NSView? = nil) -> Bool {
     func mouse(_ type: NSEvent.EventType) -> NSEvent? {
       NSEvent.mouseEvent(
         with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -111,7 +111,7 @@ enum TerminalSelfTest {
     }
     guard let down = mouse(.leftMouseDown), let up = mouse(.leftMouseUp) else { return false }
     NSApp.postEvent(up, atStart: false)
-    window.sendEvent(down)
+    if let view { view.mouseDown(with: down) } else { window.sendEvent(down) }
     return true
   }
 

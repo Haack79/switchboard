@@ -119,6 +119,8 @@ public struct Session: Codable, Equatable, Sendable {
   /// True once sbd gave a Manager conversation its first `mcp` list. A
   /// conversation that the user later set to the full setup keeps nil.
   public var mcpScoped: Bool?
+  /// Set while sbd's removal job holds the session, and after it failed.
+  public var removal: Removal?
   /// True for the operator, the one background Manager session. It also has
   /// `manager` set, so an older sbd treats it as a conversation.
   public var isOperator: Bool?
@@ -359,6 +361,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var host: String?
   /// The state of the host's link, or nil for a session on this Mac and for a host that has no link.
   public var link: LinkState?
+  /// The session's place in sbd's removal job, or nil when no removal is
+  /// queued, running, or failed.
+  public var removal: Removal?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,
