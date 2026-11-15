@@ -46,6 +46,9 @@ struct StateBadge: View {
 
 struct ContentView: View {
   static let windowMinWidth: CGFloat = 900
+
+  /// A view picker segment's label: the view's name, then its count without parentheses. A zero count does not show.
+  static func viewLabel(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) \(count)" : name }
   static let sidebarMinWidth: CGFloat = 240
 
   @EnvironmentObject var model: BoardModel
@@ -125,9 +128,9 @@ struct ContentView: View {
       ToolbarItem(placement: .navigation) {
         // No segment is selected while a session shows.
         Picker("View", selection: viewChoice) {
-          Text("Inbox (\(model.triage.count))").tag(MainView?.some(.inbox))
+          Text(Self.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
           Text("Board").tag(MainView?.some(.board))
-          Text("Issues (\(model.issueCount))").tag(MainView?.some(.issues))
+          Text(Self.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -833,7 +836,8 @@ private struct DoneFooter: View {
           .padding(.top, 8)
         } label: {
           HStack {
-            Text("Done and merged (\(collapsed.count))").fontWeight(.semibold)
+            Text("Done and merged").fontWeight(.semibold)
+            Text("\(collapsed.count)").foregroundStyle(.secondary).monospacedDigit()
             DeleteAllDoneButton()
           }
         }
