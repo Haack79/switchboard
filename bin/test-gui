@@ -35,11 +35,14 @@
 # account folder is empty, so the rows are sbd's folder scan plus the built-ins.
 # It checks the rows, Down, Tab, Return, keypad Enter, Esc, held Tab, Return, and
 # Enter, and what Claude got.
+# The multiselect check clicks one row in the sidebar through the app's ShellSelfTest commands, adds another
+# row to the selection as a ⌘-click does, checks that the detail pane shows "2 sessions selected", clicks
+# Delete 2 Sessions…, and checks that the confirmation opens and that sbd still lists both sessions.
 # The wake check stops a session's claude three times through the app's WakeSelfTest,
 # and checks that three keys in its terminal start it once, that a click starts it,
 # and that a drag does not.
-# Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, wake). With
-# none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
+# Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, multiselect,
+# wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
 # The script ends the app, sbd, the tmux server, the stand-in, and its folder
 # in /tmp when it exits, whether or not the checks passed. It keeps the app's
 # log, the screen, and the pane PNGs in .build/gui-test/terminal. After any
@@ -54,9 +57,9 @@ checks=("$@")
 read -r -a skips <<<"${SB_GUI_SKIP:-}"
 for name in ${checks[@]+"${checks[@]}"} ${skips[@]+"${skips[@]}"}; do
   case $name in
-  terminal | relaunch | drafts | shell | drops | keys | slash | wake) ;;
+  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | wake) ;;
   *)
-    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, and wake." >&2
+    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, and wake." >&2
     exit 2
     ;;
   esac
@@ -131,6 +134,16 @@ end_app() {
   kill -KILL "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=''
+}
+
+# ShellSelfTest checks run one app command at a time in the caller's "$shots".
+cmd_done() { [ ! -e "$shots/cmd" ]; }
+app() { # runs one ShellSelfTest command and prints its result
+  # The app polls for cmd. The rename makes the whole command appear at once.
+  echo "$*" >"$shots/cmd.tmp"
+  mv "$shots/cmd.tmp" "$shots/cmd"
+  wait_for 20 cmd_done || fail "the app did not run: $*"
+  grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
 }
 
 # Replaces the last run's files in .build/gui-test/<check> with this run's.
@@ -398,14 +411,6 @@ check_shell() {
   shell_gone() { ! tmux -S "$tmux_socket" has-session -t "=$1-shell" 2>/dev/null; }
   closed() { sb get "$1" --json | jq -e '.shellClosed == true' >/dev/null; }
   is_open() { ! closed "$1"; }
-  cmd_done() { [ ! -e "$shots/cmd" ]; }
-  app() { # runs one ShellSelfTest command and prints its result
-    # The app polls for cmd. The rename makes the whole command appear at once.
-    echo "$*" >"$shots/cmd.tmp"
-    mv "$shots/cmd.tmp" "$shots/cmd"
-    wait_for 20 cmd_done || fail "the app did not run: $*"
-    grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
-  }
   panes_are() { [ "$(app panes)" = "$1" ]; }
   click() { # <close | open> <where>
     local result
@@ -755,6 +760,49 @@ check_slash() {
 }
 
 if wants slash; then check_slash; fi
+
+# The multi-selection lives in the app, so the app's answers to ShellSelfTest commands are the evidence. The
+# commands click with mouse events at the row's and the button's places in the window, so a layout that does not
+# fit the 1024 pt CI window makes the click miss.
+check_multiselect() {
+  check=multiselect
+  local shots="$home/shots/multiselect" first second result
+  mkdir "$shots"
+  echo "Checking multi-select in the sidebar…"
+  new_session multiselect-one
+  first=$session
+  new_session multiselect-two
+  second=$session
+  shows() { [ "$(app where)" = "session(\"$1\")" ]; }
+  detail_is() { [ "$(app detail)" = "$1" ]; }
+  confirming() { [ "$(app sheet)" = "confirming 2" ]; }
+  # A queued delete keeps the session listed until its delay passes, so "listed" also requires no removal.
+  listed() { sb get "$1" --json | jq -e --arg id "$1" '.id == $id and .removal == null' >/dev/null; }
+
+  SB_SELECT="$first" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
+  app_pid=$!
+  wait_for 60 shows "$first" || fail "the app did not select $first: $(app where)"
+  # The sidebar can build a row a moment after the click scrolls it into view, so each click is retried.
+  row_clicked() { result=$(app "$1" "$2"); [[ $result == "clicked at "* ]]; }
+  # SB_SELECT selects the first session in the model only. extend-row extends the sidebar table's own selection,
+  # so the first row is clicked first.
+  wait_for 10 row_clicked click-row "$first" || fail "the app could not click the row of $first: $result"
+  wait_for 5 shows "$first" || fail "clicking the row of $first did not show it: $(app where)"
+  result=$(app extend-row "$second")
+  [[ $result == "selected row "* ]] || fail "the app could not add the row of $second to the selection: $result"
+  wait_for 5 detail_is "2 sessions selected" || fail "the detail pane does not show 2 sessions selected: $(app detail)"
+  app snapshot "$shots/multiselect.png" >/dev/null
+  result=$(app click-delete-selected)
+  [[ $result == "clicked at "* ]] || fail "the app could not click Delete 2 Sessions…: $result"
+  wait_for 60 confirming || fail "Delete 2 Sessions… did not open the confirmation: $(app sheet)"
+  app snapshot "$shots/confirmation.png" >/dev/null
+  end_app
+  listed "$first" && listed "$second" || fail "opening the confirmation queued or deleted a session"
+  save_shots
+  echo "ok: multiselect (click, extend, detail pane, Delete 2 Sessions… confirmation)"
+}
+
+if wants multiselect; then check_multiselect; fi
 
 # sbd records each start of claude with what caused it, so `sb events` is the evidence.
 check_wake() {

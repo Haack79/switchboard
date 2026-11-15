@@ -6,7 +6,7 @@ import os
 @testable import SwitchboardApp
 
 /// The requests that a model sent, in order.
-private final class SentRequests: Sendable {
+private final class ChatReadRequests: Sendable {
   struct Request: Equatable, Sendable {
     var op: String
     var args: [String: JSON]
@@ -33,10 +33,10 @@ private func readable(
 /// `NSApp.isActive`.
 @MainActor
 private func readingModel(_ list: [SessionSummary], selection: String?, active: Bool = true) -> (
-  BoardModel, SentRequests
+  BoardModel, ChatReadRequests
 ) {
   let model = offlineModel()
-  let sent = SentRequests()
+  let sent = ChatReadRequests()
   model.send = { op, args in
     sent.append(op, args)
     return .null

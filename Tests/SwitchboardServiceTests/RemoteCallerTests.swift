@@ -1024,7 +1024,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
 
       #expect {
         try service.finishPaneStop(
-          session, PaneStop(claudePid: nil, processes: [tree.child]), command: "sb rm --worktree")
+          session, PaneStop(claudePid: nil, processes: [tree.child]), again: "run `sb rm --worktree` again")
       } throws: { isUnread($0) }
 
       #expect(b.stillRuns(tree.child))
@@ -1040,7 +1040,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
 
       #expect {
         try service.finishPaneStop(
-          session, PaneStop(claudePid: nil, processes: [tree.child]), command: "sb rm --worktree")
+          session, PaneStop(claudePid: nil, processes: [tree.child]), again: "run `sb rm --worktree` again")
       } throws: { "\($0)".contains("still run") }
 
       #expect(b.stillRuns(tree.child))
@@ -1056,7 +1056,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
       try b.bench.waitForExit(Int32(tree.child))
 
       try service.finishPaneStop(
-        session, PaneStop(claudePid: nil, processes: [tree.child]), command: "sb rm --worktree")
+        session, PaneStop(claudePid: nil, processes: [tree.child]), again: "run `sb rm --worktree` again")
     }
   }
 
@@ -1070,7 +1070,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
 
       #expect {
         try service.finishPaneStop(
-          session, PaneStop(claudePid: nil, processes: [tree.child]), command: "sb rm --worktree")
+          session, PaneStop(claudePid: nil, processes: [tree.child]), again: "run `sb rm --worktree` again")
       } throws: { "\($0)".contains("can't check which processes use \(session.cwd) on mini") }
     }
   }
@@ -1091,7 +1091,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
 
       #expect {
         try service.finishPaneStop(
-          session, PaneStop(claudePid: nil, processes: [tree.child]), command: "sb rm --worktree")
+          session, PaneStop(claudePid: nil, processes: [tree.child]), again: "run `sb rm --worktree` again")
       } throws: { "\($0)".contains(String(user.processIdentifier)) }
 
       #expect(user.isRunning)
@@ -1203,7 +1203,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
       service.queue.sync { _ = service.removing.insert("s1") }
 
       #expect { try service.queue.sync { try service.send("s1", "hello", trigger: .send) } } throws: {
-        "\($0)".contains("is being removed")
+        "\($0)".contains("is being deleted")
       }
 
       #expect(!FileManager.default.fileExists(atPath: launcher(facts)))

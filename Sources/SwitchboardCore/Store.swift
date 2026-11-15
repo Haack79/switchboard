@@ -59,6 +59,9 @@ public final class Store {
     try exec(
       "CREATE TABLE IF NOT EXISTS removed_host_sessions (id TEXT NOT NULL, host TEXT NOT NULL, PRIMARY KEY (id, host))")
     try exec(
+      "CREATE TABLE IF NOT EXISTS removal_notices (id INTEGER PRIMARY KEY, session TEXT NOT NULL, name TEXT NOT NULL, message TEXT NOT NULL)"
+    )
+    try exec(
       "CREATE TABLE IF NOT EXISTS removed_sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, removed INTEGER NOT NULL)")
   }
 
@@ -136,6 +139,23 @@ public final class Store {
         branch: row.optionalText(4), pr: row.optionalInt(5), note: row.text(6), text: row.text(7),
         by: Author(rawValue: row.text(8)) ?? .you, added: row.int(9), resolved: row.int(10), how: row.text(11))
     }
+  }
+
+  @discardableResult
+  public func addRemovalNotice(session: String, name: String, message: String) throws -> RemovalNotice {
+    try run("INSERT INTO removal_notices (session, name, message) VALUES (?, ?, ?)", [session, name, message])
+    return RemovalNotice(id: sqlite3_last_insert_rowid(db), session: session, name: name, message: message)
+  }
+
+  /// The removal notices, oldest first.
+  public func removalNotices() throws -> [RemovalNotice] {
+    try query("SELECT id, session, name, message FROM removal_notices ORDER BY id", []) { row in
+      RemovalNotice(id: row.int(0), session: row.text(1), name: row.text(2), message: row.text(3))
+    }
+  }
+
+  public func deleteRemovalNotice(id: Int64) throws {
+    try run("DELETE FROM removal_notices WHERE id = ?", [id])
   }
 
   /// The snapshot that `Snapshots` saved for the session, as JSON text.
