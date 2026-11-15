@@ -64,16 +64,14 @@ final class BlockingWait: @unchecked Sendable {
     } catch {
       fail(error)
     }
-    var lastAnswer = Date()
+    var retry = UnreachableRetry()
     while true {
       do {
-        if let outcome = try read() {
+        // sbd may be restarting, so a pass that can't reach it leaves the next pass to try again.
+        if let outcome = try retry.attempt(read) ?? nil {
           exiting.lock()
           report(outcome)
         }
-        lastAnswer = Date()
-      } catch is SbdUnreachable where Date().timeIntervalSince(lastAnswer) < BlockingWait.unreachableSeconds {
-        // sbd may be restarting, so the next pass tries again.
       } catch {
         fail(error)
       }
@@ -146,5 +144,23 @@ final class BlockingWait: @unchecked Sendable {
     exiting.lock()
     warn("\(error)")
     exit(unreachable ? BlockingWait.unreachable : 1)
+  }
+}
+
+/// Keeps sb trying while sbd can't be reached, for up to `BlockingWait.unreachableSeconds` after sbd's last
+/// answer. launchd restarts sbd, and what sb waits for persists across the restart.
+struct UnreachableRetry {
+  private var lastAnswer = Date()
+
+  /// Runs `body` and returns its result. It returns nil when sbd can't be reached and its last answer came less
+  /// than `BlockingWait.unreachableSeconds` ago. It throws any other error.
+  mutating func attempt<T>(_ body: () throws -> T) throws -> T? {
+    do {
+      let result = try body()
+      lastAnswer = Date()
+      return result
+    } catch is SbdUnreachable where Date().timeIntervalSince(lastAnswer) < BlockingWait.unreachableSeconds {
+      return nil
+    }
   }
 }

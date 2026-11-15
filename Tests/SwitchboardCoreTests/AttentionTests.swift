@@ -1008,6 +1008,41 @@ enum WaitingCause: String, CaseIterable, Sendable {
   }
 }
 
+@Suite struct RemovalAttentionTests {
+  /// Short enough that a reason that `oneLine` shortens to 70 characters keeps it whole.
+  static let message = "/tmp/w has uncommitted files (1)."
+
+  /// A stored session with a removal in `state`, decoded as sbd decodes the store.
+  static func session(removal state: String, done: Bool = false) throws -> Session {
+    let json: JSON = [
+      "id": "s1", "name": "test", "cwd": "/tmp/w", "claudeSessionId": "uuid", "created": 0, "started": true,
+      "done": .bool(done),
+      "removal": [
+        "state": .string(state), "requested": 1, "notBefore": 1, "worktree": true, "branch": false,
+        "remoteBranch": false, "released": false, "resolve": [], "error": state == "failed" ? .string(message) : .null,
+      ],
+    ]
+    let s = try JSONCoding.decode(Session.self, from: json.text)
+    try #require(s.removal != nil)
+    return s
+  }
+
+  /// Delete All takes Done sessions: one the user marked done, and one whose PR merged. A failed removal must move
+  /// each to Needs you, or the failure never reaches the Inbox.
+  @Test(arguments: ["plain", "marked done", "merged PR"])
+  func aFailedRemovalNeedsYouWithTheError(_ kind: String) throws {
+    let s = try Self.session(removal: "failed", done: kind == "marked done")
+    let f =
+      kind == "merged PR"
+      ? try prFacts(samplePR(state: .merged), dirty: 0)
+      : facts([event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Done."])])
+
+    let verdict = Attention.evaluate(s, f, now: 10)
+
+    #expect(verdict == Verdict(state: .needsYou, reason: "Delete failed: \(Self.message)"))
+  }
+}
+
 /// The operator's report verdict. It nests under `TriageOperatorTests`, so
 /// that suite's filter runs it.
 extension TriageOperatorTests {
