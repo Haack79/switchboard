@@ -126,6 +126,16 @@ let usage = """
                                   clear the waits, and a conversation's waits
                                   that went to the operator
     wait <session> --resolve <what happened> [--id W]
+    schedule <session> --every <interval> <prompt>
+                                  send the prompt to the session on an interval,
+                                  one number and one unit (s, m, h, d, or w) of
+                                  at least 1m, such as 30m. sbd keeps it across
+                                  restarts. A session holds 10 at most. Inside
+                                  a session, name it too: $SB_SESSION_ID
+    schedule ls [<session>]       list the schedules, the next due first
+    schedule rm <id>              remove a schedule
+    schedule pause|resume <id>    pause a schedule, or resume it one interval
+                                  from now
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
     note <session> --todo <text>  add a to-do, a task for you that blocks
@@ -317,6 +327,12 @@ let usage = """
     issues source ls              list the sources
     issues team [--label L]... [--person P]...
                                   show or set the labels and logins of your team
+    ref <owner/name#N | URL | #N> [--repo owner/name]
+                                  show an issue or PR: its kind, state, title,
+                                  author, and labels, and a PR's checks, review,
+                                  and mergeability. It reads a session's PR or
+                                  the cached issues first, else GitHub. #N needs
+                                  --repo
 
   Follow-ups, sessions that haven't started:
     followup add <text> [--title T] [--repo owner/name] [--branch B] [--on WHEN]
@@ -409,7 +425,7 @@ struct Args {
   init(_ argv: ArraySlice<String>, literalAfter: Int = .max) {
     let valued = Set([
       "--branch", "--base", "--name", "--prompt", "--model", "--account", "--until", "--timeout", "--session",
-      "--since", "--host",
+      "--since", "--host", "--every",
       "--id", "--resolve", "--rm", "--card",
       "--title", "--repo", "--on", "--after", "--link", "--parent", "--path", "--file",
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
@@ -547,6 +563,7 @@ func printSession(_ s: SessionSummary) {
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printWaitsAndNotes(s)
+  printSchedules(s)
 }
 
 /// The sessions that `sb import` can import, grouped by repo. ● marks a
@@ -756,7 +773,7 @@ if ["new", "spawn"].contains(command), argv.contains("--plan") {
 // The text of these commands is everything after the session. All but
 // `send` and `rename` read flags instead when the word after the session is
 // one. `send` reads its leading --image pairs itself, in Send.swift.
-let flagsAfterSession = ["wait", "note", "deny", "answer"]
+let flagsAfterSession = ["wait", "note", "deny", "answer", "schedule"]
 var a = Args(argv, literalAfter: (["send", "rename", "choose"] + flagsAfterSession).contains(command) ? 1 : .max)
 // The text of `sb group note` and `sb group describe` is everything after the
 // group. `describe` reads flags instead when the word after the group is
@@ -768,6 +785,7 @@ if ["group", "groups"].contains(command), ["note", "describe"].contains(argv.fir
   }
 }
 if flagsAfterSession.contains(command), a.positional.count > 1, a.positional[1].hasPrefix("--") { a = Args(argv) }
+if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(argv.first ?? "") { a = Args(argv) }
 
 switch command {
 case "hook":
@@ -845,6 +863,8 @@ case "wait":
   waitCommand(a)
 case "note":
   noteCommand(a)
+case "schedule", "schedules":
+  scheduleCommand(a)
 case "shell":
   let open = a.switches.contains("--open")
   guard open != a.switches.contains("--close") else { die("shell needs --open or --close") }
@@ -966,6 +986,8 @@ case "followup", "followups":
   followup(a)
 case "issues":
   issues(a)
+case "ref":
+  refCommand(a)
 case "poll":
   let result = call("poll", ["all": .bool(a.switches.contains("--all"))], timeout: 300)
   if a.json {

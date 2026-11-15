@@ -95,6 +95,37 @@ private func commentNode(_ id: String, _ author: String?, _ createdAt: String) -
     #expect(GitHub.parsePR(node)?.pr.trunkConfig == nil)
   }
 
+  @Test func readsWhenThePRWasCreated() throws {
+    let node = try editedNode(18303, ["createdAt": "2026-10-20T08:00:00Z"])
+
+    #expect(GitHub.parsePR(node)?.pr.createdAt == "2026-10-20T08:00:00Z")
+  }
+
+  @Test func aNodeWithoutACreationTimeLeavesItNil() throws {
+    let node = try editedNode(18303, ["createdAt": nil])
+
+    #expect(GitHub.parsePR(node)?.pr.createdAt == nil)
+  }
+
+  @Test func aStatusResponseCarriesEachPRsCreationTime() throws {
+    let node = try editedNode(18303, ["createdAt": "2026-10-20T08:00:00Z"])
+    let response: JSON = ["data": ["nodes": [node]]]
+
+    let prs = GitHub.parseStatus(response, ["PR_kwDOJsIKrs8AAAABKhgNxg"]).prs
+
+    #expect(prs.map(\.pr.createdAt) == ["2026-10-20T08:00:00Z"])
+  }
+
+  /// The comment fragment also reads `createdAt`, so only the PR's own fields count. `updatedAt` stays out: it
+  /// changes on every comment, and each change would record a `pr` event.
+  @Test func theStatusQueryReadsThePRsCreationTimeAndNotItsUpdateTime() {
+    let prFields = GitHub.statusQuery.components(separatedBy: "fragment comment")[0]
+    let words = prFields.split(whereSeparator: { $0.isWhitespace || "{}()".contains($0) })
+
+    #expect(words.contains("createdAt"))
+    #expect(!words.contains("updatedAt"))
+  }
+
   /// GitHub answers a field it couldn't resolve, such as for a token without
   /// Contents read, with null and an error. That null is not an answer.
   @Test(arguments: [

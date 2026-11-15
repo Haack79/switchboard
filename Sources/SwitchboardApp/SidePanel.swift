@@ -15,7 +15,7 @@ extension Wait {
   }
 }
 
-/// What the session view's side panel shows: the session's open waits, its notes, and its artifacts.
+/// What the session view's side panel shows: the session's open waits, its schedules, its notes, and its artifacts.
 struct SidePanel {
   static let width: CGFloat = 240
   static let noWaits = "No open waits."
@@ -23,9 +23,14 @@ struct SidePanel {
   static let noArtifacts = "No artifacts."
 
   let waitsTitle: String
+  /// The panel leaves out the Schedules section of a session without a schedule.
+  /// Schedules come from `sb schedule` and the MCP tools, so an empty section would offer nothing to do.
+  let showsSchedules: Bool
+  let schedulesTitle: String
   let hasNotes: Bool
   let notesTitle: String
-  /// sbd resolves no wait on its own while the session is marked Done. Nil unless such a session has an open wait.
+  /// sbd resolves no wait and runs no schedule while the session is marked Done.
+  /// Nil unless such a session has an open wait or a schedule.
   let doneCaption: String?
   /// The title counts only the artifacts that no delete removed.
   let artifactsTitle: String
@@ -34,11 +39,15 @@ struct SidePanel {
   let artifacts: [SessionArtifact]
 
   init(_ s: SessionSummary) {
+    let schedules = s.schedules ?? []
     waitsTitle = Self.title("Waits", s.waits.count)
+    showsSchedules = !schedules.isEmpty
+    schedulesTitle = Self.title("Schedules", schedules.count)
     hasNotes = !s.notes.isEmpty
     notesTitle = Self.title("Notes", s.notes.count)
     doneCaption =
-      s.markedDone && !s.waits.isEmpty ? "Waits don't resolve on their own while the session is marked Done." : nil
+      s.markedDone && !(s.waits.isEmpty && schedules.isEmpty)
+      ? "Waits and schedules don't run on their own while the session is marked Done." : nil
     artifacts = (s.artifacts ?? []).newestFirst
     hasArtifacts = !artifacts.isEmpty
     artifactsTitle = Self.title("Artifacts", artifacts.count(where: { $0.removed == nil }))
@@ -66,6 +75,11 @@ struct SidePanelView: View {
             Text(wait.caption(age: ago(wait.created))).font(.caption).foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
+        }
+        if panel.showsSchedules {
+          Divider()
+          title(panel.schedulesTitle)
+          ScheduleList(session: session)
         }
         if let caption = panel.doneCaption {
           Text(caption).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

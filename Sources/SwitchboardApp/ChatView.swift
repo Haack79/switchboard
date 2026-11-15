@@ -11,6 +11,7 @@ struct ChatView: View {
     VStack(spacing: 0) {
       ChatHeader(session: session)
       if session.kind == .manager { ManagerStatusStrip(session: session) }
+      SchedulesStrip(session: session)
       Divider()
       if model.showingTerminal {
         SessionView(session: session)
@@ -49,6 +50,7 @@ struct ChatView: View {
     .onChange(of: pending.last(where: \.failed)) { _, failed in
       if let error = failed?.error { AccessibilityNotification.Announcement("Not sent: \(error)").post() }
     }
+    .referenceRepo(session)
   }
 
   private var emptyText: String {

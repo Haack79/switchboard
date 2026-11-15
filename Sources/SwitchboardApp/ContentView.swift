@@ -169,9 +169,9 @@ struct ContentView: View {
       QuickAskView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).sessionLinks(model) }
+      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).inlineLinks(model) }
     }
-    .sessionLinks(model)
+    .inlineLinks(model)
   }
 }
 
@@ -453,7 +453,7 @@ struct SessionRow: View {
   /// The active account's folder. The hover card names the session's account only when it differs.
   let activeAccount: String
   var repo: String? = nil
-  var hoverCard: HoverCard? = nil
+  var hoverCard: HoverCard<String>? = nil
   @Environment(\.backgroundProminence) private var prominence
 
   var body: some View {

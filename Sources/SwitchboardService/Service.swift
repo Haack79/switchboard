@@ -223,6 +223,7 @@ public final class Service {
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
   var issueCache = IssueCache()
+  let references = ReferenceFetches()
   var quota: any QuotaBudget = UnlimitedBudget()
   var groups: [String: SessionGroup] = [:]
   var plans: [String: PlanDocument] = [:]
@@ -430,6 +431,9 @@ public final class Service {
         return .success(try JSON(encoding: planFollowup(request.args)))
       case "issues-refresh", "issues-start", "issues-clone":
         return .success(try issueWorkRequest(request.op, request.args))
+      case "ref-details":
+        // A fetch waits on GitHub, so it runs off the state queue.
+        return .success(try JSON(encoding: referenceDetails(request.args)))
       case "poll":
         // A poll waits on GitHub, so it runs off the state queue.
         return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])
@@ -587,6 +591,8 @@ public final class Service {
       return try waitRequest(op, args)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args)
+    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "manager-ls":
@@ -2151,8 +2157,11 @@ public final class Service {
       }
       noteViewed(now: now)
       runQueuedStarts(now: now)
-      // A resolved `resume` wait can launch claude.
-      if !mcpStarting(now: now) { resolveDueWaits(now: now) }
+      // A resolved `resume` wait and a schedule's run can launch claude.
+      if !mcpStarting(now: now) {
+        resolveDueWaits(now: now)
+        fireDueSchedules(now: now)
+      }
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
@@ -2205,6 +2214,7 @@ public final class Service {
       waits: s.waits ?? [], notes: s.notes ?? [], cards: e.facts.cards,
       openPrompt: e.facts.openPermission != nil || e.facts.openQuestion != nil, pr: e.facts.pr.map(PRSummary.init),
       markedDone: s.done)
+    if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)
       out.repository = out.checkout.flatMap { repository($0, of: s) }
