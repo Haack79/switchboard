@@ -695,6 +695,28 @@ extension Instance {
     #expect(try !sbd.get(s.id).live)
   }
 
+  /// A message that starts a stopped claude is its launch prompt. A pause that stops the claude before
+  /// SessionStart holds the prompt, so the resume delivers it after the resume message.
+  @Test func aLaunchPromptThatThePauseStopsArrivesAfterTheResume() throws {
+    let sbd = try Instance()
+    let s = try sbd.liveIdle()
+    try sbd.sb("stop", s.id)
+    try sbd.waitFor(s.id, "the stop") { !$0.live && $0.claudePid == nil }
+    sbd.hold("hold-start")
+    let mark = try sbd.lastEventId(s.id)
+    try sbd.sb("send", s.id, "the task")
+    try sbd.waitFor(s.id, "the held claude") { $0.claudePid != nil }
+
+    try sbd.pauseJSON(s.id)
+    try sbd.release("hold-start")
+    try sbd.waitForPausedExit(s.id)
+    #expect(try sbd.heldCount(s.id) == 1)
+
+    try sbd.sb("resume", s.id)
+    let prompts = try sbd.waitForPrompts(s.id, after: mark, count: 2)
+    #expect(prompts.last == "the task", "\(prompts)")
+  }
+
   /// A claude that waits before SessionStart and takes 10 s to exit after SIGTERM, through the stub's
   /// `hold-start` and `start-linger` gates. It returns the claude's pid.
   private func slowExitingClaudeBeforeStart(_ sbd: Instance, _ s: SessionSummary) throws -> Int {
@@ -907,5 +929,32 @@ extension Instance {
     #expect(r.stderr.contains("mini is not connected"), "\(r.stderr)")
     #expect(try sbd.pauseField(s.id) == nil)
     #expect(sbd.runs(s.pid))
+  }
+
+  /// A condition that comes due while sbd can't read the host keeps the pause. The tick resumes the session
+  /// once, after the link returns.
+  @Test func aConditionThatComesDueWithTheLinkDownResumesAfterTheLinkReturns() throws {
+    let sbd = try Instance.remote(config: Instance.shortHostWait)
+    try sbd.connectHost()
+    let s = try start(sbd)
+    try sbd.sb("pause", s.id, "--until", "1h")
+    try sbd.waitFor(s.id, "claude to stop on the box") { $0.claudePid == nil && !$0.live }
+    try sbd.dropLinkAndRefuse(refusal)
+    let mark = try sbd.lastEventId(s.id)
+
+    try sbd.advanceClock(2 * 3_600_000)
+    try sbd.tickThrice()
+
+    #expect(try sbd.pauseField(s.id) != nil)
+    #expect(try sbd.events(s.id, after: mark).filter { $0.kind == "unpaused" }.isEmpty)
+    try sbd.restoreLink()
+    try sbd.waitFor(
+      s.id, "claude to run on the box again", timeout: 30,
+      {
+        _ = try? sbd.advanceClock(1)
+        return $0.claudePid != nil
+      })
+    #expect(try sbd.pauseField(s.id) == nil)
+    #expect(try sbd.events(s.id, after: mark).filter { $0.kind == "unpaused" }.count == 1)
   }
 }

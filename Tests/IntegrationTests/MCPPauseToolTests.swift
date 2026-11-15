@@ -223,6 +223,32 @@ extension MCPToolServerSuite {
     #expect(try sbd.pauseField(target.id) == nil)
   }
 
+  /// A ref that matches no session gets the same refusal as one outside the group.
+  @Test(arguments: ["outside", "loose", "no-such-session"])
+  func aScopedPauseRefusesAnUntilSessionOutsideTheGroup(_ who: String) throws {
+    let sbd = try Instance()
+    let (s, chat) = try scopeWithChat(sbd)
+    let ref = who == "outside" ? s.outside.name : who == "loose" ? s.loose.name : who
+    let mcp = try scopedClient(sbd, s, chat: chat)
+
+    let result = try mcp.call("pause", ["session": .string(s.member.name), "until": .string("session:\(ref)")])
+
+    #expect(result.isError, "\(result.text)")
+    #expect(result.text.contains("--until \(ref) is not in group"), "\(result.text)")
+    #expect(try sbd.pauseField(s.member.id) == nil)
+  }
+
+  @Test func aScopedPauseTakesAnUntilSessionThatIsTheCaller() throws {
+    let sbd = try Instance()
+    let (s, chat) = try scopeWithChat(sbd)
+    let mcp = try scopedClient(sbd, s, chat: chat)
+
+    let result = try mcp.call("pause", ["session": .string(s.member.name), "until": .string("session:\(chat)")])
+
+    #expect(!result.isError, "\(result.text)")
+    #expect(try sbd.pauseField(s.member.id) != nil)
+  }
+
   @Test func aScopedPauseRefusesTheManager() throws {
     let sbd = try Instance()
     let (s, chat) = try scopeWithChat(sbd)

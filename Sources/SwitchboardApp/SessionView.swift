@@ -220,9 +220,9 @@ struct SessionView: View {
       }
       Spacer()
       HStack {
-        if let pause = session.pause {
+        if session.pause != nil {
           Button("Resume") { model.resume(session.id) }
-            .help(pause.line)
+            .help(PauseBanner.resumeHelp)
         } else if session.live {
           Button("Stop") { model.stop(session.id) }
             .help("Stop claude now. It resumes when you send a message or open the session again.")

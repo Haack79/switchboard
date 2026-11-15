@@ -23,6 +23,7 @@ extension Service {
     let message = args["message"]?.string.flatMap(nonBlank)
     let now = nowMs()
     let condition = try args["until"]?.string.map { try Pause.parseUntil($0, now: now) }
+    if let condition { try requireConditionInScope(condition, args) }
     let pauseOne = { (id: String) in
       try self.pause(id, by: by, from: from, reason: reason, message: message, condition: condition, now: now)
     }
@@ -154,6 +155,19 @@ extension Service {
     }
   }
 
+  /// A scoped request's condition may name only a session in the scope's group, or the caller. A ref that
+  /// matches no session gets the same refusal, so a group chat can't learn which names exist outside its group.
+  private func requireConditionInScope(_ condition: WaitRequest, _ args: JSON) throws {
+    guard let value = args["scope"], value != .null, condition.kind == Wait.Kind.session.rawValue,
+      let ref = condition.target
+    else { return }
+    guard let scope = value.string else { throw APIError("scope is a group id") }
+    let other = try? lookup(["session": .string(ref)])
+    guard let other, entries[other]?.session.group == scope || other == args["caller"]?.string else {
+      throw APIError("--until \(ref) is not in group \(groups[scope]?.name ?? scope)")
+    }
+  }
+
   /// The ids of the session's open waits and of its pause condition, which a new wait or condition doesn't reuse.
   func waitIds(_ id: String) -> [String] {
     entries[id]?.session.resolvableWaits.map(\.id) ?? []
@@ -188,10 +202,22 @@ extension Service {
   }
 
   /// Stops the paused session's running claude, at most once every `pauseStopMs`. A claude that reported
-  /// SessionEnd is already exiting, so it gets no second stop.
+  /// SessionEnd is already exiting, so it gets no second stop. A claude that has sent no hook since its launch
+  /// never read its launch prompt, so the prompt goes to the front of the held messages before the stop.
   func enforcePause(_ id: String, now: Int64) {
     guard let e = entries[id], !e.facts.exiting, now - (e.pauseStopAt ?? 0) >= Service.pauseStopMs else { return }
     entries[id]?.pauseStopAt = now
+    // `closeTrust` puts the prompt back when a trust card is open.
+    if !e.facts.hookSinceLaunch, e.facts.trustCard == nil, let prompt = e.facts.lastLaunchPrompt, !prompt.isEmpty,
+      !e.pending.contains(where: { $0.text == prompt })
+    {
+      do {
+        let sent = try recordSent(id, prompt, .queued, byUser: true, from: nil, extra: ["first": true, "held": true])
+        entries[id]?.pending.insert(QueuedMessage(text: prompt, sent: sent), at: 0)
+      } catch {
+        logLine("can't hold the launch prompt of paused \(id): \(error)")
+      }
+    }
     do { try stop(id, reason: "paused") } catch { logLine("can't stop paused \(id): \(error)") }
   }
 
