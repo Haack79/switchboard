@@ -594,6 +594,22 @@ struct BoardView: View {
   @FocusState private var focused: Bool
   static let labelWidth: CGFloat = 140
   static let columnWidth: CGFloat = 200
+  static let minColumnWidth: CGFloat = 165
+  static let maxColumnWidth: CGFloat = 280
+  static let columnSpacing: CGFloat = 12
+  static let boardPadding: CGFloat = 16
+  static var legacyScrollerWidth: CGFloat { NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) }
+
+  /// How wide each column draws in a Board `width` points wide with `columns` columns. The columns fill the width
+  /// that a legacy vertical scroller leaves, kept between `minColumnWidth` and `maxColumnWidth`. A Board too narrow
+  /// for every column at the minimum scrolls sideways.
+  static func fittedColumnWidth(available width: CGFloat, columns: Int) -> CGFloat {
+    guard columns > 0 else { return minColumnWidth }
+    // Overlay scrollers take no width. The Board reserves the legacy width anyway, so a mouse plugged in later
+    // does not make it scroll sideways.
+    let room = width - legacyScrollerWidth - 2 * boardPadding - labelWidth - columnSpacing * CGFloat(columns)
+    return min(max(room / CGFloat(columns), minColumnWidth), maxColumnWidth)
+  }
 
   /// Makes the same moves as a drag, because keyboard and VoiceOver users
   /// can't start a drag. It also offers Ungrouped when the Board hides the
@@ -629,92 +645,98 @@ struct BoardView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
-      ScrollViewReader { proxy in
-        ScrollView([.horizontal, .vertical]) {
-          LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-            Section {
-              ForEach(layout.lanes) { lane in
-                Divider()
-                HStack(alignment: .top, spacing: 12) {
-                  LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
-                    .frame(width: Self.labelWidth, alignment: .leading)
-                  ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
-                    VStack(spacing: 8) {
-                      ForEach(stack) { s in
-                        Group {
-                          if drops {
-                            BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                          } else {
-                            BoardCard(session: s, keyboardFocused: s.id == ring)
+      GeometryReader { geometry in
+        let fittedWidth = Self.fittedColumnWidth(available: geometry.size.width, columns: layout.columns.count)
+        ScrollViewReader { proxy in
+          ScrollView([.horizontal, .vertical]) {
+            LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+              Section {
+                ForEach(layout.lanes) { lane in
+                  Divider()
+                  HStack(alignment: .top, spacing: Self.columnSpacing) {
+                    LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
+                      .frame(width: Self.labelWidth, alignment: .leading)
+                    ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
+                      VStack(spacing: 8) {
+                        ForEach(stack) { s in
+                          Group {
+                            if drops {
+                              BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
+                            } else {
+                              BoardCard(session: s, keyboardFocused: s.id == ring)
+                            }
                           }
+                          .contextMenu {
+                            SnoozeMenuItems(session: s)
+                            PauseMenuItem(model: model, session: s)
+                            if drops { moveMenu(s.id, from: lane.group?.id) }
+                          }
+                          .id(s.id)
                         }
-                        .contextMenu {
-                          SnoozeMenuItems(session: s)
-                          PauseMenuItem(model: model, session: s)
-                          if drops { moveMenu(s.id, from: lane.group?.id) }
-                        }
-                        .id(s.id)
                       }
+                      .frame(width: fittedWidth, alignment: .top)
                     }
-                    .frame(width: Self.columnWidth, alignment: .top)
+                  }
+                  .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
+                  .accessibilityElement(children: .contain)
+                  .accessibilityLabel(lane.title)
+                  .accessibilityIdentifier("board-row-\(lane.id)")
+                }
+                DoneFooter(sessions: layout.done)
+              } header: {
+                HStack(alignment: .center, spacing: Self.columnSpacing) {
+                  VStack(alignment: .leading, spacing: 4) {
+                    Picker("Lanes", selection: $laneKind) {
+                      ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .help("Show a lane per repo or per group")
+                    // The header stays pinned, so the name field shows without a scroll.
+                    if laneKind == .group { NewGroupRow() }
+                    GroupSuggestionButton()
+                  }
+                  .frame(width: Self.labelWidth)
+                  ForEach(layout.columns, id: \.self) { column in
+                    HStack(spacing: 4) {
+                      Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
+                      if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
+                    }
+                    .frame(width: fittedWidth, alignment: .leading)
                   }
                 }
-                .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(lane.title)
-                .accessibilityIdentifier("board-row-\(lane.id)")
+                .padding(.vertical, 4)
+                .background(.background)
               }
-              DoneFooter(sessions: layout.done)
-            } header: {
-              HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Picker("Lanes", selection: $laneKind) {
-                    ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
-                  }
-                  .pickerStyle(.segmented)
-                  .labelsHidden()
-                  .help("Show a lane per repo or per group")
-                  // The header stays pinned, so the name field shows without a scroll.
-                  if laneKind == .group { NewGroupRow() }
-                  GroupSuggestionButton()
-                }
-                .frame(width: Self.labelWidth)
-                ForEach(layout.columns, id: \.self) { column in
-                  HStack(spacing: 4) {
-                    Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
-                    if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
-                  }
-                  .frame(width: Self.columnWidth, alignment: .leading)
-                }
-              }
-              .padding(.vertical, 4)
-              .background(.background)
             }
+            .padding(Self.boardPadding)
           }
-          .padding()
-        }
-        .defaultScrollAnchor(.topLeading)
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
-          // SwiftUI offers a key to this handler before a text field inside the Board. The new group's name
-          // field and a lane's description field keep their own arrows and Return.
-          if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
-          switch NavKey.action(press.key, modifiers: press.modifiers) {
-          case .move(let direction): model.moveBoardFocus(direction)
-          case .open:
-            guard let id = model.currentBoardCard else { return .ignored }
-            model.openFromBoard(id)
-          case nil: return .ignored
+          // macOS hides overlay scrollers until a scroll, so nothing would show that more columns sit to the right.
+          .scrollIndicators(.visible)
+          .defaultScrollAnchor(.topLeading)
+          .focusable()
+          .focused($focused)
+          .focusEffectDisabled()
+          .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) {
+            press in
+            // SwiftUI offers a key to this handler before a text field inside the Board. The new group's name
+            // field and a lane's description field keep their own arrows and Return.
+            if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
+            switch NavKey.action(press.key, modifiers: press.modifiers) {
+            case .move(let direction): model.moveBoardFocus(direction)
+            case .open:
+              guard let id = model.currentBoardCard else { return .ignored }
+              model.openFromBoard(id)
+            case nil: return .ignored
+            }
+            return .handled
           }
-          return .handled
-        }
-        .takesListFocus(.board, $focused, model: model)
-        // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
-        .onAppear { if !model.namingGroup { focused = true } }
-        .onChange(of: model.boardFocus) {
-          if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+          .takesListFocus(.board, $focused, model: model)
+          // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
+          .onAppear { if !model.namingGroup { focused = true } }
+          .onChange(of: model.boardFocus) {
+            if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+          }
         }
       }
       .groupDeleteDialog(model)
