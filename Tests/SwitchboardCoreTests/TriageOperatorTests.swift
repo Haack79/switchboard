@@ -21,9 +21,23 @@ func opReport(_ id: Int64, _ text: String, needsYou: Bool = true, about: String?
   return Event(id: id, session: "s1", t: t ?? id, kind: "report", data: .object(data))
 }
 
-/// A `sent` event for a message that the user wrote: no `by: sbd` and no `from`.
+/// A `sent` event for a message that the user wrote, from a terminal or the app.
 func opUserSent(_ id: Int64, _ text: String, t: Int64? = nil) -> Event {
-  Event(id: id, session: "s1", t: t ?? id, kind: "sent", data: ["text": .string(text), "delivery": "pasted"])
+  Event(
+    id: id, session: "s1", t: t ?? id, kind: "sent", data: ["text": .string(text), "delivery": "pasted", "by": "you"])
+}
+
+/// A `sent` event for a message that a Claude Code wrote. A Claude Code outside a session, or in a session that sbd
+/// no longer knows, sends no `from`.
+func opClaudeSent(_ id: Int64, _ text: String, from: String? = nil) -> Event {
+  var data: [String: JSON] = ["text": .string(text), "delivery": "pasted", "by": "claude"]
+  if let from { data["from"] = .string(from) }
+  return Event(id: id, session: "s1", t: id, kind: "sent", data: .object(data))
+}
+
+/// A `sent` event with neither `by` nor `from`, as a log written before sbd recorded every author holds.
+func opUnattributedSent(_ id: Int64, _ text: String) -> Event {
+  Event(id: id, session: "s1", t: id, kind: "sent", data: ["text": .string(text), "delivery": "pasted"])
 }
 
 /// A `sent` event for a message that sbd sent on its own, such as a wait's outcome.
@@ -176,6 +190,42 @@ extension TriageOperatorTests {
       let f = facts(opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text))
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
+    }
+
+    @Test(arguments: [nil, "c1"] as [String?]) func aMessageThatAClaudeCodeWroteClosesNothing(_ from: String?) {
+      let text = "Keep 10 sessions on the queue."
+      let f = facts(opIdle + [opReport(10, "Merge it?"), opClaudeSent(11, text, from: from)] + opTurn(12, text))
+
+      #expect(f.openReports.map(\.text) == ["Merge it?"])
+    }
+
+    /// Only `by: you` names the user, so a `sent` event that names no author closes nothing.
+    @Test func aMessageWithNeitherByNorFromClosesNothing() {
+      let f = facts(opIdle + [opReport(10, "Merge it?"), opUnattributedSent(11, "yes")] + opTurn(12, "yes"))
+
+      #expect(f.openReports.map(\.text) == ["Merge it?"])
+    }
+
+    /// Any `by` that is not exactly `you` leaves the reports open, whatever its JSON type.
+    @Test(arguments: [
+      JSON.string("claude"), .string("sbd"), .string(""), .string("null"), .string("You"), .string(" you"), .null,
+      .bool(true),
+    ])
+    func aMessageWhoseByIsNotYouClosesNothing(_ by: JSON) {
+      let sent = Event(
+        id: 11, session: "s1", t: 11, kind: "sent", data: ["text": "yes", "delivery": "pasted", "by": by])
+      let f = facts(opIdle + [opReport(10, "Merge it?"), sent])
+
+      #expect(f.openReports.map(\.text) == ["Merge it?"])
+    }
+
+    /// The user's message closes the reports even when it waits in the queue behind a turn.
+    @Test func aQueuedMessageThatTheUserWroteClosesTheReports() {
+      let sent = Event(
+        id: 11, session: "s1", t: 11, kind: "sent", data: ["text": "yes", "delivery": "queued", "by": "you"])
+      let f = facts(opIdle + [opReport(10, "Merge it?"), sent])
+
+      #expect(f.openReports.isEmpty)
     }
 
     @Test func aMessageThatTheUserWroteClosesTheEarlierReports() {
@@ -385,6 +435,16 @@ let operatorShapes: [OperatorShape] = [
       let text = "Keep 10 sessions on the queue."
       return opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text)
     }, item: .report),
+  OperatorShape(
+    name: "a report, then a message that a Claude Code outside a session wrote",
+    events: {
+      let text = "Keep 10 sessions on the queue."
+      return opIdle + [opReport(10, "Merge it?"), opClaudeSent(11, text)] + opTurn(12, text)
+    }, item: .report),
+  OperatorShape(
+    name: "a report, then a message with neither by nor from",
+    events: { opIdle + [opReport(10, "Merge it?"), opUnattributedSent(11, "yes")] + opTurn(12, "yes") },
+    item: .report),
   OperatorShape(name: "an overdue wait", events: { opIdle }, waits: [overdueWait], item: .rule),
   OperatorShape(name: "a notify outcome", events: { opIdle + [try opNotified(5)] }, item: .rule),
   OperatorShape(

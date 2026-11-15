@@ -1316,7 +1316,7 @@ public final class Service {
   {
     var data: [String: JSON] = ["text": .string(text), "delivery": .string(delivery.rawValue)]
     if delivery == .pasted { data[Delivery.awaitsDeliveredKey] = true }
-    if by == .sbd { data["by"] = .string(by.rawValue) }
+    data["by"] = .string(by.rawValue)
     if let from { data["from"] = .string(from) }
     return try recordStored(id, "sent", .object(data))
   }

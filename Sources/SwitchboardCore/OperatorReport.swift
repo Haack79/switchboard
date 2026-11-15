@@ -40,9 +40,9 @@ extension SessionFacts {
   }
 
   /// Keeps the `needsYou` reports that are open. A message that the user wrote closes the reports recorded
-  /// before it. Its `sent` event has no `by` and no `from`, so neither a message that sbd sent nor one from a
-  /// session closes one. An `ack` closes them too, unless a prompt blocks the session: the Inbox then shows
-  /// that prompt, so the user did not see the reports.
+  /// before it. Only a `sent` event whose `by` is `you` closes them. A message from sbd or from a Claude Code
+  /// closes none. A `sent` that names no author closes none either. An `ack` closes them too, unless a
+  /// prompt blocks the session: the Inbox then shows that prompt, so the user did not see the reports.
   mutating func applyReports(_ event: Event) {
     switch event.kind {
     case OperatorReport.event:
@@ -50,7 +50,7 @@ extension SessionFacts {
       openReports.append(report)
       // A report that repeats an acknowledged reason is a new item.
       acknowledgment = nil
-    case "sent" where event.data["by"] == nil && event.data["from"] == nil:
+    case "sent" where event.data["by"]?.string == MessageAuthor.you.rawValue:
       openReports = []
     case "ack" where ackClosesReports:
       openReports = []

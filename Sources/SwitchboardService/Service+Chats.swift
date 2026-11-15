@@ -34,11 +34,13 @@ extension Service {
     }
   }
 
-  /// Sends `text` to the chat, or without text opens it. `from` names the session whose Claude sent the text.
-  func openOrSend(_ id: String, _ text: String?, from: String? = nil) throws -> Response {
+  /// Sends `text` to the chat, or without text opens it. `sender` holds the `from` and `insideClaude` of the
+  /// request that carried the text, which say who wrote it.
+  func openOrSend(_ id: String, _ text: String?, sender: JSON = [:]) throws -> Response {
     var request: [String: JSON] = ["session": .string(id)]
     request["text"] = text.map(JSON.string)
-    request["from"] = from.map(JSON.string)
+    request["from"] = sender["from"]
+    request["insideClaude"] = sender["insideClaude"]
     let response = handle(Request(op: text == nil ? "open" : "send", args: .object(request)))
     guard text != nil, let delivery = response.result?["delivery"] else { return response }
     return .success(try queue.sync { try withDelivery(summary(id), delivery) })

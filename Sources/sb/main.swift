@@ -854,7 +854,9 @@ case "open":
 case "stop":
   sessionCommand("stop", a)
 case "resume":
-  sessionCommand("resume", a, extra: a.values["--prompt"].map { ["prompt": .string($0)] } ?? [:])
+  var extra = a.values["--prompt"].map { ["prompt": JSON.string($0)] } ?? [:]
+  extra.merge(insideClaudeArg) { $1 }
+  sessionCommand("resume", a, extra: extra)
 case "done":
   sessionCommand("done", a, extra: ["done": .bool(true)])
 case "undone":
