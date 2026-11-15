@@ -198,10 +198,7 @@ struct CardView: View {
           HStack(spacing: 6) {
             if let header = q.header {
               InlineText(plain: header)
-                .font(.caption.bold())
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(AttentionState.needsYou.color.opacity(0.18)))
+                .pill(AttentionState.needsYou.color, size: .regular)
             }
             InlineText(plain: q.question).fontWeight(.medium)
             if q.multiSelect { Text("pick any").font(.caption).foregroundStyle(.secondary) }
