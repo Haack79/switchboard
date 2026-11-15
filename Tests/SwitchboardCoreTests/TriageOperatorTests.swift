@@ -277,6 +277,174 @@ extension TriageOperatorTests {
   }
 }
 
+// MARK: Undoing the ack (SessionFacts.acknowledgedReports)
+
+/// The `unack` event that the Inbox's Undo records.
+func opUnack(_ id: Int64) -> Event { Event(id: id, session: "s1", t: id, kind: "unack", data: [:]) }
+
+/// A turn whose Bash call opens a permission prompt, with event ids from `id`.
+func opPermissionTurn(_ id: Int64) -> [Event] {
+  [
+    opPrompt(id, "go"), Event(id: id + 1, session: "s1", t: id + 1, kind: "PreToolUse", data: .object(touchCall)),
+    Event(id: id + 2, session: "s1", t: id + 2, kind: "PermissionRequest", data: .object(touch)),
+  ]
+}
+
+extension TriageOperatorTests {
+  @Suite struct AckUndoFold {
+    @Test func anAckMovesTheOpenReportsToAcknowledgedReports() {
+      let reports = [opReport(10, "a", about: "k1", t: 70), opReport(11, "b", t: 71)]
+      let open = facts(opIdle + reports).openReports
+
+      let f = facts(opIdle + reports + [opAck(12)])
+
+      #expect(f.acknowledgedReports == open)
+      #expect(f.openReports.isEmpty)
+    }
+
+    @Test func anUnackReopensTheReportsThatTheAckClosedInTheirOrder() {
+      let reports = [opReport(10, "a"), opReport(11, "b"), opReport(12, "c")]
+      let open = facts(opIdle + reports).openReports
+
+      let f = facts(opIdle + reports + [opAck(13), opUnack(14)])
+
+      #expect(f.openReports == open)
+      #expect(f.acknowledgedReports.isEmpty)
+    }
+
+    @Test func aSecondUnackReopensNothingMore() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opUnack(12), opUnack(13)])
+
+      #expect(f.openReports.map(\.id) == [10])
+    }
+
+    @Test func anAckAfterAnUnackClosesTheReportsAgain() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opUnack(12), opAck(13)])
+
+      #expect(f.openReports.isEmpty)
+      #expect(f.acknowledgedReports.map(\.id) == [10])
+    }
+
+    /// The ack closed nothing, so its unack must leave the report that stayed open.
+    @Test func anUnackAfterAnAckWhileAPromptBlocksKeepsTheOpenReport() {
+      let f = facts([opReport(0, "Merge it?", t: 0)] + permissionTurn() + [opAck(50), opUnack(51)])
+
+      #expect(f.openReports.map(\.text) == ["Merge it?"])
+      #expect(f.acknowledgedReports.isEmpty)
+    }
+
+    /// Every ack replaces the list. The second ack closed no reports, so the unack reopens none.
+    @Test func anUnackAfterTheAckOfALaterPromptReopensNoReports() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11)] + opPermissionTurn(20) + [opAck(30), opUnack(31)])
+
+      #expect(f.openReports.isEmpty)
+    }
+
+    @Test func anUnackAfterANewReportReopensNoneOfTheAcknowledgedReports() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opReport(12, "b"), opUnack(13)])
+
+      #expect(f.openReports.map(\.id) == [12])
+    }
+
+    /// Only a `needsYou` report opens an item, so a report without it keeps the list.
+    @Test func aReportWithoutNeedsYouKeepsAcknowledgedReports() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opReport(12, "Removed it.", needsYou: false), opUnack(13)])
+
+      #expect(f.openReports.map(\.id) == [10])
+    }
+
+    @Test func anUnackAfterTheUsersMessageReopensNothing() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opUserSent(12, "yes")] + opTurn(13, "yes") + [opUnack(15)])
+
+      #expect(f.openReports.isEmpty)
+      #expect(f.acknowledgedReports.isEmpty)
+    }
+
+    /// A message that the user did not write closes no reports, so it keeps the list too.
+    @Test func anUnackAfterAMessageFromClaudeReopensTheReports() {
+      let text = "Keep 10 sessions on the queue."
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opClaudeSent(12, text)] + opTurn(13, text) + [opUnack(15)])
+
+      #expect(f.openReports.map(\.id) == [10])
+    }
+
+    @Test func anUnackAfterNewTurnsReopensTheReportsInTheirOrder() {
+      let reports = [opReport(10, "a"), opReport(11, "b")]
+      let open = facts(opIdle + reports).openReports
+
+      let f = facts(opIdle + reports + [opAck(12)] + opTurn(13, "go") + opTurn(15, "again") + [opUnack(17)])
+
+      #expect(f.openReports == open)
+    }
+  }
+}
+
+// MARK: The shown verdict of acknowledged reports (Attention.shown with a kind)
+
+/// The verdict that sbd shows for a session of `kind`, with sbd's default acknowledgment period.
+func opShown(_ verdict: Verdict, _ f: SessionFacts, kind: SessionKind = .operator) -> Verdict {
+  Attention.shown(verdict, f, now: opNow, acknowledgedMs: RecheckSettings().acknowledgedMs, kind: kind)
+}
+
+extension TriageOperatorTests {
+  @Suite struct AckUndoShown {
+    static let statesOutsideTheInbox = AttentionState.allCases.filter { !AttentionState.inbox.contains($0) }
+
+    @Test(arguments: statesOutsideTheInbox)
+    func aVerdictOutsideTheInboxWithAcknowledgedReportsIsAcknowledged(_ state: AttentionState) {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11)])
+
+      let shown = opShown(Verdict(state: state, reason: "x"), f)
+
+      #expect(shown.acknowledged)
+      #expect(shown.state == state)
+      #expect(shown.reason == "x")
+    }
+
+    @Test func aVerdictAfterAnUnackIsNotAcknowledged() {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11), opUnack(12), opPrompt(13, "go")])
+
+      #expect(!opShown(Verdict(state: .working, reason: "x"), f).acknowledged)
+    }
+
+    /// A prompt that opens after the ack is a new item. The acknowledged reports must not hide it.
+    @Test func aBlockingPromptAfterTheAckStaysInTheInbox() throws {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11)] + opPermissionTurn(20))
+      let shown = opShown(opVerdict(operatorSession(), f), f)
+
+      #expect(shown.state == .needsYou, "\(shown.reason)")
+      #expect(!shown.acknowledged)
+      #expect(try #require(item(f, session: operatorSession())).source == .card)
+    }
+
+    /// The wait rule's Needs you is the operator's item. The acknowledged reports must not hide it.
+    @Test func anOverdueWaitAfterTheAckStaysInTheInbox() throws {
+      let f = facts(opIdle + [opReport(10, "a"), opAck(11)])
+      let verdict = opVerdict(operatorSession(waits: [overdueWait]), f)
+      try #require(verdict.byWaitRule, "\(verdict.state) \(verdict.reason)")
+
+      let shown = opShown(verdict, f)
+
+      #expect(shown.state == .needsYou, "\(shown.reason)")
+      #expect(!shown.acknowledged)
+    }
+
+    /// An idle operator's verdict after the ack is the reply rule's Needs you, which gives the operator no item.
+    /// The service's undo accepts only an acknowledged verdict, so this one must read as acknowledged.
+    @Test func theIdleOperatorAfterAnAckThatClosedItsReportsIsAcknowledged() throws {
+      let before = facts(opIdle + [opReport(10, "Merge it?")])
+      let ack = Event(
+        id: 11, session: "s1", t: 11, kind: "ack",
+        data: try JSON(encoding: Acknowledgment(opVerdict(operatorSession(), before), before)))
+      let f = facts(opIdle + [opReport(10, "Merge it?"), ack])
+      let verdict = opVerdict(operatorSession(), f)
+      try #require(item(f, session: operatorSession()) == nil)
+
+      #expect(opShown(verdict, f).acknowledged, "\(verdict.state) \(verdict.reason)")
+    }
+  }
+}
+
 // MARK: The item
 
 extension TriageOperatorTests {
@@ -599,6 +767,23 @@ extension TriageOperatorTests {
       let with = facts(try shape.events() + strayReports)
 
       #expect(item(with, session: s) == item(without, session: s))
+    }
+
+    /// Only the operator's ack closes reports, so stray reports and an ack must not mark another kind's verdict
+    /// acknowledged. The prompt after the ack starts a turn, so most shapes give a verdict outside the Inbox.
+    @Test(arguments: [SessionKind.manager, .chat, .work], reportParityShapes)
+    func reportEventsAndAnAckChangeNoOtherKindsShownVerdict(_ kind: SessionKind, _ shape: ReportParityShape) throws {
+      let s = kindSession(kind, waits: shape.waits)
+      let after = [opAck(110), opPrompt(111, "go")]
+      let without = facts(try shape.events() + after)
+      let with = facts(try shape.events() + strayReports + after)
+
+      let shownWithout = opShown(opVerdict(s, without), without, kind: kind)
+      let shownWith = opShown(opVerdict(s, with), with, kind: kind)
+
+      #expect(shownWith == shownWithout)
+      // `Verdict ==` compares only the state and the reason.
+      #expect(shownWith.acknowledged == shownWithout.acknowledged, "\(shownWith.state) \(shownWith.reason)")
     }
 
     /// A conversation's and a chat's item is only its blocking prompt's item.

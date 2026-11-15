@@ -12,7 +12,9 @@ extension Service {
     let now = nowMs()
     let verdict = Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState)
     if args["undo"]?.bool == true {
-      guard shown(id, verdict, now: now).acknowledged || verdict.requested else {
+      // The operator's reports reopen even while a wait or a prompt gives it an item that hides Undo Acknowledge.
+      let reopensReports = e.session.kind == .operator && !e.facts.acknowledgedReports.isEmpty
+      guard shown(id, verdict, now: now).acknowledged || verdict.requested || reopensReports else {
         throw APIError("\(e.session.name) isn't acknowledged")
       }
       record(id, "unack")
@@ -62,6 +64,8 @@ extension Service {
   /// `evaluate` gave at `now`. Every caller goes through here, so the
   /// acknowledgment rules read the same settings everywhere.
   func shown(_ id: String, _ verdict: Verdict, now: Int64) -> Verdict {
-    Attention.shown(verdict, entries[id]!.facts, now: now, acknowledgedMs: config.recheck.acknowledgedMs)
+    let e = entries[id]!
+    return Attention.shown(
+      verdict, e.facts, now: now, acknowledgedMs: config.recheck.acknowledgedMs, kind: e.session.kind)
   }
 }

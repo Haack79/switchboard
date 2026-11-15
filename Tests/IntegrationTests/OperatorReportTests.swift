@@ -329,6 +329,31 @@ import Testing
     #expect(try sbd.get(op.id).reason == "PR bravo is green. Merge it?")
   }
 
+  // MARK: Undoing the ack
+
+  @Test func sbAckUndoReopensTheReportsThatTheAckClosed() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op, "PR alpha is green. Merge it?")
+    try reported(sbd, op, "PR bravo is green. Merge it?")
+    let acked = try sbd.client.call("ack", ["session": .string(op.id)], as: SessionSummary.self)
+    #expect(acked.acknowledged == true, "\(acked.state) \(acked.reason)")
+    #expect(acked.triage == nil)
+    // A second ack must not discard the reports that the undo reopens, whatever it answers.
+    _ = try sbd.run("ack", "Operator")
+
+    try sbd.sb("ack", "Operator", "--undo")
+
+    let latest = try #require(try reportEvents(sbd).last)
+    let item = try #require(try inboxItem(sbd, op))
+    #expect(item.source == .report)
+    #expect(item.ref == "report:\(latest.id)")
+    #expect(item.summary == "PR alpha is green. Merge it?\nPR bravo is green. Merge it?")
+    #expect(try reports(sbd).map { $0["open"]?.bool } == [true, true])
+    let error = failure(sbd, "ack", ["session": .string(op.id), "undo": true])
+    #expect(error.contains("isn't acknowledged"), Comment(rawValue: error))
+  }
+
   @Test func choosingTheReplyOptionSendsTheTextToTheOperator() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)
