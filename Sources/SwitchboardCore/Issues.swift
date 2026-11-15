@@ -19,29 +19,16 @@ public struct IssueRef: Codable, Equatable, Hashable, Sendable {
     return ref
   }
 
-  /// Reads `123`, `#123`, `owner/name#123`, or
-  /// `https://github.com/owner/name/issues/123`, which may end in a further
-  /// path, a query, or a fragment. A `/pull/` URL is not an issue.
+  /// Reads `123`, `#123`, or what `GitHubRef(parsing:)` reads. A `/pull/` URL is not an issue.
   public init?(parsing text: String) {
-    var number = text.trimmingCharacters(in: .whitespaces)
-    var repo: String?
-    if number.contains("://") {
-      guard let url = URL(string: number), ["https", "http"].contains(url.scheme?.lowercased()),
-        url.host?.lowercased() == "github.com"
-      else { return nil }
-      let parts = url.path.split(separator: "/").map(String.init)
-      guard parts.count >= 4, parts[2] == "issues" else { return nil }
-      repo = "\(parts[0])/\(parts[1])"
-      number = parts[3]
-    } else if let hash = number.firstIndex(of: "#") {
-      let prefix = String(number[..<hash])
-      if !prefix.isEmpty { repo = prefix }
-      number = String(number[number.index(after: hash)...])
+    let text = text.trimmingCharacters(in: .whitespaces)
+    if let ref = GitHubRef(trimmed: text) {
+      guard ref.form != .pullURL else { return nil }
+      self.init(repo: ref.repo, number: ref.number)
+      return
     }
-    if let repo, !Issues.validRepo(repo) { return nil }
-    guard let n = Issues.number(number) else { return nil }
-    self.repo = repo
-    self.number = n
+    guard let number = Issues.number(text.hasPrefix("#") ? String(text.dropFirst()) : text) else { return nil }
+    self.init(number: number)
   }
 }
 

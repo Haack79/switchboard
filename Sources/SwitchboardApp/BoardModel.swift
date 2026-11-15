@@ -31,7 +31,10 @@ final class BoardModel: ObservableObject {
   }
   @Published var showingOrgFilter = false
   /// Decides when a session tile's hover card shows. Tests replace it.
-  var hoverCard: HoverCard?
+  var hoverCard: HoverCard<String>?
+  /// Decides when a reference's hover card shows. Tests replace it.
+  var referenceCard: HoverCard<ReferenceCardID>?
+  let references: ReferenceStore
   /// Why sbd can't be reached, or nil while it answers.
   @Published var unreachable: String?
   /// The last failed action, shown until the next one succeeds.
@@ -81,6 +84,10 @@ final class BoardModel: ObservableObject {
   @Published var listFocusRequests = 0
   /// The session whose Claude terminal takes keyboard focus when it shows. The terminal clears it.
   @Published var terminalFocus: String?
+  /// The session whose empty Message Claude field shows under its terminal. A field with a draft always shows.
+  @Published var revealedMessageField: String?
+  /// The session whose Message Claude field takes keyboard focus when it shows. The field clears it.
+  @Published var messageFieldFocus: String?
   /// The Board's open cards as it last drew them. BoardView keeps it current. The Session menu's ⌘T state and
   /// the Board's ring read it, so a change redraws them.
   @Published var boardGrid = BoardGrid(lanes: [])
@@ -130,6 +137,8 @@ final class BoardModel: ObservableObject {
   /// stay disabled until sbd replies, so a second click can't report that
   /// the first one already started claude.
   @Published var startingNow: Set<String> = []
+  /// Sessions whose wake is on its way to sbd, so a burst of keys sends one request at a time. No view reads it.
+  private(set) var waking: Set<String> = []
   /// Group suggestions whose Accept or Decline is on its way to sbd. Their
   /// rows stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringSuggestions: Set<String> = []
@@ -288,10 +297,11 @@ final class BoardModel: ObservableObject {
     orgFilter: OrgFilter = OrgFilter()
   ) {
     self.client = client
+    references = ReferenceStore()
     messageDrafts = MessageDrafts(folder: draftsFolder)
     self.orgFilterStore = orgFilterStore
     self.orgFilter = orgFilterStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
-    hoverCard = HoverCard.panel(for: self)
+    makeHoverCards()
   }
 
   /// Clears a selection that the org filter hides, closes the hover card of a session that is no longer
@@ -442,6 +452,7 @@ final class BoardModel: ObservableObject {
   func start() {
     guard timer == nil else { return }
     hoverCard?.closeOnEvents()
+    referenceCard?.closeOnEvents()
     if Bundle.main.bundleIdentifier != nil {
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
@@ -731,6 +742,13 @@ final class BoardModel: ObservableObject {
   }
   func stop(_ id: String) { perform("stop", ["session": .string(id)]) }
   func resume(_ id: String) { perform("resume", ["session": .string(id)]) }
+  /// Starts claude in a stopped session after a key or a click in its terminal. It sends `open`, not `resume`.
+  /// sbd launches on `open` only while claude is stopped, so the keys that arrive before the summary shows
+  /// claude starting do nothing. A second `resume` would fail with "already running".
+  func wake(_ id: String) {
+    guard waking.insert(id).inserted else { return }
+    perform("open", ["session": .string(id)], finally: { self.waking.remove(id) })
+  }
   /// Starts a queued session now. When the live cap is full, sbd stops the
   /// lowest-priority idle session to make room. When the start still waits,
   /// the error banner shows why.

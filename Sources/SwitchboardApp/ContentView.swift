@@ -162,9 +162,9 @@ struct ContentView: View {
       SessionSearchView().environmentObject(model)
     }
     .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).sessionLinks(model) }
+      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).inlineLinks(model) }
     }
-    .sessionLinks(model)
+    .inlineLinks(model)
   }
 }
 
@@ -446,7 +446,7 @@ struct SessionRow: View {
   /// The active account's folder. The hover card names the session's account only when it differs.
   let activeAccount: String
   var repo: String? = nil
-  var hoverCard: HoverCard? = nil
+  var hoverCard: HoverCard<String>? = nil
   @Environment(\.backgroundProminence) private var prominence
 
   var body: some View {
@@ -966,19 +966,26 @@ extension BoardHolder {
   }
 }
 
-/// Who holds a Waiting card, in a capsule.
-struct HolderBadge: View {
-  let holder: BoardHolder
-
-  var body: some View {
-    Text(holder.badgeTitle)
-      .font(.caption2.bold())
+extension View {
+  /// Small secondary text on one line in a gray capsule.
+  func capsuleBadge() -> some View {
+    font(.caption2.bold())
       .lineLimit(1)
       .fixedSize()
       .padding(.horizontal, 5)
       .padding(.vertical, 1)
       .background(Capsule().fill(Color.secondary.opacity(0.15)))
       .foregroundStyle(.secondary)
+  }
+}
+
+/// Who holds a Waiting card, in a capsule.
+struct HolderBadge: View {
+  let holder: BoardHolder
+
+  var body: some View {
+    Text(holder.badgeTitle)
+      .capsuleBadge()
       .help("Held by \(holder.badgeTitle)")
       .accessibilityLabel("Held by \(holder.badgeTitle)")
   }

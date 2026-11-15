@@ -1,9 +1,10 @@
 import Foundation
 
 /// What the merge card says about a PR beyond its status: its size, its
-/// review threads, and its description. The poller reads them for a PR at a
-/// merge decision, once per head commit and again on each status read. It
-/// reads them once per head commit for a PR that a review nudge quotes.
+/// review threads, its reviews, and its description. The poller reads them
+/// for a PR at a merge decision, once per head commit and again on each
+/// status read. It reads them once per head commit for a PR that a review
+/// nudge quotes.
 public struct MergeDetails: Codable, Equatable, Sendable {
   public var additions: Int
   public var deletions: Int
@@ -24,10 +25,75 @@ public struct MergeDetails: Codable, Equatable, Sendable {
   /// The test plan's unchecked items, and its sentences that say something
   /// was not tested or not run.
   public var testGaps: [String]
+  /// The first `maxThreadDetails` unresolved threads among those read, in
+  /// GitHub's order. nil when the read left out the comments of an open
+  /// thread.
+  public var threadDetails: [ThreadDetail]?
+  /// The latest approval or change request of each reviewer, in GitHub's
+  /// order. nil when the read lacks them.
+  public var reviews: [ReviewDetail]?
+
+  /// Whether the read found an open thread or left some threads unread.
+  public var mayHaveOpenThreads: Bool { openThreads > 0 || threadsRead < threads }
+
+  /// An unresolved review thread and its first comment.
+  public struct ThreadDetail: Codable, Equatable, Sendable {
+    /// The first comment's id, as `ReplyTarget.parse` reads it from `url`.
+    /// nil when the URL doesn't name a review comment.
+    public var rootId: Int64?
+    /// The first comment's URL.
+    public var url: String
+    public var path: String
+    /// The line on the head, or on the commit where the comment was made
+    /// when the thread is outdated.
+    public var line: Int?
+    public var outdated: Bool
+    /// The first comment's author. A GitHub App's login has no [bot] suffix.
+    public var author: String
+    /// true when a GitHub App wrote the first comment, and nil otherwise.
+    public var bot: Bool?
+    /// The first comment on one line, at most `maxExcerpt` characters.
+    public var excerpt: String
+    /// Whether the thread has more than one comment and the last one is by
+    /// the user whose token sbd reads with. Sessions post with that token too.
+    public var replied: Bool
+  }
+
+  /// A reviewer's latest approval or change request.
+  public struct ReviewDetail: Codable, Equatable, Sendable {
+    public var author: String
+    /// true when a GitHub App wrote the review, and nil otherwise.
+    public var bot: Bool?
+    public var state: String
+    /// The commit the review was made on.
+    public var commit: String?
+    /// How many of the PR's last 100 commits come after `commit`. nil when
+    /// `commit` is not among them, as after a force-push.
+    public var commitsSince: Int?
+    /// At most `maxReviewBody` characters, with its line breaks.
+    public var body: String
+    public var url: String
+    /// The first `maxNotes` inline comments.
+    public var notes: [Note]
+    /// GitHub's count of the inline comments.
+    public var noteCount: Int
+
+    /// An inline comment of a review.
+    public struct Note: Codable, Equatable, Sendable {
+      public var path: String
+      public var line: Int?
+      public var excerpt: String
+      public var url: String
+
+      /// Where the comment is: "a.swift:12", or "a.swift" without a line.
+      public var place: String { line.map { "\(path):\($0)" } ?? path }
+    }
+  }
 
   public init(
     additions: Int = 0, deletions: Int = 0, changedFiles: Int = 0, threads: Int = 0, threadsRead: Int = 0,
-    openThreads: Int = 0, description: String = "", gist: String? = nil, testGaps: [String] = []
+    openThreads: Int = 0, description: String = "", gist: String? = nil, testGaps: [String] = [],
+    threadDetails: [ThreadDetail]? = nil, reviews: [ReviewDetail]? = nil
   ) {
     self.additions = additions
     self.deletions = deletions
@@ -38,11 +104,18 @@ public struct MergeDetails: Codable, Equatable, Sendable {
     self.description = description
     self.gist = gist
     self.testGaps = testGaps
+    self.threadDetails = threadDetails
+    self.reviews = reviews
   }
 
   public static let maxDescription = 4000
   static let maxGist = 300
   static let maxTestGaps = 5
+  public static let maxThreadDetails = 10
+  static let maxExcerpt = 300
+  static let maxReviewBody = 600
+  /// The query asks for this many inline comments of each review.
+  static let maxNotes = 5
 
   /// The sections whose heading has a word that starts with one of these
   /// are boilerplate. A match inside a word, as in "Latest", does not count.
@@ -211,14 +284,31 @@ extension GitHub {
 
   /// What the merge card needs of each PR at a merge decision. The status
   /// query leaves it out, because a PR's review threads would slow every
-  /// status read.
+  /// status read. `$threads` adds each thread's first and last comment.
+  /// Measured on 2026-11-14 over chunks of 20 PRs, a chunk cost 1 point
+  /// before the review details, 4 points with `$threads` false, and 45
+  /// points with `$threads` true.
   public static let mergeDetailsQuery = """
-    query($ids: [ID!]!) {
+    query($ids: [ID!]!, $threads: Boolean!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
           id headRefOid title body additions deletions changedFiles
-          reviewThreads(first: \(maxThreads)) { totalCount nodes { isResolved } }
+          reviewThreads(first: \(maxThreads)) {
+            totalCount
+            nodes {
+              isResolved isOutdated path line originalLine
+              first: comments(first: 1) @include(if: $threads) { nodes { url body author { __typename login } } }
+              last: comments(last: 1) @include(if: $threads) { totalCount nodes { viewerDidAuthor } }
+            }
+          }
+          latestOpinionatedReviews(first: 20) {
+            nodes {
+              author { __typename login } state body url submittedAt commit { oid }
+              comments(first: \(MergeDetails.maxNotes)) { totalCount nodes { path line originalLine body url } }
+            }
+          }
+          commits(last: 100) { nodes { commit { oid } } }
         }
       }
     }
@@ -232,13 +322,51 @@ extension GitHub {
       let total = node["reviewThreads"]?["totalCount"]?.int
     else { return nil }
     let threads = nodes(node["reviewThreads"])
+    let open = threads.filter { $0["isResolved"]?.bool == false }
+    // A read with `$threads` false lacks `first` on every thread, so it has no details when a thread is open.
+    let threadDetails =
+      open.allSatisfy { $0["first"] != nil } ? open.prefix(MergeDetails.maxThreadDetails).map(threadDetail) : nil
+    let commits = node["commits"].map { nodes($0).map { $0["commit"]?["oid"]?.string } }
+    let reviews = node["latestOpinionatedReviews"].map { nodes($0).map { reviewDetail($0, commits: commits) } }
     let read = MergeDetails.read(body: node["body"]?.string ?? "", title: node["title"]?.string ?? "")
     return (
       head,
       MergeDetails(
         additions: additions, deletions: deletions, changedFiles: files, threads: total, threadsRead: threads.count,
-        openThreads: threads.filter { $0["isResolved"]?.bool == false }.count, description: read.description,
-        gist: read.gist, testGaps: read.testGaps)
+        openThreads: open.count, description: read.description, gist: read.gist, testGaps: read.testGaps,
+        threadDetails: threadDetails, reviews: reviews)
     )
+  }
+
+  static func threadDetail(_ node: JSON) -> MergeDetails.ThreadDetail {
+    let first = nodes(node["first"]).first
+    let url = first?["url"]?.string ?? ""
+    let target = try? ReplyTarget.parse(url)
+    let last = node["last"]
+    return MergeDetails.ThreadDetail(
+      rootId: target?.kind == .reviewComment ? target?.id : nil, url: url, path: node["path"]?.string ?? "",
+      line: node["line"]?.int ?? node["originalLine"]?.int, outdated: node["isOutdated"]?.bool ?? false,
+      author: login(first?["author"]), bot: isBot(first?["author"]) ? true : nil,
+      excerpt: oneLine(first?["body"]?.string ?? "", max: MergeDetails.maxExcerpt),
+      replied: (last?["totalCount"]?.int ?? 0) > 1 && nodes(last).last?["viewerDidAuthor"]?.bool == true)
+  }
+
+  /// `commits` holds the oids of the PR's last commits, oldest first, and
+  /// is nil when the read lacks them.
+  static func reviewDetail(_ node: JSON, commits: [String?]?) -> MergeDetails.ReviewDetail {
+    let commit = node["commit"]?["oid"]?.string
+    let body = node["body"]?.string ?? ""
+    var since: Int?
+    if let commit, let commits, let i = commits.lastIndex(of: commit) { since = commits.count - 1 - i }
+    return MergeDetails.ReviewDetail(
+      author: login(node["author"]), bot: isBot(node["author"]) ? true : nil, state: node["state"]?.string ?? "",
+      commit: commit, commitsSince: since,
+      body: truncated(body, max: MergeDetails.maxReviewBody), url: node["url"]?.string ?? "",
+      notes: nodes(node["comments"]).prefix(MergeDetails.maxNotes).map { note in
+        MergeDetails.ReviewDetail.Note(
+          path: note["path"]?.string ?? "", line: note["line"]?.int ?? note["originalLine"]?.int,
+          excerpt: oneLine(note["body"]?.string ?? "", max: MergeDetails.maxExcerpt), url: note["url"]?.string ?? "")
+      },
+      noteCount: node["comments"]?["totalCount"]?.int ?? 0)
   }
 }

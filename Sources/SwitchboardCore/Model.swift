@@ -430,7 +430,12 @@ public func firstLine(_ text: String) -> String? {
 public func oneLine(_ text: String, max: Int = 70) -> String {
   let line = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
     .filter { !$0.isEmpty }.joined(separator: " ")
-  return line.count <= max ? line : String(line.prefix(max - 1)) + "…"
+  return truncated(line, max: max)
+}
+
+/// The text cut to `max` characters, the last of which is an ellipsis.
+public func truncated(_ text: String, max: Int) -> String {
+  text.count <= max ? text : String(text.prefix(max - 1)) + "…"
 }
 
 /// The parts joined as an English list: "a", "a and b", or "a, b, and c".

@@ -107,6 +107,25 @@ func sampleVerdict(_ author: String, _ state: String, on commit: String? = nil) 
   func isPendingOnlyWhileAnOpenPRWillChange(_ pr: PullRequest, _ pending: Bool) {
     #expect(pr.isPending == pending)
   }
+
+  /// A `pr` event that an older sbd recorded has no `createdAt`.
+  @Test func prFromAnOlderSbdDecodesWithoutACreationTime() throws {
+    var object = try #require(try JSON(encoding: samplePR()).object)
+    object["createdAt"] = nil
+
+    let decoded = try JSONCoding.convert(JSON.object(object), to: PullRequest.self)
+
+    #expect(decoded.createdAt == nil)
+  }
+
+  @Test func createdAtSurvivesAnEventRoundTrip() throws {
+    var original = samplePR()
+    original.createdAt = "2026-10-20T08:00:00Z"
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: original), to: PullRequest.self)
+
+    #expect(decoded.createdAt == "2026-10-20T08:00:00Z")
+  }
 }
 
 @Suite struct StateAccessors {

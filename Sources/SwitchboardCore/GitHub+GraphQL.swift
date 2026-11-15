@@ -8,7 +8,7 @@ extension GitHub {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
-          id number url title state isDraft mergedAt closedAt mergeCommit { oid } body author { login }
+          id number url title state isDraft createdAt mergedAt closedAt mergeCommit { oid } body author { login }
           headRefName headRefOid baseRefName mergeable reviewDecision isMergeQueueEnabled isInMergeQueue
           repository { nameWithOwner defaultBranchRef { name } trunkConfig: object(expression: "HEAD:.trunk") { id } }
           labels(first: 20) { nodes { name } }
@@ -220,7 +220,7 @@ extension GitHub {
     let review = { (n: JSON) in
       Review(
         author: login(n["author"]), state: n["state"]?.string ?? "", submittedAt: n["submittedAt"]?.string,
-        commit: n["commit"]?["oid"]?.string, bot: n["author"]?["__typename"]?.string == "Bot" ? true : nil)
+        commit: n["commit"]?["oid"]?.string, bot: isBot(n["author"]) ? true : nil)
     }
     let reviewRequests = node["reviewRequests"].map {
       nodes($0).compactMap { $0["requestedReviewer"].flatMap { $0["login"]?.string ?? $0["slug"]?.string } }
@@ -229,7 +229,7 @@ extension GitHub {
     // A decision that ReviewDecision doesn't know stays unread, so it never
     // reads as "no review required".
     let reviewDecision = node["reviewDecision"]?.string.flatMap(ReviewDecision.init(rawValue:))
-    let pr = PullRequest(
+    var pr = PullRequest(
       id: id, number: number, url: node["url"]?.string ?? "", repo: repo,
       title: node["title"]?.string ?? "", state: PRState(rawValue: node["state"]?.string ?? "") ?? .open,
       draft: node["isDraft"]?.bool ?? false, head: node["headRefName"]?.string ?? "",
@@ -248,6 +248,7 @@ extension GitHub {
       mergeQueue: node["isMergeQueueEnabled"]?.bool, inMergeQueue: node["isInMergeQueue"]?.bool,
       author: node["author"].map(login), codeOwnerRequests: node["reviewRequests"].flatMap(codeOwnerRequests),
       closesIssues: node["body"]?.string.flatMap { Issues.closingRefs(inBody: $0, repo: repo) })
+    pr.createdAt = node["createdAt"]?.string
     var seen: Set<String> = []
     let comments = (nodes(node["firstComments"]) + nodes(node["lastComments"])).compactMap(parseComment)
       .filter { seen.insert($0.id).inserted }.sorted { $0.createdAt < $1.createdAt }
@@ -344,7 +345,7 @@ extension GitHub {
   /// [bot] at the end. GraphQL gives the same login to the app and to a user.
   public static func parseComment(_ node: JSON) -> PRComment? {
     guard let id = node["id"]?.string else { return nil }
-    let bot = node["author"]?["__typename"]?.string == "Bot"
+    let bot = isBot(node["author"])
     return PRComment(
       id: id, author: login(node["author"]) + (bot ? "[bot]" : ""), createdAt: node["createdAt"]?.string ?? "",
       editedAt: node["lastEditedAt"]?.string, edited: node["includesCreatedEdit"]?.bool ?? false,
@@ -364,6 +365,9 @@ extension GitHub {
 
   /// GitHub reports a deleted account's author as null and shows it as ghost.
   static func login(_ author: JSON?) -> String { author?["login"]?.string ?? "ghost" }
+
+  /// Whether the author is a GitHub App.
+  static func isBot(_ author: JSON?) -> Bool { author?["__typename"]?.string == "Bot" }
 
   static func nodes(_ connection: JSON?) -> [JSON] {
     (connection?["nodes"]?.array ?? []).filter { $0 != .null }
