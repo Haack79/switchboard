@@ -26,7 +26,8 @@ public enum SnoozePresets {
 
   /// The snooze mark's end time: `HH:mm` when it ends today in `zone`,
   /// `EEE HH:mm` within the next 6 calendar days, and `MMM d HH:mm` after that.
-  /// It formats the parts itself, because a refresh path calls it.
+  /// The snooze mark calls it on every refresh of the app, so it formats the
+  /// parts itself. A DateFormatter costs about 30 times as much to build.
   public static func shortTime(until: Int64, now: Int64, zone: TimeZone) -> String {
     let calendar = gregorian(zone)
     let end = date(until)

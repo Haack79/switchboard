@@ -45,7 +45,7 @@ struct SnoozeTriggers {
 }
 
 extension SessionFacts {
-  /// The kinds that end a snooze record that has ended, beside an event that
+  /// The kinds that end a snooze record that has ended, besides an event that
   /// moves `lastTouched`. Each one means that the user acted on the session.
   static let snoozeClearingKinds: Set = ["dialog_closed", "card_closed", "ack"]
 

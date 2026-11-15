@@ -63,6 +63,7 @@ final class BoardModel: ObservableObject {
   @Published var doneRemoval: DoneRemoval?
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || doneRemoval != nil || showingIssueSetup
+      || pickingSnoozeTime != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)

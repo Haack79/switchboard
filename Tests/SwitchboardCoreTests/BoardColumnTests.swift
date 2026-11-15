@@ -87,7 +87,7 @@ private func shownPlace(_ events: [Event], waits: [Wait] = []) -> BoardPlacement
   let v = Attention.shown(
     Attention.evaluate(s, f, now: 100), f, now: 100, acknowledgedMs: RecheckSettings().acknowledgedMs)
   return BoardColumn.place(
-    state: v.state, setAside: v.acknowledged, stateSince: 50, waits: waits, facts: f, created: 0)
+    state: v.state, setAside: v.setAside, stateSince: 50, waits: waits, facts: f, created: 0)
 }
 
 /// The `ack` event at `t` for the Inbox item in `state` that a session shows after `events`.
@@ -535,6 +535,12 @@ extension BoardColumnTests {
       let before = turn("Want me to push?")
 
       #expect(shownPlace(before + [try ackOfShown(.canContinue, after: before, at: 2)]).holder == .you)
+    }
+
+    @Test func snoozedOfferIsHeldByYou() {
+      let snooze = event("snooze", 2, ["until": .number(1_000)])
+
+      #expect(shownPlace(turn("Want me to push?") + [snooze]).holder == .you)
     }
 
     /// sbd clears an acknowledgment only at a turn, an unack, or a new

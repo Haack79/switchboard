@@ -183,7 +183,9 @@ extension Service {
       record(id, "triage", ["stop": .number(Double(stop)), "skipped": .string(skip)])
       return
     }
-    let session = summary(id)
+    var session = summary(id)
+    // The summary describes the turn for when the item shows, so the model reads sbd's state, not a snooze's Waiting.
+    session.state = verdict.state
     guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)
