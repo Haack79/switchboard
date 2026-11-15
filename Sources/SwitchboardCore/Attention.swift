@@ -468,6 +468,8 @@ public struct Verdict: Equatable, Sendable {
   /// The note of a snooze that ended, which `Attention.shown` adds to an
   /// Inbox verdict until the user acts on the session.
   public var snoozeNote: String?
+  /// True when a layer of `Attention.shown` moved an Inbox verdict to Waiting because the user set it aside.
+  public var setAside: Bool { acknowledged || snoozed }
   /// What the session's card offers for a rule that knows the next step.
   public var options: [TriageOption] = []
   /// What the user should read before deciding.

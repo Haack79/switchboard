@@ -6,8 +6,6 @@ import Foundation
 public struct Snooze: Codable, Equatable, Sendable {
   /// When the snooze ends, in ms since the epoch.
   public var until: Int64
-  /// When the `snooze` event was recorded. The event's time sets it.
-  public var at: Int64
   /// Why the snooze ended before `until`, or nil when it didn't.
   public var wokeEarly: String?
 
@@ -17,7 +15,10 @@ public struct Snooze: Codable, Equatable, Sendable {
   public func isActive(at t: Int64) -> Bool { wokeEarly == nil && t < until }
 
   /// The note that an ended snooze adds to the item that came back.
-  var note: String { "snoozed until \(Wait.formatTime(until))" + (wokeEarly.map { ", woke early: \($0)" } ?? "") }
+  var note: String { Snooze.label(until: until) + (wokeEarly.map { ", woke early: \($0)" } ?? "") }
+
+  /// "snoozed until" and the time, as `sb` and the note show it.
+  public static func label(until: Int64) -> String { "snoozed until \(Wait.formatTime(until))" }
 }
 
 /// The facts that can end a snooze early, read before an event so that the
@@ -58,12 +59,13 @@ extension SessionFacts {
     switch event.kind {
     case "snooze":
       guard let until = event.data["until"]?.int else { return }
-      snooze = Snooze(until: Int64(until), at: event.t, wokeEarly: nil)
+      snooze = Snooze(until: Int64(until), wokeEarly: nil)
     case "unsnooze":
       snooze = nil
     default:
       guard let record = snooze else { return }
       if let before {
+        // SnoozeTriggers reads self, so it runs before the write to snooze starts.
         let why = before.wake(after: SnoozeTriggers(self))
         snooze?.wokeEarly = why
       } else if !record.isActive(at: event.t),

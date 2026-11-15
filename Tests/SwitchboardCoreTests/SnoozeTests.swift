@@ -72,19 +72,19 @@ private func expectNoWake(_ f: SessionFacts, sourceLocation: SourceLocation = #_
 extension SnoozeTests {
   @Suite struct SnoozeRecord {
     @Test func isActiveAMillisecondBeforeItsEnd() {
-      let s = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil)
+      let s = Snooze(until: snoozeUntil, wokeEarly: nil)
 
       #expect(s.isActive(at: snoozeUntil - 1))
     }
 
     @Test func isNotActiveAtItsEnd() {
-      let s = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil)
+      let s = Snooze(until: snoozeUntil, wokeEarly: nil)
 
       #expect(!s.isActive(at: snoozeUntil))
     }
 
     @Test func isNotActiveAfterAnEarlyWake() {
-      let s = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: newPrompt)
+      let s = Snooze(until: snoozeUntil, wokeEarly: newPrompt)
 
       #expect(!s.isActive(at: snoozeAt + 1))
     }
@@ -95,7 +95,7 @@ extension SnoozeTests {
 
     @Test(arguments: [nil, newPrompt, ciFailed, prMerged])
     func roundTripsThroughJSON(_ why: String?) throws {
-      let s = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: why)
+      let s = Snooze(until: snoozeUntil, wokeEarly: why)
 
       #expect(try JSONCoding.convert(JSON(encoding: s), to: Snooze.self) == s)
     }
@@ -107,7 +107,7 @@ extension SnoozeTests {
       let decoded = try JSONCoding.convert(JSON(encoding: f), to: SessionFacts.self)
 
       #expect(decoded == f)
-      #expect(decoded.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
+      #expect(decoded.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func factsWithAWokenSnoozeRoundTripThroughJSON() throws {
@@ -127,13 +127,7 @@ extension SnoozeTests {
     @Test func snoozeEventSetsTheRecord() {
       let f = facts(turn("Done.") + [snoozeEvent()])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
-    }
-
-    @Test func snoozeEventsTimeWinsOverATimeInItsData() {
-      let f = facts(turn("Done.") + [event("snooze", 7, ["until": .number(Double(snoozeUntil)), "at": 999])])
-
-      #expect(f.snooze?.at == 7)
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func unsnoozeEventClearsTheRecord() {
@@ -145,19 +139,19 @@ extension SnoozeTests {
     @Test func laterSnoozeReplacesTheTime() {
       let f = facts(turn("Done.") + [snoozeEvent(), snoozeEvent(3, until: 2 * snoozeUntil)])
 
-      #expect(f.snooze == Snooze(until: 2 * snoozeUntil, at: 3, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: 2 * snoozeUntil, wokeEarly: nil))
     }
 
     @Test func laterSnoozeClearsAnEarlyWake() {
       let f = facts(turn("Done.") + [snoozeEvent(), touchRequest(9, 3), snoozeEvent(4, until: 2 * snoozeUntil)])
 
-      #expect(f.snooze == Snooze(until: 2 * snoozeUntil, at: 4, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: 2 * snoozeUntil, wokeEarly: nil))
     }
 
     @Test func laterSnoozeReplacesAnEndedRecord() {
       let f = facts(turn("Done.") + [snoozeEvent(), snoozeEvent(after, until: after + snoozeUntil)])
 
-      #expect(f.snooze == Snooze(until: after + snoozeUntil, at: after, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: after + snoozeUntil, wokeEarly: nil))
     }
 
     @Test(arguments: ["snooze", "unsnooze"])
@@ -198,8 +192,8 @@ enum SnoozableItem: String, CaseIterable, Sendable {
 }
 
 private let nonInboxStates = AttentionState.allCases.filter { !AttentionState.inbox.contains($0) }
-private let activeSnooze = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil)
-private let wokenSnooze = Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: newPrompt)
+private let activeSnooze = Snooze(until: snoozeUntil, wokeEarly: nil)
+private let wokenSnooze = Snooze(until: snoozeUntil, wokeEarly: newPrompt)
 
 extension SnoozeTests {
   @Suite struct ActiveSnooze {
@@ -299,7 +293,7 @@ extension SnoozeTests {
 
     @Test(arguments: [newPrompt, ciFailed, prMerged])
     func wokenNoteNamesEachReason(_ why: String) throws {
-      let f = try SnoozableItem.reply.withSnooze(Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: why))
+      let f = try SnoozableItem.reply.withSnooze(Snooze(until: snoozeUntil, wokeEarly: why))
 
       #expect(verdict(f, at: during).snoozeNote == "snoozed until \(Wait.formatTime(snoozeUntil)), woke early: \(why)")
     }
@@ -328,7 +322,7 @@ extension SnoozeTests {
 
 extension SnoozeTests {
   @Suite struct OutsideTheInbox {
-    @Test(arguments: nonInboxStates, [activeSnooze, wokenSnooze, Snooze(until: 10, at: snoozeAt, wokeEarly: nil)])
+    @Test(arguments: nonInboxStates, [activeSnooze, wokenSnooze, Snooze(until: 10, wokeEarly: nil)])
     func nonInboxVerdictIsUnchanged(_ state: AttentionState, _ snooze: Snooze) {
       var f = SessionFacts()
       f.snooze = snooze
@@ -381,7 +375,7 @@ extension SnoozeTests {
     }
 
     @Test func activeAcknowledgmentAndActiveSnoozeIsWaitingAndAcknowledged() {
-      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, at: 3, wokeEarly: nil)), at: during)
+      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, wokeEarly: nil)), at: during)
 
       #expect(v == Verdict(state: .waiting, reason: readTheReply))
       #expect(v.acknowledged)
@@ -389,13 +383,13 @@ extension SnoozeTests {
 
     /// The Acknowledge layer already moved the verdict out of the Inbox, so the snooze layer leaves it alone.
     @Test func activeAcknowledgmentAndActiveSnoozeIsNotMarkedSnoozed() {
-      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, at: 3, wokeEarly: nil)), at: during)
+      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, wokeEarly: nil)), at: during)
 
       #expect(!v.snoozed)
     }
 
     @Test func activeAcknowledgmentAndEndedSnoozeHasNoNote() {
-      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, at: 3, wokeEarly: newPrompt)), at: during)
+      let v = verdict(acknowledgedFacts(snooze: Snooze(until: snoozeUntil, wokeEarly: newPrompt)), at: during)
 
       #expect(v.acknowledged)
       #expect(v.snoozeNote == nil)
@@ -403,7 +397,7 @@ extension SnoozeTests {
 
     @Test func expiredAcknowledgmentAndActiveSnoozeIsSnoozedWithTheRecheckReason() {
       let t = 2 + acknowledgedMs
-      let f = acknowledgedFacts(snooze: Snooze(until: 10 * acknowledgedMs, at: 3, wokeEarly: nil))
+      let f = acknowledgedFacts(snooze: Snooze(until: 10 * acknowledgedMs, wokeEarly: nil))
 
       let v = verdict(f, at: t)
 
@@ -415,7 +409,7 @@ extension SnoozeTests {
 
     @Test func expiredAcknowledgmentAndEndedSnoozeIsInTheInboxWithTheRecheckReasonAndTheNote() {
       let t = 2 + acknowledgedMs
-      let f = acknowledgedFacts(snooze: Snooze(until: snoozeUntil, at: 3, wokeEarly: nil))
+      let f = acknowledgedFacts(snooze: Snooze(until: snoozeUntil, wokeEarly: nil))
 
       let v = verdict(f, at: t)
 
@@ -980,7 +974,7 @@ extension SnoozeTests {
     func otherEventsLeaveTheEndedRecord(_ e: Event) {
       let f = facts(turn("Done.") + [snoozeEvent(), e])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func replyAfterTheItemCameBackKeepsTheNote() {
@@ -997,13 +991,13 @@ extension SnoozeTests {
           snoozeEvent(), event("sent", 3, ["text": "more"]), event("UserPromptSubmit", 4, ["prompt": "more"]),
         ])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func newTurnLeavesTheActiveRecord() {
       let f = facts(turn("Done.") + [snoozeEvent(), event("PreToolUse", 3, tool("Bash", ["command": "ls"], id: "t1"))])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     /// The prompt was open before the snooze, so it didn't wake it, and its answer must not clear it.
@@ -1014,14 +1008,14 @@ extension SnoozeTests {
     func answeringAPromptLeavesTheActiveRecord(_ answer: Event) {
       let f = facts(promptTurn(touchCall, touch) + [snoozeEvent(3), answer])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: 3, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func acknowledgingLeavesTheActiveRecord() {
       let f = facts(
         turn("Done.") + [snoozeEvent(), event("ack", 3, ["state": "needs_you", "reason": .string(readTheReply)])])
 
-      #expect(f.snooze == Snooze(until: snoozeUntil, at: snoozeAt, wokeEarly: nil))
+      #expect(f.snooze == Snooze(until: snoozeUntil, wokeEarly: nil))
     }
 
     @Test func activeRecordStillHoldsAfterTheUserMessagesTheSession() {

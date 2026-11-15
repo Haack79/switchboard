@@ -8,7 +8,7 @@ extension Service {
   /// that sbd does to the session. A new snooze replaces the session's
   /// current one. `caller` is the asking session's id.
   func snoozeRequest(_ args: JSON) throws -> JSON {
-    let id = try snoozeTarget(args)
+    let id = try lookupOther(args, refusing: "snooze")
     let session = entries[id]!.session
     guard session.kind == .work else { throw APIError("only a work session can be snoozed") }
     if session.done { throw APIError("\(session.name) is marked done") }
@@ -20,21 +20,11 @@ extension Service {
 
   /// The `unsnooze` request, which ends the active snooze of `session`.
   func unsnoozeRequest(_ args: JSON) throws -> JSON {
-    let id = try snoozeTarget(args)
+    let id = try lookupOther(args, refusing: "snooze")
     let e = entries[id]!
     guard e.facts.snooze?.isActive(at: nowMs()) == true else { throw APIError("\(e.session.name) isn't snoozed") }
     record(id, "unsnooze")
     return try JSON(encoding: summary(id))
-  }
-
-  /// The session that the request names. A session can't snooze or unsnooze
-  /// itself, because it could then hide its own question from the user.
-  private func snoozeTarget(_ args: JSON) throws -> String {
-    let id = try lookup(args)
-    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
-      throw APIError("\(entries[id]!.session.name) can't snooze itself out of the Inbox")
-    }
-    return id
   }
 
   /// When the snooze that the request asks for ends.
@@ -48,7 +38,7 @@ extension Service {
     guard let text = until ?? duration else { return now + Snooze.defaultMs }
     guard let time = Wait.parseTime(text, now: now) else { throw APIError("can't read the time \(text)") }
     guard time > now else { throw APIError("\(text) has passed") }
-    // The event stores the time as a JSON number, a Double, which holds every integer only up to 2^53.
+    // The event stores the time as a JSON number. A JSON number is a Double, which holds every integer only up to 2^53.
     guard time <= 1 << 53 else { throw APIError("\(text) is too far away") }
     return time
   }

@@ -684,6 +684,16 @@ public final class Service {
     return try resolveRef(key, "session", entries.values.map { ($0.session.id, $0.session.name) })
   }
 
+  /// The session that `args` names, refused when it is the asking session
+  /// `caller`, because a session could then hide its own question from the user.
+  func lookupOther(_ args: JSON, refusing verb: String) throws -> String {
+    let id = try lookup(args)
+    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
+      throw APIError("\(entries[id]!.session.name) can't \(verb) itself out of the Inbox")
+    }
+    return id
+  }
+
   // MARK: Hooks
 
   /// Records a hook event and returns it with what the hook prints, or nil
@@ -2274,7 +2284,7 @@ public final class Service {
     if verdict.state == .readyForReview, let ready = e.facts.readySince { out.since = ready }
     if s.kind == .work && s.docket == nil {
       out.board = BoardColumn.place(
-        state: verdict.state, setAside: verdict.acknowledged || verdict.snoozed, stateSince: out.since,
+        state: verdict.state, setAside: verdict.setAside, stateSince: out.since,
         waits: s.waits ?? [],
         facts: e.facts, created: s.created)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: e.facts.pr, branch: e.branch) }

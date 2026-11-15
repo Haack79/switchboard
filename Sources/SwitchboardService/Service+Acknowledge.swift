@@ -4,14 +4,10 @@ import SwitchboardCore
 extension Service {
   /// The `ack` request, which marks the Inbox item of `session` as seen, or
   /// with `undo` puts it back. It changes nothing else about the session.
-  /// `caller` is the asking session's id. A session can't acknowledge itself,
-  /// because it could then hide its own question from the user.
+  /// `caller` is the asking session's id, which `lookupOther` refuses.
   func acknowledgeRequest(_ args: JSON) throws -> JSON {
-    let id = try lookup(args)
+    let id = try lookupOther(args, refusing: "acknowledge")
     let e = entries[id]!
-    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
-      throw APIError("\(e.session.name) can't acknowledge itself out of the Inbox")
-    }
     let now = nowMs()
     let verdict = Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState)
     if args["undo"]?.bool == true {

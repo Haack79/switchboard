@@ -5,7 +5,7 @@ extension SessionSummary {
   /// snooze holds it, and with the note of a snooze that ended.
   var reasonLine: String {
     var line = acknowledged == true ? "\(reason) (acknowledged)" : reason
-    if let until = snoozedUntil { line += " (snoozed until \(Wait.formatTime(until)))" }
+    if let until = snoozedUntil { line += " (\(Snooze.label(until: until)))" }
     if let note = snoozeNote { line += " (\(note))" }
     return line
   }

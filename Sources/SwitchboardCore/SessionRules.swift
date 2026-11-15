@@ -9,6 +9,9 @@ extension SessionSummary {
   /// Whether the user can acknowledge the session's item, or undo that.
   public var canAcknowledge: Bool { acknowledged == true || AttentionState.inbox.contains(state) }
 
+  /// Whether sbd accepts a snooze of the session: a work session that isn't marked done.
+  public var canSnooze: Bool { kind == .work && !markedDone }
+
   /// False for a follow-up that hasn't started, a docket row, and a session whose worktree the cleanup removed.
   public var hasTerminals: Bool { runsClaude && cleanup?.state != .removed }
 }

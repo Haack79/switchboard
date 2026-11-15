@@ -1,11 +1,6 @@
 import SwiftUI
 import SwitchboardCore
 
-extension SessionSummary {
-  /// Whether sbd accepts a snooze of the session: a work session that isn't marked done.
-  var canSnooze: Bool { kind == .work && !markedDone }
-}
-
 /// The Snooze menu, with its presets and Pick a Time…, and Unsnooze while the
 /// session is snoozed. A session that `canSnooze` refuses gets no items.
 struct SnoozeMenuItems: View {
@@ -19,7 +14,7 @@ struct SnoozeMenuItems: View {
         let titles = SnoozePresets.times(now: nowMs(), zone: .current).map(\.title)
         ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
           Button(title) {
-            // SwiftUI can build a context menu long before the click, so the end comes from the clock at the click.
+            // SwiftUI can build a context menu long before the click. The end comes from the clock at the click.
             let until = SnoozePresets.times(now: nowMs(), zone: .current)[index].until
             model.snooze(session.id, until: Date(timeIntervalSince1970: Double(until) / 1000))
           }
