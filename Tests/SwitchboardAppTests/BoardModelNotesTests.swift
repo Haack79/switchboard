@@ -53,17 +53,17 @@ import Testing
   @Test func trashRequestResolvesTheShownTodos() {
     let s = session(mixed)
 
-    let request = BoardModel.deleteRequest(s, resolve: TodoDeletion(s).ids)
+    let request = BoardModel.queueRequest([s.id], scope: .done, resolve: TodoDeletion(s).ids)
 
     #expect(request["resolve"] == ["n3", "n4"])
   }
 
-  @Test func trashRequestKeepsTheWorktreeAndBranchFieldsBesideResolve() {
-    let request = BoardModel.deleteRequest(session(mixed), resolve: ["n3", "n4"])
+  @Test func trashRequestKeepsTheQueueFieldsBesideResolve() {
+    let request = BoardModel.queueRequest([session(mixed).id], scope: .done, resolve: ["n3", "n4"])
 
     #expect(
       request == [
-        "session": "s1", "worktree": true, "branch": true, "remote_branch": true, "resolve": ["n3", "n4"],
+        "scope": "done", "targets": ["s1"], "worktree": true, "remote_branch": true, "resolve": ["n3", "n4"],
       ])
   }
 
@@ -72,7 +72,7 @@ import Testing
       todoFixture("n3", "tell Alex in #flags"), todoFixture("n5", "added after the dialog opened"),
     ])
 
-    let request = BoardModel.deleteRequest(current, resolve: ["n3"])
+    let request = BoardModel.queueRequest([current.id], scope: .done, resolve: ["n3"])
 
     #expect(request["resolve"] == ["n3"])
   }
@@ -86,7 +86,7 @@ import Testing
   func trashRequestHasNoResolveWithoutAnOpenTodo(_ notes: [Note]) {
     let s = session(notes)
 
-    let request = BoardModel.deleteRequest(s, resolve: TodoDeletion(s).ids)
+    let request = BoardModel.queueRequest([s.id], scope: .done, resolve: TodoDeletion(s).ids)
 
     #expect(request["resolve"] == nil)
   }
@@ -96,7 +96,7 @@ import Testing
 
     let sent = await firstRequest { $0.deleteDone(s, resolve: ["n3", "n4"]) }
 
-    #expect(sent.op == "rm")
+    #expect(sent.op == "rm-queue")
     #expect(sent.args["resolve"] == ["n3", "n4"])
   }
 
@@ -143,7 +143,7 @@ import Testing
 
     let sent = await firstRequest { $0.deleteDone(s, resolve: []) }
 
-    #expect(sent.op == "rm")
+    #expect(sent.op == "rm-queue")
     #expect(sent.args["resolve"] == nil)
   }
 

@@ -165,9 +165,14 @@ public enum ParentDigest {
       out.append("\(state.title):")
       out += rows.map { "- \(sessionMention(name: $0.name, id: $0.id)): \(oneLine($0.reason, max: 120))" }
     }
-    let items = inbox.compactMap { s in s.triage.map { "- \(sessionMention(name: s.name, id: s.id)): \($0.title)" } }
+    let items = inboxLines(inbox)
     if !items.isEmpty { out += ["Inbox:"] + items }
     return out.joined(separator: "\n")
+  }
+
+  /// One line for each session in `inbox` that has an Inbox item, with the item's title.
+  public static func inboxLines(_ inbox: [SessionSummary]) -> [String] {
+    inbox.compactMap { s in s.triage.map { "- \(sessionMention(name: s.name, id: s.id)): \($0.title)" } }
   }
 
   /// What sbd answers a hook with to add `text` to the model's context.

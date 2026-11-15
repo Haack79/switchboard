@@ -30,6 +30,10 @@ struct SessionView: View {
       header
       PauseBanner(session: session)
       Divider()
+      if session.removal?.state == .failed {
+        FailedRemovalActions(session: session).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        Divider()
+      }
       CardList(cards: session.cards)
       GeometryReader { geometry in
         let fits = SidePanel.fits(width: geometry.size.width, beside: SessionView.terminalsMinWidth(session))

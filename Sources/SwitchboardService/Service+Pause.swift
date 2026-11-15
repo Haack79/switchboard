@@ -269,11 +269,13 @@ extension Service {
   /// Ends the session's pause and sends the resume message ahead of the held messages. `outcome` says why it
   /// resumes, and `message` replaces the pause's text. `by` is nil when sbd resumes the session on its own. A host
   /// that sbd can't read keeps the pause. A folder that is gone ends the pause, then throws the folder's error
-  /// before anything is sent, so a pause can always be cleared.
+  /// before anything is sent, so a gone folder never keeps a pause. A session that is being deleted keeps its pause,
+  /// so a met condition resumes it after an Undo.
   func unpause(
     _ id: String, outcome: String?, message: String?, trigger: LaunchTrigger, by: Author?, from: String?
   ) throws {
     guard let session = entries[id]?.session, let pause = session.pause else { throw APIError("\(id) isn't paused") }
+    if let refusal = beingDeletedRefusal(id) { throw refusal }
     try requireRead(id)
     var folderGone: Error?
     do {

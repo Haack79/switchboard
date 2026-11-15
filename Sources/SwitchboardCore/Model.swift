@@ -121,6 +121,8 @@ public struct Session: Codable, Equatable, Sendable {
   public var mcpScoped: Bool?
   /// Set while the session is paused.
   public var pause: Pause?
+  /// Set while sbd's removal job holds the session, and after it failed.
+  public var removal: Removal?
   /// True for the operator, the one background Manager session. It also has
   /// `manager` set, so an older sbd treats it as a conversation.
   public var isOperator: Bool?
@@ -358,6 +360,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var pause: Pause?
   /// How many messages wait for the resume of a paused session, or nil when it isn't paused.
   public var heldMessages: Int?
+  /// The session's place in sbd's removal job, or nil when no removal is
+  /// queued, running, or failed.
+  public var removal: Removal?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,

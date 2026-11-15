@@ -552,6 +552,10 @@ public enum Attention {
   static func rules(
     _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState?
   ) -> Verdict {
+    // A failed removal comes first, because the sessions that Delete All takes are Done.
+    if let removal = session.removal, removal.state == .failed {
+      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"))
+    }
     if session.done { return Verdict(state: .done, reason: "marked done") }
     if let verdict = followupVerdict(session) { return verdict }
     if let verdict = docketVerdict(session, facts) { return verdict }

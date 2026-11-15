@@ -35,11 +35,12 @@ extension Service {
     "queued: \(liveCount(onHost: host)) of \(liveCap(onHost: host)) live\(host.map { " on \($0)" } ?? "")"
   }
 
-  /// The session, when its folder exists, its claude is stopped, it isn't paused, and no `rm` is removing it.
-  /// Every start of claude calls it, so a start that misses the pause check of its own still refuses.
+  /// The session, when its folder exists, its claude is stopped, it isn't paused, no `rm` is removing it, and
+  /// the removal job doesn't hold it. Every start of claude calls it, so a start that misses the pause check of
+  /// its own still refuses.
   func requireStartable(_ id: String) throws -> Session {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
-    guard !removing.contains(id) else { throw APIError("\(id) is being removed") }
+    if let refusal = beingDeletedRefusal(id) { throw refusal }
     if let blocker = Pause.blocker(session) {
       throw APIError("\(id) is \(session.pause?.line ?? blocker). Resume it with: sb resume \(id)")
     }
@@ -107,6 +108,7 @@ extension Service {
     let queued = entries.values.filter {
       $0.session.host == host && claudeState($0.session.id) != .unknown && !removing.contains($0.session.id)
         && Pause.blocker($0.session) == nil
+        && $0.session.removal?.holdsSession != true
     }.compactMap(liveStart)
     return LivePlan.make(
       cap: liveCap(onHost: host),

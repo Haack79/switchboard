@@ -103,17 +103,19 @@ extension Service {
   /// `resolving` names exactly the session's open to-dos, and it refuses the
   /// operator while it has an open wait or report. It records each of
   /// them in `resolved_todos` in the same transaction as the delete. A
-  /// failed delete leaves them open. The same transaction records the
-  /// session's name in `removed_sessions`, and `removedNames` gets it only
-  /// after the delete commits. For a session on a host, the same
-  /// transaction records it in `removed_host_sessions`, so the spool cut may
-  /// remove its leftover lines. The same transaction saves the session's
-  /// artifact group with the session's artifacts kept on it, and `groups`
-  /// gets that record only after the delete commits. It runs on the state
-  /// queue.
+  /// failed delete leaves them open. It refuses a session whose worktree
+  /// sits in the trash unchecked, as `trashRefusal` says. The same
+  /// transaction records the session's name in `removed_sessions`, and
+  /// `removedNames` gets it only after the delete commits. For a session on
+  /// a host, the same transaction records it in `removed_host_sessions`, so
+  /// the spool cut may remove its leftover lines. The same transaction saves
+  /// the session's artifact group with the session's artifacts kept on it,
+  /// and `groups` gets that record only after the delete commits. It runs on
+  /// the state queue.
   func forgetSession(_ id: String, resolving: Set<String>) throws {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     try refuseOperatorRemoval(id)
+    if let refusal = trashRefusal(id) { throw refusal }
     // Only a merged PR leaves marks. Other removals skip the summary.
     let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil
     let record = try removal(id, resolving: resolving)

@@ -70,6 +70,9 @@ struct SwitchboardApp: App {
         Group {
           Button("Search Sessions…") { model.showingSearch = true }
             .keyboardShortcut(NavShortcuts.searchSessions)
+          Button("Ask Switchboard…") { model.openQuickAsk() }
+            .keyboardShortcut(NavShortcuts.quickAsk)
+            .disabled(model.presentingSheet)
           Button("Next Session") { model.selectAdjacentSession(by: 1) }
             .keyboardShortcut(NavShortcuts.nextSession)
           Button("Previous Session") { model.selectAdjacentSession(by: -1) }
@@ -94,26 +97,30 @@ struct SwitchboardApp: App {
         }
         .disabled(model.presentingSheet)
         Divider()
-        Button("Stop Claude") { model.selection.map(model.stop) }
-          .keyboardShortcut(".", modifiers: [.command])
-          .disabled(model.selected?.live != true)
-        Button("Resume Claude") { model.selection.map(model.resume) }
-          .keyboardShortcut("r", modifiers: [.command, .shift])
-          .disabled(model.selected == nil || model.selected?.live == true || model.selected?.runsClaude == false)
-        Button(model.selected?.shellClosed == true ? "Open Shell" : "Close Shell") {
-          if let s = model.selected { model.setShellOpen(s.id, s.shellClosed == true) }
+        // The items act on `selection`, which the detail pane does not show during a multi-selection.
+        Group {
+          Button("Stop Claude") { model.selection.map(model.stop) }
+            .keyboardShortcut(".", modifiers: [.command])
+            .disabled(model.selected?.live != true)
+          Button("Resume Claude") { model.selection.map(model.resume) }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(model.selected == nil || model.selected?.live == true || model.selected?.runsClaude == false)
+          Button(model.selected?.shellClosed == true ? "Open Shell" : "Close Shell") {
+            if let s = model.selected { model.setShellOpen(s.id, s.shellClosed == true) }
+          }
+          .disabled(model.selected?.hasTerminals != true)
+          Button(model.selected?.markedDone == true ? "Mark Not Done" : "Mark Done") {
+            if let s = model.selected { model.setDone(s.id, !s.markedDone) }
+          }
+          .keyboardShortcut("d", modifiers: [.command, .shift])
+          .disabled(model.selected == nil)
+          Button(acknowledgeTarget?.acknowledgeTitle ?? "Acknowledge") {
+            if let s = model.acknowledgeTarget { model.acknowledge(s.id, undo: s.acknowledged == true) }
+          }
+          .keyboardShortcut("a", modifiers: [.command, .shift])
+          .disabled(acknowledgeTarget?.canAcknowledge != true)
         }
-        .disabled(model.selected?.hasTerminals != true)
-        Button(model.selected?.markedDone == true ? "Mark Not Done" : "Mark Done") {
-          if let s = model.selected { model.setDone(s.id, !s.markedDone) }
-        }
-        .keyboardShortcut("d", modifiers: [.command, .shift])
-        .disabled(model.selected == nil)
-        Button(acknowledgeTarget?.acknowledgeTitle ?? "Acknowledge") {
-          if let s = model.acknowledgeTarget { model.acknowledge(s.id, undo: s.acknowledged == true) }
-        }
-        .keyboardShortcut("a", modifiers: [.command, .shift])
-        .disabled(acknowledgeTarget?.canAcknowledge != true)
+        .disabled(model.showsMultiSelection)
       }
     }
 

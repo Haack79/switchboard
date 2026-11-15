@@ -22,6 +22,9 @@ enum NavShortcuts {
   /// Session > Message Claude. It stays out of `all`, because it moves focus into a field that `bin/test-gui shell`
   /// does not expect.
   static let messageField = KeyboardShortcut("e", modifiers: [.command, .shift])
+  /// Session > Ask Switchboard. It stays out of `all`, because it opens a sheet that `bin/test-gui shell` does not
+  /// expect.
+  static let quickAsk = KeyboardShortcut("k", modifiers: [.command, .shift])
 
   /// `bin/test-gui shell` sends these in order. Search Sessions is last, because it opens a sheet.
   static let all = [
