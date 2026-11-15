@@ -15,8 +15,6 @@ struct QuickAskState: Equatable {
     }
   }
 
-  /// The text in the field.
-  var question = ""
   /// The question that the running ask or the shown answer belongs to.
   var asked: String?
   var phase = Phase.editing
@@ -27,10 +25,10 @@ extension BoardModel {
     if quickAsk == nil { quickAsk = QuickAskState() }
   }
 
-  /// Asks the question in the field. An ask that is still running is cancelled first.
-  func submitQuickAsk() {
+  /// Asks the question. An ask that is still running is cancelled first.
+  func submitQuickAsk(_ text: String) {
     guard var state = quickAsk else { return }
-    let question = state.question.trimmingCharacters(in: .whitespacesAndNewlines)
+    let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !question.isEmpty else { return }
     quickAskCancel?.cancel()
     let cancel = CallCancel()

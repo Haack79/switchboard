@@ -6,6 +6,9 @@ import SwitchboardCore
 struct QuickAskView: View {
   @EnvironmentObject var model: BoardModel
   @FocusState private var fieldFocused: Bool
+  // The text stays in the view. A @Published copy on BoardModel would redraw every view that observes the model on
+  // each keystroke.
+  @State private var question = ""
 
   var body: some View {
     let state = model.quickAsk ?? QuickAskState()
@@ -34,16 +37,13 @@ struct QuickAskView: View {
   private var field: some View {
     HStack(spacing: 8) {
       Image(systemName: "questionmark.bubble").foregroundStyle(.secondary)
-      TextField(
-        "Ask Switchboard",
-        text: Binding(get: { model.quickAsk?.question ?? "" }, set: { model.quickAsk?.question = $0 })
-      )
-      .textFieldStyle(.plain)
-      .font(.title3)
-      .focused($fieldFocused)
-      .accessibilityLabel("Ask Switchboard")
-      // An input method that is composing keeps Return. onSubmit only fires once it commits.
-      .onSubmit { model.submitQuickAsk() }
+      TextField("Ask Switchboard", text: $question)
+        .textFieldStyle(.plain)
+        .font(.title3)
+        .focused($fieldFocused)
+        .accessibilityLabel("Ask Switchboard")
+        // An input method that is composing keeps Return. onSubmit only fires once it commits.
+        .onSubmit { model.submitQuickAsk(question) }
     }
     .padding(12)
   }
@@ -81,6 +81,7 @@ struct QuickAskView: View {
         .foregroundStyle(.secondary)
       Spacer()
       Button("Close") { model.closeQuickAsk() }
+        .keyboardShortcut(.cancelAction)
       Button("Continue as Chat") { model.continueQuickAskAsChat() }
         .disabled(state.asked == nil)
     }

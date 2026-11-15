@@ -64,6 +64,15 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     #expect(output == "from the caller")
   }
 
+  /// Process raises an exception that Swift can't catch for a NUL, which would end sbd.
+  @Test func refusesANulInAnArgumentOrTheEnvironment() throws {
+    let folder = try scratchFolder()
+
+    #expect(throws: APIError.self) { try run("echo a\u{0}b", folder: folder) }
+    #expect(throws: APIError.self) { try run("echo hi", env: ["X": "a\u{0}b"], folder: folder) }
+    #expect(throws: APIError.self) { try run("echo hi", env: ["X\u{0}Y": "v"], folder: folder) }
+  }
+
   @Test func aNonZeroExitThrowsWithTheStatusAndTheOutput() throws {
     let folder = try scratchFolder()
 

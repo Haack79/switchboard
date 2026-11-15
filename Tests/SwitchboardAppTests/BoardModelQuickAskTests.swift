@@ -87,26 +87,23 @@ private func workSession(_ id: String) -> SessionSummary {
 /// and Continue as chat starts a Manager conversation.
 @MainActor
 @Suite struct BoardModelQuickAskTests {
-  /// A model whose `ask` is the stub and whose `send` records requests, with the panel open and the question typed.
-  private func model(_ stub: AskStub, recorder: SendRecorder = SendRecorder(), question: String = "what needs me?")
-    -> BoardModel
-  {
+  /// A model whose `ask` is the stub and whose `send` records requests, with the panel open.
+  private func model(_ stub: AskStub, recorder: SendRecorder = SendRecorder()) -> BoardModel {
     let model = offlineModel()
     model.ask = stub.call
     model.send = recorder.send
     model.openQuickAsk()
-    model.quickAsk?.question = question
     return model
   }
 
   // MARK: Open
 
-  @Test func openShowsAnEmptyQuestionToEdit() {
+  @Test func openStartsEditingWithNothingAsked() {
     let model = offlineModel()
 
     model.openQuickAsk()
 
-    #expect(model.quickAsk?.question == "")
+    #expect(model.quickAsk?.asked == nil)
     #expect(model.quickAsk?.phase == .editing)
   }
 
@@ -137,9 +134,9 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test(arguments: ["", "   ", "\n\t"])
   func anEmptyQuestionDoesNotAsk(_ question: String) async {
     let stub = AskStub()
-    let model = model(stub, question: question)
+    let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk(question)
     await pause()
 
     #expect(stub.questions.isEmpty)
@@ -148,9 +145,9 @@ private func workSession(_ id: String) -> SessionSummary {
 
   @Test func submitAsksOnceWithTheTrimmedQuestion() async {
     let stub = AskStub()
-    let model = model(stub, question: "  what needs me?\n")
+    let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk("  what needs me?\n")
     await settle { model.quickAsk?.phase != .asking && model.quickAsk?.phase != .editing }
 
     #expect(stub.questions == ["what needs me?"])
@@ -160,7 +157,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(answer: { _ in answered("Two sessions need you.") })
     let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { model.quickAsk?.phase == .answered("Two sessions need you.") }
 
     #expect(model.quickAsk?.phase == .answered("Two sessions need you."))
@@ -171,7 +168,7 @@ private func workSession(_ id: String) -> SessionSummary {
     defer { stub.releaseAll() }
     let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.questions.count == 1 }
 
     #expect(model.quickAsk?.phase == .asking)
@@ -181,7 +178,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(answer: { _ in throw Refusal(description: "claude exited with status 1") })
     let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle {
       if case .failed = model.quickAsk?.phase { return true }
       return false
@@ -194,24 +191,23 @@ private func workSession(_ id: String) -> SessionSummary {
     #expect(text.contains("claude exited with status 1"))
   }
 
-  @Test func submitKeepsTheQuestion() async {
+  @Test func submitRecordsTheTrimmedQuestionAsAsked() async {
     let stub = AskStub()
     let model = model(stub)
 
-    model.submitQuickAsk()
+    model.submitQuickAsk("  what needs me?\n")
     await settle { model.quickAsk?.phase == .answered("Answer to what needs me?") }
 
-    #expect(model.quickAsk?.question.trimmingCharacters(in: .whitespaces) == "what needs me?")
+    #expect(model.quickAsk?.asked == "what needs me?")
   }
 
   @Test func anEditedQuestionAfterAnAnswerAsksAgain() async {
     let stub = AskStub()
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { model.quickAsk?.phase == .answered("Answer to what needs me?") }
 
-    model.quickAsk?.question = "which account is active?"
-    model.submitQuickAsk()
+    model.submitQuickAsk("which account is active?")
     await settle { model.quickAsk?.phase == .answered("Answer to which account is active?") }
 
     #expect(stub.questions == ["what needs me?", "which account is active?"])
@@ -232,7 +228,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(holds: { _ in true })
     defer { stub.releaseAll() }
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     let token = try #require(stub.tokens.first)
 
@@ -256,7 +252,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(holds: { _ in true })
     defer { stub.releaseAll() }
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     model.closeQuickAsk()
 
@@ -271,7 +267,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(holds: { _ in true })
     defer { stub.releaseAll() }
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     model.closeQuickAsk()
     model.openQuickAsk()
@@ -281,7 +277,7 @@ private func workSession(_ id: String) -> SessionSummary {
     await pause()
 
     #expect(model.quickAsk?.phase == .editing)
-    #expect(model.quickAsk?.question == "")
+    #expect(model.quickAsk?.asked == nil)
   }
 
   /// The ask queue runs one call at a time, so the first call's late answer reaches the main actor before the
@@ -289,13 +285,12 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test func anAnswerThatArrivesAfterCloseAndReopenLosesToTheNewAsk() async {
     let stub = AskStub(holds: { $0 == 1 })
     defer { stub.releaseAll() }
-    let model = model(stub, question: "first")
-    model.submitQuickAsk()
+    let model = model(stub)
+    model.submitQuickAsk("first")
     await settle { stub.tokens.count == 1 }
     model.closeQuickAsk()
     model.openQuickAsk()
-    model.quickAsk?.question = "second"
-    model.submitQuickAsk()
+    model.submitQuickAsk("second")
 
     stub.releaseOne()
     await settle { model.quickAsk?.phase == .answered("Answer to second") }
@@ -308,13 +303,12 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test func aSecondSubmitDuringARunCancelsTheFirst() async throws {
     let stub = AskStub(holds: { $0 == 1 })
     defer { stub.releaseAll() }
-    let model = model(stub, question: "first")
-    model.submitQuickAsk()
+    let model = model(stub)
+    model.submitQuickAsk("first")
     await settle { stub.tokens.count == 1 }
     let first = try #require(stub.tokens.first)
 
-    model.quickAsk?.question = "second"
-    model.submitQuickAsk()
+    model.submitQuickAsk("second")
 
     #expect(first.isCancelled)
   }
@@ -322,11 +316,10 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test func aSecondSubmitDuringARunShowsOnlyTheSecondAnswer() async {
     let stub = AskStub(holds: { $0 == 1 })
     defer { stub.releaseAll() }
-    let model = model(stub, question: "first")
-    model.submitQuickAsk()
+    let model = model(stub)
+    model.submitQuickAsk("first")
     await settle { stub.tokens.count == 1 }
-    model.quickAsk?.question = "second"
-    model.submitQuickAsk()
+    model.submitQuickAsk("second")
 
     stub.releaseOne()
     await settle { stub.returned == 2 }
@@ -343,7 +336,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(answer: { _ in answered("Two sessions need you.") })
     let recorder = SendRecorder()
     let model = model(stub, recorder: recorder)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { model.quickAsk?.phase == .answered("Two sessions need you.") }
 
     model.continueQuickAskAsChat()
@@ -359,7 +352,7 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test func continueSelectsTheNewConversation() async {
     let stub = AskStub()
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { model.quickAsk?.phase == .answered("Answer to what needs me?") }
 
     model.continueQuickAskAsChat()
@@ -371,7 +364,7 @@ private func workSession(_ id: String) -> SessionSummary {
   @Test func continueClosesThePanel() async {
     let stub = AskStub()
     let model = model(stub)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { model.quickAsk?.phase == .answered("Answer to what needs me?") }
 
     model.continueQuickAskAsChat()
@@ -385,7 +378,7 @@ private func workSession(_ id: String) -> SessionSummary {
     defer { stub.releaseAll() }
     let recorder = SendRecorder()
     let model = model(stub, recorder: recorder)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     let token = try #require(stub.tokens.first)
 
@@ -404,7 +397,7 @@ private func workSession(_ id: String) -> SessionSummary {
     defer { stub.releaseAll() }
     let recorder = SendRecorder()
     let model = model(stub, recorder: recorder)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     model.continueQuickAskAsChat()
     await settle { !recorder.managerRequests.isEmpty }
@@ -420,7 +413,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let stub = AskStub(answer: { _ in throw Refusal(description: "timed out after 90 s") })
     let recorder = SendRecorder()
     let model = model(stub, recorder: recorder)
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle {
       if case .failed = model.quickAsk?.phase { return true }
       return false
@@ -451,8 +444,7 @@ private func workSession(_ id: String) -> SessionSummary {
     let model = appliedModel([workSession("s1")])
     model.ask = stub.call
     model.openQuickAsk()
-    model.quickAsk?.question = "what needs me?"
-    model.submitQuickAsk()
+    model.submitQuickAsk("what needs me?")
     await settle { stub.tokens.count == 1 }
     let token = try #require(stub.tokens.first)
 

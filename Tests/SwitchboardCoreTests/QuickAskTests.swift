@@ -197,9 +197,10 @@ extension QuickAskTests {
       #expect(QuickAsk.system.contains("no tools"))
     }
 
-    @Test func systemPromptNamesTheStateTagAndContinueAsChat() {
+    @Test func systemPromptNamesTheStateTagAndBothWaysToContinue() {
       #expect(QuickAsk.system.contains("<switchboard-state>"))
-      #expect(QuickAsk.system.contains("Continue as chat"))
+      #expect(QuickAsk.system.contains("\"Continue as Chat\""))
+      #expect(QuickAsk.system.contains("sb manager new"))
     }
   }
 }
@@ -529,6 +530,27 @@ extension QuickAskTests {
 
     @Test func theQuestionSurvivesTheCut() throws {
       #expect(try afterBlock(Self.text).contains("what needs me?"))
+    }
+
+    /// 50 Needs you and 400 Working sessions with no Done or Stale ones, so the cut reaches the other states.
+    @Test func workingSessionsGoBeforeNeedsYouOnes() throws {
+      let states: [(AttentionState, Int)] = [(.needsYou, 50), (.working, 400)]
+      var sessions: [SessionSummary] = []
+      for (state, count) in states {
+        for i in 0..<count {
+          sessions.append(
+            session(
+              "\(state.rawValue)-\(i)", name: "\(state.rawValue)-row-\(i)", state: state,
+              reason: String(repeating: "r", count: 300), reply: String(repeating: "p", count: 400)))
+        }
+      }
+      let block = String(try stateBlock(input(sessions: sessions)))
+      let shown = { (state: AttentionState) in
+        sessions.filter { $0.state == state && block.contains(sessionMention(name: $0.name, id: $0.id)) }
+      }
+
+      #expect(shown(.needsYou).count == 50)
+      #expect(shown(.working).count < 400)
     }
   }
 }

@@ -199,6 +199,17 @@ private final class BackgroundAsk: Sendable {
     #expect(input[close.upperBound...].contains("what needs me?"))
   }
 
+  @Test func theRunUsesTheActiveAccount() throws {
+    let sbd = try Instance(
+      accounts: ["A", "B"], inheriting: .unset, config: ["triage": ["systemPrompt": "", "enabled": false]])
+    try sbd.sb("account", "use", "B")
+
+    try sbd.sb("ask", "--json", "which account is active?")
+
+    let account = try String(contentsOfFile: "\(sbd.home.path)/quick-ask-account", encoding: .utf8)
+    #expect(account == sbd.account("B"))
+  }
+
   // MARK: Refusals
 
   /// A refusal starts no run, so one sbd serves every refused question.

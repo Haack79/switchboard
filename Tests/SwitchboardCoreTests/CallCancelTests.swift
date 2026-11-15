@@ -162,7 +162,8 @@ private func readRequest(_ fd: Int32) throws -> Request {
   }
 
   /// The call closes its socket when it ends, and the next socket that opens can take the same descriptor number.
-  /// A cancel after the call must not shut down that other socket.
+  /// A cancel after the call must not shut down that other socket. Other tests open descriptors in parallel and can
+  /// take the freed number first, so the test opens many pairs to make one of them likely to get it.
   @Test func aCancelAfterTheCallEndedLeavesALaterSocketOnTheSameDescriptorWorking() throws {
     try withListener { listener, path in
       let token = CallCancel()
@@ -172,15 +173,21 @@ private func readRequest(_ fd: Int32) throws -> Request {
       _ = try readRequest(server)
       try UnixSocket.write(server, successLine("null"))
       try #require(call.wait(5) == .value(.null))
-      var pair: [Int32] = [0, 0]
-      try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
-      defer { pair.forEach { close($0) } }
+      var pairs: [[Int32]] = []
+      defer { pairs.joined().forEach { close($0) } }
+      for _ in 0..<32 {
+        var pair: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
+        pairs.append(pair)
+      }
 
       token.cancel()
 
-      try UnixSocket.write(pair[0], Data("still open\n".utf8))
-      var reader = UnixSocket.LineReader(fd: pair[1])
-      #expect(try reader.next() == Data("still open".utf8))
+      for pair in pairs {
+        try UnixSocket.write(pair[0], Data("still open\n".utf8))
+        var reader = UnixSocket.LineReader(fd: pair[1])
+        #expect(try reader.next() == Data("still open".utf8))
+      }
     }
   }
 
