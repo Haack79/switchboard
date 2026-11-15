@@ -103,7 +103,24 @@ let usage = """
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
     stop <session>                stop the session's claude
-    resume <session> [--prompt P] resume the session's claude
+    pause <session|group> [--until WHEN] [--reason R] [--message M]
+                                  stop the session's claude and keep it stopped.
+                                  Nothing starts it or types into it, and every
+                                  message waits until the resume. --message sets
+                                  the text that the resume sends. --until resumes
+                                  it on its own at a time (2h, 2026-11-15 09:00),
+                                  when a PR merges (#123, pr:owner/name#123, a PR
+                                  URL), or when another session reaches a state
+                                  (session:<name>[=<state>], Done by default).
+                                  A group pauses each session in it that has
+                                  started, isn't done, and isn't paused
+    resume <session|group> [--message M]
+                                  resume the session's claude. A paused session
+                                  gets M, else the pause's message, else a note
+                                  that it was paused, then the messages that
+                                  waited. --prompt is another name for --message.
+                                  A group resumes each paused session in it
+    pause|resume --group G ...    name the group when a session has its name
     done <session>, undone <session>
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
@@ -441,6 +458,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--steps", "--for",
+      "--reason", "--message",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -572,6 +590,7 @@ func printSession(_ s: SessionSummary) {
   for a in (s.artifacts ?? []).newestFirst { print("  artifact: \(a.title)  \(a.url)  (\(a.caption()))".printable) }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
+  printPause(s)
   printWaitsAndNotes(s)
   printSchedules(s)
 }
@@ -863,8 +882,10 @@ case "open":
   }
 case "stop":
   sessionCommand("stop", a)
+case "pause":
+  targetCommand("pause", a, flags: ["until", "reason", "message"])
 case "resume":
-  sessionCommand("resume", a, extra: a.values["--prompt"].map { ["prompt": .string($0)] } ?? [:])
+  targetCommand("resume", a, flags: ["message", "prompt"])
 case "done":
   sessionCommand("done", a, extra: ["done": .bool(true)])
 case "undone":

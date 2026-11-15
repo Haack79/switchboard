@@ -23,8 +23,13 @@ extension Service {
       guard let outcome = args["outcome"]?.string, !outcome.isEmpty else {
         throw APIError("resolve-wait needs an outcome that says what happened")
       }
-      let (holder, wait) = try openWait(id, args["wait"]?.string)
-      try resolve(holder, wait, outcome: outcome)
+      let waitId = args["wait"]?.string
+      if let until = pauseCondition(id, waitId) {
+        try resolve(id, until, outcome: outcome)
+      } else {
+        let (holder, wait) = try openWait(id, waitId)
+        try resolve(holder, wait, outcome: outcome)
+      }
     default:
       throw APIError("unknown request \(op)")
     }
@@ -42,10 +47,7 @@ extension Service {
     try refuseNotStarted(session)
     let request = try JSONCoding.convert(args, to: WaitRequest.self)
     // The checks run against `named`, so a conversation still can't wait on itself.
-    var wait = try request.makeWait(id: "", waiter: named, now: nowMs()) { ref in
-      let other = try lookup(["session": .string(ref)])
-      return Wait.SessionTarget(id: other, name: entries[other]!.session.name)
-    }
+    var wait = try request.makeWait(id: "", waiter: named, now: nowMs(), findSession: waitTarget)
     if wait.kind == .ci && wait.pr == nil {
       wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
     }
@@ -56,7 +58,7 @@ extension Service {
       wait.handedFrom = Wait.SessionTarget(id: named, name: session.name)
     }
     let open = entries[waiter]!.session.waits ?? []
-    wait.id = shortId("w", taken: open.map(\.id))
+    wait.id = shortId("w", taken: waitIds(waiter))
     wait = config.recheck.stamped(wait)
     try update(waiter) { $0.waits = open + [wait] }
     record(waiter, "wait", try waitEventData(wait))
@@ -114,7 +116,7 @@ extension Service {
   /// and they don't resume it.
   private func waitsToResolve() -> [(session: Session, wait: Wait)] {
     entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }.flatMap { s in
-      (s.waits ?? []).map { (session: s, wait: $0) }
+      s.resolvableWaits.map { (session: s, wait: $0) }
     }
   }
 
@@ -144,6 +146,7 @@ extension Service {
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
   private func resolve(_ id: String, _ wait: Wait, outcome: String) throws {
+    if try resumeOnCondition(id, wait, outcome: outcome) { return }
     if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), byUser: false, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
     record(id, "wait-resolved", try waitEventData(wait, ["outcome": .string(outcome)]))
@@ -156,10 +159,11 @@ extension Service {
     let open = entries[id]?.session.waits ?? []
     if let waitId {
       if let wait = open.first(where: { $0.id == waitId }) { return (id, wait) }
-      guard let handed = handedOff(from: id), let wait = handed.waits.first(where: { $0.id == waitId }) else {
-        throw APIError("\(id) has no wait \(waitId)")
+      if let handed = handedOff(from: id), let wait = handed.waits.first(where: { $0.id == waitId }) {
+        return (handed.holder, wait)
       }
-      return (handed.holder, wait)
+      try refuseCondition(id, waitId)
+      throw APIError("\(id) has no wait \(waitId)")
     }
     guard open.count == 1 else {
       throw APIError(open.isEmpty ? "\(id) has no open wait" : "\(id) has \(open.count) waits, so name one")

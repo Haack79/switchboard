@@ -1244,3 +1244,63 @@ extension BoardColumnTests {
     }
   }
 }
+
+// MARK: A paused card
+
+/// The placement of a paused session, which the verdict puts in Waiting, with its PR read at t=10.
+private func pausedPlace(_ pause: Pause, pr: PullRequest? = nil, waits: [Wait] = []) throws -> BoardPlacement {
+  let events = try pr.map { [try prEvent(10, $0)] } ?? []
+  return BoardColumn.place(
+    state: .waiting, stateSince: pause.since, waits: waits, facts: facts(events), created: 0, pause: pause)
+}
+
+extension BoardColumnTests {
+  @Suite struct PausedCard {
+    @Test func aCardThatYouPausedIsWaitingOnYouWithThePauseLine() throws {
+      let p = try pausedPlace(pauseOf(reason: "free CPU"))
+
+      #expect(p.column == .waiting)
+      #expect(p.line == "Paused by you: free CPU")
+      #expect(p.holder == .you)
+    }
+
+    @Test(arguments: [managerPauser, flagsChatPauser, workPauser, nil] as [Pause.Pauser?])
+    func aCardThatClaudePausedIsHeldByASession(_ from: Pause.Pauser?) throws {
+      let pause = pauseOf(by: .claude, from: from)
+
+      let p = try pausedPlace(pause)
+
+      #expect(p.column == .waiting)
+      #expect(p.line == pause.line)
+      #expect(p.holder == .session)
+    }
+
+    @Test(arguments: Wait.Kind.allCases)
+    func thePauseLineReplacesTheLineOfAnOpenWait(_ kind: Wait.Kind) throws {
+      let p = try pausedPlace(pauseOf(by: .claude, from: managerPauser), waits: [wait(kind)])
+
+      #expect(p.line == "Paused by Manager")
+      #expect(p.holder == .session)
+    }
+
+    @Test(arguments: [
+      ("a conflict", samplePR(mergeable: .conflicting)), ("failed checks", samplePR(checks: "FAILURE")),
+      ("running checks", samplePR(checks: "PENDING")), ("changes requested", changesRequestedPR()),
+    ])
+    func thePauseLineReplacesTheLineOfAnOpenPR(_ label: String, _ pr: PullRequest) throws {
+      let p = try pausedPlace(pauseOf(), pr: pr)
+
+      #expect(p.column == .waiting, "\(label)")
+      #expect(p.line == "Paused by you", "\(label)")
+      #expect(p.holder == .you, "\(label)")
+    }
+
+    @Test(arguments: [
+      ("approved", approvedPR(), BoardColumn.approved), ("awaiting review", awaitingReviewPR(), .inReview),
+      ("in Trunk's queue", approvedPR(queue: .testing), .merging), ("merged", samplePR(state: .merged), .done),
+    ])
+    func aPRColumnStillWins(_ label: String, _ pr: PullRequest, _ column: BoardColumn) throws {
+      #expect(try pausedPlace(pauseOf(), pr: pr).column == column, "\(label)")
+    }
+  }
+}

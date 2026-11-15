@@ -39,19 +39,22 @@ public enum BoardColumn: String, Codable, CaseIterable, Sendable {
   /// `Attention.shown` moved an Inbox verdict to Waiting because the user set
   /// it aside. It decides only a Waiting card's holder. `stateSince` is when the session
   /// entered `state`. A session that no `pr` event has placed counts its PR
-  /// column from `created`.
+  /// column from `created`. A paused card that lands in Waiting shows the pause's line.
+  /// It waits on you when you paused it.
   public static func place(
     state: AttentionState, setAside: Bool = false, stateSince: Int64, waits: [Wait], facts: SessionFacts,
-    created: Int64
+    created: Int64, pause: Pause? = nil
   ) -> BoardPlacement {
     var placement = column(
-      state: state, setAside: setAside, stateSince: stateSince, waits: waits, facts: facts, created: created)
+      state: state, setAside: setAside, stateSince: stateSince, waits: waits, facts: facts, created: created,
+      pause: pause)
     placement.back = facts.boardBack
     return placement
   }
 
   private static func column(
-    state: AttentionState, setAside: Bool, stateSince: Int64, waits: [Wait], facts: SessionFacts, created: Int64
+    state: AttentionState, setAside: Bool, stateSince: Int64, waits: [Wait], facts: SessionFacts, created: Int64,
+    pause: Pause?
   ) -> BoardPlacement {
     let pr = facts.pr
     let column = prColumn(pr)
@@ -72,6 +75,10 @@ public enum BoardColumn: String, Codable, CaseIterable, Sendable {
       let line =
         "waits on \(names.isEmpty ? "a review" : Attention.names(names))" + (pr.checksRunning ? ", CI running" : "")
       return BoardPlacement(column: .inReview, since: prSince, line: line, reviewers: names.isEmpty ? nil : names)
+    }
+    if let pause {
+      return BoardPlacement(
+        column: .waiting, since: stateSince, line: pause.line, holder: pause.by == .you ? .you : .session)
     }
     let oldest = waits.min { $0.created < $1.created }
     let on = waitingOn(oldest, facts)
