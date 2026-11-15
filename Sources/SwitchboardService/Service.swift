@@ -595,6 +595,8 @@ public final class Service {
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "manager-mcp-request":
+      return try openMCPRequest(args)
     case "operator-report":
       return try operatorReport(args)
     case "operator-reports":

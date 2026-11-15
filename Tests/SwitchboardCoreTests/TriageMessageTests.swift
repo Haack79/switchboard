@@ -192,9 +192,13 @@ private func longCommandTurn() -> [Event] {
   @Test func aGroupMessageCardPutsItsTargetsAndTextInDetails() throws {
     var f = facts(permissionTurn())
     var card = f.cards[0]
-    card.send = GroupMessage(
+    let group = GroupMessage(
       group: "g1", groupName: "inbox", text: "Rebase now.",
       targets: [GroupSend.Target(id: "s2", name: "alpha"), GroupSend.Target(id: "s3", name: "beta")], expires: 9)
+    card.kind = .send
+    card.tool = "send_group"
+    card.summary = group.summary
+    card.send = group
     f.cards = [card]
 
     let m = try #require(message(f))

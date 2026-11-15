@@ -22,7 +22,7 @@ import Testing
     }
   }
 
-  @Test(arguments: [Card.Kind.permission, .question, .trust])
+  @Test(arguments: [Card.Kind.permission, .question, .trust, .mcp])
   func aManagersBlockingCardGoesInTheInbox(_ kind: Card.Kind) throws {
     let model = model([try needsItem("m", manager: true, waitingOn: kind), needsItem("a")])
 
@@ -36,6 +36,22 @@ import Testing
     #expect(model.triage.isEmpty)
     #expect(model.needsUser.isEmpty)
     #expect(model.currentInboxItem == nil)
+  }
+
+  @Test func aManagersMCPCardCountsTowardTheBadge() throws {
+    let model = model([try needsItem("m", manager: true, waitingOn: .mcp)])
+
+    #expect(model.needsUser.map(\.id) == ["m"])
+  }
+
+  @Test(arguments: ["allow", "deny"]) func answeringAnMCPCardSendsAnswerWithTheBehavior(_ behavior: String) async throws
+  {
+    let card = try cardFixture(7, session: "m", kind: .mcp)
+
+    let request = await firstRequest { $0.answer(card, behavior: behavior) }
+
+    #expect(request.op == "answer")
+    #expect(request.args == ["session": "m", "card": 7, "behavior": .string(behavior)])
   }
 
   @Test func aManagersSendCardStaysOutOfTheInbox() throws {
