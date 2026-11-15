@@ -4,7 +4,7 @@ import Testing
 @testable import SwitchboardCore
 
 /// A listening socket in a new folder under /tmp, because a Unix socket path can't exceed 103 bytes.
-private func withListener(_ body: (_ listener: Int32, _ path: String) throws -> Void) throws {
+func withListener(_ body: (_ listener: Int32, _ path: String) throws -> Void) throws {
   var template = Array("/tmp/sbt.XXXXXX".utf8CString)
   guard let dir = mkdtemp(&template) else { throw APIError("mkdtemp failed") }
   let folder = String(cString: dir)
@@ -17,7 +17,7 @@ private func withListener(_ body: (_ listener: Int32, _ path: String) throws -> 
 
 /// Accepts one connection, as `Server` does. It throws when none arrives within the time, so a client that failed
 /// to connect fails the test instead of blocking it.
-private func acceptOne(_ listener: Int32, within seconds: Int32 = 10) throws -> Int32 {
+func acceptOne(_ listener: Int32, within seconds: Int32 = 10) throws -> Int32 {
   var waiting = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
   guard poll(&waiting, 1, seconds * 1000) == 1 else { throw APIError("no client connected") }
   let fd = accept(listener, nil, nil)

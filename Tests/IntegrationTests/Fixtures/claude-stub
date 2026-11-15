@@ -90,6 +90,18 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt that holds <switchboard-state> is the quick ask call.
+# It is checked first, because the snapshot can hold <rows> or <pr-body>. It
+# writes each argument with a NUL after it to $SB_HOME/quick-ask-args,
+# replacing that file, so a test can split the last call's arguments exactly.
+# It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one
+# line per call to $SB_HOME/quick-ask-calls.log, keeps the last prompt in
+# $SB_HOME/quick-ask-input.txt, and writes its pid to
+# $SB_HOME/quick-ask.pid. A prompt that holds FAIL-ASK makes it exit 1, and
+# SLOW-ASK makes it exec sleep 30, which keeps the pid. Otherwise it prints
+# $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
+# {"answer":"Nothing needs you."} when the file is missing, in the same
+# envelope.
 # `claude agents ...` prints $CLAUDE_CONFIG_DIR/agents.json, a fixture that
 # the test writes, or [] when it can't be read. It adds a row for each session
 # that is in the middle of an interrupt or a slow tool call, which are the
@@ -124,6 +136,21 @@
 args=("$@")
 if [ "${1-}" = -p ]; then
   input=$(cat)
+  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
+  if [[ $input == *"<switchboard-state>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/quick-ask-args"
+    printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/quick-ask-account"
+    echo "$$" >>"$SB_HOME/quick-ask-calls.log"
+    printf '%s' "$input" >"$SB_HOME/quick-ask-input.txt"
+    echo "$$" >"$SB_HOME/quick-ask.pid"
+    case $input in
+    *FAIL-ASK*) echo "ask failed" >&2 && exit 1 ;;
+    *SLOW-ASK*) exec sleep 30 ;;
+    esac
+    out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
+    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    exit 0
+  fi
   if [[ $input == *"<rows>"* ]]; then
     printf '%s\0' "${args[*]}" >>"$SB_HOME/plan-calls.log"
     printf '%s' "$input" >"$SB_HOME/plan-input.txt"
