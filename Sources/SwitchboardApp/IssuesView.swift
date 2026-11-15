@@ -135,7 +135,8 @@ private struct IssueRows: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(section.title), \(section.issues.count), \(collapsed ? "collapsed" : "expanded")")
+            .accessibilityLabel(
+              ListSectionHeader.spoken(title: section.title, count: section.issues.count, collapsed: collapsed))
             if !collapsed {
               ForEach(section.issues) { row in
                 IssueRow(row: row, current: row.id == current).id(row.id)

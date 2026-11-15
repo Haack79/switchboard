@@ -35,7 +35,8 @@ struct ListSectionHeader: View {
       if count > 0 { Text("\(count)").monospacedDigit() }
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(Self.spoken(title: title, count: count))
+    .accessibilityLabel(Self.spoken(title: title, count: count, collapsed: collapsed))
+    .accessibilityAddTraits(.isHeader)
     .font(.caption.bold())
     .foregroundStyle(.secondary)
     .padding(.horizontal, 12)
@@ -43,9 +44,13 @@ struct ListSectionHeader: View {
     .padding(.bottom, 4)
   }
 
-  /// What VoiceOver reads for the header: the title, then the count when it is not zero.
-  static func spoken(title: String, count: Int) -> String {
-    count > 0 ? "\(title), \(count)" : title
+  /// What VoiceOver reads for the header: the title, then the count when it is not zero, then whether a section that
+  /// collapses is collapsed or expanded.
+  static func spoken(title: String, count: Int, collapsed: Bool? = nil) -> String {
+    var parts = [title]
+    if count > 0 { parts.append("\(count)") }
+    if let collapsed { parts.append(collapsed ? "collapsed" : "expanded") }
+    return parts.joined(separator: ", ")
   }
 }
 
