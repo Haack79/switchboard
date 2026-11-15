@@ -87,10 +87,13 @@ extension BoardModel {
   /// terminal shows in place. Any other target is selected first, so its terminal shows.
   func focusTerminal() {
     guard let target = terminalTarget, showsClaudeTerminal(target) else { return }
-    let inPlace =
-      visibleView == .inbox && TriageDetail.pane(for: target, showingTerminal: showingTerminal) == .terminal
-    if !inPlace { selection = target.id }
+    if !inboxShowsTerminal(target) { selection = target.id }
     terminalFocus = target.id
+  }
+
+  /// Whether the Inbox shows `target`'s terminal in its right pane.
+  private func inboxShowsTerminal(_ target: SessionSummary) -> Bool {
+    visibleView == .inbox && TriageDetail.pane(for: target, showingTerminal: showingTerminal) == .terminal
   }
 
   /// Shows the current Inbox item's terminal in the Inbox's right pane and puts keyboard focus in it.
@@ -113,6 +116,44 @@ extension BoardModel {
   /// Clears the terminal focus request while it still names `id`.
   func releaseTerminalFocus(_ id: String) {
     if terminalFocus == id { terminalFocus = nil }
+  }
+
+  /// The session whose terminal view shows now, where ⇧⌘E reveals the Message Claude field. The Board and a
+  /// pane that shows a chat's messages or an Inbox summary have no terminal view.
+  var messageFieldTarget: SessionSummary? {
+    guard let target = terminalTarget, target.docket == nil, showsClaudeTerminal(target) else { return nil }
+    switch visibleView {
+    case nil: return target
+    case .inbox: return inboxShowsTerminal(target) ? target : nil
+    case .board, .issues: return nil
+    }
+  }
+
+  /// Shows the Message Claude field under the terminal of `id`, or of `messageFieldTarget`. With `focus`, it also
+  /// puts keyboard focus in the field.
+  func revealMessageField(_ id: String? = nil, focus: Bool = true) {
+    guard let id = id ?? messageFieldTarget?.id else { return }
+    revealedMessageField = id
+    if focus { messageFieldFocus = id }
+  }
+
+  /// Hides the session's Message Claude field and returns keyboard focus to its Claude terminal.
+  func hideMessageField(_ id: String) {
+    forgetMessageField(id)
+    // An error alone keeps the field showing.
+    if let session = summary(id) { messageDraft(for: session).error = nil }
+    terminalFocus = id
+  }
+
+  /// Clears the reveal and the focus request of the session's Message Claude field while they still name `id`.
+  func forgetMessageField(_ id: String) {
+    if revealedMessageField == id { revealedMessageField = nil }
+    releaseMessageFieldFocus(id)
+  }
+
+  /// Clears the field focus request while it still names `id`.
+  func releaseMessageFieldFocus(_ id: String) {
+    if messageFieldFocus == id { messageFieldFocus = nil }
   }
 
   /// A chat pane shows its terminal only while the Terminal toggle is on. A request for a hidden terminal would

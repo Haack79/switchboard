@@ -17,6 +17,8 @@ struct TerminalPane: NSViewRepresentable {
   /// Reads the blocks of the session's recent assistant messages for the copy button over quotes and code blocks. A pane
   /// without one shows no copy button.
   var loadBlockSources: BlockSourcesLoader? = nil
+  /// Runs on a key or a click aimed at this terminal, as `TerminalWake` decides. Pass it only while claude is stopped.
+  var wake: (() -> Void)? = nil
 
   func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
 
@@ -38,6 +40,7 @@ struct TerminalPane: NSViewRepresentable {
 
   func updateNSView(_ view: PaddedTerminalView, context: Context) {
     view.onFocus = onFocus
+    view.wake = wake
     view.focusWhenInWindow = takesFocus
     view.terminal.newlineOnShiftReturn = newlineOnShiftReturn
     view.showCopyButtons(loadBlockSources)
@@ -45,6 +48,7 @@ struct TerminalPane: NSViewRepresentable {
 
   static func dismantleNSView(_ view: PaddedTerminalView, coordinator: Coordinator) {
     view.showCopyButtons(nil)
+    view.stopWakeMonitor()
     view.terminal.terminate()
   }
 
@@ -93,9 +97,62 @@ final class PaddedTerminalView: NSView {
     didSet { focusIfAsked() }
   }
 
+  /// The monitor reads this when an event arrives, because `updateNSView` replaces it on every refresh. The monitor
+  /// runs only while this is set and the view is in a window.
+  var wake: (() -> Void)? {
+    didSet { updateWakeMonitor() }
+  }
+  private var wakeMonitor: Any?
+  /// Where a left click aimed at the terminal went down, in window coordinates.
+  private var clickStart: CGPoint?
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    updateWakeMonitor()
     focusIfAsked()
+  }
+
+  /// SwiftTerm's key and mouse handlers are not open to subclasses, so a local monitor sees the events first.
+  /// The monitor returns every event unchanged. The summary can still say stopped just after claude starts,
+  /// and swallowing then would eat real keys. tmux drops a key sent to the stopped pane.
+  private func updateWakeMonitor() {
+    guard wake != nil, window != nil else { return stopWakeMonitor() }
+    guard wakeMonitor == nil else { return }
+    wakeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) {
+      [weak self] event in
+      self?.wakeIfAimed(event)
+      return event
+    }
+  }
+
+  func stopWakeMonitor() {
+    wakeMonitor.map(NSEvent.removeMonitor)
+    wakeMonitor = nil
+    clickStart = nil
+  }
+
+  private func wakeIfAimed(_ event: NSEvent) {
+    guard let wake, let window, event.window === window else { return }
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    switch event.type {
+    case .keyDown:
+      if window.firstResponder === terminal && TerminalWake.wakes(key: modifiers) { wake() }
+    case .leftMouseDown:
+      clickStart = hitsTerminal(event.locationInWindow) ? event.locationInWindow : nil
+    case .leftMouseUp:
+      if let start = clickStart, TerminalWake.isClick(down: start, up: event.locationInWindow, modifiers: modifiers) {
+        wake()
+      }
+      clickStart = nil
+    default: break
+    }
+  }
+
+  /// A click on the copy button or the scroller hits that view instead, so it doesn't wake.
+  private func hitsTerminal(_ point: CGPoint) -> Bool {
+    // `hitTest` takes a point in the superview's coordinates.
+    guard let content = window?.contentView, let frame = content.superview else { return false }
+    return content.hitTest(frame.convert(point, from: nil)) === terminal
   }
 
   private(set) var copyOverlay: TerminalCopyOverlay?
