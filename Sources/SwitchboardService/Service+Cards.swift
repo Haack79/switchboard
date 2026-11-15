@@ -53,7 +53,8 @@ extension Service {
 
   /// What the hook prints: `answer` for a hook that sbd does not hold, else the held request's reply. A held
   /// request that closes with no reply is dropped. `closedByClaude` then says, off the state queue, whether
-  /// Claude Code closed it, and only then does this record `card_closed`.
+  /// Claude Code closed it, and only then does this record `card_closed`. It records `card_closed` even when
+  /// the card left first, because `releaseCards` gives no reply to a request whose hook is already gone.
   func awaitAnswer(
     _ opened: (card: Int64, request: HeldRequest)?, else answer: JSON, closedByClaude: () -> Bool
   ) -> JSON {
@@ -72,13 +73,14 @@ extension Service {
   }
 
   /// Drops the session's held requests whose card is gone or deferred. A
-  /// request that has no reply yet gets an empty body, which Claude Code
-  /// reads as no decision.
+  /// request whose hook is still open gets an empty body, which Claude Code
+  /// reads as no decision. A request whose hook is already gone gets no
+  /// reply, so `awaitAnswer` still checks the close and records `card_closed`.
   func releaseCards(_ id: String) {
     guard !held.isEmpty else { return }
     let open = Set(entries[id]?.facts.cards.filter { !$0.deferred }.map(\.id) ?? [])
     for (card, request) in held where request.session == id && !open.contains(card) {
-      request.resolve([:])
+      if !request.hookGone() { request.resolve([:]) }
       held[card] = nil
     }
   }
