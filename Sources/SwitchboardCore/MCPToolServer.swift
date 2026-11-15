@@ -209,6 +209,16 @@ public struct MCPToolServer: Sendable {
       return try client.call("group-suggest", pick(args, ["accept"]))
     case "plan_artifact":
       return try planArtifact(args, scoped)
+    case "add_schedule":
+      var request = pick(args, ["every", "prompt"])
+      request["session"] = try sessionOrCaller(args, scoped)
+      request["by"] = MCPToolServer.byClaude
+      return try scheduleCall("schedule", request, group: scoped?.group.id)
+    case "list_schedules":
+      let request = try args["session"].map { _ in ["session": try sessionID(args, scoped)] } ?? [:]
+      return try scheduleCall("schedules", request, group: scoped?.group.id)
+    case "remove_schedule":
+      return try scheduleCall("remove-schedule", pick(args, ["schedule"]), group: scoped?.group.id)
     case "request_mcp_server":
       guard let caller else {
         throw APIError("request_mcp_server works only in a Manager conversation that Switchboard started.")
