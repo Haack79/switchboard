@@ -35,23 +35,23 @@ public enum BoardColumn: String, Codable, CaseIterable, Sendable {
 
   /// The session's column, from its attention state, its open waits, and its
   /// facts. The first rule that matches wins: Done, Merging, In progress,
-  /// Approved, In review, and Waiting. `acknowledged` is true when
-  /// `Attention.shown` moved an acknowledged Inbox verdict to Waiting. It
-  /// decides only a Waiting card's holder. `stateSince` is when the session
+  /// Approved, In review, and Waiting. `setAside` is true when
+  /// `Attention.shown` moved an Inbox verdict to Waiting because the user set
+  /// it aside. It decides only a Waiting card's holder. `stateSince` is when the session
   /// entered `state`. A session that no `pr` event has placed counts its PR
   /// column from `created`.
   public static func place(
-    state: AttentionState, acknowledged: Bool = false, stateSince: Int64, waits: [Wait], facts: SessionFacts,
+    state: AttentionState, setAside: Bool = false, stateSince: Int64, waits: [Wait], facts: SessionFacts,
     created: Int64
   ) -> BoardPlacement {
     var placement = column(
-      state: state, acknowledged: acknowledged, stateSince: stateSince, waits: waits, facts: facts, created: created)
+      state: state, setAside: setAside, stateSince: stateSince, waits: waits, facts: facts, created: created)
     placement.back = facts.boardBack
     return placement
   }
 
   private static func column(
-    state: AttentionState, acknowledged: Bool, stateSince: Int64, waits: [Wait], facts: SessionFacts, created: Int64
+    state: AttentionState, setAside: Bool, stateSince: Int64, waits: [Wait], facts: SessionFacts, created: Int64
   ) -> BoardPlacement {
     let pr = facts.pr
     let column = prColumn(pr)
@@ -75,7 +75,7 @@ public enum BoardColumn: String, Codable, CaseIterable, Sendable {
     }
     let oldest = waits.min { $0.created < $1.created }
     let on = waitingOn(oldest, facts)
-    let yours = acknowledged || [.needsYou, .readyToMerge, .canContinue, .stale].contains(state)
+    let yours = setAside || [.needsYou, .readyToMerge, .canContinue, .stale].contains(state)
     return BoardPlacement(
       column: .waiting, since: oldest?.created ?? stateSince, line: on?.line, holder: yours ? .you : on?.holder)
   }

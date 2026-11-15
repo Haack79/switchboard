@@ -1076,11 +1076,8 @@ final class BoardModel: ObservableObject {
     var args: [String: JSON] = ["session": .string(id)]
     if undo {
       args["undo"] = true
-    } else if currentInboxItem == id {
-      navigate(.replace) { moveInbox(by: 1) }
-      // A field in the item that scrolls away would keep the keystrokes. A
-      // session's terminal outside the Inbox keeps them.
-      if visibleView == .inbox { NSApp.keyWindow?.makeFirstResponder(nil) }
+    } else {
+      stepInboxPast(id)
     }
     perform(
       "ack", args,
@@ -1089,6 +1086,16 @@ final class BoardModel: ObservableObject {
         if undo, let s = try? JSONCoding.convert(value, to: SessionSummary.self) { self.lastSeen[id] = s }
       },
       finally: { self.acknowledging.remove(id) })
+  }
+
+  /// Moves the Inbox's focus to the next item when `id` is the current one,
+  /// because the user set that item aside.
+  func stepInboxPast(_ id: String) {
+    guard currentInboxItem == id else { return }
+    navigate(.replace) { moveInbox(by: 1) }
+    // A field in the item that scrolls away would keep the keystrokes. A
+    // session's terminal outside the Inbox keeps them.
+    if visibleView == .inbox { NSApp.keyWindow?.makeFirstResponder(nil) }
   }
 
   /// The session that the Session menu's Acknowledge acts on: the current

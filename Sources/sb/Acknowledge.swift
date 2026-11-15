@@ -25,8 +25,3 @@ var fromArg: [String: JSON] {
   guard author == .claude, let from = ProcessInfo.processInfo.environment["SB_SESSION_ID"] else { return [:] }
   return ["from": .string(from)]
 }
-
-extension SessionSummary {
-  /// The reason line, marked when the user acknowledged it.
-  var reasonLine: String { acknowledged == true ? "\(reason) (acknowledged)" : reason }
-}

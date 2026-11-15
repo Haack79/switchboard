@@ -2261,7 +2261,7 @@ public final class Service {
     if verdict.state == .readyForReview, let ready = e.facts.readySince { out.since = ready }
     if s.kind == .work && s.docket == nil {
       out.board = BoardColumn.place(
-        state: verdict.state, acknowledged: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
+        state: verdict.state, setAside: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
         facts: e.facts, created: s.created)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: e.facts.pr, branch: e.branch) }
     }
