@@ -102,6 +102,8 @@ final class BoardModel: ObservableObject {
   @Published var itemContexts: [String: ItemContext] = [:]
   /// Each chat's last messages, by session id, read while its pane shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
+  /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
+  @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
@@ -136,6 +138,9 @@ final class BoardModel: ObservableObject {
   /// Artifact plans whose Apply or Reject is on its way to sbd. Their buttons
   /// stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringArtifacts: Set<String> = []
+  /// The artifacts, as `<group> <url>`, that "Use as plan" is attaching. Their buttons stay disabled until sbd
+  /// replies, so a second click can't ask the group's chat to read the artifact again.
+  @Published var usingAsPlan: Set<String> = []
   /// The decision requests that wait for sbd: `<session>/<number>` for an
   /// answer, and `<session>/submit` and `<session>/discard`.
   @Published var deciding: Set<String> = []
@@ -244,7 +249,8 @@ final class BoardModel: ObservableObject {
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)
   /// A plan apply waits for sbd's GitHub poll and then writes to GitHub, so
-  /// it runs apart from other actions too.
+  /// it runs apart from other actions too. An artifact attach runs here because
+  /// it can wait for the group's chat to start.
   private let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
   private var timer: Timer?
   /// Whether Switchboard is the active app. A chat's replies count as read only while it is. Tests replace it.
@@ -256,8 +262,16 @@ final class BoardModel: ObservableObject {
   /// The session that `create` or `openManager` selected before a refresh
   /// listed it.
   private(set) var pendingSelection: String?
+  /// The session that `focus` named before a refresh listed it, the successful
+  /// refreshes that have not listed it, and the selection when it started. It
+  /// waits for `focusRefreshLimit` refreshes. Selecting another session ends it.
+  private var focusWait: (id: String, misses: Int, selection: String?)?
+  var pendingFocus: String? { focusWait?.id }
+  private static let focusRefreshLimit = 3
   private var loaded = false
   private var followupsRead = Date.distantPast
+  /// Whether the next refresh reads `followup-ls` and the other lists that it reads every 5 s.
+  var followupsDue: Bool { Date().timeIntervalSince(followupsRead) >= 5 }
   /// sbd reads the usage every few minutes, so the app asks once a minute.
   private var usageRead = Date.distantPast
 
@@ -361,6 +375,11 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
+  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
+  var operatorSession: SessionSummary? {
+    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  }
+
   /// A state's sessions in the sidebar, each one followed by its children.
   struct SidebarGroup: Identifiable {
     var state: AttentionState
@@ -434,7 +453,7 @@ final class BoardModel: ObservableObject {
 
   func refresh(followups: Bool = false) {
     let client = client
-    let readFollowups = followups || Date().timeIntervalSince(followupsRead) >= 5
+    let readFollowups = followups || followupsDue
     if readFollowups { followupsRead = Date() }
     let readUsage = Date().timeIntervalSince(usageRead) >= 60
     if readUsage { usageRead = Date() }
@@ -521,6 +540,7 @@ final class BoardModel: ObservableObject {
       // A selected session that is hidden here therefore had no known org until this refresh.
       if let id = selection { showOrg(of: id) }
       if let id = pendingSelection, allBoard.contains(where: { $0.id == id }) { pendingSelection = nil }
+      resolvePendingFocus()
       clearHiddenSelectionAndUpdateBadge()
       // A follow-up that fires appears in `ls` as Needs you. The last seen sessions
       // include the follow-ups, so that change from Not started notifies.
@@ -674,6 +694,13 @@ final class BoardModel: ObservableObject {
   /// selects it. With `new`, it starts a conversation, which its first prompt names.
   func openManager(new: Bool = false) {
     perform("manager", new ? ["new": true] : [:]) { value in
+      if let id = value["id"]?.string { self.selectUnlisted(id) }
+    }
+  }
+
+  /// Selects the operator. sbd creates it when none exists, and resumes a stopped one.
+  func openOperator() {
+    perform("operator", [:]) { value in
       if let id = value["id"]?.string { self.selectUnlisted(id) }
     }
   }
@@ -845,12 +872,37 @@ final class BoardModel: ObservableObject {
       finally: { self.answeringArtifacts.remove(plan) })
   }
 
+  /// Attaches the artifact as a plan of the group. The group's chat reads it, which may start the chat. The
+  /// request can wait on that start, so it runs on `planWrites`. `then` lists the plan on the group unless a
+  /// refresh already did, so the row shows "Plan" as soon as its button turns back on.
+  func useArtifactAsPlan(url: String, group: String) {
+    let key = usingAsPlanKey(url: url, group: group)
+    guard usingAsPlan.insert(key).inserted else { return }
+    perform(
+      "plan-attach", ["doc": .string(url), "group": .string(group)], on: planWrites,
+      then: { result in
+        guard let doc = try? JSONCoding.convert(result, to: PlanDocument.self),
+          let g = self.groups.firstIndex(where: { $0.id == group }),
+          self.groups[g].plans?.contains(where: { $0.id == doc.id }) != true
+        else { return }
+        self.groups[g].plans = (self.groups[g].plans ?? []) + [PlanSummary(doc)]
+      },
+      finally: { self.usingAsPlan.remove(key) })
+  }
+
+  func isUsingAsPlan(url: String, group: String) -> Bool {
+    usingAsPlan.contains(usingAsPlanKey(url: url, group: group))
+  }
+
+  private func usingAsPlanKey(url: String, group: String) -> String { "\(group) \(url)" }
+
   private func followUpKey(plan: String, row: String) -> String { "\(plan) \(row)" }
 
   /// `sent` runs only when sbd accepted the message. A second send to the
   /// same session does nothing until sbd answers the first. Each image is a
   /// file name and the image's bytes. `ref` names the Inbox item that the
-  /// message answers.
+  /// message answers. A message to a chat shows in the chat at once as a
+  /// pending message, which carries sbd's refusal in place of `actionError`.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
     sent: (() -> Void)? = nil
@@ -859,25 +911,110 @@ final class BoardModel: ObservableObject {
     var args: [String: JSON] = ["session": .string(id), "text": .string(text)]
     if let ref { args["ref"] = .string(ref) }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
-    perform("send", args, then: { _ in sent?() }, finally: { self.sending.remove(id) })
+    let pending =
+      summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
+    if let pending {
+      pendingChat[id, default: []].removeAll(where: \.failed)
+      pendingChat[id, default: []].append(pending)
+    }
+    perform(
+      "send", args,
+      then: { result in
+        if let pending {
+          // `perform` clears `actionError` only for a request without a `failed` handler.
+          self.actionError = nil
+          self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
+        }
+        sent?()
+      },
+      failed: pending.map { pending in { self.setPending(pending.id, in: id, .failed("\($0)")) } },
+      finally: { self.sending.remove(id) })
+  }
+
+  private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
+    guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
+    pendingChat[session]?[i].status = status
+  }
+
+  func dismissPending(_ message: UUID, in session: String) {
+    pendingChat[session]?.removeAll { $0.id == message }
   }
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
   var showWindow: (() -> Void)?
 
-  /// Selects the session and brings its window forward, opening the window first when it is closed.
+  /// Selects the listed session as a sidebar click does and brings its window forward. A closed window opens
+  /// first. A session that the app does not list is left alone.
   func reveal(_ id: String) {
-    selection = id
+    guard let session = summary(id) else { return }
+    showInSidebar(session)
     showWindow?()
   }
 
-  /// Reveals the session that a session link names, and returns whether the
-  /// URL is a session link. A link to a session that is gone does nothing,
-  /// because the system cannot open the scheme either.
+  /// Reveals the session that an in-app session link names. It returns
+  /// whether the URL has the app's scheme. A link to a session that is gone
+  /// does nothing. Every `switchboard:` URL counts as handled, so that Launch
+  /// Services never hands the app's own link to another copy of the app.
   func openSessionLink(_ url: URL) -> Bool {
-    guard let id = SessionLink.id(from: url) else { return false }
-    if sessionNames.entry(id)?.removed == false { reveal(id) }
+    guard url.scheme?.lowercased() == SessionLink.scheme else { return false }
+    if let id = SessionLink.id(from: url) { reveal(id) }
     return true
+  }
+
+  /// Focuses the session that a URL from another app or from `sb focus` names.
+  func openExternalLink(_ url: URL) {
+    guard let id = SessionLink.id(from: url) else {
+      actionError = "Switchboard can't open \(url.absoluteString)"
+      // The error banner shows only in the window.
+      showWindow?()
+      return
+    }
+    focus(id)
+  }
+
+  /// Closes the search panel and Recent Places, then shows the session as a
+  /// sidebar click does. A session that no refresh has listed yet, such as one
+  /// that `sb new` just made or any session at a cold launch, is focused when
+  /// a refresh lists it.
+  func focus(_ id: String) {
+    showingSearch = false
+    showingRecentPlaces = false
+    focusWait = nil
+    if !settleFocus(id) {
+      focusWait = (id, 0, selection)
+      // An unstarted follow-up shows only in `followup-ls`. A refresh reads
+      // that list every 5 s, which can be after the wait gives up.
+      followupsRead = .distantPast
+      // A closed window has not started the refreshes that list the session.
+      showWindow?()
+    }
+  }
+
+  /// Reveals the session when a refresh lists it, or reports a removed one.
+  /// It returns false while the session can still appear.
+  private func settleFocus(_ id: String) -> Bool {
+    if summary(id) != nil {
+      reveal(id)
+    } else if sessionNames.entry(id)?.removed == true {
+      actionError = "Session \(id) was removed"
+      showWindow?()
+    } else {
+      return false
+    }
+    return true
+  }
+
+  private func resolvePendingFocus() {
+    guard let wait = focusWait else { return }
+    focusWait = nil
+    // The user picked another session while the focus waited.
+    if selection != nil && selection != wait.selection { return }
+    if settleFocus(wait.id) { return }
+    if wait.misses + 1 >= Self.focusRefreshLimit {
+      actionError = "Switchboard has no session \(wait.id)"
+    } else {
+      focusWait = (wait.id, wait.misses + 1, wait.selection)
+    }
   }
 
   /// Answers a card: allow, deny with an optional message, or one answer per
@@ -1084,6 +1221,10 @@ final class BoardModel: ObservableObject {
         // A failed first read shows an empty log, so the pane stops showing that it is loading.
         if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
+        }
+        if let messages, let pending = self.pendingChat[session] {
+          let left = PendingChatMessage.notInLog(pending, log: messages)
+          if left != pending { self.pendingChat[session] = left }
         }
       }
     }

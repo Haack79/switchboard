@@ -340,9 +340,13 @@ extension Instance {
   }
 
   /// The store refuses the delete, so sbd refuses before it stops claude or removes the worktree.
-  private func refusesWhenTheStoreCannotDelete(_ table: String, branch: Bool, statement: String = "DELETE") throws {
+  private func refusesWhenTheStoreCannotDelete(
+    _ table: String, branch: Bool, statement: String = "DELETE",
+    setup: (Instance, SessionSummary) throws -> Void = { _, _ in }
+  ) throws {
     let github = try FakeGitHub()
     let (sbd, repo, s) = try mergedBranchSession(github)
+    try setup(sbd, s)
     try sbd.block(statement, on: table)
     let r = try (branch ? sbd.deleteSessionAndBranch(s.id) : sbd.deleteSession(s.id))
     #expect(r.status != 0)
@@ -366,6 +370,15 @@ extension Instance {
   /// before the worktree goes.
   @Test func refusesBeforeRemovingTheWorktreeWhenTheStoreCannotRecordTheRemoval() throws {
     try refusesWhenTheStoreCannotDelete("removed_sessions", branch: true, statement: "INSERT")
+  }
+
+  /// The dry run saves the session's artifact group too, so a store that can't save it refuses before the
+  /// worktree goes.
+  @Test func refusesBeforeRemovingTheWorktreeWhenTheStoreCannotKeepTheArtifactsOnTheGroup() throws {
+    try refusesWhenTheStoreCannotDelete("groups", branch: true, statement: "INSERT") { sbd, s in
+      _ = try sbd.addArtifactGroup("Flags", s.id)
+      try sbd.postArtifactHook(s.id)
+    }
   }
 
   @Test func aRemovalWithTheWorktreeRecordsTheSessionsName() throws {

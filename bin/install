@@ -26,6 +26,10 @@ if [ "$force" = 0 ]; then require_newer_than_installed "$dest" HEAD; fi
 mkdir -p "$HOME/Applications" "$HOME/.local/bin"
 rm -rf "$dest"
 cp -R "$app" "$dest"
+# Registers the installed app for switchboard:// links, so Launch Services
+# prefers it over the build/Switchboard.app copies in the checkouts.
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$lsregister" -f "$dest" || echo "warning: couldn't register $dest for switchboard:// links" >&2
 ln -sf "$dest/Contents/MacOS/sb" "$HOME/.local/bin/sb"
 "$dest/Contents/MacOS/sb" service install
 echo "Installed $dest. Open it with: open \"$dest\""

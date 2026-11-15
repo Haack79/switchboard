@@ -93,7 +93,7 @@ func tempFolder() throws -> String {
     #expect(try store.events(since: events[0].id).map(\.session) == ["s2", "s1"])
     #expect(try store.events(session: "s1").count == 2)
     #expect(try store.events(limit: 2, newest: true).map(\.kind) == ["SessionStart", "SessionEnd"])
-    try store.delete(session: "s1", name: "one")
+    try store.delete(session: SessionRemoval(id: "s1", name: "one"))
     #expect(try store.sessions().isEmpty)
     #expect(try store.events(session: "s1").isEmpty)
   }
@@ -289,8 +289,8 @@ func tempFolder() throws -> String {
     try store.save(s)
 
     try store.delete(
-      session: s.id, name: s.name, resolving: [Self.record(s, Self.todo("n1"), how: "resolved and deleted the session")]
-    )
+      session: SessionRemoval(
+        id: s.id, name: s.name, todos: [Self.record(s, Self.todo("n1"), how: "resolved and deleted the session")]))
 
     #expect(try store.sessions().isEmpty)
     let rows = try store.resolvedTodos(limit: 50)
@@ -311,8 +311,8 @@ func tempFolder() throws -> String {
 
     #expect(throws: APIError.self) {
       try store.delete(
-        session: s.id, name: s.name,
-        resolving: [Self.record(s, Self.todo("n1"), how: "resolved and deleted the session")])
+        session: SessionRemoval(
+          id: s.id, name: s.name, todos: [Self.record(s, Self.todo("n1"), how: "resolved and deleted the session")]))
     }
 
     #expect(try store.sessions() == [s])
@@ -346,7 +346,7 @@ func tempFolder() throws -> String {
     var row = Self.record(s, Self.todo("n1"), how: "resolved and deleted the session")
     row.pr = nil
 
-    try store.delete(session: s.id, name: s.name, resolving: [row])
+    try store.delete(session: SessionRemoval(id: s.id, name: s.name, todos: [row]))
 
     let read = try #require(try store.resolvedTodos(limit: 50).first)
     #expect(read.repo == nil)
@@ -385,7 +385,7 @@ func tempFolder() throws -> String {
     try Self.seed(store, Self.session())
     let before = nowMs()
 
-    try store.delete(session: Self.id, name: Self.name)
+    try store.delete(session: SessionRemoval(id: Self.id, name: Self.name))
 
     let after = nowMs()
     let rows = try store.removedSessions()
@@ -401,7 +401,7 @@ func tempFolder() throws -> String {
     let store = try Store(path: "\(dir)/sb.db")
     try Self.seed(store, Self.session())
 
-    try store.delete(session: Self.id, name: Self.name)
+    try store.delete(session: SessionRemoval(id: Self.id, name: Self.name))
 
     #expect(try store.sessions().isEmpty)
     #expect(try store.events(session: Self.id).isEmpty)
@@ -416,7 +416,7 @@ func tempFolder() throws -> String {
     let store = try Store(path: "\(dir)/sb.db")
     try Self.seed(store, Self.session(name: name))
 
-    try store.delete(session: Self.id, name: name)
+    try store.delete(session: SessionRemoval(id: Self.id, name: name))
 
     #expect(try store.removedSessions().map(\.name) == [name])
   }
@@ -427,7 +427,7 @@ func tempFolder() throws -> String {
     let store = try Store(path: "\(dir)/sb.db")
     try Self.seed(store, Self.session())
 
-    try store.delete(session: Self.id, name: Self.name, onHost: "mini")
+    try store.delete(session: SessionRemoval(id: Self.id, name: Self.name, host: "mini"))
 
     #expect(try store.removedSessions().map(\.id) == [Self.id])
     #expect(try store.removedHostSessions(host: "mini") == [Self.id])
@@ -442,8 +442,9 @@ func tempFolder() throws -> String {
     try Self.seed(store, s)
 
     try store.delete(
-      session: s.id, name: s.name,
-      resolving: [ResolvedTodoStoreTests.record(s, ResolvedTodoStoreTests.todo("n1"), how: "resolved and deleted")])
+      session: SessionRemoval(
+        id: s.id, name: s.name,
+        todos: [ResolvedTodoStoreTests.record(s, ResolvedTodoStoreTests.todo("n1"), how: "resolved and deleted")]))
 
     #expect(try store.removedSessions().map(\.id) == [s.id])
     #expect(try store.resolvedTodos(limit: 50).map(\.note) == ["n1"])
@@ -457,7 +458,7 @@ func tempFolder() throws -> String {
     let s = Self.session()
     try Self.seed(store, s)
 
-    try store.checkDeletable(session: s.id, name: s.name, resolving: [])
+    try store.checkDeletable(session: SessionRemoval(id: s.id, name: s.name))
 
     #expect(try Store(path: "\(dir)/sb.db").removedSessions().isEmpty)
     #expect(try store.sessions() == [s])
@@ -473,7 +474,7 @@ func tempFolder() throws -> String {
     try Self.seed(store, s)
     try ResolvedTodoStoreTests.block("INSERT", on: "removed_sessions", in: "\(dir)/sb.db")
 
-    #expect(throws: APIError.self) { try store.checkDeletable(session: s.id, name: s.name, resolving: []) }
+    #expect(throws: APIError.self) { try store.checkDeletable(session: SessionRemoval(id: s.id, name: s.name)) }
 
     #expect(try store.sessions() == [s])
     #expect(try store.removedSessions().isEmpty)
@@ -496,7 +497,7 @@ func tempFolder() throws -> String {
     try Self.seed(store, s)
     try ResolvedTodoStoreTests.block(statement, on: table, in: "\(dir)/sb.db")
 
-    #expect(throws: APIError.self) { try store.delete(session: s.id, name: s.name, onHost: host) }
+    #expect(throws: APIError.self) { try store.delete(session: SessionRemoval(id: s.id, name: s.name, host: host)) }
 
     let reopened = try Store(path: "\(dir)/sb.db")
     #expect(try reopened.sessions() == [s])
@@ -516,7 +517,7 @@ func tempFolder() throws -> String {
     try Self.seed(store, s)
 
     _ = try other.transaction {
-      #expect(throws: APIError.self) { try store.delete(session: s.id, name: s.name) }
+      #expect(throws: APIError.self) { try store.delete(session: SessionRemoval(id: s.id, name: s.name)) }
     }
 
     #expect(try store.sessions() == [s])
@@ -529,12 +530,12 @@ func tempFolder() throws -> String {
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let store = try Store(path: "\(dir)/sb.db")
     try Self.seed(store, Self.session(name: "old-name"))
-    try store.delete(session: Self.id, name: "old-name")
+    try store.delete(session: SessionRemoval(id: Self.id, name: "old-name"))
     let first = try #require(try store.removedSessions().first)
     Self.waitPast(first.removed)
     try Self.seed(store, Self.session(name: "new-name"))
 
-    try store.delete(session: Self.id, name: "new-name")
+    try store.delete(session: SessionRemoval(id: Self.id, name: "new-name"))
 
     let rows = try store.removedSessions()
     #expect(rows.map(\.id) == [Self.id])
@@ -549,7 +550,7 @@ func tempFolder() throws -> String {
     let ids = ["sgcctv", "seb4ec", "s2m9qa"]
     for id in ids {
       try Self.seed(store, Self.session(id, name: "name of \(id)"))
-      try store.delete(session: id, name: "name of \(id)")
+      try store.delete(session: SessionRemoval(id: id, name: "name of \(id)"))
       Self.waitPast(try #require(try store.removedSessions().first { $0.id == id }).removed)
     }
 
@@ -566,7 +567,7 @@ func tempFolder() throws -> String {
     do {
       let store = try Store(path: "\(dir)/sb.db")
       try Self.seed(store, Self.session())
-      try store.delete(session: Self.id, name: Self.name)
+      try store.delete(session: SessionRemoval(id: Self.id, name: Self.name))
       written = try store.removedSessions()
     }
 
@@ -601,7 +602,7 @@ func tempFolder() throws -> String {
 
     #expect(try store.removedSessions().isEmpty)
     #expect(try store.sessions() == [s])
-    try store.delete(session: s.id, name: s.name)
+    try store.delete(session: SessionRemoval(id: s.id, name: s.name))
     #expect(try store.removedSessions().map(\.id) == [s.id])
   }
 }

@@ -64,7 +64,22 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    operator [<text>]             open the operator, the one background Manager
+                                  session that follows through on the waits that
+                                  conversations hand it, creating it the first
+                                  time. With text, send it a message
+    operator --log                the operator's last messages
+    operator report [--needs-you] [--session S] <text>
+                                  record a report. Only the operator runs it.
+                                  --needs-you puts it in the Inbox until you
+                                  answer the operator or acknowledge it. S is
+                                  the session that it is about
+    operator reports [--all]      list the operator's reports, oldest first, and
+                                  whether each is open. --all lifts the limit of
+                                  \(Event.defaultLimit)
     get <session>                 show one session
+    focus <session>               show the session in the Switchboard app, launching
+                                  the app if it isn't running
     slash <session>               the commands that the session's claude takes
                                   after /: its skills, its commands, and Claude
                                   Code's built-ins
@@ -106,8 +121,13 @@ let usage = """
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
          [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
+         [--here]
                                   wait on a PR, a deploy, another session, or a
-                                  time. Inside a session, the session is optional
+                                  time. Inside a session, the session is optional.
+                                  A wait that Claude sets in a Manager
+                                  conversation and that resumes goes to the
+                                  operator, unless it reads the conversation's
+                                  own PR. --here keeps it on the conversation
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -115,7 +135,9 @@ let usage = """
                                   can't be reached, and 1 when it is cleared. The
                                   session doesn't resume. The timeout and Ctrl-C
                                   clear the wait
-    wait <session> --clear [--id W]
+    wait [<session>] --clear [--id W]
+                                  clear the waits, and a conversation's waits
+                                  that went to the operator
     wait <session> --resolve <what happened> [--id W]
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
@@ -535,6 +557,7 @@ func printSession(_ s: SessionSummary) {
     )
   }
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
+  for a in (s.artifacts ?? []).newestFirst { print("  artifact: \(a.title)  \(a.url)  (\(a.caption()))".printable) }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
@@ -565,9 +588,10 @@ func printImportable(_ list: ImportList, repo: String? = nil) {
   }
 }
 
-func sessionCommand(_ op: String, _ a: Args, extra: [String: JSON] = [:]) {
+/// Sends `op` for `session`, or for the session that `a` names when `session` is nil, and prints the answer.
+func sessionCommand(_ op: String, _ a: Args, session: String? = nil, extra: [String: JSON] = [:]) {
   var args = extra
-  args["session"] = .string(a.session(op))
+  args["session"] = .string(session ?? a.session(op))
   let result = call(op, args)
   if a.json { printJSON(result) } else { printSession(summary(result)) }
 }
@@ -610,6 +634,24 @@ func attach(_ a: Args) -> Never {
   let argv = command.map { strdup($0) } + [nil]
   execv(command[0], argv)
   die("can't run \(command[0]): \(UnixSocket.errnoText())")
+}
+
+/// Opens the session's `switchboard://session/<id>` link. When this sb sits in
+/// a Switchboard app, `open -a` sends the link to that app, so Launch Services
+/// can't pick one of the build/Switchboard.app copies in the checkouts.
+func focus(_ a: Args) -> Never {
+  let result = call("get", ["session": .string(a.session("focus"))])
+  let s = summary(result)
+  let app = AppBundle.containing(executable: ownExecutable())
+  // SB_OPEN lets a test keep `focus` away from Launch Services.
+  let open = ProcessInfo.processInfo.environment["SB_OPEN"] ?? "/usr/bin/open"
+  let opened: CommandResult
+  do {
+    opened = try runCommand(open, (app.map { ["-a", $0.path] } ?? []) + [SessionLink.url(for: s.id).absoluteString])
+  } catch { die("can't open Switchboard: \(error)") }
+  guard opened.status == 0 else { die("can't open Switchboard: \(opened.problem)") }
+  if a.json { printJSON(result) } else { printSession(s) }
+  exit(0)
 }
 
 func watch(_ a: Args) -> Never {
@@ -792,8 +834,12 @@ case "usage":
   usageCommand(a)
 case "manager":
   manager(a)
+case "operator":
+  operatorCommand(a)
 case "get", "show":
   sessionCommand("get", a)
+case "focus":
+  focus(a)
 case "open":
   if a.switches.contains("--terminals") {
     printJSON(call("open", ["session": .string(a.session("open")), "terminals": true]))

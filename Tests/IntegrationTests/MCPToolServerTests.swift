@@ -7,7 +7,7 @@ enum MCPToolServerTests {
   static let allTools: Set<String> = [
     "list_sessions", "get_session", "read_reply", "triage", "events", "send", "send_group", "spawn", "set_wait",
     "clear_wait", "add_note", "list_groups", "add_group", "remove_group", "move_to_group", "add_group_note",
-    "suggest_groups", "plan_artifact", "pause", "resume",
+    "suggest_groups", "plan_artifact", "report", "pause", "resume",
   ]
   /// The tools that a scoped server leaves out.
   static let unscopedOnly: Set<String> = ["add_group", "remove_group", "suggest_groups"]

@@ -42,12 +42,13 @@ public struct Pause: Codable, Equatable, Sendable {
     self.message = message
   }
 
-  /// "you", "Manager", "the <group> chat", a work session's name, or "Claude" when no session is known.
+  /// "you", "Manager", "Operator", "the <group> chat", a work session's name, or "Claude" when no session is known.
   public var byText: String {
     guard by == .claude else { return "you" }
     guard let from else { return "Claude" }
     switch from.kind {
     case .manager: return "Manager"
+    case .operator: return Manager.operatorName
     case .chat: return "the \(from.name) chat"
     case .work: return from.name
     }

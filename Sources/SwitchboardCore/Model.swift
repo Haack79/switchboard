@@ -71,7 +71,7 @@ public struct Session: Codable, Equatable, Sendable {
   public var notes: [Note]?
   /// The session that added this one, such as the session that captured a follow-up.
   public var parent: String?
-  /// True for a Manager conversation. Several can exist.
+  /// True for a Manager conversation, of which several can exist, and for the operator.
   public var manager: Bool?
   /// Set on a follow-up. Until it starts, `cwd` is empty and claude never runs.
   public var followup: Followup?
@@ -110,7 +110,7 @@ public struct Session: Codable, Equatable, Sendable {
   public var issue: IssueRef?
   /// The name of the remote host that the session runs on, as config.json lists it. Nil means this Mac.
   public var host: String?
-  /// The MCP servers that a Manager conversation loads besides switchboard,
+  /// The MCP servers that a Manager conversation or the operator loads besides switchboard,
   /// by name. Nil launches claude with the full setup, as for every other
   /// session. An empty list loads only switchboard.
   public var mcp: [String]?
@@ -119,8 +119,11 @@ public struct Session: Codable, Equatable, Sendable {
   public var mcpScoped: Bool?
   /// Set while the session is paused.
   public var pause: Pause?
+  /// True for the operator, the one background Manager session. It also has
+  /// `manager` set, so an older sbd treats it as a conversation.
+  public var isOperator: Bool?
 
-  public var kind: SessionKind { SessionKind(manager: manager, chat: chat) }
+  public var kind: SessionKind { SessionKind(isOperator: isOperator, manager: manager, chat: chat) }
 
   public init(
     id: String, name: String, cwd: String, repo: String? = nil, branch: String? = nil,
@@ -146,9 +149,12 @@ public enum SessionKind: String, Codable, Sendable {
   case work
   case manager
   case chat
+  /// The background Manager session that follows through on the waits that
+  /// conversations hand it. Only one exists.
+  case `operator`
 
-  public init(manager: Bool?, chat: String?) {
-    self = manager == true ? .manager : chat != nil ? .chat : .work
+  public init(isOperator: Bool? = nil, manager: Bool?, chat: String?) {
+    self = isOperator == true ? .operator : manager == true ? .manager : chat != nil ? .chat : .work
   }
 
   /// Whether the app shows a session of this kind as a chat. `chat-log`
@@ -157,7 +163,15 @@ public enum SessionKind: String, Codable, Sendable {
   public var showsAsChat: Bool {
     switch self {
     case .work: false
-    case .manager, .chat: true
+    case .manager, .chat, .operator: true
+    }
+  }
+
+  /// Whether sbd starts a session of this kind in the Manager folder: a Manager conversation or the operator.
+  public var runsInManagerFolder: Bool {
+    switch self {
+    case .work, .chat: false
+    case .manager, .operator: true
     }
   }
 
@@ -167,6 +181,7 @@ public enum SessionKind: String, Codable, Sendable {
     case .work: nil
     case .manager: "the Manager"
     case .chat: "a group chat"
+    case .operator: "the operator"
     }
   }
 
@@ -176,6 +191,7 @@ public enum SessionKind: String, Codable, Sendable {
     switch self {
     case .work: .all
     case .manager, .chat: .blockingPrompts
+    case .operator: .operatorItems
     }
   }
 }
@@ -187,6 +203,9 @@ public enum InboxItems: Sendable {
   /// sessions it manages, and those sessions have their own items. A reply
   /// waits on the user's next message, which the chat pane takes.
   case blockingPrompts
+  /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
+  /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
+  case operatorItems
 }
 
 /// One entry in the event log: a hook payload, or something sbd did.
@@ -300,6 +319,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var dependencies: [Dependency]?
   /// The plans attached to the session and to its group, or nil when there are none.
   public var plans: [PlanSummary]?
+  /// The artifacts that the session published, in first-publish order, or nil when there are none.
+  public var artifacts: [SessionArtifact]?
   /// The review that a docket row tracks, or nil for any other session.
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.

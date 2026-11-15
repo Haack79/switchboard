@@ -207,6 +207,7 @@ struct Sidebar: View {
     let activeAccount = model.activeAccountFolder
     List(selection: $model.selection) {
       ConversationsSection(activeAccount: activeAccount)
+      OperatorRow(activeAccount: activeAccount)
       ForEach(model.sidebarGroups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
@@ -742,6 +743,7 @@ private struct LaneLabel: View {
             .accessibilityLabel("Delete group \(group.name)")
         }
         GroupPauseButtons(group: group)
+        GroupArtifactsLink(group: group)
       }
       let plans = group?.plans ?? []
       PlanFollowupList(plans: plans)

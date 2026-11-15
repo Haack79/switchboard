@@ -118,6 +118,27 @@ extension GroupTests {
     #expect(try l.sbd.plan(moved).group == l.flags.id)
   }
 
+  /// The merge retires the absorbed group's chat, which keeps the absorbed group's id. The group that survives
+  /// keeps the chat's artifacts, and the chat's later removal neither drops nor repeats them.
+  @Test func aMergedGroupKeepsTheAbsorbedGroupsChatArtifacts() throws {
+    let l = try linkedGroups()
+    let chat = try #require(JSON.parse(try l.sbd.sb("chat", "Docs", "--json"))?["id"]?.string)
+    try l.sbd.postArtifactHook(chat)
+    let before = try #require(try l.sbd.groupArtifacts(l.docs.id))
+
+    _ = try accept(l.sbd, mergeId(l.flags, l.docs))
+
+    let merged = try #require(try l.sbd.groupArtifacts(l.flags.id))
+    #expect(merged == before)
+    #expect(merged.compactMap { $0["session"]?.string } == [chat])
+    #expect(merged.compactMap { $0["url"]?.string } == [artifactPageURL])
+    try l.sbd.sb("rm", chat)
+    #expect(try l.sbd.groupArtifacts(l.flags.id) == before)
+    l.sbd.stopSbd()
+    try l.sbd.startSbd()
+    #expect(try l.sbd.groupArtifacts(l.flags.id) == before)
+  }
+
   @Test func suggestPrintsAMergeAsWhatItDoes() throws {
     let l = try linkedGroups()
 
