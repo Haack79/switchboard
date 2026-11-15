@@ -65,7 +65,7 @@ struct SidePanelView: View {
     let panel = SidePanel(session)
     ScrollView {
       VStack(alignment: .leading, spacing: 10) {
-        title("Waits", panel.waitsCount)
+        ListSectionHeader(title: "Waits", count: panel.waitsCount, inset: false)
         if session.waits.isEmpty { Text(SidePanel.noWaits).foregroundStyle(.secondary) }
         ForEach(session.waits, id: \.id) { wait in
           VStack(alignment: .leading, spacing: 2) {
@@ -76,18 +76,18 @@ struct SidePanelView: View {
         }
         if panel.showsSchedules {
           Divider()
-          title("Schedules", panel.schedulesCount)
+          ListSectionHeader(title: "Schedules", count: panel.schedulesCount, inset: false)
           ScheduleList(session: session)
         }
         if let caption = panel.doneCaption {
           Text(caption).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         Divider()
-        title("Notes", panel.notesCount)
+        ListSectionHeader(title: "Notes", count: panel.notesCount, inset: false)
         if !panel.hasNotes { Text(SidePanel.noNotes).foregroundStyle(.secondary) }
         NotesList(session: session)
         Divider()
-        title("Artifacts", panel.artifactsCount)
+        ListSectionHeader(title: "Artifacts", count: panel.artifactsCount, inset: false)
         if !panel.hasArtifacts { Text(SidePanel.noArtifacts).foregroundStyle(.secondary) }
         ForEach(panel.artifacts, id: \.url) { artifact in
           VStack(alignment: .leading, spacing: 2) {
@@ -112,19 +112,5 @@ struct SidePanelView: View {
     .frame(width: SidePanel.width)
     .frame(maxHeight: .infinity, alignment: .top)
     .accessibilityIdentifier("session-side-panel")
-  }
-
-  /// A section's name, with its count at the trailing edge as in the list section headers. A zero count does not show.
-  private func title(_ name: String, _ count: Int) -> some View {
-    HStack(spacing: 4) {
-      Text(name)
-      Spacer(minLength: 4)
-      if count > 0 { Text("\(count)").monospacedDigit() }
-    }
-    .font(.caption.bold())
-    .foregroundStyle(.secondary)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(ListSectionHeader.spoken(title: name, count: count))
-    .accessibilityAddTraits(.isHeader)
   }
 }

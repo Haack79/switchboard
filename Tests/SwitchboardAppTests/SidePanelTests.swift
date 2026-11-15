@@ -46,7 +46,7 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     #expect(SidePanel(waitingSession(waits)).waitsCount == count)
   }
 
-  @Test func titlesTheNotesSectionWithoutACountWhenThereIsNoNote() {
+  @Test func countsNoNoteWhenThereIsNoNote() {
     #expect(SidePanel(notedSession([])).notesCount == 0)
   }
 
@@ -235,7 +235,7 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     return s
   }
 
-  @Test func titlesTheArtifactsSectionWithoutACountWhenThereIsNoArtifact() {
+  @Test func countsNoArtifactWhenThereIsNoArtifact() {
     #expect(SidePanel(Self.session(nil)).artifactsCount == 0)
   }
 
@@ -245,7 +245,7 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     #expect(SidePanel(Self.session(artifacts)).artifactsCount == 2)
   }
 
-  @Test func titlesTheArtifactsSectionWithoutACountWhenEveryArtifactIsRemoved() {
+  @Test func countsNoArtifactWhenEveryArtifactIsRemoved() {
     let artifacts = [artifactFixture("a", removed: 5), artifactFixture("b", removed: 6)]
 
     #expect(SidePanel(Self.session(artifacts)).artifactsCount == 0)

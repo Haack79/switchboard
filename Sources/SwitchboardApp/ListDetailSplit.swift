@@ -24,6 +24,8 @@ struct ListSectionHeader: View {
   let title: String
   let count: Int
   var collapsed: Bool?
+  /// False for a header inside a container that already pads its content, such as the session side panel.
+  var inset = true
 
   var body: some View {
     HStack(spacing: 4) {
@@ -39,9 +41,7 @@ struct ListSectionHeader: View {
     .accessibilityAddTraits(.isHeader)
     .font(.caption.bold())
     .foregroundStyle(.secondary)
-    .padding(.horizontal, 12)
-    .padding(.top, 10)
-    .padding(.bottom, 4)
+    .padding(inset ? EdgeInsets(top: 10, leading: 12, bottom: 4, trailing: 12) : EdgeInsets())
   }
 
   /// What VoiceOver reads for the header: the title, then the count when it is not zero, then whether a section that
