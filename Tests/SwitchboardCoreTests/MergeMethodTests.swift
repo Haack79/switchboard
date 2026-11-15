@@ -8,7 +8,8 @@ import Testing
 /// sbd merges it with a merge commit.
 private func landablePR(
   draft: Bool = false, base: String = "main", mergeable: Mergeable? = .mergeable,
-  reviewDecision: ReviewDecision? = .approved, verdicts: [Review] = [sampleVerdict("alice", "APPROVED")],
+  reviewDecision: ReviewDecision? = .approved,
+  verdicts: [Review] = [sampleVerdict("alice", "APPROVED", on: samplePRHead)],
   checks: String? = "SUCCESS", queue: TrunkQueueState? = nil, reviewRequests: [String]? = [],
   trunkConfig: Bool? = false, mergeQueue: Bool? = false, inMergeQueue: Bool? = false
 ) -> PullRequest {
@@ -18,7 +19,9 @@ private func landablePR(
   pr.trunkConfig = trunkConfig
   pr.mergeQueue = mergeQueue
   pr.inMergeQueue = inMergeQueue
+  pr.codeOwnerRequests = []
   pr.reviewDecisionRead = true
+  pr.mergeDetails = MergeDetails()
   return pr
 }
 

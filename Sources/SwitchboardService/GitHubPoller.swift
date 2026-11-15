@@ -587,7 +587,9 @@ final class GitHubPoller {
     return result.error
   }
 
-  func idsVariable(_ ids: [String]) -> JSON { ["ids": .array(ids.map(JSON.string))] }
+  func idsVariable(_ ids: [String], with more: [String: JSON] = [:]) -> JSON {
+    .object(more.merging(["ids": .array(ids.map(JSON.string))]) { $1 })
+  }
 
   /// Sends one GraphQL request and returns the response, whose `data` isn't
   /// null.

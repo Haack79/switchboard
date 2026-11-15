@@ -41,20 +41,81 @@ private let templateBody = """
   """
 
 /// A node of `GitHub.mergeDetailsQuery`'s response. `threads` gives each
-/// review thread's `isResolved`, and nil gives a null node.
+/// review thread's `isResolved`, and nil gives a null node. `threadNodes`
+/// replaces them with whole thread nodes. `reviews` gives the
+/// `latestOpinionatedReviews` nodes and `commits` the oids of
+/// `commits(last: 100)`, oldest first. Either is absent when nil.
 private func detailsNode(
   id: JSON = "PR_kwDOJ6Ng5c7Bv2xQ", head: JSON = .string(head133856),
   title: String = title133856, body: String = "", additions: Int = 315, deletions: Int = 208, changedFiles: Int = 4,
-  totalCount: Int? = nil, threads: [Bool?] = []
+  totalCount: Int? = nil, threads: [Bool?] = [], threadNodes: [JSON]? = nil, reviews: [JSON]? = nil,
+  commits: [String]? = nil
 ) -> JSON {
-  var reviewThreads: [String: JSON] = [
-    "nodes": .array(threads.map { $0.map { ["isResolved": .bool($0)] } ?? .null })
-  ]
-  reviewThreads["totalCount"] = .number(Double(totalCount ?? threads.count))
-  return [
+  let nodes = threadNodes ?? threads.map { $0.map { ["isResolved": .bool($0)] } ?? .null }
+  var reviewThreads: [String: JSON] = ["nodes": .array(nodes)]
+  reviewThreads["totalCount"] = .number(Double(totalCount ?? nodes.count))
+  var node: [String: JSON] = [
     "id": id, "headRefOid": head, "title": .string(title), "body": .string(body),
     "additions": .number(Double(additions)), "deletions": .number(Double(deletions)),
     "changedFiles": .number(Double(changedFiles)), "reviewThreads": .object(reviewThreads),
+  ]
+  if let reviews { node["latestOpinionatedReviews"] = ["nodes": .array(reviews)] }
+  if let commits { node["commits"] = ["nodes": .array(commits.map { ["commit": ["oid": .string($0)]] })] }
+  return .object(node)
+}
+
+private let pr133856 = "https://github.com/PostHog/posthog/pull/133856"
+
+/// A review thread node as the merge details query reads it with
+/// `threads: true`. `withComments: false` leaves out `first` and `last`, as
+/// a read with `threads: false` does.
+private func threadNode(
+  resolved: Bool = false, outdated: Bool = false, path: String = "posthog/models/cohort.py", line: Int? = 42,
+  originalLine: Int? = 40, author: String = "dmarticus", typename: String = "User",
+  body: String = "Should this handle the empty group?", url: String = "\(pr133856)#discussion_r2512345678",
+  comments: Int = 1, viewerWroteLast: Bool = false, withComments: Bool = true
+) -> JSON {
+  var node: [String: JSON] = [
+    "isResolved": .bool(resolved), "isOutdated": .bool(outdated), "path": .string(path),
+    "line": line.map { .number(Double($0)) } ?? .null,
+    "originalLine": originalLine.map { .number(Double($0)) } ?? .null,
+  ]
+  if withComments {
+    node["first"] = [
+      "nodes": [
+        [
+          "url": .string(url), "body": .string(body),
+          "author": ["__typename": .string(typename), "login": .string(author)],
+        ]
+      ]
+    ]
+    node["last"] = ["totalCount": .number(Double(comments)), "nodes": [["viewerDidAuthor": .bool(viewerWroteLast)]]]
+  }
+  return .object(node)
+}
+
+/// An inline comment node of a review.
+private func noteNode(
+  path: String = "posthog/models/cohort.py", line: Int? = 12, originalLine: Int? = 12, body: String = "Nit.",
+  url: String = "\(pr133856)#discussion_r2600000001"
+) -> JSON {
+  [
+    "path": .string(path), "line": line.map { .number(Double($0)) } ?? .null,
+    "originalLine": originalLine.map { .number(Double($0)) } ?? .null, "body": .string(body), "url": .string(url),
+  ]
+}
+
+/// A `latestOpinionatedReviews` node as the merge details query reads it.
+private func reviewNode(
+  author: String = "stamphog", typename: String = "User", state: String = "APPROVED", body: String = "Looks good.",
+  url: String = "\(pr133856)#pullrequestreview-3400000001", commit: String? = head133856,
+  notes: [JSON] = [], noteCount: Int? = nil
+) -> JSON {
+  [
+    "author": ["__typename": .string(typename), "login": .string(author)], "state": .string(state),
+    "body": .string(body), "url": .string(url), "submittedAt": "2026-11-11T10:00:00Z",
+    "commit": commit.map { ["oid": .string($0)] } ?? .null,
+    "comments": ["totalCount": .number(Double(noteCount ?? notes.count)), "nodes": .array(notes)],
   ]
 }
 
@@ -630,6 +691,419 @@ extension MergeDetailsTests {
       ] {
         #expect(query.contains(field), "\(field)")
       }
+    }
+
+    @Test func queryReadsTheReviewDetailFields() {
+      let query = GitHub.mergeDetailsQuery
+
+      for field in [
+        "$ids: [ID!]!", "$threads: Boolean!", "rateLimit { cost }", "isOutdated", "path", "originalLine",
+        "first: comments(first: 1) @include(if: $threads)", "last: comments(last: 1) @include(if: $threads)",
+        "viewerDidAuthor", "url", "__typename", "latestOpinionatedReviews(first: 20)", "submittedAt",
+        "commit { oid }", "comments(first: 5)", "commits(last: 100)",
+      ] {
+        #expect(query.contains(field), "\(field)")
+      }
+    }
+
+    @Test func queryAsksForThreadCommentsOnlyUnderTheThreadsVariable() {
+      #expect(GitHub.mergeDetailsQuery.components(separatedBy: "@include(if: $threads)").count - 1 == 2)
+    }
+
+    /// A read from before the review details, or one whose new fields are
+    /// missing, gives the same details as before.
+    @Test func nodeWithoutTheNewFieldsGivesTheDetailsItGaveBefore() throws {
+      let node = detailsNode(totalCount: 3, threads: [true, false, nil])
+
+      let details = try #require(GitHub.parseMergeDetails(node)).details
+
+      #expect(
+        details
+          == MergeDetails(
+            additions: 315, deletions: 208, changedFiles: 4, threads: 3, threadsRead: 2, openThreads: 1,
+            description: "", gist: nil, testGaps: []))
+    }
+
+    @Test func nodeWithoutTheNewFieldsHasNoThreadOrReviewDetails() throws {
+      let details = try #require(GitHub.parseMergeDetails(detailsNode(threads: [false]))).details
+
+      #expect(details.threadDetails == nil)
+      #expect(details.reviews == nil)
+    }
+
+    @Test func nodeWithReviewsButNoThreadCommentsStillParses() throws {
+      let node = detailsNode(threadNodes: [threadNode(withComments: false)], reviews: [reviewNode()])
+
+      let details = try #require(GitHub.parseMergeDetails(node)).details
+
+      #expect(details.threadDetails == nil)
+      #expect(details.reviews?.count == 1)
+      #expect(details.openThreads == 1)
+    }
+
+    @Test func nodeWithThreadCommentsButNoReviewsStillParses() throws {
+      let node = detailsNode(threadNodes: [threadNode()])
+
+      let details = try #require(GitHub.parseMergeDetails(node)).details
+
+      #expect(details.threadDetails?.count == 1)
+      #expect(details.reviews == nil)
+    }
+  }
+}
+
+// MARK: - Thread details
+
+extension MergeDetailsTests {
+  @Suite struct ThreadDetails {
+    func details(_ nodes: [JSON], totalCount: Int? = nil) throws -> MergeDetails {
+      try #require(GitHub.parseMergeDetails(detailsNode(totalCount: totalCount, threadNodes: nodes))).details
+    }
+
+    func only(_ node: JSON) throws -> MergeDetails.ThreadDetail {
+      try #require(try details([node]).threadDetails?.first)
+    }
+
+    @Test func keepsOnlyTheOpenThreadsInGitHubsOrder() throws {
+      let nodes = [threadNode(path: "a.py"), threadNode(resolved: true, path: "b.py"), threadNode(path: "c.py")]
+
+      let threads = try #require(try details(nodes).threadDetails)
+
+      #expect(threads.map(\.path) == ["a.py", "c.py"])
+    }
+
+    @Test func threadsThatAreAllResolvedGiveNoDetails() throws {
+      let nodes = [threadNode(resolved: true), threadNode(resolved: true)]
+
+      #expect(try details(nodes).threadDetails?.isEmpty == true)
+    }
+
+    @Test func keepsAtMostTenOpenThreads() throws {
+      let nodes = (0..<11).map { threadNode(path: "f\($0).py") }
+
+      let threads = try #require(try details(nodes).threadDetails)
+
+      #expect(MergeDetails.maxThreadDetails == 10)
+      #expect(threads.map(\.path) == (0..<10).map { "f\($0).py" })
+    }
+
+    @Test func openThreadsCountsTheThreadsBeyondTheDetails() throws {
+      let nodes = (0..<11).map { threadNode(path: "f\($0).py") }
+
+      #expect(try details(nodes).openThreads == 11)
+    }
+
+    @Test func threadReadWithoutCommentsGivesNoDetailsAndKeepsTheCounts() throws {
+      let nodes = [threadNode(withComments: false), threadNode(resolved: true, withComments: false)]
+
+      let read = try details(nodes, totalCount: 5)
+
+      #expect(read.threadDetails == nil)
+      #expect(read.threads == 5)
+      #expect(read.threadsRead == 2)
+      #expect(read.openThreads == 1)
+    }
+
+    @Test(arguments: [
+      // One comment is the thread's root, so nobody replied, even when the viewer opened it.
+      (1, true, false),
+      (1, false, false),
+      (2, true, true),
+      (5, true, true),
+      // Someone else wrote the last comment.
+      (2, false, false),
+      (5, false, false),
+    ])
+    func repliedMeansTheViewerWroteALaterLastComment(_ comments: Int, _ viewerWroteLast: Bool, _ replied: Bool)
+      throws
+    {
+      let thread = try only(threadNode(comments: comments, viewerWroteLast: viewerWroteLast))
+
+      #expect(thread.replied == replied, "\(comments) comments, viewer wrote last: \(viewerWroteLast)")
+    }
+
+    @Test func botAuthorIsABot() throws {
+      let thread = try only(threadNode(author: "greptile-apps", typename: "Bot"))
+
+      #expect(thread.author == "greptile-apps")
+      #expect(thread.bot == true)
+    }
+
+    @Test func userAuthorIsNotABot() throws {
+      let thread = try only(threadNode(author: "dmarticus", typename: "User"))
+
+      #expect(thread.author == "dmarticus")
+      #expect(thread.bot != true)
+    }
+
+    @Test func currentThreadHasItsLine() throws {
+      let thread = try only(threadNode(line: 42, originalLine: 40))
+
+      #expect(thread.line == 42)
+      #expect(thread.outdated == false)
+    }
+
+    @Test func outdatedThreadKeepsItsOriginalLine() throws {
+      let thread = try only(threadNode(outdated: true, line: nil, originalLine: 40))
+
+      #expect(thread.line == 40)
+      #expect(thread.outdated == true)
+    }
+
+    @Test func keepsTheFirstCommentsURLAndPath() throws {
+      let url = "\(pr133856)#discussion_r2512345678"
+
+      let thread = try only(threadNode(path: "posthog/api/flags.py", url: url))
+
+      #expect(thread.url == url)
+      #expect(thread.path == "posthog/api/flags.py")
+    }
+
+    /// The draft side resolves `replyTo` with ReplyTarget.parse, so both
+    /// sides of a match compare ids that one function produced.
+    @Test(arguments: [
+      ("\(pr133856)#discussion_r2512345678", Int64(2_512_345_678)),
+      ("\(pr133856)#discussion_r3456789012", Int64(3_456_789_012)),
+      ("\(pr133856)/files#discussion_r3456789012", Int64(3_456_789_012)),
+      ("https://github.com/acme/widgets/pull/7#discussion_r1", Int64(1)),
+    ])
+    func rootIdIsTheIdThatReplyTargetParses(_ url: String, _ id: Int64) throws {
+      let thread = try only(threadNode(url: url))
+
+      #expect(thread.rootId == id, "\(url)")
+      #expect(thread.rootId == (try? ReplyTarget.parse(url))?.id, "\(url)")
+    }
+
+    @Test(arguments: [
+      "",
+      "not a url",
+      "http://github.com/PostHog/posthog/pull/133856#discussion_r2512345678",
+      "https://example.com/PostHog/posthog/pull/133856#discussion_r2512345678",
+      "https://github.com/PostHog/posthog/pull/133856",
+      "https://github.com/PostHog/posthog/pull/133856#discussion_rabc",
+      "https://github.com/PostHog/posthog/pull/133856?x=1#discussion_r2512345678",
+      "https://github.com/PostHog/posthog/issues/133856#discussion_r2512345678",
+    ])
+    func rootIdIsNilForAURLThatDoesNotParse(_ url: String) throws {
+      let thread = try only(threadNode(url: url))
+
+      #expect(thread.rootId == nil, "\(url)")
+    }
+
+    /// A draft matches a thread only by a review comment id, so an id of
+    /// another kind would let a conversation comment's draft land in a thread.
+    @Test(arguments: [
+      "\(pr133856)#issuecomment-2512345678",
+      "\(pr133856)#pullrequestreview-2512345678",
+    ])
+    func rootIdIsNilForAURLThatNamesAnotherKindOfComment(_ url: String) throws {
+      #expect(try only(threadNode(url: url)).rootId == nil, "\(url)")
+    }
+
+    /// The details cover every open thread, so a read without comments of a
+    /// PR whose threads are all resolved has nothing missing.
+    @Test func resolvedThreadsReadWithoutCommentsGiveNoMissingDetails() throws {
+      let nodes = [threadNode(resolved: true, withComments: false)]
+
+      #expect(try details(nodes).threadDetails == [])
+    }
+
+    @Test func openThreadWhoseFirstCommentIsGoneStillGivesADetail() throws {
+      var node = try #require(threadNode(path: "gone.py").object)
+      node["first"] = ["nodes": []]
+
+      let thread = try only(.object(node))
+
+      #expect(thread.path == "gone.py")
+      #expect(thread.rootId == nil)
+      #expect(thread.excerpt == "")
+    }
+
+    @Test func excerptIsTheFirstCommentOnOneLine() throws {
+      let thread = try only(threadNode(body: "Should this handle\nthe empty group?\n\nI think so."))
+
+      #expect(thread.excerpt == "Should this handle the empty group? I think so.")
+    }
+
+    @Test func excerptHasAtMost300Characters() throws {
+      let body = String(repeating: "This changes the default.\n", count: 60)
+
+      let thread = try only(threadNode(body: body))
+
+      #expect(thread.excerpt.count <= 300)
+      #expect(!thread.excerpt.contains("\n"))
+    }
+  }
+}
+
+// MARK: - Review details
+
+extension MergeDetailsTests {
+  @Suite struct ReviewDetails {
+    static let commits = ["c1", "c2", "c3", head133856]
+
+    func reviews(_ nodes: [JSON], commits: [String]? = ReviewDetails.commits) throws -> [MergeDetails.ReviewDetail] {
+      let parsed = try #require(GitHub.parseMergeDetails(detailsNode(reviews: nodes, commits: commits)))
+      return try #require(parsed.details.reviews)
+    }
+
+    func only(_ node: JSON, commits: [String]? = ReviewDetails.commits) throws -> MergeDetails.ReviewDetail {
+      let all = try reviews([node], commits: commits)
+      #expect(all.count == 1)
+      return try #require(all.first)
+    }
+
+    @Test func readsTheAuthorStateBodyCommitAndURL() throws {
+      let url = "\(pr133856)#pullrequestreview-3400000001"
+
+      let review = try only(reviewNode(author: "stamphog", state: "APPROVED", body: "Looks good.", url: url))
+
+      #expect(review.author == "stamphog")
+      #expect(review.state == "APPROVED")
+      #expect(review.body == "Looks good.")
+      #expect(review.commit == head133856)
+      #expect(review.url == url)
+    }
+
+    @Test func keepsGitHubsOrder() throws {
+      let all = try reviews([reviewNode(author: "stamphog"), reviewNode(author: "dmarticus")])
+
+      #expect(all.map(\.author) == ["stamphog", "dmarticus"])
+    }
+
+    @Test func botReviewerIsABot() throws {
+      #expect(try only(reviewNode(author: "stamphog", typename: "Bot")).bot == true)
+    }
+
+    @Test func userReviewerIsNotABot() throws {
+      #expect(try only(reviewNode(author: "dmarticus", typename: "User")).bot != true)
+    }
+
+    @Test(arguments: [
+      (head133856, 0),
+      ("c3", 1),
+      ("c2", 2),
+      ("c1", 3),
+    ])
+    func commitsSinceCountsTheCommitsAfterTheReviewsCommit(_ commit: String, _ since: Int) throws {
+      #expect(try only(reviewNode(commit: commit)).commitsSince == since, "\(commit)")
+    }
+
+    /// A force-push, or a PR with more than 100 commits, leaves the review's
+    /// commit out of the list.
+    @Test func commitsSinceIsNilWhenTheCommitIsNotInTheList() throws {
+      #expect(try only(reviewNode(commit: "gone")).commitsSince == nil)
+    }
+
+    @Test func commitsSinceIsNilWhenTheReviewHasNoCommit() throws {
+      #expect(try only(reviewNode(commit: nil)).commitsSince == nil)
+    }
+
+    @Test func commitsSinceIsNilWithoutTheCommitList() throws {
+      #expect(try only(reviewNode(commit: head133856), commits: nil).commitsSince == nil)
+    }
+
+    @Test func bodyHasAtMost600Characters() throws {
+      let body = String(repeating: "This looks right to me. ", count: 60)
+
+      #expect(try only(reviewNode(body: body)).body.count <= 600)
+    }
+
+    @Test func shortBodyIsKept() throws {
+      #expect(try only(reviewNode(body: "Ship it.")).body == "Ship it.")
+    }
+
+    @Test func emptyBodyIsEmpty() throws {
+      #expect(try only(reviewNode(body: "")).body == "")
+    }
+
+    @Test func readsEachInlineComment() throws {
+      let note = noteNode(
+        path: "posthog/api/flags.py", line: 12, body: "Nit:\nrename this.", url: "\(pr133856)#discussion_r2600000001")
+
+      let read = try #require(try only(reviewNode(notes: [note])).notes.first)
+
+      #expect(read.path == "posthog/api/flags.py")
+      #expect(read.line == 12)
+      #expect(read.excerpt == "Nit: rename this.")
+      #expect(read.url == "\(pr133856)#discussion_r2600000001")
+    }
+
+    @Test func outdatedInlineCommentKeepsItsOriginalLine() throws {
+      let read = try #require(try only(reviewNode(notes: [noteNode(line: nil, originalLine: 9)])).notes.first)
+
+      #expect(read.line == 9)
+    }
+
+    @Test func keepsAtMostFiveInlineCommentsAndTheirCount() throws {
+      let notes = (0..<7).map { noteNode(path: "f\($0).py") }
+
+      let review = try only(reviewNode(notes: notes, noteCount: 9))
+
+      #expect(review.notes.map(\.path) == (0..<5).map { "f\($0).py" })
+      #expect(review.noteCount == 9)
+    }
+
+    @Test func inlineCommentExcerptHasAtMost300Characters() throws {
+      let body = String(repeating: "Rename this.\n", count: 60)
+
+      let read = try #require(try only(reviewNode(notes: [noteNode(body: body)])).notes.first)
+
+      #expect(read.excerpt.count <= 300)
+      #expect(!read.excerpt.contains("\n"))
+    }
+  }
+}
+
+// MARK: - Stored shape
+
+extension MergeDetailsTests {
+  @Suite struct StoredShape {
+    /// The merge details of a `pr` event that an sbd before the review
+    /// details wrote.
+    static let oldDetails = """
+      {"additions":315,"changedFiles":4,"deletions":208,"description":"The cache drops writes.",\
+      "gist":"The cache drops writes.","openThreads":1,"testGaps":["Not run: the e2e suite."],"threads":2,\
+      "threadsRead":2}
+      """
+
+    @Test func detailsWrittenBeforeTheReviewDetailsDecode() throws {
+      let details = try JSONCoding.decode(MergeDetails.self, from: Self.oldDetails)
+
+      #expect(
+        details
+          == MergeDetails(
+            additions: 315, deletions: 208, changedFiles: 4, threads: 2, threadsRead: 2, openThreads: 1,
+            description: "The cache drops writes.", gist: "The cache drops writes.",
+            testGaps: ["Not run: the e2e suite."]))
+      #expect(details.threadDetails == nil)
+      #expect(details.reviews == nil)
+    }
+
+    @Test func pullRequestWrittenBeforeTheReviewDetailsDecodes() throws {
+      var object = try #require(try JSON(encoding: samplePR()).object)
+      let oldDetails: JSON = try #require(JSON.parse(Self.oldDetails))
+      object["mergeDetails"] = oldDetails
+
+      let pr = try JSONCoding.decode(PullRequest.self, from: JSON.object(object).text)
+
+      #expect(pr.mergeDetails?.openThreads == 1)
+      #expect(pr.mergeDetails?.threadDetails == nil)
+      #expect(pr.mergeDetails?.reviews == nil)
+    }
+
+    @Test func parsedReviewDetailsSurviveARoundTrip() throws {
+      let node = detailsNode(
+        threadNodes: [threadNode(typename: "Bot"), threadNode(resolved: true)],
+        reviews: [reviewNode(notes: [noteNode()]), reviewNode(author: "dmarticus", commit: nil)],
+        commits: ["c1", head133856])
+      let details = try #require(GitHub.parseMergeDetails(node)).details
+
+      let decoded = try JSONCoding.decode(MergeDetails.self, from: try JSONCoding.encode(details))
+
+      #expect(decoded == details)
+      #expect(decoded.threadDetails?.isEmpty == false)
+      #expect(decoded.reviews?.isEmpty == false)
     }
   }
 }
