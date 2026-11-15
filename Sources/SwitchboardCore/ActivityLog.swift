@@ -27,13 +27,15 @@ public enum LaunchTrigger: String, Codable, Sendable, CaseIterable {
   case mcp
   /// A relaunch that delivers messages queued while claude exited.
   case pending
+  /// A schedule's prompt, which sbd sends on its own.
+  case schedule
 
   /// Whether the user's own action started claude. It differs from `byUser` on a `sent` event, which says who
   /// wrote the message: a card's answer and a group message are the user's, though sbd writes their text.
   public var userCaused: Bool {
     switch self {
     case .open, .send, .resume, .create, .followup, .card, .decision, .group, .merge: return true
-    case .session, .notice, .wait, .dependency, .autoContinue, .chat, .mcp, .pending: return false
+    case .session, .notice, .wait, .dependency, .autoContinue, .chat, .mcp, .pending, .schedule: return false
     }
   }
 }

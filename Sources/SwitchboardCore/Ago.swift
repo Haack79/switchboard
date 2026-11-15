@@ -6,3 +6,8 @@ public func ago(_ ms: Int64, now: Int64 = nowMs()) -> String {
   if s < 86400 { return "\(s / 3600)h" }
   return "\(s / 86400)d"
 }
+
+/// How long until `ms`, in the units of `ago`: "in 12m", or "now" for a time that has come.
+public func fromNow(_ ms: Int64, now: Int64 = nowMs()) -> String {
+  ms > now ? "in \(ago(now, now: ms))" : "now"
+}

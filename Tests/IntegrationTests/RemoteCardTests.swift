@@ -156,8 +156,9 @@ private let refusal = "ssh: connect to host mini.local port 22: Operation timed 
     let after = try sbd.waitFor(s.id, "the removed card") { $0.cards.isEmpty }
 
     #expect(after.reason == "approve `touch z`")
+    // sbd records card_closed after the card goes, once it confirms that Claude Code closed the hook.
+    try sbd.waitFor("the card_closed event") { try sbd.events(s.id).contains { $0.kind == "card_closed" } }
     let events = try sbd.events(s.id)
-    #expect(events.contains { $0.kind == "card_closed" })
     #expect(events.contains { $0.kind == "dialog_closed" && $0.data["allowed"] == nil })
   }
 
