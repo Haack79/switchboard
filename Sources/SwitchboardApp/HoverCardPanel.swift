@@ -262,10 +262,7 @@ struct HoverCardBody: View {
           Circle().fill(pr.status.color).frame(width: 6, height: 6)
           Text(verbatim: pr.text).lineLimit(1)
         }
-        .font(.caption.weight(.medium))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(pr.status.color.opacity(0.14)))
+        .pill(pr.status.color, size: .regular, plainText: true)
       }
       if let summary = content.summary {
         // `HoverCardContent` already put the names in. A name is never scanned again.
