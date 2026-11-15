@@ -245,7 +245,8 @@ import Testing
 
     #expect(try cards(sbd, other).isEmpty)
     #expect(try requested(sbd, other.id).isEmpty)
-    if !result.isError { #expect(try cards(sbd, c).map(\.kind) == [.mcp]) }
+    #expect(!result.isError, "\(result.text)")
+    #expect(try cards(sbd, c).map(\.kind) == [.mcp])
   }
 
   // MARK: Who gets the tool (Decision 6)

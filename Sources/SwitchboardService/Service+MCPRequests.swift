@@ -16,7 +16,8 @@ extension Service {
     let all = args["all"]?.bool == true
     var names: [String] = []
     for name in args["servers"]?.array?.compactMap(\.string) ?? [] where !names.contains(name) { names.append(name) }
-    guard all != !names.isEmpty else { throw APIError("ask for server names or for all, not both or neither") }
+    let hasNames = !names.isEmpty
+    guard all != hasNames else { throw APIError("ask for server names or for all, not both or neither") }
     let reason = oneLine(args["reason"]?.string ?? "", max: TriageCard.lineLength)
     guard !reason.isEmpty else { throw APIError("say in reason why this conversation needs the server") }
     if let open = entries[id]!.facts.cards.first(where: { $0.kind == .mcp }) {

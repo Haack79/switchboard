@@ -33,7 +33,7 @@ public struct MCPServerRequest: Codable, Equatable, Sendable {
       servers == nil
       ? " The full setup includes claude.ai connectors such as Slack and every server in your config." : ""
     return
-      "Claude restarts with it and resumes this conversation. Nothing changes until you allow it. Send the conversation a message after the restart to continue.\(connectors)"
+      "Claude restarts with the servers and resumes this conversation. Nothing changes until you allow it. Send the conversation a message after the restart to continue.\(connectors)"
   }
 }
 

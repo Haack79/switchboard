@@ -279,7 +279,7 @@ import Testing
   @Test func aManagersMCPItemSaysClaudeRestartsAndNothingChangesUntilAllow() throws {
     let item = try #require(conversationItem(mcpRequestFacts(), .manager))
 
-    #expect(item.summary.contains("Claude restarts with it and resumes this conversation."), "\(item.summary)")
+    #expect(item.summary.contains("Claude restarts with the servers and resumes this conversation."), "\(item.summary)")
     #expect(item.summary.contains("Nothing changes until you allow it."), "\(item.summary)")
     #expect(item.summary.contains("Send the conversation a message after the restart"), "\(item.summary)")
   }

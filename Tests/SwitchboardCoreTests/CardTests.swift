@@ -720,6 +720,13 @@ let mcpCardSurvivors = turnEnds + [event("idle", 4)]
     #expect(f.cards.map(\.id) == [9])
   }
 
+  /// An `mcp_decided` that names a send card is not the decision that closes it.
+  @Test func anMCPDecisionLeavesAnotherKindOfCard() {
+    let f = facts([sendPending(), mcpDecidedEvent(7, "allowed")])
+
+    #expect(f.cards.map(\.id) == [7])
+  }
+
   @Test(arguments: mcpCardSurvivors) func anMCPCardSurvivesTheEndOfTheTurn(_ end: Event) {
     let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(), end])
 
