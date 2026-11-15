@@ -339,6 +339,13 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// True while the session works on a message that the user sent to answer
   /// its rule's Inbox item, which holds it in Waiting.
   public var requested: Bool?
+  /// When the user's snooze of the session ends, while the snooze holds. It is
+  /// set whatever the state, so a working snoozed session has it too.
+  public var snoozedUntil: Int64?
+  /// The note of a snooze that ended, such as "snoozed until 2026-11-15 09:00",
+  /// while the item that came back is in the Inbox and the user hasn't acted
+  /// on the session. Never set together with `snoozedUntil`.
+  public var snoozeNote: String?
   /// True while the session's start of claude waits behind the live cap.
   public var queued: Bool?
   /// Claude Code's permission mode, such as `default` or `auto`, or nil when

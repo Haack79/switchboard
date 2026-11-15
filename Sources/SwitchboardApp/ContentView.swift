@@ -68,6 +68,10 @@ struct ContentView: View {
     Binding(get: { model.showingDoneRemoval }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
+  private var isPickingSnoozeTime: Binding<Bool> {
+    Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
+  }
+
   private var isShowingQuickAsk: Binding<Bool> {
     Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
   }
@@ -173,6 +177,9 @@ struct ContentView: View {
     .sheet(isPresented: isShowingDoneRemoval) {
       DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
+    .sheet(isPresented: isPickingSnoozeTime) {
+      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
     .inlineLinks(model)
   }
 }
@@ -233,6 +240,7 @@ struct Sidebar: View {
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              SnoozeMenuItems(session: row.session)
               DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               PauseMenuItem(model: model, session: row.session)
               if row.session.queued == true {
@@ -525,6 +533,7 @@ struct SessionRow: View {
         // The sidebar can be too narrow for the badge beside the PR number.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           if let pr = session.pr { QueueBadge(pr: pr) }
+          if let until = session.snoozedUntil { SnoozeMark(until: until) }
           subtitle
         }
         CleanupNote(session: session)
@@ -637,6 +646,7 @@ struct BoardView: View {
                           }
                         }
                         .contextMenu {
+                          SnoozeMenuItems(session: s)
                           PauseMenuItem(model: model, session: s)
                           if drops { moveMenu(s.id, from: lane.group?.id) }
                         }
@@ -1097,6 +1107,7 @@ struct BoardCard: View {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let pr = s.pr { QueueBadge(pr: pr) }
             if let holder = s.holderBadge { HolderBadge(holder: holder) }
+            if let until = s.snoozedUntil { SnoozeMark(until: until) }
             if let pause = s.pause { PausedBadge(pause: pause) }
             Text(statusLine)
               .font(.caption2).foregroundStyle(.tertiary)

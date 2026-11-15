@@ -85,7 +85,7 @@ extension Attention {
     _ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64, kind: SessionKind
   ) -> Verdict {
     var out = shown(verdict, facts, now: now, acknowledgedMs: acknowledgedMs)
-    if kind == .operator, !facts.acknowledgedReports.isEmpty, Triage.operatorItem(facts, out) == nil {
+    if kind == .operator, !facts.acknowledgedReports.isEmpty, Triage.operatorItem(facts, verdict) == nil {
       out.acknowledged = true
     }
     return out

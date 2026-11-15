@@ -30,8 +30,3 @@ var fromArg: [String: JSON] {
   arg["from"] = ProcessInfo.processInfo.environment["SB_SESSION_ID"].map(JSON.string)
   return arg
 }
-
-extension SessionSummary {
-  /// The reason line, marked when the user acknowledged it.
-  var reasonLine: String { acknowledged == true ? "\(reason) (acknowledged)" : reason }
-}

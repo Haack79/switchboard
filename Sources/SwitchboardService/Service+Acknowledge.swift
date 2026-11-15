@@ -4,19 +4,17 @@ import SwitchboardCore
 extension Service {
   /// The `ack` request, which marks the Inbox item of `session` as seen, or
   /// with `undo` puts it back. It changes nothing else about the session.
-  /// `caller` is the asking session's id. A session can't acknowledge itself,
-  /// because it could then hide its own question from the user.
+  /// `caller` is the asking session's id, which `lookupOther` refuses. A
+  /// session that acknowledged itself could hide its own question from the user.
   func acknowledgeRequest(_ args: JSON) throws -> JSON {
-    let id = try lookup(args)
+    let id = try lookupOther(args, refusing: "acknowledge itself out of the Inbox")
     let e = entries[id]!
-    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
-      throw APIError("\(e.session.name) can't acknowledge itself out of the Inbox")
-    }
-    let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
+    let now = nowMs()
+    let verdict = Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState)
     if args["undo"]?.bool == true {
       // The operator's reports reopen even while a wait or a prompt gives it an item that hides Undo Acknowledge.
       let reopensReports = e.session.kind == .operator && !e.facts.acknowledgedReports.isEmpty
-      guard shown(id, verdict).acknowledged || verdict.requested || reopensReports else {
+      guard shown(id, verdict, now: now).acknowledged || verdict.requested || reopensReports else {
         throw APIError("\(e.session.name) isn't acknowledged")
       }
       record(id, "unack")
@@ -34,7 +32,7 @@ extension Service {
   /// unless the user already acknowledged it.
   func acknowledge(_ id: String, _ verdict: Verdict) throws {
     let e = entries[id]!
-    guard !shown(id, verdict).acknowledged else { return }
+    guard !shown(id, verdict, now: nowMs()).acknowledged else { return }
     guard AttentionState.inbox.contains(verdict.state) else {
       throw APIError("\(e.session.name) isn't in the Inbox: \(verdict.reason)")
     }
@@ -49,7 +47,7 @@ extension Service {
   func inboxRequest(_ id: String, ref: String, message: String) -> InboxRequest? {
     let e = entries[id]!
     let now = nowMs()
-    let shownVerdict = shown(id, Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState))
+    let shownVerdict = shown(id, Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState), now: now)
     guard let item = Triage.item(e.facts, shownVerdict, kind: e.session.kind), item.ref == ref, item.source == .rule
     else { return nil }
     let verdict = Attention.unheld(e.session, e.facts, now: now, stateOf: lastState)
@@ -63,11 +61,11 @@ extension Service {
   }
 
   /// The verdict that the app and `sb` show for `id`, given the verdict that
-  /// `evaluate` gave. Every caller goes through here, so the acknowledgment
-  /// rules read the same settings everywhere.
-  func shown(_ id: String, _ verdict: Verdict) -> Verdict {
+  /// `evaluate` gave at `now`. Every caller goes through here, so the
+  /// acknowledgment rules read the same settings everywhere.
+  func shown(_ id: String, _ verdict: Verdict, now: Int64) -> Verdict {
     let e = entries[id]!
     return Attention.shown(
-      verdict, e.facts, now: nowMs(), acknowledgedMs: config.recheck.acknowledgedMs, kind: e.session.kind)
+      verdict, e.facts, now: now, acknowledgedMs: config.recheck.acknowledgedMs, kind: e.session.kind)
   }
 }
