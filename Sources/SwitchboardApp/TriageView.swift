@@ -77,8 +77,8 @@ struct TriageDetail: View {
   }
 
   private var bar: some View {
-    // Every item keeps to one line. When the pane is narrow, the repo and branch truncate first, then the name and
-    // the PR link. The buttons keep their full width.
+    // Every item keeps to one line. When the pane is narrow, the repo and branch truncate first, then the PR link,
+    // then the name. The buttons keep their full width.
     HStack(spacing: 8) {
       Text(model.inboxName(session)).fontWeight(.medium).lineLimit(1).layoutPriority(2)
         .help(model.inboxName(session))
@@ -96,7 +96,7 @@ struct TriageDetail: View {
           if let owners = link.owners { CodeOwnerShield(status: owners) }
           if let head = link.head {
             Text("uses \(head)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-              .help("The PR's branch. This folder is on \(session.branch ?? "another branch").")
+              .help("The PR's branch, \(head). This folder is on \(session.branch ?? "another branch").")
           }
         }
         .layoutPriority(1)
