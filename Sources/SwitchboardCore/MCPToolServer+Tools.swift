@@ -178,7 +178,8 @@ extension MCPToolServer {
       "Lists the schedules with their session, prompt, interval, next run, and last result, the next due first. Pass a session to list only its schedules. A next run in the past means the run waits for the session to be free.",
       ["session": session]),
     Tool(
-      "remove_schedule", "Removes a schedule. Get its id from list_schedules or from add_schedule's result.", ["schedule": string("The id of the schedule.")],
+      "remove_schedule", "Removes a schedule. Get its id from list_schedules or from add_schedule's result.",
+      ["schedule": string("The id of the schedule.")],
       required: ["schedule"]),
     Tool(
       "report",

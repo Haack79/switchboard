@@ -14,7 +14,7 @@ extension Service {
       let id: String
       do {
         id = try lookup(args)
-      } catch where args["group"] == nil && args["session"]?.string == Manager.operatorName {
+      } catch  where args["group"] == nil && args["session"]?.string == Manager.operatorName {
         // The Manager guide schedules loops on the operator by name, so an unscoped request creates it as `sb wait` does.
         id = try ensureOperator()
       }
