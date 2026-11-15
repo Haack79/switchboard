@@ -13,14 +13,17 @@ final class SessionViewState: ObservableObject {
   @Published var sidePanelFits = true
 }
 
-/// One session: its state and actions, the Claude terminal and the shell side
-/// by side, and a field that sends Claude a message.
+/// One session: its state and actions, and the Claude terminal and the shell side by side. The user types to
+/// Claude in its terminal. The field that sends Claude a message, with images, shows only on request or while
+/// it holds a draft.
 struct SessionView: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
   @StateObject private var ui = SessionViewState()
   @StateObject private var connection = TerminalConnection()
   @AppStorage("sessionSidePanel") private var showsSidePanel = true
+  /// True while a file drag is over the Claude terminal.
+  @State private var dropTargeted = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -42,15 +45,13 @@ struct SessionView: View {
       // A GeometryReader accepts any width. Without this, the layout above gives the terminals less than
       // their minimum widths, and the shell pane is laid out past the trailing edge.
       .frame(minWidth: SessionView.terminalsMinWidth(session))
-      Divider()
-      MessageField(
-        session: session.id, draft: model.messageDraft(for: session),
-        shortcut: KeyboardShortcut(.return, modifiers: [.command])
-      )
-      .padding(8)
+      SessionMessageField(session: session.id, draft: model.messageDraft(for: session))
     }
-    // A request that no terminal took would otherwise take focus the next time this session shows.
-    .onDisappear { [model, id = session.id] in model.releaseTerminalFocus(id) }
+    // A request that no view took would otherwise take focus the next time this session shows.
+    .onDisappear { [model, id = session.id] in
+      model.releaseTerminalFocus(id)
+      model.forgetMessageField(id)
+    }
     .task(id: session.id) {
       // `open` refuses a session whose folder cleanup removed.
       if session.hasTerminals { await connection.connect(session.id, live: session.live) }
@@ -72,11 +73,17 @@ struct SessionView: View {
               Button("Open Shell") { model.setShellOpen(session.id, true) }
                 .help("Start a shell in the session's folder beside the Claude terminal")
             }
+            // Open Shell comes first, so it keeps the place that `ShellSelfTest.labelPoint` clicks.
+            Button("Message") { model.revealMessageField(session.id) }
+              .help("Show a field that sends Claude a message, with images dropped on it or pasted into it (⇧⌘E)")
           }
           TerminalPane(
             command: terminals.attachCommand(.claude), takesFocus: model.terminalFocus == session.id,
             onFocus: { [model, id = session.id] in model.releaseTerminalFocus(id) }, newlineOnShiftReturn: true,
-            loadBlockSources: { [model, id = session.id] done in model.loadBlockSources(id, then: done) })
+            loadBlockSources: { [model, id = session.id] done in model.loadBlockSources(id, then: done) },
+            wake: session.wakesOnTerminalInput ? { [model, id = session.id] in model.wake(id) } : nil
+          )
+          .overlay { imageDrop }
         }
         .frame(minWidth: SessionView.claudeMinWidth, idealWidth: 760)
         if session.shellClosed != true {
@@ -104,6 +111,28 @@ struct SessionView: View {
     } else {
       ProgressView("Opening terminals…").frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+  }
+
+  /// SwiftTerm takes no drops, so a file dropped on the Claude terminal attaches to the draft and shows the field.
+  private var imageDrop: some View {
+    FileDropTarget(isTargeted: $dropTargeted) { [model, session] urls in
+      let draft = model.messageDraft(for: session)
+      let shown = SessionView.showsMessageField(revealed: model.revealedMessageField == session.id, draft: draft)
+      model.revealMessageField(session.id, focus: false)
+      let left = draft.add(dropped: urls)
+      // A field that appears with an error already set never sees the error change, so it would not announce it.
+      if !shown, let error = draft.error { AccessibilityNotification.Announcement(error).post() }
+      return left
+    }
+    .overlay {
+      if dropTargeted { Rectangle().stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) }
+    }
+  }
+
+  /// Whether the terminal view shows the Message Claude field. A draft with anything to send or an error always
+  /// shows, so text typed in the Inbox summary, or kept across a relaunch, is never hidden.
+  static func showsMessageField(revealed: Bool, draft: MessageField.Draft) -> Bool {
+    revealed || !draft.isEmpty || draft.error != nil
   }
 
   static let claudeMinWidth: CGFloat = 320
@@ -225,7 +254,9 @@ struct SessionView: View {
             .help(PauseBanner.resumeHelp)
         } else if session.live {
           Button("Stop") { model.stop(session.id) }
-            .help("Stop claude now. It resumes when you send a message or open the session again.")
+            .help(
+              "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
+            )
         } else if session.queued == true {
           Button("Start Now") { model.startNow(session.id) }
             .disabled(model.startingNow.contains(session.id))
@@ -289,5 +320,31 @@ struct SessionView: View {
     .padding(.horizontal, SessionView.labelPadding)
     .padding(.vertical, 3)
     .background(.bar)
+  }
+}
+
+/// The Message Claude field under a session's terminals. It observes the draft, so typing into a hidden draft
+/// elsewhere shows it here.
+private struct SessionMessageField: View {
+  @EnvironmentObject var model: BoardModel
+  let session: String
+  @ObservedObject var draft: MessageField.Draft
+
+  var body: some View {
+    if SessionView.showsMessageField(revealed: model.revealedMessageField == session, draft: draft) {
+      Divider()
+      MessageField(
+        session: session, draft: draft, shortcut: KeyboardShortcut(.return, modifiers: [.command]),
+        takesFocus: model.messageFieldFocus == session,
+        onFocus: { [model, session] in model.releaseMessageFieldFocus(session) },
+        onEmptyEscape: { [model, session] in model.hideMessageField(session) },
+        // Text typed while the send was on its way stays, and so does the field.
+        onSent: { [model, session, draft] in if draft.isEmpty { model.hideMessageField(session) } }
+      )
+      .padding(8)
+      // A field that shows only for its draft would vanish under the cursor when the user empties the draft. A
+      // field that shows counts as revealed, so only Esc on an empty field, a send, or leaving the view hides it.
+      .onChange(of: session, initial: true) { [model] in model.revealMessageField(session, focus: false) }
+    }
   }
 }

@@ -22,7 +22,12 @@ enum GroupPause {
 struct PausedBadge: View {
   let pause: Pause
 
-  var body: some View { CapsuleBadge(title: "Paused", help: pause.line) }
+  var body: some View {
+    Text("Paused")
+      .capsuleBadge()
+      .help(pause.line)
+      .accessibilityLabel(pause.line)
+  }
 }
 
 /// A paused session's line: who paused it and why, the messages it holds, and Resume.
