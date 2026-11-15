@@ -250,3 +250,70 @@ private let pasteDeliveries: [Delivery] = [.pasted, .queued]
     #expect(decoded.pending == r.pending)
   }
 }
+
+/// What a restart rebuilds for a paused session's held messages and the resume message that `unpause` puts
+/// first. Live, `unpause` puts the resume message at the front of `pending`. Replay must build the same queue.
+@Suite struct PauseReplayTests {
+  /// A queued `sent` event, held while the session was paused when `held` is true, and put at the front when
+  /// `first` is true.
+  private func queued(_ text: String, _ t: Int64, held: Bool = false, first: Bool = false) -> Event {
+    var data: [String: JSON] = ["text": .string(text), "delivery": .string(Delivery.queued.rawValue)]
+    if held { data["held"] = true }
+    if first { data["first"] = true }
+    return event("sent", t, data)
+  }
+
+  @Test func aFirstMessageGoesAheadOfTheMessagesQueuedBeforeIt() {
+    let r = replay([queued("A", 1), queued("B", 2), queued("C", 3, first: true)])
+
+    #expect(r.pending == ["C", "A", "B"])
+  }
+
+  @Test func heldMessagesWaitInPendingInTheirOrder() {
+    let r = replay([queued("A", 1, held: true), queued("B", 2, held: true)])
+
+    #expect(r.pending == ["A", "B"])
+  }
+
+  @Test func theResumeMessageGoesAheadOfTheHeldMessagesAndLaterOnesFollow() {
+    let r = replay([
+      queued("A", 1, held: true), queued("B", 2, held: true), queued("go on", 3, first: true), queued("D", 4),
+    ])
+
+    #expect(r.pending == ["go on", "A", "B", "D"])
+  }
+
+  @Test(arguments: ["hello", "null", "", "  42  ", "Say \"hi\"\nthen\tstop"])
+  func theFirstMessageKeepsItsTextExactly(_ text: String) {
+    let r = replay([queued("A", 1), queued(text, 2, first: true)])
+
+    #expect(r.pending == [text, "A"])
+  }
+
+  @Test func theFirstMessageLeavesPendingWhenItsPasteIsDelivered() {
+    let r = replay([
+      queued("A", 1, held: true), queued("go on", 2, first: true), after("pasting", "go on", 3),
+      after("delivered", "go on", 4),
+    ])
+
+    #expect(r.pending == ["A"])
+    #expect(r.uncertain.isEmpty)
+  }
+
+  @Test func aFirstMessageWithAFalseFlagQueuesAtTheBack() {
+    var late = queued("C", 3)
+    late.data = .object((late.data.object ?? [:]).merging(["first": false]) { $1 })
+
+    let r = replay([queued("A", 1), queued("B", 2), late])
+
+    #expect(r.pending == ["A", "B", "C"])
+  }
+
+  @Test func theRebuiltOrderSurvivesEncoding() throws {
+    let r = replay([queued("A", 1, held: true), queued("go on", 2, first: true)])
+
+    let decoded = try JSONCoding.decode(SessionReplay.self, from: try JSONCoding.encode(r))
+
+    #expect(decoded.pending == ["go on", "A"])
+  }
+}

@@ -305,6 +305,53 @@ import Testing
     #expect(try runs(sbd, s.id, "tick done").count == 1)
   }
 
+  /// Nothing is held, so only the session's pause can hold the run: a stopped session's run would resume it.
+  @Test func aPausedSessionsScheduleWaitsAndRunsOnceAfterTheResumeMessage() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try schedule(sbd, s.id, "tick while paused")
+    try sbd.pauseJSON(s.id)
+    try sbd.waitForPausedExit(s.id)
+
+    try sbd.advanceClock(3 * ScheduleFireTests.every + 30_000)
+    sleep(1)
+
+    #expect(try runs(sbd, s.id, "tick while paused").isEmpty)
+    #expect(try current(sbd, s.id, made.id)?.last == nil)
+    #expect(try scheduleRan(sbd, s.id).isEmpty)
+    #expect(try sbd.pauseField(s.id) != nil)
+    let mark = try sbd.lastEventId(s.id)
+    try sbd.sb("resume", s.id, "--message", "go on")
+    #expect(try sbd.waitForPrompts(s.id, after: mark, count: 2) == ["go on", "tick while paused"])
+    // The resumed launch and its turn pass real time on sbd's clock, which can pass one more due time.
+    #expect(try waitForRun(sbd, s.id, made.id).skipped >= 2)
+    sleep(2)
+    #expect(try runs(sbd, s.id, "tick while paused").count == 1)
+    #expect(try scheduleRan(sbd, s.id).count == 1)
+  }
+
+  /// A held message keeps the session's queue busy, so the run also waits behind it after the resume.
+  @Test func aRunThatCameDueWhilePausedFollowsTheResumeMessageAndTheHeldMessages() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    _ = try schedule(sbd, s.id, "tick after held")
+    try sbd.pauseJSON(s.id)
+    try sbd.waitForPausedExit(s.id)
+    try sbd.sb("send", s.id, "held note")
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    sleep(1)
+
+    #expect(try runs(sbd, s.id, "tick after held").isEmpty)
+    let mark = try sbd.lastEventId(s.id)
+    try sbd.sb("resume", s.id, "--message", "go on")
+    let expected = ["go on", "held note", "tick after held"]
+    #expect(try sbd.waitForPrompts(s.id, after: mark, count: 3) == expected)
+    sleep(2)
+    #expect(try sbd.promptsSince(s.id, after: mark) == expected)
+    #expect(try scheduleRan(sbd, s.id).count == 1)
+  }
+
   @Test func aPausedScheduleDoesNotRun() throws {
     let sbd = try Instance()
     let s = try sbd.idleSession()

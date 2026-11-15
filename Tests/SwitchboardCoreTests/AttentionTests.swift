@@ -935,7 +935,7 @@ private func approvedLandablePR(_ edit: (inout PullRequest) -> Void = { _ in }) 
 /// Each concrete cause of Waiting that `Attention.rules` knows.
 enum WaitingCause: String, CaseIterable, Sendable {
   case openWait, subagent, backgroundJob, jobReport, mergedNotYetRead, mergeQueue, checksRunning
-  case mergeabilityUnknown, busyStackBase, openDependency
+  case mergeabilityUnknown, busyStackBase, openDependency, paused
 
   static let now: Int64 = 10_000
   static let reply = "I'll wait for it."
@@ -981,6 +981,8 @@ enum WaitingCause: String, CaseIterable, Sendable {
         events.append(
           try dependenciesEvent(3, [Dependency(via: .body, repo: "acme/widgets", number: 41, state: .open)]))
       }
+    case .paused:
+      if withCause { s.pause = pauseOf() }
     }
     return Attention.evaluate(s, facts(events), now: WaitingCause.now, stateOf: stateOf)
   }
@@ -1005,6 +1007,199 @@ enum WaitingCause: String, CaseIterable, Sendable {
     let v = Attention.evaluate(session(), f, now: sni5dxAck + 59 * 60_000)
 
     #expect(v == Verdict(state: .needsYou, reason: "read its last reply and decide what's next"))
+  }
+}
+
+/// A session in a state that some rule gives, which a pause must override.
+enum PausedShape: String, CaseIterable, Sendable, CustomTestStringConvertible {
+  case firstPrompt, runningTurn, openCard, deferredCard, openPermission, openQuestion, questionReply, offer
+  case openWait, overdueWait, notifyOutcome, readyToMerge, openPR, requestHold, unreadHost, stale
+
+  var testDescription: String { rawValue }
+
+  static let conflictReason = "merge main in; #42 conflicts with main"
+
+  var now: Int64 { self == .stale ? Attention.staleAfterMs + 10 : 10_500 }
+
+  /// The state that the session has without the pause, which shows that the shape reaches its rule.
+  var unpausedState: AttentionState {
+    switch self {
+    case .runningTurn: .working
+    case .offer: .canContinue
+    case .openWait, .requestHold: .waiting
+    case .readyToMerge: .readyToMerge
+    case .openPR: .readyForReview
+    case .stale: .stale
+    case .firstPrompt, .openCard, .deferredCard, .openPermission, .openQuestion, .questionReply, .overdueWait,
+      .notifyOutcome, .unreadHost:
+      .needsYou
+    }
+  }
+
+  /// The session with the pause, or without one when `pause` is nil.
+  func subject(_ pause: Pause?) -> Session {
+    var s = session()
+    switch self {
+    case .openWait: s.waits = [Wait(id: "w1", kind: .ci, pr: pr1204, created: 0)]
+    case .overdueWait: s.waits = [Wait(id: "w1", kind: .ci, pr: pr1204, created: 0, recheck: 5_000)]
+    case .openPR: s.waits = [Wait(id: "w1", kind: .manual, note: "the deploy of #42", created: 0, then: .notify)]
+    case .unreadHost: s.host = "mini"
+    default: break
+    }
+    s.pause = pause
+    return s
+  }
+
+  func shapeFacts() throws -> SessionFacts {
+    func turn(_ reply: String) -> [Event] {
+      [event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": .string(reply)])]
+    }
+    switch self {
+    case .firstPrompt:
+      return facts([event("SessionStart", 1)])
+    case .runningTurn:
+      return facts([event("UserPromptSubmit", 0, ["prompt": "go"])])
+    case .openCard, .deferredCard:
+      var f = facts(turn("All tests pass."))
+      var card = Card(event("PermissionRequest", 3, tool("Bash", ["command": "ls"])))
+      card.deferred = self == .deferredCard
+      f.cards = [card]
+      return f
+    case .openPermission:
+      return facts([
+        event("UserPromptSubmit", 0, ["prompt": "go"]),
+        event("PreToolUse", 1, tool("Bash", ["command": "rm -rf build"], id: "x")),
+        event("PermissionRequest", 2, tool("Bash", ["command": "rm -rf build"])),
+      ])
+    case .openQuestion:
+      return facts([
+        event("UserPromptSubmit", 0, ["prompt": "go"]),
+        event("PreToolUse", 1, tool("AskUserQuestion", ["questions": [["question": "Which fruit?"]]], id: "q")),
+      ])
+    case .questionReply:
+      return facts(turn("Which base should it target?"))
+    case .offer:
+      return facts(turn("Want me to push the fix?"))
+    case .openWait, .overdueWait, .stale:
+      return facts(turn("All tests pass."))
+    case .notifyOutcome:
+      return facts(
+        turn("All tests pass.") + [try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2)])
+    case .readyToMerge:
+      return try prFacts(readyPR())
+    case .openPR:
+      return try prFacts(readyPR(reviewDecision: .reviewRequired))
+    case .requestHold:
+      let request = event(
+        InboxRequest.event, 10_000,
+        [
+          "state": "needs_you", "reason": .string(PausedShape.conflictReason), "head": .string(samplePRHead),
+          "message": "Merge origin/main into this branch.", "until": .number(Double(10_000 + 3_600_000)),
+          "readMs": 60_000,
+        ])
+      return try prFacts(samplePR(mergeable: .conflicting), then: [request])
+    case .unreadHost:
+      return facts(
+        turn("Which base should it target?") + [
+          event("link_down", 3, ["host": "mini", "link": "unreachable", "error": "ssh: connect to host mini.local"])
+        ])
+    }
+  }
+}
+
+/// A paused session that isn't marked done is Waiting with the pause's line, whatever else holds it.
+@Suite struct PausedAttentionTests {
+  static let pause = pauseOf(by: .claude, from: managerPauser, reason: "free CPU for flags")
+
+  @Test(arguments: PausedShape.allCases)
+  func withoutThePauseTheShapeReachesItsRule(_ shape: PausedShape) throws {
+    let v = Attention.evaluate(shape.subject(nil), try shape.shapeFacts(), now: shape.now)
+
+    #expect(v.state == shape.unpausedState, "\(v)")
+  }
+
+  @Test func withoutThePauseTheRequestHoldsTheSession() throws {
+    let shape = PausedShape.requestHold
+
+    let v = Attention.evaluate(shape.subject(nil), try shape.shapeFacts(), now: shape.now)
+
+    #expect(v.requested)
+  }
+
+  @Test(arguments: PausedShape.allCases)
+  func evaluateGivesWaitingWithThePauseLine(_ shape: PausedShape) throws {
+    let v = Attention.evaluate(shape.subject(Self.pause), try shape.shapeFacts(), now: shape.now)
+
+    #expect(v == Verdict(state: .waiting, reason: "Paused by Manager: free CPU for flags"))
+  }
+
+  @Test(arguments: PausedShape.allCases)
+  func unheldGivesWaitingWithThePauseLine(_ shape: PausedShape) throws {
+    let v = Attention.unheld(shape.subject(Self.pause), try shape.shapeFacts(), now: shape.now)
+
+    #expect(v == Verdict(state: .waiting, reason: Self.pause.line))
+  }
+
+  @Test(arguments: PausedShape.allCases)
+  func thePausedVerdictIsInfo(_ shape: PausedShape) throws {
+    let v = Attention.evaluate(shape.subject(Self.pause), try shape.shapeFacts(), now: shape.now)
+
+    #expect(v.kind == .info)
+  }
+
+  @Test(arguments: PausedShape.allCases)
+  func thePausedVerdictIsNotARequestHold(_ shape: PausedShape) throws {
+    let v = Attention.evaluate(shape.subject(Self.pause), try shape.shapeFacts(), now: shape.now)
+
+    #expect(!v.requested)
+  }
+
+  @Test(arguments: PausedShape.allCases)
+  func doneOutranksThePause(_ shape: PausedShape) throws {
+    var s = shape.subject(Self.pause)
+    s.done = true
+
+    let v = Attention.evaluate(s, try shape.shapeFacts(), now: shape.now)
+
+    #expect(v == Verdict(state: .done, reason: "marked done"))
+  }
+
+  @Test(arguments: [true, false])
+  func aPausedManagerOrChatIsWaitingWithThePauseLine(_ manager: Bool) throws {
+    var s = PausedShape.questionReply.subject(Self.pause)
+    if manager { s.manager = true } else { s.chat = "g1" }
+
+    let v = Attention.evaluate(s, try PausedShape.questionReply.shapeFacts(), now: 10)
+
+    #expect(v == Verdict(state: .waiting, reason: Self.pause.line))
+  }
+
+  /// An acknowledgment moves only an Inbox verdict, so it leaves the paused verdict as it is.
+  @Test func anAcknowledgedItemStaysPaused() throws {
+    let readTheReply = "read its last reply and decide what's next"
+    let ack = try JSON(encoding: Acknowledgment(state: .needsYou, reason: readTheReply, head: nil))
+    let f = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "All tests pass."]),
+      event("ack", 2, ack.object ?? [:]),
+    ])
+    let acknowledgedMs = RecheckSettings().acknowledgedMs
+    let unpaused = Attention.shown(
+      Attention.evaluate(session(), f, now: 10), f, now: 10, acknowledgedMs: acknowledgedMs)
+    try #require(unpaused.acknowledged, "the acknowledgment didn't hold the unpaused session: \(unpaused)")
+
+    let v = Attention.shown(
+      Attention.evaluate(pausedSession(Self.pause), f, now: 10), f, now: 10, acknowledgedMs: acknowledgedMs)
+
+    #expect(v == Verdict(state: .waiting, reason: Self.pause.line))
+    #expect(!v.acknowledged)
+  }
+
+  @Test func trackRecordsWaitingForAPausedSession() throws {
+    var f = try PausedShape.questionReply.shapeFacts()
+
+    Attention.track(pausedSession(Self.pause), &f, now: 10)
+
+    #expect(f.lastState == .waiting)
   }
 }
 

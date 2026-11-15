@@ -234,6 +234,7 @@ struct Sidebar: View {
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
               DeleteSelectedMenuItem(id: row.id, count: removableSelection)
+              PauseMenuItem(model: model, session: row.session)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -502,6 +503,10 @@ struct SessionRow: View {
       VStack(alignment: .leading, spacing: 2) {
         HStack {
           Text(session.name).fontWeight(.medium).lineLimit(1)
+          if let pause = session.pause {
+            Image(systemName: "pause.circle").font(.caption).foregroundStyle(.secondary)
+              .help(pause.line).accessibilityLabel("Paused")
+          }
           Spacer()
           IssueBadge(session: session)
           if let pr = session.pr, let url = pr.link {
@@ -627,10 +632,13 @@ struct BoardView: View {
                         Group {
                           if drops {
                             BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                              .contextMenu { moveMenu(s.id, from: lane.group?.id) }
                           } else {
                             BoardCard(session: s, keyboardFocused: s.id == ring)
                           }
+                        }
+                        .contextMenu {
+                          PauseMenuItem(model: model, session: s)
+                          if drops { moveMenu(s.id, from: lane.group?.id) }
                         }
                         .id(s.id)
                       }
@@ -773,6 +781,7 @@ private struct LaneLabel: View {
             .help(group.sessions.isEmpty ? "Delete this group" : "Delete this group and move its sessions to Ungrouped")
             .accessibilityLabel("Delete group \(group.name)")
         }
+        GroupPauseButtons(group: group)
         GroupArtifactsLink(group: group)
       }
       let plans = group?.plans ?? []
@@ -1088,6 +1097,7 @@ struct BoardCard: View {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let pr = s.pr { QueueBadge(pr: pr) }
             if let holder = s.holderBadge { HolderBadge(holder: holder) }
+            if let pause = s.pause { PausedBadge(pause: pause) }
             Text(statusLine)
               .font(.caption2).foregroundStyle(.tertiary)
           }
@@ -1130,6 +1140,7 @@ struct BoardCard: View {
       TimelineView(.everyMinute) { _ in
         HStack(spacing: 4) {
           NotesButton(session: s)
+          if s.pause != nil { ResumeButton(session: s) }
           if Nudge.shows(s, now: nowMs()) { NudgeButton(session: s) }
           if s.canMerge { MergeButton(session: s) }
           if let base = s.mergeBase { MergeBaseButton(session: s, base: base) }

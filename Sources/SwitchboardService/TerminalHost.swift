@@ -192,17 +192,25 @@ final class TerminalHost {
   /// names from each terminal that attaches. `-E` keeps it from copying them
   /// from sbd's own client. This removes those names in `env` from the
   /// session again. A value that the session holds for one of them then came
-  /// from a terminal.
-  func create(_ name: String, cwd: String, env: [String: String], command: String? = nil) throws {
+  /// from a terminal. `deadMessage` is the line that the pane shows once its
+  /// command exits.
+  func create(
+    _ name: String, cwd: String, env: [String: String], command: String? = nil, deadMessage: String? = nil
+  ) throws {
     do {
+      // tmux writes the dead message into the pane when the command exits. A command that exits at once can
+      // beat a separate call, so the same tmux call sets it.
       try run(
         ["new-session", "-d", "-E", "-s", name, "-x", "200", "-y", "50", "-c", cwd] + envArgs(env)
-          + (command.map { [$0] } ?? []))
+          + (command.map { [$0] } ?? []) + (deadMessage.map { [";"] + deadMessageArgs(name, $0) } ?? []))
     } catch {
       guard TerminalHost.isDuplicateSession(error) else { throw error }
       // The pane exists, so sbd's list of panes was out of date. A running
       // pane stays as it is, and a dead one starts again.
-      if isDead(name) == true { try respawn(name, cwd: cwd, env: env, command: command) }
+      if isDead(name) == true {
+        if let deadMessage { try setDeadMessage(name, deadMessage) }
+        try respawn(name, cwd: cwd, env: env, command: command)
+      }
       return
     }
     let copied = try copiedFromTerminals()
@@ -259,7 +267,14 @@ final class TerminalHost {
 
   /// The line that a dead pane shows below its last screen.
   func setDeadMessage(_ name: String, _ message: String) throws {
-    try run(["set-option", "-p", "-t", "=\(name):", "remain-on-exit-format", message])
+    try run(deadMessageArgs(name, message))
+  }
+
+  /// The option is a tmux format.
+  /// tmux runs the command in `#(…)`.
+  /// The code doubles each `#`, so the message shows as written.
+  private func deadMessageArgs(_ name: String, _ message: String) -> [String] {
+    ["set-option", "-p", "-t", "=\(name):", "remain-on-exit-format", message.replacingOccurrences(of: "#", with: "##")]
   }
 
   func kill(_ name: String) {

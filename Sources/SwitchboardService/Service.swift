@@ -72,6 +72,12 @@ public final class Service {
     /// Set when a running claude's MCP servers changed. `applyMCPChanges`
     /// relaunches claude once it can take the change.
     var mcpRelaunch: MCPRelaunch?
+    /// When sbd last stopped the claude of the paused session.
+    var pauseStopAt: Int64?
+    /// The trigger of a resume that came while the paused claude still ran. The tick launches claude for the
+    /// queued resume message once that claude exits, even when it exited before its SessionStart. It stays set
+    /// until a launch starts claude or the running claude reports SessionStart.
+    var resumeLaunch: LaunchTrigger?
 
     /// Whether a message is queued for the session or on its way. A launch's
     /// prompt stays on its way until SessionStart, for up to `startingMs`.
@@ -350,7 +356,8 @@ public final class Service {
   // MARK: Requests
 
   static let actsOnProcesses: Set<String> = [
-    "send", "send-group", "stop", "resume", "open", "terminals", "shell", "resolve-wait", "answer", "account-move",
+    "send", "send-group", "stop", "pause", "resume", "open", "terminals", "shell", "resolve-wait", "answer",
+    "account-move",
     "dependency-resolved", "live-next",
   ]
   static let launches: Set<String> = [
@@ -358,7 +365,7 @@ public final class Service {
   ]
   /// The requests that wait for the host of the session they name, and read its panes and processes first.
   static let needsHost: Set<String> = [
-    "open", "resume", "stop", "send", "answer", "screen", "terminals", "shell", "live-next",
+    "open", "pause", "resume", "stop", "send", "answer", "screen", "terminals", "shell", "live-next",
   ]
   /// The requests that can send claude a message. Each one first waits up to 5 s for a starting claude
   /// to go live. `open` sends nothing, so it doesn't wait.
@@ -514,10 +521,12 @@ public final class Service {
 
   /// The session whose claude `request` can message: the session it names, or
   /// the operator for a `resolve-wait` of a wait that a conversation handed it.
+  /// A met pause condition resumes the session that it names.
   private func messaged(_ request: Request) throws -> String {
     let id = try lookup(request.args)
-    guard request.op == "resolve-wait" else { return id }
-    return try openWait(id, request.args["wait"]?.string).holder
+    let waitId = request.args["wait"]?.string
+    guard request.op == "resolve-wait", pauseCondition(id, waitId) == nil else { return id }
+    return try openWait(id, waitId).holder
   }
 
   /// For a request that acts on a session on a host: waits for the host, then reads its panes and processes.
@@ -582,17 +591,22 @@ public final class Service {
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
       let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
-      return ["delivery": .string(delivery.rawValue)]
+      var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
+      if let session = entries[id]?.session, let pause = session.pause {
+        reply["held"] = .string(pause.line)
+        reply["name"] = .string(session.name)
+      }
+      return .object(reply)
     case "dependency-resolved":
       return try dependencyResolved(args)
     case "stop":
       let id = try lookup(args)
       try stop(id, reason: "asked")
       return try JSON(encoding: summary(id))
+    case "pause":
+      return try pauseRequest(args)
     case "resume":
-      let id = try lookup(args)
-      try launch(id, prompt: args["prompt"]?.string, by: Service.author(args), trigger: .resume)
-      return try JSON(encoding: summary(id))
+      return try resumeRequest(args)
     case "done":
       let id = try lookup(args)
       let done = args["done"]?.bool ?? true
@@ -765,6 +779,8 @@ public final class Service {
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
       if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
+      // This claude takes the queued resume message, so the tick launches no other claude for the resume.
+      entries[id]?.resumeLaunch = nil
       refreshSoon()
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
@@ -1162,7 +1178,16 @@ public final class Service {
     let shell = paneName(id, .shell)
     if paneRow(id, .shell)?.dead == true { try closeShell(id) }
     if entries[id]?.session.shellClosed != true { try startShell(id) }
-    if paneRow(id, .claude) == nil { try launch(id, prompt: nil, trigger: .open) }
+    if paneRow(id, .claude) == nil {
+      if let pause = session.pause {
+        // A pane whose command exits at once shows the pause, and a keystroke in it starts nothing.
+        try site(for: session).terminals().create(
+          paneName(id, .claude), cwd: session.cwd, env: try newPaneEnv(id), command: "true",
+          deadMessage: Service.pausedPaneMessage(pause))
+      } else {
+        try launch(id, prompt: nil, trigger: .open)
+      }
+    }
     let terminals = try site(for: session).terminals()
     return Terminals(
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
@@ -1225,15 +1250,14 @@ public final class Service {
     if paneRow(id, .claude) != nil {
       try terminals.respawn(name, cwd: session.cwd, env: env, command: command)
     } else {
-      try terminals.create(name, cwd: session.cwd, env: env, command: command)
-      try terminals.setDeadMessage(
-        name, "Claude stopped. Switchboard resumes it when you open the session or send it a message.")
+      try terminals.create(name, cwd: session.cwd, env: env, command: command, deadMessage: Service.stoppedPaneMessage)
     }
     markStarting(name)
     if !session.started { try update(id) { $0.started = true } }
     forgetClaudePid(id)
     // This launch reads the current MCP servers, so no relaunch for a change to them is still due.
     entries[id]?.mcpRelaunch = nil
+    entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
     entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
     record(
@@ -1283,9 +1307,11 @@ public final class Service {
   /// Whether claude sits at its prompt, ready for a paste: this launch's
   /// claude reported SessionStart at least 1.5 s ago, no turn runs, and no
   /// message is on its way. A claude that shows a dialog at startup, such as
-  /// the workspace trust dialog, has not reported SessionStart.
+  /// the workspace trust dialog, has not reported SessionStart. A paused session takes no paste.
   private func readyForPaste(_ id: String, now: Int64) -> Bool {
-    guard let e = entries[id], e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart else { return false }
+    guard let e = entries[id], Pause.blocker(e.session) == nil, e.facts.live, !e.facts.turnRunning,
+      let start = e.facts.lastStart
+    else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
     if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
     return now - start >= 1500
@@ -1296,12 +1322,18 @@ public final class Service {
   /// checks that the log still holds the `sent` event. It throws, and pastes
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
+  /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
     from: String? = nil
   ) throws -> Delivery {
-    guard entries[id] != nil else { throw APIError("no session \(id)") }
+    guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
+    if Pause.blocker(e.session) != nil {
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
+      entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
+      return .queued
+    }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
     // a message with images waits for a paste.
@@ -1336,11 +1368,12 @@ public final class Service {
     deliverPending(id, after: 0.2)
   }
 
+  /// `extra` adds fields to the event, such as `held`.
   @discardableResult
-  private func recordSent(_ id: String, _ text: String, _ delivery: Delivery, by: MessageAuthor, from: String?) throws
-    -> Event
-  {
-    var data: [String: JSON] = ["text": .string(text), "delivery": .string(delivery.rawValue)]
+  func recordSent(
+    _ id: String, _ text: String, _ delivery: Delivery, by: MessageAuthor, from: String?, extra: [String: JSON] = [:]
+  ) throws -> Event {
+    var data = extra.merging(["text": .string(text), "delivery": .string(delivery.rawValue)]) { $1 }
     if delivery == .pasted { data[Delivery.awaitsDeliveredKey] = true }
     data["by"] = .string(by.rawValue)
     if let from { data["from"] = .string(from) }
@@ -1479,7 +1512,8 @@ public final class Service {
   func startPaste(_ id: String, _ message: QueuedMessage) -> Bool {
     entries[id]?.heldText = nil
     // The removal job can take the session after `deliverPending` let the paste start.
-    if removalRefusal(id) != nil {
+    // A pause that came after the paste was queued keeps the message for the resume.
+    if removalRefusal(id) != nil || entries[id].flatMap({ Pause.blocker($0.session) }) != nil {
       requeue(id, message)
       return false
     }
@@ -2320,8 +2354,12 @@ public final class Service {
           if jobs > 0 { entries[id]?.lastJobSeen = now }
           // A running turn outranks the job rule. The tick records the count after the turn ends.
           if live, entries[id]?.facts.turnRunning == false { recordJobs(id, jobs) }
-          if let e = entries[id], stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
-            try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+          if let e = entries[id] {
+            if Pause.blocker(e.session) != nil {
+              enforcePause(id, now: now)
+            } else if stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
+              try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+            }
           }
         case .stopped:
           entries[id]?.unreportedSince = nil
@@ -2330,11 +2368,13 @@ public final class Service {
           if live { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
-          // and these launches come at most every 5 s.
-          if let e = entries[id], !e.pending.isEmpty, e.facts.startedSinceLaunch,
-            now - (e.facts.lastLaunch ?? 0) >= 5_000, !mcpStarting(now: now)
+          // unless a resume came while it ran. These launches come at most
+          // every 5 s. A paused session's messages wait for the resume.
+          if let e = entries[id], !e.pending.isEmpty, Pause.blocker(e.session) == nil,
+            e.facts.startedSinceLaunch || e.resumeLaunch != nil, now - (e.facts.lastLaunch ?? 0) >= 5_000,
+            !mcpStarting(now: now)
           {
-            try? launch(id, prompt: nil, trigger: .pending)
+            try? launch(id, prompt: nil, trigger: e.resumeLaunch ?? .pending)
           }
         case .starting:
           entries[id]?.unreportedSince = nil
@@ -2464,10 +2504,16 @@ public final class Service {
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }
     if verdict.state == .readyForReview, let ready = e.facts.readySince { out.since = ready }
+    if let pause = s.pause {
+      out.pause = pause
+      out.heldMessages = e.pending.count
+      // A replay tracks each event under the current session, so the tracked state can start before the pause.
+      if !s.done { out.since = pause.since }
+    }
     if s.kind == .work && s.docket == nil {
       out.board = BoardColumn.place(
         state: verdict.state, acknowledged: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
-        facts: e.facts, created: s.created)
+        facts: e.facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: e.facts.pr, branch: e.branch) }
     }
     if s.kind == .manager {
