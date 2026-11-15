@@ -39,6 +39,16 @@ import Testing
     #expect(Manager.operatorName == "Operator")
   }
 
+  @Test(arguments: ["Operator", "Operator\nCheck the loops", "\n  Operator  \n"])
+  func aPromptWhoseFirstLineIsTheOperatorsNameNamesNoConversation(_ prompt: String) {
+    #expect(Manager.name(fromPrompt: prompt) == Manager.untitled)
+  }
+
+  @Test(arguments: ["Operator check", "operator", "Ask the Operator"])
+  func aPromptThatOnlyMentionsTheOperatorStillNamesTheConversation(_ prompt: String) {
+    #expect(Manager.name(fromPrompt: prompt) != Manager.untitled)
+  }
+
   @Test func theOperatorPromptSaysToCheckTheOperatorBeforeItReArmsALoop() {
     #expect(Manager.operatorPrompt.contains("`sb get \(Manager.operatorName)`"), "\(Manager.operatorPrompt)")
   }

@@ -96,6 +96,23 @@ extension Service {
     return oldest.id
   }
 
+  /// Refuses `name` for a session that is not the operator. The operator's prompt finds it with
+  /// `sb get Operator`. A second session with that name makes the lookup fail.
+  func refuseOperatorName(_ name: String?) throws {
+    guard name == Manager.operatorName else { return }
+    throw APIError(
+      "the name \(Manager.operatorName) belongs to the background operator, "
+        + "and a second session with it breaks `sb get \(Manager.operatorName)`. Pick another name.")
+  }
+
+  /// Refuses to rename the operator. Its prompt and the Manager guide find it by its name.
+  func refuseOperatorRename(_ id: String) throws {
+    guard entries[id]?.session.kind == .operator else { return }
+    throw APIError(
+      "the operator keeps the name \(Manager.operatorName), because its prompt finds it with "
+        + "`sb get \(Manager.operatorName)`. Rename another session instead.")
+  }
+
   /// Refuses to remove the operator while it has an open wait or an open `needsYou` report, because the
   /// removal would drop it without a message.
   func refuseOperatorRemoval(_ id: String) throws {
