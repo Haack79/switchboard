@@ -17,8 +17,7 @@ import SwiftUI
 /// event queue, so it passes through the app's event monitors as a real press does. `where` reports the place
 /// that the window shows. `snapshot <path>` draws the window as SB_SNAPSHOT does. `click-row <session>` clicks the
 /// session's sidebar row with mouse events at the row's place in the window. `extend-row <session>` adds the
-/// session's row to the sidebar table's selection, as a ⌘-click does. `selection` reports the model's selection,
-/// its multi-selection, and the sidebar table's selected rows. `detail` reports
+/// session's row to the sidebar table's selection, as a ⌘-click does. `detail` reports
 /// "N sessions selected" while the detail pane shows the multi-selection, else the place that the window shows.
 /// `click-delete-selected` clicks Delete N Sessions… in the detail pane the same way. `sheet` reports the removal
 /// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`.
@@ -103,16 +102,13 @@ enum ShellSelfTest {
     case "where":
       return "\(model.location.place)"
     case "click-row":
-      return click(anchor: rest, modifiers: [], throughWindow: true)
+      return click(anchor: rest, throughWindow: true)
     case "extend-row":
       return extendSelection(to: rest)
     case "detail":
       return model.showsMultiSelection ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
     case "click-delete-selected":
-      return click(anchor: "delete-selected", modifiers: [], throughWindow: false)
-    case "selection":
-      let rows = tables(in: window?.contentView ?? NSView()).map { "\(Array($0.selectedRowIndexes))" }
-      return "selection \(model.selection ?? "nil") multi \(model.multiSelection.sorted()) table \(rows)"
+      return click(anchor: "delete-selected", throughWindow: false)
     case "sheet":
       switch model.doneRemoval {
       case nil: return "none"
@@ -134,9 +130,7 @@ enum ShellSelfTest {
   /// middle, and reports the type of the view that the window hits there. Without `throughWindow`, the mouse-down
   /// goes to that view. A window that is not key drops a first click on a button, and a hidden launch never makes
   /// its window key. A sidebar row needs the window, because the window's handling of the mouse-down selects the row.
-  private static func click(
-    anchor name: String, modifiers: NSEvent.ModifierFlags, throughWindow: Bool
-  ) -> String {
+  private static func click(anchor name: String, throughWindow: Bool) -> String {
     guard let window, let root = window.contentView else { return "no window" }
     guard let anchor = ClickAnchorView.find(name, in: root) ?? scrollIntoView(name, in: root) else {
       return "no \(name)"
@@ -150,7 +144,7 @@ enum ShellSelfTest {
     if let row = enclosingRow(of: anchor), !hit.isDescendant(of: row) {
       return "\(type(of: hit)) covers \(name)"
     }
-    guard TerminalSelfTest.click(at: point, in: window, modifiers: modifiers, on: throughWindow ? nil : hit) else {
+    guard TerminalSelfTest.click(at: point, in: window, on: throughWindow ? nil : hit) else {
       return "no event"
     }
     return "clicked at \(Int(point.x)),\(Int(point.y)) on \(type(of: hit))"
@@ -262,16 +256,6 @@ enum ShellSelfTest {
   }
 
   private static func log(_ text: String) { FileHandle.standardError.write(Data("shelltest: \(text)\n".utf8)) }
-
-  /// Logs `text` with the modifier flags of the event that AppKit is handling and of the keyboard, while
-  /// SB_SHELL_TEST runs.
-  static func trace(_ text: @autoclosure () -> String) {
-    guard folder != nil else { return }
-    let current = NSApp.currentEvent.map { "\($0.type.rawValue)/\($0.modifierFlags.rawValue)" } ?? "none"
-    // bin/test-gui reads a command's result from the last "shelltest: " line, so a trace has its own prefix.
-    FileHandle.standardError.write(
-      Data("shelltrace: \(text()) currentEvent=\(current) modifierFlags=\(NSEvent.modifierFlags.rawValue)\n".utf8))
-  }
 }
 
 extension View {

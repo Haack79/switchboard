@@ -40,7 +40,6 @@ final class BoardModel: ObservableObject {
   /// the navigation, so it records nothing of its own. Every change ends a multi-selection.
   @Published var selection: String? {
     didSet {
-      ShellSelfTest.trace("selection \(oldValue ?? "nil") -> \(selection ?? "nil")")
       if !multiSelection.isEmpty { multiSelection = [] }
       navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
     }

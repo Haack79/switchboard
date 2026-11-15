@@ -103,12 +103,10 @@ enum TerminalSelfTest {
   /// to the queue before the mouse-down goes to the window, so the call returns whether or not such a loop runs.
   /// Returns false when AppKit makes no event. With `view`, the mouse-down goes to that view instead of the window.
   @discardableResult
-  static func click(
-    at point: NSPoint, in window: NSWindow, modifiers: NSEvent.ModifierFlags = [], on view: NSView? = nil
-  ) -> Bool {
+  static func click(at point: NSPoint, in window: NSWindow, on view: NSView? = nil) -> Bool {
     func mouse(_ type: NSEvent.EventType) -> NSEvent? {
       NSEvent.mouseEvent(
-        with: type, location: point, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+        with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
     }
     guard let down = mouse(.leftMouseDown), let up = mouse(.leftMouseUp) else { return false }
