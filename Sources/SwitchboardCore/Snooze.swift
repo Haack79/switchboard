@@ -65,7 +65,8 @@ extension SessionFacts {
     default:
       guard let record = snooze else { return }
       if let before {
-        // SnoozeTriggers reads self, so it runs before the write to snooze starts.
+        // Swift rejects a read of self inside the optional-chained assignment to snooze.
+        // So the wake reason comes first, on its own line.
         let why = before.wake(after: SnoozeTriggers(self))
         snooze?.wokeEarly = why
       } else if !record.isActive(at: event.t),

@@ -624,6 +624,13 @@ extension Instance {
     #expect(row["state"]?.string == "waiting")
     #expect(row["triage"] == nil)
     #expect(row["snoozedUntil"]?.int.map(Int64.init) == until)
+    let inputPath = "\(sbd.home.path)/summary-input.txt"
+    var input = ""
+    try sbd.waitFor("the summary call of the question") {
+      input = (try? String(contentsOfFile: inputPath, encoding: .utf8)) ?? ""
+      return input.contains("Which database should I use")
+    }
+    #expect(input.contains("State: Needs you"))
   }
 
   // A working session
@@ -805,7 +812,7 @@ extension Instance {
     let r = try sbd.run(["unsnooze", s.id], env: ["CLAUDECODE": "1", "SB_SESSION_ID": s.id])
 
     #expect(r.status != 0)
-    #expect(r.stderr.contains("can't snooze itself"))
+    #expect(r.stderr.contains("can't unsnooze itself"))
     #expect(try sbd.count("unsnooze", of: s.id) == 0)
     #expect(try sbd.listed(s.id)["snoozedUntil"] != nil)
   }

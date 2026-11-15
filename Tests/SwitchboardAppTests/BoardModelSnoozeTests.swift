@@ -120,6 +120,15 @@ private func wokenItem(_ id: String) -> SessionSummary {
     return model
   }
 
+  @Test func theOpenSnoozePickerCountsAsASheet() throws {
+    let model = offlineModel()
+    try #require(!model.presentingSheet)
+    model.pickingSnoozeTime = "a"
+    #expect(model.presentingSheet)
+    model.pickingSnoozeTime = nil
+    #expect(!model.presentingSheet)
+  }
+
   @Test func snoozingTheCurrentItemFocusesTheNextOne() {
     let model = inboxModel(focus: "b")
     model.snooze("b", until: snoozeEnd)

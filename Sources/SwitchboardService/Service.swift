@@ -716,11 +716,11 @@ public final class Service {
   }
 
   /// The session that `args` names, refused when it is the asking session
-  /// `caller`, because a session could then hide its own question from the user.
-  func lookupOther(_ args: JSON, refusing verb: String) throws -> String {
+  /// `caller`. The refusal says that the session can't do `action`.
+  func lookupOther(_ args: JSON, refusing action: String) throws -> String {
     let id = try lookup(args)
     if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
-      throw APIError("\(entries[id]!.session.name) can't \(verb) itself out of the Inbox")
+      throw APIError("\(entries[id]!.session.name) can't \(action)")
     }
     return id
   }

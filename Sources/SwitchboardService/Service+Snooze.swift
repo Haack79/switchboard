@@ -8,7 +8,7 @@ extension Service {
   /// that sbd does to the session. A new snooze replaces the session's
   /// current one. `caller` is the asking session's id.
   func snoozeRequest(_ args: JSON) throws -> JSON {
-    let id = try lookupOther(args, refusing: "snooze")
+    let id = try lookupOther(args, refusing: "snooze itself out of the Inbox")
     let session = entries[id]!.session
     guard session.kind == .work else { throw APIError("only a work session can be snoozed") }
     if session.done { throw APIError("\(session.name) is marked done") }
@@ -20,7 +20,7 @@ extension Service {
 
   /// The `unsnooze` request, which ends the active snooze of `session`.
   func unsnoozeRequest(_ args: JSON) throws -> JSON {
-    let id = try lookupOther(args, refusing: "snooze")
+    let id = try lookupOther(args, refusing: "unsnooze itself")
     let e = entries[id]!
     guard e.facts.snooze?.isActive(at: nowMs()) == true else { throw APIError("\(e.session.name) isn't snoozed") }
     record(id, "unsnooze")

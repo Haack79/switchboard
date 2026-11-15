@@ -11,11 +11,14 @@ struct SnoozeMenuItems: View {
     if session.canSnooze {
       let busy = model.snoozing.contains(session.id)
       Menu("Snooze") {
-        let titles = SnoozePresets.times(now: nowMs(), zone: .current).map(\.title)
-        ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
-          Button(title) {
-            // SwiftUI can build a context menu long before the click. The end comes from the clock at the click.
-            let until = SnoozePresets.times(now: nowMs(), zone: .current)[index].until
+        let presets = SnoozePresets.times(now: nowMs(), zone: .current)
+        ForEach(Array(presets.enumerated()), id: \.offset) { index, shown in
+          Button(shown.title) {
+            // SwiftUI can build a context menu long before the click. A duration counts from the click.
+            // A dated preset keeps the day that its title names, even when midnight passes before the click.
+            let now = nowMs()
+            let fresh = SnoozePresets.times(now: now, zone: .current)[index]
+            let until = fresh.title == shown.title || shown.until <= now ? fresh.until : shown.until
             model.snooze(session.id, until: Date(timeIntervalSince1970: Double(until) / 1000))
           }
         }
@@ -41,7 +44,7 @@ struct SnoozePicker: View {
     return hour.addingTimeInterval(3600)
   }
 
-  private var name: String { model.sessions.first { $0.id == session }?.name ?? session }
+  private var name: String { model.sessionNames.name(session) }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {

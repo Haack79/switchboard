@@ -209,7 +209,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   static let activityKinds = Set(hookKinds).union([
     "created", "imported", "followup", "started", "resumed", "followup-started", "sent", "answered",
     "dialog_closed", "card_closed", "wait", "wait-cleared", "note", "note-removed", "note-resolved", "done", "undone",
-    "account-moved", "account-move-skipped", "idle", "ack", "unack", "snooze", "unsnooze",
+    "account-moved", "account-move-skipped", "idle", "ack", "unack",
   ])
 
   public init() {}

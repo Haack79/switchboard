@@ -155,13 +155,13 @@ extension SnoozeTests {
     }
 
     @Test(arguments: ["snooze", "unsnooze"])
-    func snoozeAndUnsnoozeMoveTheLastActivity(_ kind: String) {
+    func snoozeAndUnsnoozeLeaveTheLastActivity(_ kind: String) {
       let later: Int64 = 50
       let e = kind == "snooze" ? snoozeEvent(later) : event("unsnooze", later)
 
       let f = facts(turn("Done.") + [e])
 
-      #expect(f.lastActivity == later)
+      #expect(f.lastActivity == facts(turn("Done.")).lastActivity)
     }
   }
 }
@@ -1055,6 +1055,18 @@ extension SnoozeTests {
 
       #expect(AttentionState.inbox.contains(v.state))
       #expect(snoozed.lastState == v.state)
+    }
+
+    @Test(arguments: ["snooze", "unsnooze"])
+    func aSnoozeEventLeavesAStaleSessionStale(_ kind: String) {
+      let late = 3 * Attention.staleAfterMs
+      let e = kind == "snooze" ? snoozeEvent(late, until: late + snoozeUntil) : event("unsnooze", late)
+      let plain = facts(turn("Done."))
+
+      let v = Attention.evaluate(session(), facts(turn("Done.") + [e]), now: late + 1)
+
+      #expect(v.state == .stale)
+      #expect(v == Attention.evaluate(session(), plain, now: late + 1))
     }
 
     @Test func evaluateOfAWorkingSessionIgnoresTheSnooze() {
