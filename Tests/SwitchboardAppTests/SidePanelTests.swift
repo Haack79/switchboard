@@ -39,15 +39,15 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
 }
 
 @Suite struct SidePanelTitles {
-  @Test(arguments: [(0, "Waits"), (1, "Waits (1)"), (2, "Waits (2)")])
-  func countsTheOpenWaitsInTheTitleAboveZero(_ count: Int, _ title: String) {
+  @Test(arguments: [0, 1, 2])
+  func countsTheOpenWaitsInTheTitle(_ count: Int) {
     let waits = (0..<count).map { waitFixture("w\($0)") }
 
-    #expect(SidePanel(waitingSession(waits)).waitsTitle == title)
+    #expect(SidePanel(waitingSession(waits)).waitsCount == count)
   }
 
   @Test func titlesTheNotesSectionWithoutACountWhenThereIsNoNote() {
-    #expect(SidePanel(notedSession([])).notesTitle == "Notes")
+    #expect(SidePanel(notedSession([])).notesCount == 0)
   }
 
   @Test func countsEveryNoteInTheTitleIncludingResolvedTodos() {
@@ -56,7 +56,7 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
       todoFixture("r1", "done already", resolved: true),
     ]
 
-    #expect(SidePanel(notedSession(notes)).notesTitle == "Notes (3)")
+    #expect(SidePanel(notedSession(notes)).notesCount == 3)
   }
 }
 
@@ -171,22 +171,22 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     #expect(SidePanel(scheduledSession([scheduleFixture("r1", paused: true)])).showsSchedules)
   }
 
-  @Test(arguments: [(nil, "Schedules"), ([], "Schedules")] as [([Schedule]?, String)])
-  func titlesTheSchedulesSectionWithoutACountWhenThereIsNoSchedule(_ schedules: [Schedule]?, _ title: String) {
-    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == title)
+  @Test(arguments: [nil, []] as [[Schedule]?])
+  func countsNoScheduleWhenThereIsNoSchedule(_ schedules: [Schedule]?) {
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == 0)
   }
 
-  @Test(arguments: [(1, "Schedules (1)"), (2, "Schedules (2)")])
-  func countsTheSchedulesInTheTitle(_ count: Int, _ title: String) {
+  @Test(arguments: [1, 2])
+  func countsTheSchedulesInTheTitle(_ count: Int) {
     let schedules = (0..<count).map { scheduleFixture("r\($0)") }
 
-    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == title)
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == count)
   }
 
   @Test func countsAPausedScheduleInTheTitle() {
     let schedules = [scheduleFixture("r1"), scheduleFixture("r2", paused: true)]
 
-    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == "Schedules (2)")
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == 2)
   }
 }
 
@@ -236,19 +236,19 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
   }
 
   @Test func titlesTheArtifactsSectionWithoutACountWhenThereIsNoArtifact() {
-    #expect(SidePanel(Self.session(nil)).artifactsTitle == "Artifacts")
+    #expect(SidePanel(Self.session(nil)).artifactsCount == 0)
   }
 
   @Test func countsOnlyTheArtifactsThatAreNotRemovedInTheTitle() {
     let artifacts = [artifactFixture("a"), artifactFixture("b", removed: 5), artifactFixture("c")]
 
-    #expect(SidePanel(Self.session(artifacts)).artifactsTitle == "Artifacts (2)")
+    #expect(SidePanel(Self.session(artifacts)).artifactsCount == 2)
   }
 
   @Test func titlesTheArtifactsSectionWithoutACountWhenEveryArtifactIsRemoved() {
     let artifacts = [artifactFixture("a", removed: 5), artifactFixture("b", removed: 6)]
 
-    #expect(SidePanel(Self.session(artifacts)).artifactsTitle == "Artifacts")
+    #expect(SidePanel(Self.session(artifacts)).artifactsCount == 0)
   }
 
   @Test func hasNoArtifactsForASessionWithoutAnArtifact() {
