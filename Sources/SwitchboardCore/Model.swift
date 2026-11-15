@@ -333,6 +333,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var mergeError: String?
   /// True when the user acknowledged the session's Inbox item, which moves
   /// it to Waiting until its reason changes or a new turn starts.
+  /// For the operator it is also true while an undo would reopen the reports that the acknowledgment closed.
+  /// It lasts until the user writes to the operator or a new report arrives. The state doesn't change.
   public var acknowledged: Bool?
   /// True while the session works on a message that the user sent to answer
   /// its rule's Inbox item, which holds it in Waiting.

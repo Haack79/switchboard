@@ -43,17 +43,27 @@ extension SessionFacts {
   /// before it. Only a `sent` event whose `by` is `you` closes them. A message from sbd or from a Claude Code
   /// closes none. A `sent` that names no author closes none either. An `ack` closes them too, unless a
   /// prompt blocks the session: the Inbox then shows that prompt, so the user did not see the reports.
+  /// The reports that an `ack` closes replace `acknowledgedReports`. An `unack` reopens them.
   mutating func applyReports(_ event: Event) {
     switch event.kind {
     case OperatorReport.event:
       guard let report = OperatorReport(event), report.needsYou else { return }
       openReports.append(report)
+      acknowledgedReports = []
       // A report that repeats an acknowledged reason is a new item.
       acknowledgment = nil
     case "sent" where event.data["by"]?.string == MessageAuthor.you.rawValue:
       openReports = []
+      acknowledgedReports = []
     case "ack" where ackClosesReports:
+      acknowledgedReports = openReports
       openReports = []
+    case "ack":
+      acknowledgedReports = []
+    case "unack":
+      // An ack that closed no reports leaves the open ones, and its unack keeps them.
+      openReports.insert(contentsOf: acknowledgedReports, at: 0)
+      acknowledgedReports = []
     default:
       break
     }
@@ -65,6 +75,20 @@ extension Attention {
   static func reportVerdict(_ session: Session, _ facts: SessionFacts) -> Verdict? {
     guard session.kind == .operator, !facts.openReports.isEmpty else { return nil }
     return Verdict(state: .needsYou, reason: OperatorReport.reason(facts.openReports), kind: .question)
+  }
+
+  /// The verdict that the app and `sb` show for a session of `kind`. It also marks the operator's verdict
+  /// `acknowledged` while the operator has no item and an `unack` would reopen reports. The app then offers Undo
+  /// Acknowledge, and `sb ack --undo` accepts it. This mark has no recheck time, because closed reports never
+  /// come back on their own. It keeps the verdict's state, because the operator is not in the Inbox without an item.
+  public static func shown(
+    _ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64, kind: SessionKind
+  ) -> Verdict {
+    var out = shown(verdict, facts, now: now, acknowledgedMs: acknowledgedMs)
+    if kind == .operator, !facts.acknowledgedReports.isEmpty, Triage.operatorItem(facts, out) == nil {
+      out.acknowledged = true
+    }
+    return out
   }
 }
 

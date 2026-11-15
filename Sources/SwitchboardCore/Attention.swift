@@ -189,6 +189,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var artifacts: [SessionArtifact] = []
   /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
   public var openReports: [OperatorReport] = []
+  /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
+  /// is open, because a new report clears it.
+  public var acknowledgedReports: [OperatorReport] = []
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -450,7 +453,8 @@ public struct Verdict: Equatable, Sendable {
   public var reason: String
   public var kind: TriageKind = .action
   public var source: VerdictSource = .rule
-  /// True when `Attention.shown` moved an acknowledged Inbox verdict to Waiting.
+  /// True when `Attention.shown` moved an acknowledged Inbox verdict to Waiting, or when an `unack` would reopen
+  /// the operator's reports. In the second case the state stays as it was. Either way, an undo is possible.
   public var acknowledged = false
   /// True when `Attention.requested` holds a rule verdict in Waiting while
   /// the session works on the user's request.

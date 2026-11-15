@@ -64,6 +64,8 @@ extension Service {
   /// `evaluate` gave. Every caller goes through here, so the acknowledgment
   /// rules read the same settings everywhere.
   func shown(_ id: String, _ verdict: Verdict) -> Verdict {
-    Attention.shown(verdict, entries[id]!.facts, now: nowMs(), acknowledgedMs: config.recheck.acknowledgedMs)
+    let e = entries[id]!
+    return Attention.shown(
+      verdict, e.facts, now: nowMs(), acknowledgedMs: config.recheck.acknowledgedMs, kind: e.session.kind)
   }
 }
