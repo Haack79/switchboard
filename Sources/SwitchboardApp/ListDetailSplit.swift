@@ -18,7 +18,8 @@ struct ListDetailSplit<ListContent: View, Detail: View>: View {
   }
 }
 
-/// A list section's title and its count, above the section's rows. A section that collapses shows a chevron.
+/// A list section's title and its count, above the section's rows. A section that collapses shows a chevron. The
+/// count sits at the trailing edge, as in the sidebar's section headers, and a zero count does not show.
 struct ListSectionHeader: View {
   let title: String
   let count: Int
@@ -29,13 +30,27 @@ struct ListSectionHeader: View {
       if let collapsed {
         Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.caption2).accessibilityHidden(true)
       }
-      Text("\(title) (\(count))")
+      Text(title)
+      Spacer(minLength: 4)
+      if count > 0 { Text("\(count)").monospacedDigit() }
     }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Self.spoken(title: title, count: count, collapsed: collapsed))
+    .accessibilityAddTraits(.isHeader)
     .font(.caption.bold())
     .foregroundStyle(.secondary)
     .padding(.horizontal, 12)
     .padding(.top, 10)
     .padding(.bottom, 4)
+  }
+
+  /// What VoiceOver reads for the header: the title, then the count when it is not zero, then whether a section that
+  /// collapses is collapsed or expanded.
+  static func spoken(title: String, count: Int, collapsed: Bool? = nil) -> String {
+    var parts = [title]
+    if count > 0 { parts.append("\(count)") }
+    if let collapsed { parts.append(collapsed ? "collapsed" : "expanded") }
+    return parts.joined(separator: ", ")
   }
 }
 
