@@ -521,6 +521,28 @@ private func reasons(_ result: ImportResult) -> [String: String] {
     #expect(withTask.isRunning)
   }
 
+  /// sbd refuses a claude titled with the operator's name before it stops any claude. `--name` imports it.
+  @Test func stopLeavesAClaudeTitledWithTheOperatorsNameRunningUntilItIsImportedWithAnotherName() throws {
+    let sbd = try Instance(accounts: ["A"])
+    let tree = try sbd.addWorktree(try sbd.makeRepo(), "haacked/op")
+    let claude = try stubClaude()
+    defer { if claude.isRunning { claude.terminate() } }
+    let id = newId()
+    try sbd.writeAgents(
+      "A", [agent(id, cwd: tree, name: Manager.operatorName, pid: Int(claude.processIdentifier), status: "idle")])
+
+    let refused = try sbd.client.importSessions([id], stop: [id])
+
+    #expect(refused.imported.isEmpty)
+    #expect(reasons(refused)[id]?.contains("belongs to the background operator") == true)
+    #expect(claude.isRunning)
+
+    let imported = try sbd.client.importSessions([id], name: "notes", stop: [id])
+
+    #expect(imported.refused.isEmpty, "\(imported.refused)")
+    #expect(imported.imported.map(\.name) == ["notes"])
+  }
+
   @Test func stopRefusesWhenTmuxCannotTellWhetherSwitchboardOwnsTheClaude() throws {
     let sbd = try Instance(accounts: ["A"])
     let tree = try sbd.addWorktree(try sbd.makeRepo(), "haacked/tmux")

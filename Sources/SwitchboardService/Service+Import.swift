@@ -37,6 +37,7 @@ extension Service {
     let name = args["name"]?.string
     let stopRefs = args["stop"]?.array?.compactMap(\.string).filter { !$0.isEmpty } ?? []
     if name != nil && refs.count > 1 { throw APIError("a name fits only one imported session") }
+    try refuseOperatorName(name)
     let candidates = try importCandidates()
     func named(_ refs: [String]) -> Set<String> {
       Set(
@@ -52,6 +53,10 @@ extension Service {
     queue.sync {
       for ref in refs {
         switch resolve(ref, in: candidates, stopped: stopped) {
+        case .success(let c) where name == nil && c.title == Manager.operatorName:
+          // This check runs before exitClaudes, so the claude of a refused session keeps running.
+          refused.append(
+            Refusal(ref: ref, reason: "its name \(c.title) belongs to the background operator. Import it with --name"))
         case .success(let c):
           if !chosen.contains(where: { $0.session.id == c.id }) { chosen.append((ref, c)) }
         case .failure(let error):

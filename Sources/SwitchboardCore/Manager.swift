@@ -14,9 +14,13 @@ public enum Manager {
     (a.lastActivity, a.created ?? 0) > (b.lastActivity, b.created ?? 0)
   }
 
-  /// The first non-empty line of the prompt, cut to 40 characters.
+  /// The first non-empty line of the prompt, cut to 40 characters. A line that is the operator's
+  /// name gives `untitled`, because the operator's name belongs to the operator alone.
   public static func name(fromPrompt prompt: String) -> String {
-    firstLine(prompt).map { String($0.prefix(maxNameLength)) } ?? untitled
+    guard let line = firstLine(prompt).map({ String($0.prefix(maxNameLength)) }), line != operatorName else {
+      return untitled
+    }
+    return line
   }
 
   /// Names a conversation's MCP servers for the user. `nil` is the full setup.

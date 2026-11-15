@@ -648,6 +648,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
+      try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id))
     case "issue":
@@ -1021,8 +1022,9 @@ public final class Service {
     if let host = args.host { return try newSession(args, onHost: host) }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
-    // An unknown group, an unknown account, or an account that differs from
-    // the group's fails here, before prepareFolder makes a worktree.
+    // An unknown group, an unknown account, an account that differs from
+    // the group's, or the operator's name fails here, before prepareFolder makes a worktree.
+    try refuseOperatorName(args.name ?? args.branch)
     try queue.sync {
       var probe = Session(id: "", name: "", cwd: "", branch: nil, claudeSessionId: "", model: nil, created: 0)
       probe.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1061,6 +1063,7 @@ public final class Service {
       throw APIError("a folder on \(host) is an absolute path or starts with ~, and \(args.path) is neither")
     }
     args.branch = branch(of: args, repo: args.path, at: site)
+    try refuseOperatorName(args.name ?? args.branch)
     let folder: (cwd: String, branch: String?, repo: String?)
     do {
       folder = try prepareFolder(args, at: site)
@@ -1113,6 +1116,7 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.

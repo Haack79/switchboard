@@ -391,11 +391,11 @@ private func docketLog(_ sbd: Instance, _ id: String) throws -> [String] {
     #expect(try docketRows(sbd).map(\.id) == [s.id])
   }
 
-  @Test func refusesABadParentOrGroupBeforeDocketRuns() throws {
+  @Test func refusesABadParentGroupOrNameBeforeDocketRuns() throws {
     let docket = try DocketHome()
     let sbd = try Instance(config: docket.config)
 
-    for args in [["--parent", "nosuch"], ["--group", "nosuch"]] {
+    for args in [["--parent", "nosuch"], ["--group", "nosuch"], ["--name", Manager.operatorName]] {
       let refused = try sbd.run(["docket", "--json"] + args + ["o/r#1"])
       #expect(refused.status != 0, "\(args)")
     }
