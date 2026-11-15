@@ -17,11 +17,16 @@ struct InboxView: View {
   @ViewBuilder
   private var sessions: some View {
     if model.triage.isEmpty && model.currentInboxItem == nil {
-      VStack(spacing: 12) {
-        Image(systemName: "checkmark.circle").font(.system(size: 40)).foregroundStyle(.secondary)
-        Text(model.planProposals.isEmpty ? "Nothing needs you" : "No session needs you").foregroundStyle(.secondary)
+      let hidden = model.hiddenNeedingYou
+      ContentUnavailableView {
+        Label(
+          model.planProposals.isEmpty ? "Nothing needs you" : "No session needs you", systemImage: "checkmark.circle")
+      } description: {
+        Text(Self.emptyMessage(hiddenNeedingYou: hidden))
+      } actions: {
+        if hidden > 0 { Button("Show All Orgs") { model.orgFilter = OrgFilter() } }
+        Button("Show Board") { model.show(.board) }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
       ListDetailSplit {
         TriageList()
@@ -29,9 +34,18 @@ struct InboxView: View {
         if let id = model.currentInboxItem, let session = model.sessions.first(where: { $0.id == id }) {
           TriageDetail(session: session).id(session.id)
         } else {
-          Text("Pick an item").foregroundStyle(.secondary)
+          ContentUnavailableView("Select an item", systemImage: "tray")
         }
       }
+    }
+  }
+
+  /// The line under the empty Inbox's title. It names the sessions that need the user in orgs the filter hides.
+  static func emptyMessage(hiddenNeedingYou: Int) -> String {
+    switch hiddenNeedingYou {
+    case 0: "Sessions show here when they need an answer, an approval, or a decision."
+    case 1: "1 session in an org the filter hides needs you."
+    default: "\(hiddenNeedingYou) sessions in orgs the filter hides need you."
     }
   }
 }
