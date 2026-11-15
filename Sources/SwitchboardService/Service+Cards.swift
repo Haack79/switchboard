@@ -53,8 +53,8 @@ extension Service {
 
   /// What the hook prints: `answer` for a hook that sbd does not hold, else the held request's reply. A held
   /// request that closes with no reply is dropped. `closedByClaude` then says, off the state queue, whether
-  /// Claude Code closed it, and only then does this record `card_closed`. It records `card_closed` even when
-  /// the card left first, because `releaseCards` gives no reply to a request whose hook is already gone.
+  /// Claude Code closed it, and only then does this record `card_closed`. This also covers a card that left while
+  /// its hook was already gone, because `releaseCards` replies only to a request whose hook is still open.
   func awaitAnswer(
     _ opened: (card: Int64, request: HeldRequest)?, else answer: JSON, closedByClaude: () -> Bool
   ) -> JSON {

@@ -5,7 +5,8 @@ import Testing
 @testable import SwitchboardService
 
 extension Service {
-  /// Holds `request` for card 7, then removes the card the way a fold does when its dialog leaves.
+  /// Holds `request` for card 7, which the session's cards don't list, then runs `releaseCards` as sbd does
+  /// after each recorded event.
   fileprivate func holdAndRelease(_ request: HeldRequest) {
     queue.sync {
       held[7] = request
@@ -27,11 +28,11 @@ extension Service {
       let request = HeldRequest(session: "s1", hookGone: { true })
 
       service.holdAndRelease(request)
+      #expect(service.queue.sync { service.held[7] == nil })
       let reply = service.awaitAnswer((7, request), else: ["unused": true]) { true }
 
       #expect(reply == [:])
       #expect(try service.kinds("s1") == ["card_closed"])
-      #expect(service.queue.sync { service.held[7] == nil })
     }
   }
 
