@@ -75,14 +75,12 @@ extension SessionFacts {
 }
 
 extension Attention {
-  /// The verdict that the app and `sb` show. An Inbox verdict that the user
+  /// The Acknowledge layer of `shown`. An Inbox verdict that the user
   /// acknowledged moves to Waiting while its state, its reason, and the PR's
   /// head commit are the ones that the user saw, for `acknowledgedMs` after
   /// the acknowledgment. After that the verdict stays in the Inbox, and its
-  /// reason says when the user acknowledged it. sbd's own rules, such as
-  /// waits, parent notices, and auto-continue, read `evaluate`'s verdict. An
-  /// acknowledgment therefore changes nothing that sbd does.
-  public static func shown(_ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64) -> Verdict {
+  /// reason says when the user acknowledged it.
+  static func acknowledged(_ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64) -> Verdict {
     guard AttentionState.inbox.contains(verdict.state), let ack = facts.acknowledgment, ack.covers(verdict, facts)
     else { return verdict }
     var out = verdict

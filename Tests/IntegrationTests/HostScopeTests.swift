@@ -207,7 +207,8 @@ private let otherDestination = "haacked@other.local"
     "send_pending", "send_decided", "sent", "delivered", "delivery_unknown", "answered", "card_closed", "dialog_closed",
     "stopped", "exited", "running", "idle", "job", "pr", "branch", "worktree", "cleanup", "triage", "merge", "docket",
     "dependencies", "created", "imported", "started", "resumed", "followup", "followup-started", "wait", "wait-cleared",
-    "note", "done", "undone", "ack", "account-moved", "digest", "link_down", "link_up", "reconciled", "unknown",
+    "note", "done", "undone", "ack", "snooze", "unsnooze", "account-moved", "digest", "link_down", "link_up",
+    "reconciled", "unknown",
   ]
 
   /// A payload for mini's own session whose `hook_event_name` is `kind`, or is left out when `kind` is nil. It
@@ -396,6 +397,8 @@ private let otherDestination = "haacked@other.local"
     add("done", ["session": s])
     add("done", ["session": l])
     add("ack", ["session": s])
+    add("snooze", ["session": s])
+    add("unsnooze", ["session": s])
     add("answer", ["session": s, "behavior": "allow"])
     add("rename", ["session": s, "name": text])
     add("rename", ["session": l, "name": text])

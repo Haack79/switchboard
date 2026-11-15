@@ -110,7 +110,6 @@ struct TriageRow: View {
   let current: Bool
 
   var body: some View {
-    let item = session.triage
     HStack(alignment: .top, spacing: 8) {
       Circle()
         .fill(session.state.color)
@@ -118,7 +117,7 @@ struct TriageRow: View {
         .padding(.top, 5)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
-        InlineText(plain: item?.title ?? session.reason, links: false).fontWeight(.medium).lineLimit(2)
+        InlineText(plain: session.inboxTitle, links: false).fontWeight(.medium).lineLimit(2)
         Text(
           [repo, model.inboxName(session), ago(session.since)]
             .compactMap { $0 }.joined(separator: " · ")
@@ -134,6 +133,7 @@ struct TriageRow: View {
     .listRowChrome(current: current)
     .hoverCard(session, activeAccount: model.activeAccountFolder, card: model.hoverCard)
     .onTapGesture { model.inboxFocus = session.id }
+    .contextMenu { SnoozeMenuItems(session: session) }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(current ? .isSelected : [])
   }
