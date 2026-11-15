@@ -591,17 +591,21 @@ struct BoardView: View {
   @FocusState private var focused: Bool
   static let labelWidth: CGFloat = 140
   static let columnWidth: CGFloat = 200
-  static let minLaneWidth: CGFloat = 170
-  static let maxLaneWidth: CGFloat = 280
-  static let laneSpacing: CGFloat = 12
+  static let minColumnWidth: CGFloat = 165
+  static let maxColumnWidth: CGFloat = 280
+  static let columnSpacing: CGFloat = 12
   static let boardPadding: CGFloat = 16
+  static var legacyScrollerWidth: CGFloat { NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) }
 
-  /// How wide each lane draws in a Board `width` points wide with `columns` lanes: the width that fills the Board,
-  /// kept between `minLaneWidth` and `maxLaneWidth`. A Board too narrow for every lane at the minimum scrolls sideways.
-  static func laneWidth(available width: CGFloat, columns: Int) -> CGFloat {
-    guard columns > 0 else { return columnWidth }
-    let room = width - 2 * boardPadding - labelWidth - laneSpacing * CGFloat(columns)
-    return min(max(room / CGFloat(columns), minLaneWidth), maxLaneWidth)
+  /// How wide each column draws in a Board `width` points wide with `columns` columns. The columns fill the width
+  /// that a legacy vertical scroller leaves, kept between `minColumnWidth` and `maxColumnWidth`. A Board too narrow
+  /// for every column at the minimum scrolls sideways.
+  static func fittedColumnWidth(available width: CGFloat, columns: Int) -> CGFloat {
+    guard columns > 0 else { return minColumnWidth }
+    // Overlay scrollers take no width. The Board reserves the legacy width anyway, so a mouse plugged in later
+    // does not make it scroll sideways.
+    let room = width - legacyScrollerWidth - 2 * boardPadding - labelWidth - columnSpacing * CGFloat(columns)
+    return min(max(room / CGFloat(columns), minColumnWidth), maxColumnWidth)
   }
 
   /// Makes the same moves as a drag, because keyboard and VoiceOver users
@@ -639,14 +643,14 @@ struct BoardView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
       GeometryReader { geometry in
-        let laneWidth = Self.laneWidth(available: geometry.size.width, columns: layout.columns.count)
+        let fittedWidth = Self.fittedColumnWidth(available: geometry.size.width, columns: layout.columns.count)
         ScrollViewReader { proxy in
           ScrollView([.horizontal, .vertical]) {
             LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
               Section {
                 ForEach(layout.lanes) { lane in
                   Divider()
-                  HStack(alignment: .top, spacing: Self.laneSpacing) {
+                  HStack(alignment: .top, spacing: Self.columnSpacing) {
                     LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
                       .frame(width: Self.labelWidth, alignment: .leading)
                     ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
@@ -667,7 +671,7 @@ struct BoardView: View {
                           .id(s.id)
                         }
                       }
-                      .frame(width: laneWidth, alignment: .top)
+                      .frame(width: fittedWidth, alignment: .top)
                     }
                   }
                   .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
@@ -677,7 +681,7 @@ struct BoardView: View {
                 }
                 DoneFooter(sessions: layout.done)
               } header: {
-                HStack(alignment: .center, spacing: Self.laneSpacing) {
+                HStack(alignment: .center, spacing: Self.columnSpacing) {
                   VStack(alignment: .leading, spacing: 4) {
                     Picker("Lanes", selection: $laneKind) {
                       ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -695,7 +699,7 @@ struct BoardView: View {
                       Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
                       if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
                     }
-                    .frame(width: laneWidth, alignment: .leading)
+                    .frame(width: fittedWidth, alignment: .leading)
                   }
                 }
                 .padding(.vertical, 4)
@@ -704,7 +708,7 @@ struct BoardView: View {
             }
             .padding(Self.boardPadding)
           }
-          // macOS hides overlay scrollers until a scroll, so nothing would show that more lanes sit to the right.
+          // macOS hides overlay scrollers until a scroll, so nothing would show that more columns sit to the right.
           .scrollIndicators(.visible)
           .defaultScrollAnchor(.topLeading)
           .focusable()
