@@ -18,6 +18,8 @@ enum KeySelfTest {
     let env = ProcessInfo.processInfo.environment
     guard let target = env["SB_KEY_TEST"] else { return }
     Task { @MainActor in
+      // A session's terminal view hides its Message Claude field until asked.
+      if target == "Message Claude…", let session = env["SB_SELECT"] { model.revealMessageField(session, focus: false) }
       if let field = await waitForField(target) {
         await run(field, model, sendsOnReturn: target != prompt)
       } else {

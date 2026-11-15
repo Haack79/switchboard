@@ -7,7 +7,7 @@ import Testing
 struct BackgroundLaunchTests {
   @Test(arguments: [
     "SB_SNAPSHOT", "SB_TERMINAL_TEST", "SB_DRAFT_TEST", "SB_SHELL_TEST", "SB_DROP_TEST", "SB_SLASH_TEST",
-    "SB_QUIT_FILE",
+    "SB_WAKE_TEST", "SB_QUIT_FILE",
   ])
   func scriptedHookRunsInTheBackground(hook: String) {
     #expect(BackgroundLaunch.applies(to: [hook: "/tmp/x"]))

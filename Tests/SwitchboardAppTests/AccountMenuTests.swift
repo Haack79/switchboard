@@ -31,6 +31,24 @@ import os
     #expect(AccountMenu.label(nil) == "Account")
   }
 
+  @Test func theTooltipStartsWithTheLabel() {
+    let reading = AccountUsage(name: "automation", folder: "/a", limits: limits)
+    #expect(
+      AccountMenu.help(row(reading)).hasPrefix("automation · 5h 52% · wk 64%. The Claude account for new sessions"))
+    #expect(AccountMenu.help(nil).hasPrefix("Account. "))
+  }
+
+  @Test func theSummarySaysWhyTheAccountNeedsTheUser() {
+    let spent = row(
+      AccountUsage(name: "a", folder: "/a", limits: [UsageLimit(kind: "session", label: "Session (5h)", percent: 100)]))
+    let failed = row(AccountUsage(name: "a", folder: "/a", error: "timed out"))
+    let healthy = row(AccountUsage(name: "a", folder: "/a", limits: limits))
+    #expect(AccountMenu.summary(spent) == "automation · 5h 100% · wk 0%, limit spent")
+    #expect(AccountMenu.summary(failed) == "automation, usage read failed")
+    #expect(AccountMenu.summary(healthy) == "automation · 5h 52% · wk 64%")
+    #expect(AccountMenu.help(failed).hasPrefix("automation, usage read failed. "))
+  }
+
   @Test func onlyASpentLimitOrAFailedReadNeedsTheUser() {
     let spent = [UsageLimit(kind: "session", label: "Session (5h)", percent: 100, resetsAt: nil)]
     #expect(!AccountMenu.needsYou(nil))
