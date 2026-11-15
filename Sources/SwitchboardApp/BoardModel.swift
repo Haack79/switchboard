@@ -94,6 +94,10 @@ final class BoardModel: ObservableObject {
   @Published var listFocusRequests = 0
   /// The session whose Claude terminal takes keyboard focus when it shows. The terminal clears it.
   @Published var terminalFocus: String?
+  /// The session whose empty Message Claude field shows under its terminal. A field with a draft always shows.
+  @Published var revealedMessageField: String?
+  /// The session whose Message Claude field takes keyboard focus when it shows. The field clears it.
+  @Published var messageFieldFocus: String?
   /// The Board's open cards as it last drew them. BoardView keeps it current. The Session menu's ⌘T state and
   /// the Board's ring read it, so a change redraws them.
   @Published var boardGrid = BoardGrid(lanes: [])
@@ -143,6 +147,8 @@ final class BoardModel: ObservableObject {
   /// stay disabled until sbd replies, so a second click can't report that
   /// the first one already started claude.
   @Published var startingNow: Set<String> = []
+  /// Sessions whose wake is on its way to sbd, so a burst of keys sends one request at a time. No view reads it.
+  private(set) var waking: Set<String> = []
   /// Group suggestions whose Accept or Decline is on its way to sbd. Their
   /// rows stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringSuggestions: Set<String> = []
@@ -760,6 +766,13 @@ final class BoardModel: ObservableObject {
   }
   func stop(_ id: String) { perform("stop", ["session": .string(id)]) }
   func resume(_ id: String) { perform("resume", ["session": .string(id)]) }
+  /// Starts claude in a stopped session after a key or a click in its terminal. It sends `open`, not `resume`.
+  /// sbd launches on `open` only while claude is stopped, so the keys that arrive before the summary shows
+  /// claude starting do nothing. A second `resume` would fail with "already running".
+  func wake(_ id: String) {
+    guard waking.insert(id).inserted else { return }
+    perform("open", ["session": .string(id)], finally: { self.waking.remove(id) })
+  }
   /// Starts a queued session now. When the live cap is full, sbd stops the
   /// lowest-priority idle session to make room. When the start still waits,
   /// the error banner shows why.

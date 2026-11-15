@@ -98,6 +98,86 @@ import Testing
     for _ in 0..<300 where !draft.text.isEmpty { try? await Task.sleep(nanoseconds: 10_000_000) }
     #expect(draft.text.isEmpty)
   }
+
+  // MARK: submit(then:)
+
+  /// Work session `a` and chat `c`. A chat's send takes a different path, which marks a pending message.
+  static let targets = [needsItem("a"), chatItem("c", group: "g1")]
+
+  @Test(arguments: ["a", "c"])
+  func submitRunsThenOnceWhenSbdAcceptsTheSend(_ session: String) async {
+    let model = appliedModel(Self.targets)
+    model.send = { _, _ in .null }
+    let draft = MessageField.Draft()
+    draft.text = "hello"
+    let ran = Counter()
+
+    draft.submit(session, to: model) { ran.increment() }
+    await settle { !model.sending.contains(session) }
+
+    #expect(ran.value == 1)
+  }
+
+  /// The terminal view hides the field in `then`. An empty draft lets it hide.
+  @Test func submitRunsThenAfterTheDraftClears() async {
+    let model = offlineModel()
+    model.send = { _, _ in .null }
+    let draft = MessageField.Draft()
+    draft.text = "hello"
+    let seen = Field("unset")
+
+    draft.submit("a", to: model) { seen.text = draft.text }
+    await settle { seen.text != "unset" }
+
+    #expect(seen.text.isEmpty)
+  }
+
+  @Test func submitDoesNotRunThenBeforeSbdAnswers() async {
+    let (model, release, requests) = heldModel()
+    let draft = MessageField.Draft()
+    draft.text = "hello"
+    let ran = Counter()
+
+    draft.submit("a", to: model) { ran.increment() }
+    await settle { requests.value == 1 }
+    let early = ran.value
+    release.signal()
+    await settle { ran.value > 0 }
+
+    #expect(early == 0)
+    #expect(ran.value == 1)
+  }
+
+  @Test(arguments: ["a", "c"])
+  func submitDoesNotRunThenWhenTheSendFails(_ session: String) async {
+    let model = appliedModel(Self.targets)
+    model.send = { _, _ in throw Boom() }
+    let draft = MessageField.Draft()
+    draft.text = "hello"
+    let ran = Counter()
+
+    draft.submit(session, to: model) { ran.increment() }
+    await settle { !model.sending.contains(session) }
+
+    #expect(ran.value == 0)
+  }
+
+  @Test func submitOfAnEmptyDraftDoesNotRunThen() async {
+    let model = offlineModel()
+    let requests = Counter()
+    model.send = { _, _ in
+      requests.increment()
+      return .null
+    }
+    let draft = MessageField.Draft()
+    let ran = Counter()
+
+    draft.submit("a", to: model) { ran.increment() }
+    try? await Task.sleep(nanoseconds: 50_000_000)
+
+    #expect(requests.value == 0)
+    #expect(ran.value == 0)
+  }
 }
 
 @MainActor

@@ -88,6 +88,9 @@ struct SwitchboardApp: App {
           Button("Move Focus to Terminal") { model.focusTerminal() }
             .keyboardShortcut(NavShortcuts.focusTerminal)
             .disabled(!model.canFocusTerminal)
+          Button("Message Claude") { model.revealMessageField() }
+            .keyboardShortcut(NavShortcuts.messageField)
+            .disabled(model.messageFieldTarget == nil)
         }
         .disabled(model.presentingSheet)
         Divider()

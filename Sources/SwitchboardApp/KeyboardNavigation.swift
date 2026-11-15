@@ -19,6 +19,9 @@ enum NavShortcuts {
   static let showRecentPlaces = KeyboardShortcut("y", modifiers: .command)
   /// File > New Conversation. It stays out of `all`, because it starts a Manager conversation.
   static let newConversation = KeyboardShortcut("n", modifiers: [.command, .option])
+  /// Session > Message Claude. It stays out of `all`, because it moves focus into a field that `bin/test-gui shell`
+  /// does not expect.
+  static let messageField = KeyboardShortcut("e", modifiers: [.command, .shift])
 
   /// `bin/test-gui shell` sends these in order. Search Sessions is last, because it opens a sheet.
   static let all = [

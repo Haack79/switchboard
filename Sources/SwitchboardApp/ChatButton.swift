@@ -67,17 +67,11 @@ struct ChatMarkView: View {
       EmptyView()
     case .needsMe:
       Image(systemName: "exclamationmark")
-        .font(.caption2.bold())
-        .padding(.horizontal, 4).padding(.vertical, 1)
-        .background(Capsule().fill(AttentionState.needsYou.color.opacity(0.18)))
-        .foregroundStyle(AttentionState.needsYou.color)
+        .pill(AttentionState.needsYou.color)
     case .unread(let n, let working):
       if working { progress }
-      Text("\(n)")
-        .font(.caption2.bold()).monospacedDigit()
-        .padding(.horizontal, 5).padding(.vertical, 1)
-        .background(Capsule().fill(Color.accentColor))
-        .foregroundStyle(.white)
+      Text("\(n)").monospacedDigit()
+        .pill(.accentColor, filled: true)
     case .working:
       progress
     case .idle:
