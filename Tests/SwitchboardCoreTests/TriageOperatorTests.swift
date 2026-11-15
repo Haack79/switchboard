@@ -782,6 +782,7 @@ extension TriageOperatorTests {
       let shownWith = opShown(opVerdict(s, with), with, kind: kind)
 
       #expect(shownWith == shownWithout)
+      // `Verdict ==` compares only the state and the reason.
       #expect(shownWith.acknowledged == shownWithout.acknowledged, "\(shownWith.state) \(shownWith.reason)")
     }
 

@@ -14,7 +14,9 @@ extension Service {
     }
     let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
     if args["undo"]?.bool == true {
-      guard shown(id, verdict).acknowledged || verdict.requested else {
+      // The operator's reports reopen even while a wait or a prompt gives it an item that hides Undo Acknowledge.
+      let reopensReports = e.session.kind == .operator && !e.facts.acknowledgedReports.isEmpty
+      guard shown(id, verdict).acknowledged || verdict.requested || reopensReports else {
         throw APIError("\(e.session.name) isn't acknowledged")
       }
       record(id, "unack")

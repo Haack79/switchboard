@@ -339,6 +339,8 @@ import Testing
     let acked = try sbd.client.call("ack", ["session": .string(op.id)], as: SessionSummary.self)
     #expect(acked.acknowledged == true, "\(acked.state) \(acked.reason)")
     #expect(acked.triage == nil)
+    // A second ack must not discard the reports that the undo reopens, whatever it answers.
+    _ = try sbd.run("ack", "Operator")
 
     try sbd.sb("ack", "Operator", "--undo")
 
