@@ -68,6 +68,7 @@ struct TriageDetail: View {
     }
     .task(id: "\(session.id)/\(session.lastReply?.count ?? 0)/\(session.since)") { model.loadReply(session.id) }
     .onChange(of: session.stepList?.ref) { step = nil }
+    .referenceRepo(session)
   }
 
   private var bar: some View {

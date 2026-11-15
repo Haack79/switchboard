@@ -29,10 +29,10 @@ enum ChildPanel {
     panel.orderOut(nil)
   }
 
-  /// The anchor's frame and the visible frame of the window's screen, in screen coordinates. A window off every
+  /// The anchor's rect and the visible frame of the window's screen, in screen coordinates. A window off every
   /// screen gets a large rect around the anchor in place of the screen.
-  static func frames(of anchor: NSView, in window: NSWindow) -> (anchor: NSRect, screen: NSRect) {
-    let frame = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+  static func frames(of anchor: HoverAnchor, in window: NSWindow) -> (anchor: NSRect, screen: NSRect) {
+    let frame = window.convertToScreen(anchor.view.convert(anchor.rect ?? anchor.view.bounds, to: nil))
     return (frame, window.screen?.visibleFrame ?? frame.insetBy(dx: -10_000, dy: -10_000))
   }
 

@@ -123,7 +123,7 @@ struct NotesButton: View {
 struct NotesPopover: View {
   let session: SessionSummary
 
-  var body: some View { NotesList(session: session).padding(12).frame(width: 340) }
+  var body: some View { NotesList(session: session).padding(12).frame(width: 340).referenceRepo(session) }
 }
 
 /// A session's open to-dos, plain notes, and resolved to-dos, and a field that adds a note.

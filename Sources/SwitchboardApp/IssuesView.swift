@@ -219,7 +219,7 @@ private struct IssueDetail: View {
           if let url = URL(string: issue.url) {
             Link(destination: url) { Text(verbatim: issue.ref) }
           }
-          Text("opened \(ago(isoMs(issue.createdAt))) ago · updated \(ago(isoMs(issue.updatedAt))) ago")
+          Text(verbatim: ages(opened: issue.createdAt, updated: issue.updatedAt).joined(separator: " · "))
             .foregroundStyle(.secondary)
         }
         .font(.caption)
@@ -242,7 +242,7 @@ private struct IssueDetail: View {
         if issue.body.isEmpty {
           Text("No description").foregroundStyle(.secondary).padding(12)
         } else {
-          MarkdownView(text: issue.body).padding(12)
+          MarkdownView(text: issue.body).padding(12).environment(\.referenceRepo, issue.repo)
         }
       }
     }

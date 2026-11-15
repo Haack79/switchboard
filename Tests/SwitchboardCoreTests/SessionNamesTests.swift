@@ -4,7 +4,7 @@ import Testing
 @testable import SwitchboardCore
 
 private typealias Run = MarkdownText.Run
-private typealias Piece = SessionNames.Piece
+private typealias Piece = InlineMentions.Piece
 private typealias Match = SessionNames.Match
 
 private let liveNames: [String: String] = [
@@ -30,7 +30,7 @@ private func text(_ runs: Run...) -> MarkdownText { MarkdownText(runs) }
 private func piece(_ text: String, _ style: MarkdownText.Style = [], link: String? = nil, image: String? = nil)
   -> Piece
 {
-  Piece(run: Run(text, style, link: link, image: image), match: nil)
+  Piece(run: Run(text, style, link: link, image: image), mention: nil)
 }
 
 /// The piece for a session in the test directory. A live entry wins over a removed one.
@@ -39,10 +39,10 @@ private func mention(
   removed: [String: String] = removedNames
 ) -> Piece {
   let name = live[id] ?? removed[id] ?? "missing fixture \(id)"
-  return Piece(run: Run(name, style), match: Match(id: id, name: name, removed: live[id] == nil))
+  return Piece(run: Run(name, style), mention: .session(Match(id: id, name: name, removed: live[id] == nil)))
 }
 
-private func unchanged(_ text: MarkdownText) -> [Piece] { text.runs.map { Piece(run: $0, match: nil) } }
+private func unchanged(_ text: MarkdownText) -> [Piece] { text.runs.map { Piece(run: $0, mention: nil) } }
 
 /// The pieces that a row's expected text describes. `⟨id⟩` stands for the
 /// session's name, matched. The rest is unstyled text.
@@ -100,6 +100,11 @@ private let unchangedPlain: [String] = [
   "%seb4ec", "seb4ec%", "+seb4ec", "seb4ec+",
   // The same shapes with the removed session's id.
   "sq7kpm-claude", "sessions/sq7kpm/claude.sh", "sq7kpm.jsonl",
+  // An id inside a URL that Markdown did not link. The URL runs to the next whitespace, as a GFM autolink does.
+  "https://example.com/?seb4ec", "https://example.com/a,seb4ec", "https://example.com/(seb4ec)",
+  "https://example.com/x?a;seb4ec", "see https://example.com/?seb4ec now", "http://example.com/a,seb4ec",
+  "(https://example.com/x)seb4ec", "see https://example.com/x,seb4ec", "https://github.com/o/r/pull/new/x,seb4ec",
+  "https://example.com/?sq7kpm",
 ]
 
 /// Unstyled text and the pieces the matcher gives for it, written as described in `expectedPieces`.
@@ -185,6 +190,12 @@ private let changedPlain: [(String, String)] = [
   ("seb4ec (zsh-startup-for-switchboard-v2)", "⟨seb4ec⟩ (zsh-startup-for-switchboard-v2)"),
   ("seb4ec (zsh-startup-for-switchboard and more)", "⟨seb4ec⟩ (zsh-startup-for-switchboard and more)"),
   ("sgcctv (seb4ec)", "⟨sgcctv⟩ (⟨seb4ec⟩)"),
+  // A URL ends at whitespace, and GFM leaves trailing punctuation out of it.
+  ("https://example.com/x seb4ec", "https://example.com/x ⟨seb4ec⟩"),
+  ("see https://example.com/x, seb4ec", "see https://example.com/x, ⟨seb4ec⟩"),
+  ("see https://example.com/x. seb4ec", "see https://example.com/x. ⟨seb4ec⟩"),
+  ("(https://example.com/x) seb4ec", "(https://example.com/x) ⟨seb4ec⟩"),
+  ("seb4ec https://example.com/?seb4ec", "⟨seb4ec⟩ https://example.com/?seb4ec"),
 ]
 
 /// Markdown that the matcher must leave exactly as `MarkdownBlock.parse` gives it.
@@ -204,6 +215,10 @@ private let unchangedMarkdown: [String] = [
 ]
 
 private let docsLink = "https://example.com/docs"
+
+/// No repository, and a repository that a bare `#123` would refer to. No row holds a reference, so the rows give the
+/// same pieces with either.
+private let contexts: [String?] = [nil, "haacked/switchboard"]
 
 /// Markdown and the pieces the matcher gives for it.
 private let changedMarkdown: [(String, [Piece])] = [
@@ -280,7 +295,7 @@ private let changedMarkdown: [(String, [Piece])] = [
     let live = ["seb4ec": "new-name"]
     let names = SessionNames(live: live, removed: ["seb4ec": "old-name"])
 
-    let pieces = names.pieces("old-name (seb4ec)")
+    let pieces = InlineMentions(names: names, repo: nil).pieces("old-name (seb4ec)")
 
     #expect(pieces == [piece("old-name ("), mention("seb4ec", live: live, removed: [:]), piece(")")])
   }
@@ -310,11 +325,11 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(SessionNames(live: ["seb4ec": "a"], removed: [:]) != SessionNames(live: [:], removed: ["seb4ec": "a"]))
   }
 
-  @Test(arguments: unchangedPlain)
-  func plainTextThatMustNotChangePassesThrough(_ input: String) {
+  @Test(arguments: unchangedPlain, contexts)
+  func plainTextThatMustNotChangePassesThrough(_ input: String, _ repo: String?) {
     let text = MarkdownText(stringLiteral: input)
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == unchanged(text))
   }
 
   @Test(arguments: unchangedPlain)
@@ -322,9 +337,10 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(names.replacingIDs(in: input) == input)
   }
 
-  @Test(arguments: changedPlain)
-  func plainTextIdsBecomeNames(_ input: String, _ expected: String) {
-    #expect(names.pieces(MarkdownText(stringLiteral: input)) == expectedPieces(expected))
+  @Test(arguments: changedPlain, contexts)
+  func plainTextIdsBecomeNames(_ row: (String, String), _ repo: String?) {
+    #expect(
+      InlineMentions(names: names, repo: repo).pieces(MarkdownText(stringLiteral: row.0)) == expectedPieces(row.1))
   }
 
   @Test(arguments: changedPlain)
@@ -337,7 +353,7 @@ private let changedMarkdown: [(String, [Piece])] = [
     let names = SessionNames(live: [:], removed: [:])
     let text = MarkdownText(stringLiteral: input)
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
     #expect(names.replacingIDs(in: input) == input)
   }
 
@@ -350,21 +366,23 @@ private let changedMarkdown: [(String, [Piece])] = [
     let live = ["stream": "stream-fix"]
     let names = SessionNames(live: live, removed: [:])
 
-    #expect(names.pieces(MarkdownText(stringLiteral: input)) == expectedPieces(expected, live: live))
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: input))
+        == expectedPieces(expected, live: live))
   }
 
-  @Test(arguments: unchangedMarkdown)
-  func markdownThatMustNotChangePassesThrough(_ markdown: String) throws {
+  @Test(arguments: unchangedMarkdown, contexts)
+  func markdownThatMustNotChangePassesThrough(_ markdown: String, _ repo: String?) throws {
     let text = try paragraph(markdown)
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == unchanged(text))
   }
 
-  @Test(arguments: changedMarkdown)
-  func markdownIdsBecomeNames(_ markdown: String, _ expected: [SessionNames.Piece]) throws {
-    let text = try paragraph(markdown)
+  @Test(arguments: changedMarkdown, contexts)
+  func markdownIdsBecomeNames(_ row: (String, [InlineMentions.Piece]), _ repo: String?) throws {
+    let text = try paragraph(row.0)
 
-    #expect(names.pieces(text) == expected)
+    #expect(InlineMentions(names: names, repo: repo).pieces(text) == row.1)
   }
 
   /// A code block never becomes a paragraph's `MarkdownText`, so its ids never reach `pieces`.
@@ -383,43 +401,52 @@ private let changedMarkdown: [(String, [Piece])] = [
   @Test func aClosingParenthesisInAnotherRunKeepsTheNameAsWritten() {
     let text = text(Run("zsh-startup-for-switchboard (seb4ec"), Run(")", .emphasis))
 
-    #expect(names.pieces(text) == [piece("zsh-startup-for-switchboard ("), mention("seb4ec"), piece(")", .emphasis)])
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(text) == [
+        piece("zsh-startup-for-switchboard ("), mention("seb4ec"), piece(")", .emphasis),
+      ])
   }
 
   @Test func footnoteRunPassesThrough() {
     let text = text(Run("See "), Run("seb4ec", .footnote))
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
 
   @Test func imageRunPassesThrough() {
     let text = text(Run("seb4ec", image: "x.png"), Run(" seb4ec"))
 
-    #expect(names.pieces(text) == [piece("seb4ec", image: "x.png"), piece(" "), mention("seb4ec")])
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(text) == [
+        piece("seb4ec", image: "x.png"), piece(" "), mention("seb4ec"),
+      ])
   }
 
   @Test func linkRunPassesThrough() {
     let text = text(Run("seb4ec", link: "https://example.com"), Run(" and seb4ec"))
 
-    #expect(names.pieces(text) == [piece("seb4ec", link: "https://example.com"), piece(" and "), mention("seb4ec")])
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(text) == [
+        piece("seb4ec", link: "https://example.com"), piece(" and "), mention("seb4ec"),
+      ])
   }
 
   @Test func exactIdCodeSpanKeepsItsOtherStyles() {
     let text = text(Run("seb4ec", [.code, .strong]))
 
-    #expect(names.pieces(text) == [mention("seb4ec", .strong)])
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention("seb4ec", .strong)])
   }
 
   @Test func exactIdCodeSpanOfAnUnknownIdKeepsItsCodeStyle() {
     let text = text(Run("sx2zzz", .code))
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
 
   @Test func idSplitAcrossRunsPassesThrough() {
     let text = text(Run("seb"), Run("4ec"))
 
-    #expect(names.pieces(text) == unchanged(text))
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
 
   @Test func sessionWithAnEmptyNameResolvesNothing() {
@@ -434,27 +461,35 @@ private let changedMarkdown: [(String, [Piece])] = [
     let live = ["sa2222": "b", "sb3333": "b)"]
     let names = SessionNames(live: live, removed: [:])
 
-    #expect(names.pieces("sa2222 (b) (sb3333)") == expectedPieces("⟨sa2222⟩ (⟨sb3333⟩)", live: live))
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces("sa2222 (b) (sb3333)")
+        == expectedPieces("⟨sa2222⟩ (⟨sb3333⟩)", live: live))
   }
 
   @Test func idAtTheEdgeOfAnEmphasisRunMatches() {
     let text = text(Run("Ask "), Run("seb4ec", .emphasis), Run(" now"))
 
-    #expect(names.pieces(text) == [piece("Ask "), mention("seb4ec", .emphasis), piece(" now")])
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(text) == [
+        piece("Ask "), mention("seb4ec", .emphasis), piece(" now"),
+      ])
   }
 
   @Test(arguments: unchangedPlain)
   func textWithoutIdsHasNoMatches(_ input: String) {
-    #expect(names.pieces(MarkdownText(stringLiteral: input)).allSatisfy { $0.match == nil })
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: input)).allSatisfy {
+        $0.mention == nil
+      })
   }
 
   @Test func matchesReportLiveAndRemovedSessions() {
-    let matches = names.pieces("sgcctv and sq7kpm").compactMap(\.match)
+    let matches = InlineMentions(names: names, repo: nil).pieces("sgcctv and sq7kpm").compactMap(\.mention)
 
     #expect(
       matches == [
-        Match(id: "sgcctv", name: "render-session-names", removed: false),
-        Match(id: "sq7kpm", name: "old-cleanup", removed: true),
+        .session(Match(id: "sgcctv", name: "render-session-names", removed: false)),
+        .session(Match(id: "sq7kpm", name: "old-cleanup", removed: true)),
       ])
   }
 
@@ -507,7 +542,9 @@ private let changedMarkdown: [(String, [Piece])] = [
     let names = Self.manyNames()
     var matched = 0
 
-    let elapsed = ContinuousClock().measure { matched = names.pieces(text).count(where: { $0.match != nil }) }
+    let elapsed = ContinuousClock().measure {
+      matched = InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
+    }
 
     #expect(string.utf8.count >= 200_000)
     #expect(matched == 2_000)
@@ -520,7 +557,9 @@ private let changedMarkdown: [(String, [Piece])] = [
     let names = Self.manyNames()
     var matched = 0
 
-    let elapsed = ContinuousClock().measure { matched = names.pieces(text).count(where: { $0.match != nil }) }
+    let elapsed = ContinuousClock().measure {
+      matched = InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
+    }
 
     #expect(text.plain.utf8.count >= 200_000)
     #expect(matched == 2_000)
