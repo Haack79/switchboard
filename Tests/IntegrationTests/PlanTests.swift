@@ -103,8 +103,8 @@ extension Instance {
   }
 
   @discardableResult
-  func addGroup(_ name: String) throws -> GroupSummary {
-    try JSONCoding.decode(GroupSummary.self, from: try sb("group", "add", "--json", name))
+  func addGroup(_ name: String, _ sessions: [String] = []) throws -> GroupSummary {
+    try JSONCoding.decode(GroupSummary.self, from: try sb(["group", "add", "--json", name] + sessions))
   }
 
   func groupNamed(_ name: String) throws -> GroupSummary {

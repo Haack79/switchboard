@@ -117,7 +117,7 @@ public struct Session: Codable, Equatable, Sendable {
   /// True once sbd gave a Manager conversation its first `mcp` list. A
   /// conversation that the user later set to the full setup keeps nil.
   public var mcpScoped: Bool?
-  /// Set while the session is paused. Nil in a session that an older sbd stored.
+  /// Set while the session is paused.
   public var pause: Pause?
 
   public var kind: SessionKind { SessionKind(manager: manager, chat: chat) }

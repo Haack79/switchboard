@@ -14,7 +14,7 @@ func sendCommand(_ a: Args) {
   let text = words.joined(separator: " ")
   if text.isEmpty && paths.isEmpty { die("send needs text") }
   var args: [String: JSON] = ["session": .string(a.session("send")), "text": .string(text)]
-  if author == .claude, let from = ProcessInfo.processInfo.environment["SB_SESSION_ID"] { args["from"] = .string(from) }
+  if let from = askingSession { args["from"] = .string(from) }
   if !paths.isEmpty {
     var total = 0
     do { try Attachments.checkMessage(count: paths.count, total: 0) } catch { die("\(error)") }
@@ -33,7 +33,8 @@ func sendCommand(_ a: Args) {
   }
   let result = call("send", args)
   if a.json { return printJSON(result) }
-  guard result["held"]?.bool == true else { return print(result["delivery"]?.string ?? "sent") }
-  let held = summary(call("get", ["session": args["session"]!]))
-  print("held until \(held.name) resumes (\(held.pause?.line ?? held.reason))".printable)
+  guard let held = result["held"]?.string, let name = result["name"]?.string else {
+    return print(result["delivery"]?.string ?? "sent")
+  }
+  print("held until \(name) resumes (\(held))".printable)
 }

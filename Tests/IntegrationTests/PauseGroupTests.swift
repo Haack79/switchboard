@@ -2,18 +2,7 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// These helpers read the group report from the JSON that sb prints, so that the tests compile without a
-/// `PauseReport` type.
 extension Instance {
-  /// The `result` of each row of a group report, by session id.
-  fileprivate func results(_ report: JSON) -> [String: String] {
-    var out: [String: String] = [:]
-    for row in report["sessions"]?.array ?? [] {
-      if let id = row["session"]?.string { out[id] = row["result"]?.string ?? "" }
-    }
-    return out
-  }
-
   /// The row of a group report for one session.
   fileprivate func row(_ report: JSON, _ id: String) -> JSON? {
     report["sessions"]?.array?.first { $0["session"]?.string == id }
@@ -25,23 +14,8 @@ extension Instance {
     try #require(JSON.parse(try sb(["resume"] + args + ["--json"])))
   }
 
-  fileprivate func addGroup(_ name: String, _ sessions: [String]) throws -> GroupSummary {
-    try JSONCoding.decode(GroupSummary.self, from: try sb(["group", "add", "--json", name] + sessions))
-  }
-
-  fileprivate func chatOf(_ group: String) throws -> String {
-    try id(of: try #require(JSON.parse(try sb("chat", group, "--json"))))
-  }
-
-  /// The env of an sb command that Claude runs inside the session.
-  fileprivate func claudeEnv(in id: String) -> [String: String] { ["CLAUDECODE": "1", "SB_SESSION_ID": id] }
-
   fileprivate func pausedEvents(_ id: String, after mark: Int64 = 0) throws -> [Event] {
     try events(id, after: mark).filter { $0.kind == "paused" }
-  }
-
-  fileprivate func waitForStop(_ id: String) throws {
-    try waitFor(id, "claude to exit after the pause") { !$0.live && $0.claudePid == nil }
   }
 }
 
@@ -100,7 +74,7 @@ extension Instance {
 
     try sbd.pauseJSON("Flags", ["--reason", "x"])
 
-    try sbd.waitForStop(f.live.id)
+    try sbd.waitForPausedExit(f.live.id)
     #expect(try sbd.get(f.live.id).reason == "Paused by you: x")
     #expect(try sbd.pausedEvents(f.live.id, after: mark).count == 1)
   }
@@ -126,7 +100,7 @@ extension Instance {
 
     let report = try sbd.pauseJSON("Flags", ["--reason", "x"])
 
-    try sbd.waitForStop(f.live.id)
+    try sbd.waitForPausedExit(f.live.id)
     for id in [f.done.id, f.unstarted.id, f.chat] {
       #expect(try sbd.pauseField(id) == nil, "\(id)")
       #expect(try sbd.pausedEvents(id).isEmpty, "\(id)")
@@ -187,13 +161,13 @@ extension Instance {
     #expect(try sbd.get(later.id).live)
   }
 
-  /// Claude in a member pauses its own group. The member can't pause itself, so its row fails, and the pause of
-  /// every other member goes ahead.
+  /// Claude in a member pauses its own group. The member can't pause itself, so its row fails.
+  /// The pause of every other member goes ahead.
   @Test func aMemberThatPausesItsOwnGroupFailsForItselfAndPausesTheOthers() throws {
     let sbd = try Instance()
     let g = try twoLive(sbd)
 
-    let r = try sbd.run(["pause", "--group", "Flags", "--json"], env: sbd.claudeEnv(in: g.a.id))
+    let r = try sbd.run(["pause", "--group", "Flags", "--json"], env: sbd.inside(g.a.id))
 
     let report = try #require(JSON.parse(r.stdout), "\(r.stdout) \(r.stderr)")
     #expect(sbd.results(report) == [g.a.id: "failed", g.b.id: "paused"], "\(report.text)")
@@ -210,8 +184,8 @@ extension Instance {
     let sbd = try Instance()
     let g = try twoLive(sbd)
     try sbd.pauseJSON("Flags", ["--until", "1h"])
-    try sbd.waitForStop(g.a.id)
-    try sbd.waitForStop(g.b.id)
+    try sbd.waitForPausedExit(g.a.id)
+    try sbd.waitForPausedExit(g.b.id)
     for id in [g.a.id, g.b.id] {
       #expect(try sbd.pauseField(id)?["until"]?["kind"] == "date", "\(id)")
     }
@@ -327,8 +301,8 @@ extension Instance {
     #expect(try sbd.waitForPrompts(b.id, after: marks.b, count: 1) == ["all go"])
   }
 
-  /// A member whose folder went away while it was paused fails the group resume with the folder's error, and
-  /// its pause still ends. The other member resumes.
+  /// A member whose folder went away while it was paused fails the group resume with the folder's error.
+  /// Its pause still ends. The other member resumes.
   @Test func aGroupResumeEndsThePauseOfAMemberWhoseFolderIsGoneAndResumesTheRest() throws {
     let sbd = try Instance()
     // Each session of `pausedStopped` runs in the same folder, so this one gets a folder of its own.
@@ -439,7 +413,7 @@ extension Instance {
     #expect(try sbd.pauseField(member.id) != nil)
   }
 
-  /// A ref that matches several sessions and also names a group is refused rather than read as the group.
+  /// sbd refuses a ref that matches several sessions and also names a group, rather than reading it as the group.
   @Test func aRefThatMatchesSeveralSessionsAndAGroupIsRefused() throws {
     let sbd = try Instance()
     let g = try twoLive(sbd)

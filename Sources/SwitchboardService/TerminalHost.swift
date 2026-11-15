@@ -270,8 +270,9 @@ final class TerminalHost {
     try run(deadMessageArgs(name, message))
   }
 
-  /// The option is a tmux format, and tmux runs the command in `#(…)`. Each `#` is doubled, so the message shows
-  /// as written.
+  /// The option is a tmux format.
+  /// tmux runs the command in `#(…)`.
+  /// The code doubles each `#`, so the message shows as written.
   private func deadMessageArgs(_ name: String, _ message: String) -> [String] {
     ["set-option", "-p", "-t", "=\(name):", "remain-on-exit-format", message.replacingOccurrences(of: "#", with: "##")]
   }

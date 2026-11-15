@@ -8,8 +8,6 @@ let defaultResume = "Switchboard: You were paused by you. Continue where you lef
 private let pausedPane = "Paused by you. Resume the session to start claude again."
 private let stoppedPane = "Claude stopped. Switchboard resumes it when you open the session or send it a message."
 
-/// These helpers read `pause` and `heldMessages` from the JSON that sb prints, so that the pause tests compile
-/// against a `SessionSummary` without those fields.
 extension Instance {
   /// The `pause` field of `sb get --json`, or nil when the session isn't paused.
   func pauseField(_ id: String) throws -> JSON? {
@@ -17,7 +15,27 @@ extension Instance {
     return field == .null ? nil : field
   }
 
-  func heldCount(_ id: String) throws -> Int? { try summaryJSON(id)["heldMessages"]?.int }
+  func heldCount(_ id: String) throws -> Int? { try get(id).heldMessages }
+
+  /// The `result` of each row of a group pause or resume, by session id.
+  func results(_ report: JSON?) -> [String: String] {
+    var out: [String: String] = [:]
+    for row in report?["sessions"]?.array ?? [] {
+      if let id = row["session"]?.string { out[id] = row["result"]?.string ?? "" }
+    }
+    return out
+  }
+
+  /// The id of the group's chat.
+  func chatOf(_ group: String) throws -> String {
+    try id(of: try #require(JSON.parse(try sb("chat", group, "--json"))))
+  }
+
+  /// Waits until the claude that the pause stopped has exited.
+  @discardableResult
+  func waitForPausedExit(_ id: String) throws -> SessionSummary {
+    try waitFor(id, "claude to exit after the pause") { !$0.live && $0.claudePid == nil }
+  }
 
   /// The session's `started` and `resumed` events after the mark.
   func launchEvents(_ id: String, after mark: Int64) throws -> [Event] {
@@ -44,14 +62,13 @@ extension Instance {
     try events(id, after: mark).filter { $0.kind == "stopped" && $0.data["reason"]?.string == reason }
   }
 
-  /// Three ticks, each 6 s apart, which passes the 5 s between the stops of a paused claude, then a moment for
-  /// what they started to show.
+  /// Advances the clock by three ticks of 6 s each. Each tick passes the 5 s limit between stops of a paused claude.
   func tickThrice() throws {
     for _ in 0..<3 { try advanceClock(6_000) }
     usleep(500_000)
   }
 
-  /// Runs `sb pause <id> --json` with the extra arguments, and returns what it printed.
+  /// Runs `sb pause <id> --json` with the extra arguments and returns what it printed.
   @discardableResult
   func pauseJSON(_ id: String, _ more: [String] = [], env: [String: String] = [:]) throws -> JSON {
     try #require(JSON.parse(try sb(["pause", id, "--json"] + more, env: env)))
@@ -67,7 +84,7 @@ extension Instance {
   func pausedStopped(_ name: String = "t", _ more: [String] = []) throws -> SessionSummary {
     let s = try liveIdle(name)
     try pauseJSON(s.id, more)
-    return try waitFor(s.id, "\(name)'s claude to exit after the pause") { !$0.live && $0.claudePid == nil }
+    return try waitForPausedExit(s.id)
   }
 
   /// The session ids in every list of `sb live --json`.
@@ -85,7 +102,7 @@ extension Instance {
   }
 
   /// The env of an sb command that Claude runs inside the session.
-  fileprivate func inside(_ id: String) -> [String: String] { ["CLAUDECODE": "1", "SB_SESSION_ID": id] }
+  func inside(_ id: String) -> [String: String] { ["CLAUDECODE": "1", "SB_SESSION_ID": id] }
 }
 
 @Suite(.blocking(timeLimit: .seconds(120))) struct PauseTests {
@@ -255,7 +272,7 @@ extension Instance {
 
     let reply = try #require(JSON.parse(try sbd.sb(["send", "--json", s.id, "check the logs"], env: env)))
 
-    #expect(reply["held"] == true)
+    #expect(reply["held"] == "Paused by you")
     #expect(reply["delivery"] == "queued")
     try sbd.tickThrice()
     #expect(try sbd.launchEvents(s.id, after: mark).isEmpty)
@@ -313,8 +330,8 @@ extension Instance {
     #expect(try sbd.heldCount(s.id) == nil)
   }
 
-  /// A message that waited behind a turn before the pause stays ahead of the messages held during it, and the
-  /// resume message goes in front of both.
+  /// A message that waited behind a turn before the pause stays ahead of the messages held during it.
+  /// The resume message goes in front of both.
   @Test func aMessageQueuedBeforeThePauseFollowsTheResumeMessageAheadOfTheHeldOnes() throws {
     let sbd = try Instance()
     let s = try busy(sbd, "t")
@@ -323,7 +340,7 @@ extension Instance {
     #expect(queued["held"] == nil)
 
     try sbd.pauseJSON(s.id)
-    try sbd.waitFor(s.id, "claude to exit after the pause") { !$0.live && $0.claudePid == nil }
+    try sbd.waitForPausedExit(s.id)
     try sbd.sb("send", s.id, "held while paused")
     let mark = try sbd.lastEventId(s.id)
     try sbd.sb("resume", s.id, "--message", "go on")
@@ -365,7 +382,7 @@ extension Instance {
 
     let reply = try #require(JSON.parse(try sbd.sb("send", "--json", s.id, "while it exits")))
 
-    #expect(reply["held"] == true)
+    #expect(reply["held"] == "Paused by you")
     usleep(2_000_000)
     #expect(sbd.completePastes() == pastes)
     try sbd.waitFor(s.id, "the lingering claude to exit", timeout: 20) { $0.claudePid == nil }
@@ -385,7 +402,7 @@ extension Instance {
     let picture = "\(dir)/shot.png"
     try AttachmentTests.png.write(to: URL(fileURLWithPath: picture))
     let reply = try #require(JSON.parse(try sbd.sb("send", "--json", s.id, "--image", picture, "look at this")))
-    #expect(reply["held"] == true)
+    #expect(reply["held"] == "Paused by you")
     let mark = try sbd.lastEventId(s.id)
 
     try sbd.sb("resume", s.id)
@@ -400,7 +417,7 @@ extension Instance {
   @Test func aPasteThatStartsAfterThePauseWaitsForTheResume() throws {
     let sbd = try Instance()
     let s = try sbd.liveIdle()
-    // sbd pastes only 1.5 s after SessionStart, and a paste that `send` starts reaches the gate at once.
+    // sbd pastes only 1.5 s after SessionStart. A paste that `send` starts reaches the gate at once.
     usleep(2_000_000)
     sbd.hold("hold-paste")
     let reply = try #require(JSON.parse(try sbd.sb("send", "--json", s.id, "late note")))
@@ -678,7 +695,7 @@ extension Instance {
     #expect(try !sbd.get(s.id).live)
   }
 
-  /// A claude that waits before SessionStart and takes 10 s to exit after SIGTERM, held by the stub's
+  /// A claude that waits before SessionStart and takes 10 s to exit after SIGTERM, through the stub's
   /// `hold-start` and `start-linger` gates. It returns the claude's pid.
   private func slowExitingClaudeBeforeStart(_ sbd: Instance, _ s: SessionSummary) throws -> Int {
     try sbd.sb("stop", s.id)
@@ -775,7 +792,7 @@ extension Instance {
   }
 
   /// A session whose folder went away while it was paused can't start, but its pause still ends, so it is never
-  /// stuck paused. The resume sends nothing and launches nothing, and it reports the folder's error.
+  /// stuck paused. The resume sends nothing and launches nothing. It reports the folder's error.
   @Test func aResumeOfASessionWhoseFolderIsGoneEndsThePauseAndLaunchesNothing() throws {
     let sbd = try Instance()
     let s = try sbd.pausedStopped()

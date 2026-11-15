@@ -592,14 +592,13 @@ struct BoardView: View {
                         Group {
                           if drops {
                             BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                              .contextMenu {
-                                PauseMenuItem(model: model, session: s)
-                                moveMenu(s.id, from: lane.group?.id)
-                              }
                           } else {
                             BoardCard(session: s, keyboardFocused: s.id == ring)
-                              .contextMenu { PauseMenuItem(model: model, session: s) }
                           }
+                        }
+                        .contextMenu {
+                          PauseMenuItem(model: model, session: s)
+                          if drops { moveMenu(s.id, from: lane.group?.id) }
                         }
                         .id(s.id)
                       }
@@ -974,12 +973,13 @@ extension BoardHolder {
   }
 }
 
-/// Who holds a Waiting card, in a capsule.
-struct HolderBadge: View {
-  let holder: BoardHolder
+/// A Board card's short status word in a capsule, with `help` as its tooltip and its accessibility label.
+struct CapsuleBadge: View {
+  let title: String
+  let help: String
 
   var body: some View {
-    Text(holder.badgeTitle)
+    Text(title)
       .font(.caption2.bold())
       .lineLimit(1)
       .fixedSize()
@@ -987,9 +987,16 @@ struct HolderBadge: View {
       .padding(.vertical, 1)
       .background(Capsule().fill(Color.secondary.opacity(0.15)))
       .foregroundStyle(.secondary)
-      .help("Held by \(holder.badgeTitle)")
-      .accessibilityLabel("Held by \(holder.badgeTitle)")
+      .help(help)
+      .accessibilityLabel(help)
   }
+}
+
+/// Who holds a Waiting card, in a capsule.
+struct HolderBadge: View {
+  let holder: BoardHolder
+
+  var body: some View { CapsuleBadge(title: holder.badgeTitle, help: "Held by \(holder.badgeTitle)") }
 }
 
 struct BoardCard: View {

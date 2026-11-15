@@ -2,22 +2,19 @@ import SwiftUI
 import SwitchboardCore
 
 extension SessionSummary {
-  /// True when Pause can act on the session. A session whose worktree cleanup removed is left out, because sbd
-  /// can't resume a session without its folder.
+  /// True when Pause can act on the session. It leaves out a session whose folder worktree cleanup removed,
+  /// because sbd can't start claude without the folder.
   var canPause: Bool { pause == nil && hasTerminals }
 }
 
-/// Which of a group lane's Pause All and Resume All buttons show. They follow sbd's group fan-out over the
-/// group's work sessions.
+/// Which of a group lane's Pause All and Resume All buttons show. They follow sbd's group fan-out, which
+/// `GroupPauseMember` defines.
 enum GroupPause {
-  /// `pause` is true when a member has started, isn't marked done, and isn't paused. A member in Done only because
-  /// its PR merged still counts. `resume` is true when a member is paused, including one marked done.
+  /// `pause` is true when a group pause would pause a member.
+  /// `resume` is true when a group resume would resume one.
   static func actions(_ members: [SessionSummary]) -> (pause: Bool, resume: Bool) {
-    let work = members.filter { $0.kind == .work }
-    return (
-      work.contains { $0.runsClaude && !$0.markedDone && $0.pause == nil },
-      work.contains { $0.pause != nil }
-    )
+    let work = members.workMembers
+    return (work.contains { $0.groupPauseSkip == nil }, work.contains { $0.groupResumeSkip == nil })
   }
 }
 
@@ -25,18 +22,7 @@ enum GroupPause {
 struct PausedBadge: View {
   let pause: Pause
 
-  var body: some View {
-    Text("Paused")
-      .font(.caption2.bold())
-      .lineLimit(1)
-      .fixedSize()
-      .padding(.horizontal, 5)
-      .padding(.vertical, 1)
-      .background(Capsule().fill(Color.secondary.opacity(0.15)))
-      .foregroundStyle(.secondary)
-      .help(pause.line)
-      .accessibilityLabel(pause.line)
-  }
+  var body: some View { CapsuleBadge(title: "Paused", help: pause.line) }
 }
 
 /// A paused session's line: who paused it and why, the messages it holds, and Resume.

@@ -6,19 +6,6 @@ extension MCPToolServerSuite {
   fileprivate func managerID(_ sbd: Instance) throws -> String {
     try sbd.id(of: try #require(JSON.parse(try sbd.sb("manager", "--json"))))
   }
-
-  fileprivate func chatID(_ sbd: Instance, _ group: String) throws -> String {
-    try sbd.id(of: try #require(JSON.parse(try sbd.sb("chat", group, "--json"))))
-  }
-
-  /// The `result` of each row of a group pause or resume, by session id.
-  fileprivate func results(_ report: JSON?) -> [String: String] {
-    var out: [String: String] = [:]
-    for row in report?["sessions"]?.array ?? [] {
-      if let id = row["session"]?.string { out[id] = row["result"]?.string ?? "" }
-    }
-    return out
-  }
 }
 
 /// The `pause` and `resume` tools of an unscoped server, as the Manager has them.
@@ -96,7 +83,7 @@ extension MCPToolServerSuite {
     let result = try mcp.call("pause", ["group": "Flags"])
 
     #expect(!result.isError, "\(result.text)")
-    #expect(results(result.json) == [a.id: "paused", b.id: "paused"], "\(result.text)")
+    #expect(sbd.results(result.json) == [a.id: "paused", b.id: "paused"], "\(result.text)")
     #expect(try sbd.get(a.id).reason == "Paused by Manager")
     #expect(try sbd.get(b.id).reason == "Paused by Manager")
   }
@@ -130,11 +117,11 @@ extension MCPToolServerSuite {
     #expect(try sbd.get(s.id).live)
   }
 
-  /// The server sends `by: claude`, and only the user pauses a group chat.
+  /// The server sends `by: claude`. Only the user pauses a group chat.
   @Test func theManagerPausingAGroupChatIsAnError() throws {
     let sbd = try Instance()
     _ = try addGroup(sbd, "Flags")
-    let chat = try chatID(sbd, "Flags")
+    let chat = try sbd.chatOf("Flags")
     let mcp = try MCPClient(sbd, env: inside(try managerID(sbd)))
 
     let result = try mcp.call("pause", ["session": .string(chat)])
@@ -180,7 +167,7 @@ extension MCPToolServerSuite {
     #expect(resumeKeys.isSuperset(of: ["session", "group", "message"]), "\(resumeKeys)")
   }
 
-  /// The description says that a pause stops claude and holds every message, and gives each `until` form.
+  /// The description says that a pause stops claude and holds every message. It also gives each `until` form.
   @Test func thePauseDescriptionSaysItHoldsMessagesAndGivesTheUntilForms() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
@@ -200,7 +187,7 @@ extension MCPToolServerSuite {
   /// The scope and the Flags chat, whose claude runs the scoped server.
   private func scopeWithChat(_ sbd: Instance) throws -> (scope: Scope, chat: String) {
     let s = try scope(sbd)
-    return (s, try chatID(sbd, "Flags"))
+    return (s, try sbd.chatOf("Flags"))
   }
 
   private func scopedClient(_ sbd: Instance, _ s: Scope, chat: String) throws -> MCPClient {
@@ -257,7 +244,7 @@ extension MCPToolServerSuite {
     let result = try mcp.call("pause", ["group": "Flags"])
 
     #expect(!result.isError, "\(result.text)")
-    #expect(results(result.json) == [s.member.id: "paused"], "\(result.text)")
+    #expect(sbd.results(result.json) == [s.member.id: "paused"], "\(result.text)")
     #expect(try sbd.pauseField(s.member.id) != nil)
     for id in [s.outside.id, s.loose.id, chat] {
       #expect(try sbd.pauseField(id) == nil, "\(id)")

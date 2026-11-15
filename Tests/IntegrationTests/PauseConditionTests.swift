@@ -55,11 +55,6 @@ extension Instance {
   fileprivate func openWait(_ id: String, _ kind: Wait.Kind) throws -> Wait {
     try #require(try get(id).waits.first { $0.kind == kind })
   }
-
-  /// Waits until the claude that the pause stopped has exited.
-  fileprivate func waitForPausedExit(_ id: String) throws {
-    try waitFor(id, "claude to exit after the pause") { !$0.live && $0.claudePid == nil }
-  }
 }
 
 /// `sb pause --until`: a `date`, `merge`, or `session` condition that resumes the session when it's met, and a
@@ -463,7 +458,8 @@ extension Instance {
   }
 
   /// A `ci` wait rechecks 2 h after it was set. The resume comes 1 h in, so the recheck moves to 2 h after the
-  /// resume, and the wait isn't overdue 90 min after the resume.
+  /// resume.
+  /// The wait isn't overdue 90 min after the resume.
   @Test func resumingRestampsTheRecheckOfAnOpenWaitFromTheResume() throws {
     let sbd = try Instance()
     let s = try sbd.liveIdle()

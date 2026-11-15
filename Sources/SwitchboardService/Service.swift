@@ -547,7 +547,10 @@ public final class Service {
       let delivery = try send(id, text, trigger: from == nil ? .send : .session, from: from)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
-      if Pause.blocker(entries[id]!.session) != nil { reply["held"] = true }
+      if let session = entries[id]?.session, let pause = session.pause {
+        reply["held"] = .string(pause.line)
+        reply["name"] = .string(session.name)
+      }
       return .object(reply)
     case "dependency-resolved":
       return try dependencyResolved(args)
@@ -2118,10 +2121,12 @@ public final class Service {
           if jobs > 0 { entries[id]?.lastJobSeen = now }
           // A running turn outranks the job rule. The tick records the count after the turn ends.
           if live, entries[id]?.facts.turnRunning == false { recordJobs(id, jobs) }
-          if let e = entries[id], Pause.blocker(e.session) != nil {
-            enforcePause(id, now: now)
-          } else if let e = entries[id], stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
-            try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+          if let e = entries[id] {
+            if Pause.blocker(e.session) != nil {
+              enforcePause(id, now: now)
+            } else if stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
+              try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+            }
           }
         case .stopped:
           entries[id]?.unreportedSince = nil

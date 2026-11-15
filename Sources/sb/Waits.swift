@@ -5,6 +5,16 @@ import SwitchboardCore
 /// panes without it, so a command typed in a session's shell counts as yours.
 let author = ProcessInfo.processInfo.environment["CLAUDECODE"] == "1" ? Author.claude : Author.you
 
+/// The session whose Claude runs this command, or nil when you run it.
+let askingSession = author == .claude ? ProcessInfo.processInfo.environment["SB_SESSION_ID"] : nil
+
+/// `by`, and `from` when Claude runs the command inside a session.
+func whoAsks() -> [String: JSON] {
+  var args: [String: JSON] = ["by": .string(author.rawValue)]
+  if let from = askingSession { args["from"] = .string(from) }
+  return args
+}
+
 /// The flags of a typed wait and the request field that each one sets.
 let waitFlags = [
   "--kind": "kind", "--target": "target", "--who": "who", "--env": "environment", "--service": "service",

@@ -4,16 +4,21 @@ extension MCPToolServer {
   static let pauseTools: [Tool] = [
     Tool(
       "pause",
-      "Pauses a session, or each session in a group that has started, isn't done, and isn't paused. A pause stops claude and keeps it stopped: Switchboard holds every message, notice, and wait outcome for the session until it resumes, and nothing else starts it. `until` resumes it on its own: at a time such as 2h or 2026-11-15 09:00, when a PR such as #123 or owner/name#123 merges, or when another session reaches a state, written session:<name>[=<state>] (Done by default). Pause a session rather than stop it, because a stopped session moves to Needs you and wakes on the next message.",
+      "Pauses one session, or each session in a group that has started, isn't done, and isn't paused. A pause stops claude and keeps it stopped. Switchboard holds every message, notice, and wait outcome for the session until it resumes, and nothing else starts it. Give exactly one of `session` and `group`. `until` resumes the session on its own: at a time such as 2h or 2026-11-15 09:00, when a PR such as #123 or owner/name#123 merges, or when another session reaches a state, written session:<name>[=<state>] (Done by default). To free CPU or to hold work, pause a session instead of stopping it, because a stopped session moves to Needs you and wakes on the next message.",
       [
         "session": session, "group": group,
-        "until": string("When the session resumes on its own: a time, a PR, or session:<name>[=<state>]."),
-        "reason": string("Why the session is paused, on one line. Switchboard shows it with the pause."),
-        "message": string("The message that the session resumes with. Default: a note that it was paused."),
+        "until": string(
+          "When the session resumes on its own: a duration or time such as 2h or 2026-11-15 09:00, a PR that merges, such as #123, owner/name#123, or a PR URL; or session:<name>[=<state>]. Omit it to stay paused until `resume`."
+        ),
+        "reason": string(
+          "Why the session is paused, in one line. Switchboard shows it to the user on the session's Paused line."),
+        "message": string(
+          "The message that the session gets when it resumes, before the messages that were held. Default: a note that it was paused."
+        ),
       ]),
     Tool(
       "resume",
-      "Resumes a paused session, or each paused session in a group. The session gets `message`, else the message stored with its pause, else a note that it was paused, and then the messages that waited.",
+      "Resumes a paused session, or each paused session in a group. Give exactly one of `session` and `group`. The session first gets `message`, else the message stored with its pause, else a note that it was paused. Then it gets the messages that were held.",
       ["session": session, "group": group, "message": string("The message that each session resumes with.")]),
   ]
 

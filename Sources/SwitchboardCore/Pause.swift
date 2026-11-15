@@ -83,7 +83,7 @@ public struct Pause: Codable, Equatable, Sendable {
     override ?? message ?? defaultMessage(outcome: outcome)
   }
 
-  public func defaultMessage(outcome: String?) -> String {
+  private func defaultMessage(outcome: String?) -> String {
     let why = reason.map { " (\($0))" } ?? ""
     let because = outcome.map { " You resume because \(Wait.sentence($0))" } ?? ""
     return "Switchboard: You were paused by \(byText)\(why).\(because) Continue where you left off."
@@ -121,13 +121,50 @@ public struct Pause: Codable, Equatable, Sendable {
 
   /// The reason on one line, or nil when nothing remains. It refuses text over `reasonLimit`.
   public static func cleanReason(_ text: String?) throws -> String? {
-    guard let text else { return nil }
-    let clean = SessionGroup.collapsingWhitespace(text)
-    guard clean.count <= reasonLimit else {
-      throw APIError("a pause reason has at most \(reasonLimit) characters, and this one has \(clean.count)")
-    }
-    return clean.isEmpty ? nil : clean
+    try SessionGroup.cleanLine(text, limit: reasonLimit, noun: "a pause reason")
   }
+}
+
+extension Session {
+  /// The open waits, then the pause condition. A resolver checks the condition as it checks a wait.
+  public var resolvableWaits: [Wait] {
+    guard let until = pause?.until else { return waits ?? [] }
+    return (waits ?? []) + [until]
+  }
+}
+
+/// A session as a group pause or resume sees it. sbd decides each member's row with this rule, and the app shows
+/// Pause All and Resume All with it.
+public protocol GroupPauseMember {
+  var kind: SessionKind { get }
+  var runsClaude: Bool { get }
+  /// True when `sb done` or the app marked the session done. A merged PR alone doesn't mark it.
+  var markedDone: Bool { get }
+  var pause: Pause? { get }
+}
+
+extension Session: GroupPauseMember {
+  public var markedDone: Bool { done }
+}
+
+extension SessionSummary: GroupPauseMember {}
+
+extension GroupPauseMember {
+  /// The row that a group pause gives the member without pausing it, or nil when it pauses the member. It skips a
+  /// member that hasn't started or is marked done.
+  /// It keeps the pause that a member already has.
+  public var groupPauseSkip: PauseRow.Result? {
+    if !runsClaude || markedDone { return .skipped }
+    return pause == nil ? nil : .alreadyPaused
+  }
+
+  /// The row that a group resume gives the member without resuming it, or nil when it resumes the member.
+  public var groupResumeSkip: PauseRow.Result? { pause == nil ? .skipped : nil }
+}
+
+extension Sequence where Element: GroupPauseMember {
+  /// The members that a group pause or resume gives a row. A Manager conversation or a group chat gets none.
+  public var workMembers: [Element] { filter { $0.kind == .work } }
 }
 
 /// sbd's answer to a `pause` or `resume` request that names a group: one row for each session in the group.

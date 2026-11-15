@@ -1,8 +1,7 @@
 import SwitchboardCore
 
 extension BoardModel {
-  /// Pauses one session with no reason, condition, or message. sbd refuses a request that names both a session
-  /// and a group.
+  /// Pauses one session with no reason, condition, or message.
   func pause(_ id: String) { perform("pause", ["session": .string(id)]) }
 
   func pauseGroup(_ id: String) { sendToGroup("pause", id) }

@@ -803,9 +803,9 @@ case "open":
 case "stop":
   sessionCommand("stop", a)
 case "pause":
-  pauseCommand(a)
+  targetCommand("pause", a, flags: ["until", "reason", "message"])
 case "resume":
-  resumeCommand(a)
+  targetCommand("resume", a, flags: ["message", "prompt"])
 case "done":
   sessionCommand("done", a, extra: ["done": .bool(true)])
 case "undone":

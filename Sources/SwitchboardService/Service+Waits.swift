@@ -50,7 +50,7 @@ extension Service {
   /// and they don't resume it.
   private func waitsToResolve() -> [(session: Session, wait: Wait)] {
     entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }.flatMap { s in
-      ((s.waits ?? []) + [s.pause?.until].compactMap { $0 }).map { (session: s, wait: $0) }
+      s.resolvableWaits.map { (session: s, wait: $0) }
     }
   }
 

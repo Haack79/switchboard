@@ -39,8 +39,8 @@ public enum BoardColumn: String, Codable, CaseIterable, Sendable {
   /// `Attention.shown` moved an acknowledged Inbox verdict to Waiting. It
   /// decides only a Waiting card's holder. `stateSince` is when the session
   /// entered `state`. A session that no `pr` event has placed counts its PR
-  /// column from `created`. A paused card that lands in Waiting shows the pause's line, and it waits on you
-  /// when you paused it.
+  /// column from `created`. A paused card that lands in Waiting shows the pause's line.
+  /// It waits on you when you paused it.
   public static func place(
     state: AttentionState, acknowledged: Bool = false, stateSince: Int64, waits: [Wait], facts: SessionFacts,
     created: Int64, pause: Pause? = nil
