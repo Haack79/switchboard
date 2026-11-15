@@ -166,6 +166,22 @@ extension MCPToolServer {
         "version": string("The version or update time that the Artifact tool showed, if any."),
       ], required: ["plan", "kind"]),
     Tool(
+      "add_schedule",
+      "Adds a schedule to a session, by default the calling session. Switchboard sends the prompt to the session on the interval, as is, so a slash command runs as one. The shortest interval is 1m. A run that comes due while the session is busy runs once when the session is free. A stopped session resumes with the prompt. A schedule survives restarts, so use one for a recurring check instead of /loop or a chain of date waits.",
+      [
+        "session": session,
+        "every": string("The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m."),
+        "prompt": string("The prompt to send on each run."),
+      ], required: ["every", "prompt"]),
+    Tool(
+      "list_schedules",
+      "Lists the schedules with their session, prompt, interval, next run, and last result, the next due first. Pass a session to list only its schedules. A next run in the past means the run waits for the session to be free.",
+      ["session": session]),
+    Tool(
+      "remove_schedule", "Removes a schedule. Get its id from list_schedules or from add_schedule's result.",
+      ["schedule": string("The id of the schedule.")],
+      required: ["schedule"]),
+    Tool(
       "report",
       "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it.",
       [

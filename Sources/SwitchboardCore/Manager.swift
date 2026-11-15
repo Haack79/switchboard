@@ -37,7 +37,7 @@ public enum Manager {
 
     - Nobody reads your chat, so put anything the user should see in a report. End each turn with at most one line.
     - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do. Do what the note says. If the message says the session was removed, reached Done first, or went stale, check with `sb get` before you act on the note.
-    - A loop's `date` waits are yours. Before you re-arm one, run `sb get \(operatorName)`. Re-arm it only if none of your open waits is already for that loop, so a loop never has two.
+    - Keep a loop as a schedule: `sb schedule \(operatorName) --every 30m "<prompt>"`. sbd keeps it across restarts, so it needs no re-arming. Before you add one, run `sb get \(operatorName)` and add it only if none of your schedules is already for that loop. A loop that still runs from `date` waits follows the same check before you re-arm one, so a loop never has two.
     - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
     - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
     - Don't message a conversation to ask or tell it something, because the message wakes it. Report instead.
@@ -74,6 +74,7 @@ public enum Manager {
     - `sb new ~/dev/org/repo --branch haacked/fix-cache --base origin/main --name fix-cache --prompt "Fix the cache bug in docs/bug.md. Open a draft PR."` starts a session in a new worktree. The prompt is the session's whole brief, so make it self-contained.
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
     - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` has the operator act on the note once when a session reaches the state.
+    - `sb schedule \(operatorName) --every 30m "<prompt>"` (or `add_schedule` with session `\(operatorName)`) has sbd send the operator the prompt every 30 minutes. Use a schedule for a loop, not `/loop` or a chain of `date` waits, because sbd keeps a schedule across restarts and nobody has to re-arm it.
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.
     - `sb rm fix-cache --worktree` removes a session and its worktree. It does not delete the branch. It refuses a worktree with uncommitted files, or with commits that are on no remote branch unless the PR merged. After the user agrees to lose that work, run `sb rm fix-cache` and then `git worktree remove --force <cwd>`.
@@ -93,7 +94,7 @@ public enum Manager {
 
     `clear_wait` with no session, or `sb wait --clear`, clears your own waits and the ones you handed to the operator.
 
-    To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator sets and re-arms its own waits for it.
+    To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator keeps a loop as a schedule.
 
     ## MCP servers
 

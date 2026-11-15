@@ -195,8 +195,9 @@ func timedOut(_ prompt: String, idleStopSeconds: Int = 600) throws -> (Instance,
     let after = try sbd.waitFor(s.id, "the removed card") { $0.cards.isEmpty }
     // The turn stays until claude reports it idle, and the prompt with it.
     #expect(after.reason == "approve `touch z`")
+    // sbd records card_closed after the card goes, once it confirms that Claude Code closed the hook.
+    try sbd.waitFor("the card_closed event") { try sbd.events(s.id).contains { $0.kind == "card_closed" } }
     let events = try sbd.events(s.id)
-    #expect(events.contains { $0.kind == "card_closed" })
     #expect(events.contains { $0.kind == "dialog_closed" && $0.data["allowed"] == nil })
   }
 
@@ -256,8 +257,9 @@ func timedOut(_ prompt: String, idleStopSeconds: Int = 600) throws -> (Instance,
     try sbd.waitFor("the Edit dialog") { try sbd.screen(s.id).contains(" Edit file") }
     try sbd.press(s.id, "Escape")
     try sbd.waitFor(s.id, "the removed card") { $0.cards.isEmpty }
+    // sbd records card_closed after the card goes, once it confirms that Claude Code closed the hook.
+    try sbd.waitFor("the card_closed event") { try sbd.events(s.id).contains { $0.kind == "card_closed" } }
     let events = try sbd.events(s.id)
-    #expect(events.contains { $0.kind == "card_closed" })
     #expect(events.contains { $0.kind == "dialog_closed" && $0.data["allowed"] == nil })
   }
 
