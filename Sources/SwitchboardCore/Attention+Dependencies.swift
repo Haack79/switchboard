@@ -3,7 +3,8 @@ import Foundation
 /// The rules for a session whose open PR waits on other PRs. They follow the
 /// Held group of `/sessions`, which sbd shows as Waiting.
 extension Attention {
-  /// Needs you when a dependency closed unmerged. Waiting when the PR
+  /// Needs you when a dependency closed unmerged, or when its deploy can't
+  /// resolve as its `Depends on` line names it. Waiting when the PR
   /// conflicts with a stack base whose session's turn runs, because the base
   /// may still move.
   static func blockedPR(_ facts: SessionFacts, stateOf: (String) -> AttentionState?) -> Verdict? {
@@ -11,6 +12,9 @@ extension Attention {
     if let closed = facts.dependencies.first(where: \.closed) {
       return Verdict(
         state: .needsYou, reason: oneLine("decide what replaces \(closed.label(from: pr.repo)), which closed unmerged"))
+    }
+    if let stuck = facts.dependencies.first(where: { $0.holds && $0.problem != nil }), let problem = stuck.problem {
+      return Verdict(state: .needsYou, reason: oneLine("\(stuck.label(from: pr.repo)) can't resolve: \(problem)"))
     }
     guard pr.mergeable == .conflicting,
       let base = facts.dependencies.first(where: {
