@@ -411,7 +411,7 @@ import Testing
       Press("v"), Press("x"), Press("a"), Press("z"), Press("z", [.command, .shift]), Press("f", [.command, .control]),
       Press("p"), Self.filterByOrg, Self.newConversation, Self.messageField, Press("3"),
       Press("n", [.command, .shift]),
-      Press("m", [.command, .option]), Press("e"),
+      Press("m", [.command, .option]), Press("e"), Self.quickAsk,
     ]
 
     /// Session > Filter by Org….
@@ -423,6 +423,10 @@ import Testing
     /// Session > Message Claude. A focused terminal passes only ⌘ keys to the menu bar, and ⌘E is the system's
     /// Use Selection for Find.
     static let messageField = Press("e", [.command, .shift])
+
+    /// Session > Ask Switchboard…. ⌘K is Search Sessions, and the ask panel is the other field that floats over the
+    /// window.
+    static let quickAsk = Press("k", [.command, .shift])
 
     /// A focused terminal passes only ⌘ keys to the menu bar.
     @Test func everyShortcutUsesCommand() {
@@ -466,6 +470,17 @@ import Testing
       #expect(Self.taken.filter { $0 == Self.messageField }.count == 1)
       #expect(!Self.all.map(Press.init).contains(Press(NavShortcuts.messageField)))
       #expect(Press(NavShortcuts.messageField) != Press(NavShortcuts.newConversation))
+    }
+
+    @Test func quickAskIsShiftCommandK() {
+      #expect(Press(NavShortcuts.quickAsk) == Self.quickAsk)
+    }
+
+    /// The panel is a sheet that `bin/test-gui shell` doesn't expect, so its shortcut stays out of `all`.
+    @Test func quickAskCollidesWithNoOtherShortcut() {
+      #expect(Self.taken.filter { $0 == Self.quickAsk }.count == 1)
+      #expect(!Self.all.map(Press.init).contains(Press(NavShortcuts.quickAsk)))
+      #expect(Press(NavShortcuts.quickAsk) != Press(NavShortcuts.searchSessions))
     }
 
     @Test func theShortcutsAreTheKeysTheReadmeNames() {

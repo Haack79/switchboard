@@ -70,6 +70,9 @@ struct SwitchboardApp: App {
         Group {
           Button("Search Sessions…") { model.showingSearch = true }
             .keyboardShortcut(NavShortcuts.searchSessions)
+          Button("Ask Switchboard…") { model.openQuickAsk() }
+            .keyboardShortcut(NavShortcuts.quickAsk)
+            .disabled(model.presentingSheet)
           Button("Next Session") { model.selectAdjacentSession(by: 1) }
             .keyboardShortcut(NavShortcuts.nextSession)
           Button("Previous Session") { model.selectAdjacentSession(by: -1) }

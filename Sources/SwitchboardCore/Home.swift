@@ -162,6 +162,7 @@ public struct Config: Codable, Equatable, Sendable {
   public var usage = UsageSettings()
   public var docket = DocketSettings()
   public var planUpdates = PlanUpdateSettings()
+  public var quickAsk = QuickAskSettings()
   public var recheck = RecheckSettings()
   /// Where the Issues view reads issues from, the team, and the Start presets.
   public var issues = IssueSettings()
@@ -173,7 +174,8 @@ public struct Config: Codable, Equatable, Sendable {
       autoMode, env
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds
-    case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates
+    case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
+      quickAsk
     case issues
     case recheck = "recheckSeconds"
     case testTrashOtherVolume
@@ -254,6 +256,7 @@ public struct Config: Codable, Equatable, Sendable {
     usage = try c.decodeIfPresent(UsageSettings.self, forKey: .usage) ?? d.usage
     docket = try c.decodeIfPresent(DocketSettings.self, forKey: .docket) ?? d.docket
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
+    quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     // sbd logs a bad `issues` section and keeps the defaults. Throwing would make sbd ignore all of config.json.
     do {
