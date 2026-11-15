@@ -74,6 +74,7 @@ struct DocketView: View {
         model.sessionNames.replacingIDs(
           in: todos.message(before: "docket keeps the review. Open docket to abandon it.")))
     }
+    .referenceRepo(session)
   }
 
   /// One `docket` event as a log line.

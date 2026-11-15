@@ -56,6 +56,7 @@ struct SessionView: View {
       if session.hasTerminals { await connection.connect(session.id, live: session.live) }
     }
     .sheet(item: $ui.removal) { removeSheet($0) }
+    .referenceRepo(session)
   }
 
   /// The Claude terminal and the shell, or the text that stands in for them.
