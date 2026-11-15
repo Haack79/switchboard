@@ -14,6 +14,13 @@ func printTriage(_ s: SessionSummary, position: Int? = nil) {
   for c in item.callouts {
     out("      [\(c.kind.rawValue)] \(c.title)\(c.body.isEmpty ? "" : ": \(oneLine(c.body, max: 200))")")
   }
+  if let review = item.review {
+    out("   Before you merge:")
+    for line in review.lines {
+      out("      [\(line.amber ? "amber" : "ok")] \(line.title)")
+      for detail in line.details { out("         \(oneLine(detail, max: 200))") }
+    }
+  }
   for draft in item.drafts {
     out("   Draft \(draft.number)\(draft.label.map { ": \($0)" } ?? ""):")
     for line in draft.text.split(separator: "\n", omittingEmptySubsequences: false) { out("      > \(line)") }

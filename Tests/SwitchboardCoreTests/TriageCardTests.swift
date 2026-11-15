@@ -615,7 +615,9 @@ let sessionCard = TriageSummary(
   }
 
   @Test func readyToMergeOffersMergeAndAcknowledge() throws {
-    let f = ended(samplePR(checks: "SUCCESS"))
+    var f = ended(samplePR(checks: "SUCCESS", reviewRequests: []))
+    f.pr?.codeOwnerRequests = []
+    f.pr?.mergeDetails = MergeDetails()
 
     let item = try #require(itemOf(f))
 

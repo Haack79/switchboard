@@ -11,25 +11,19 @@ enum DraftCopy {
   }
 }
 
-/// The drafts of an Inbox message, each in a quote with a copy button. A draft that names a GitHub comment to
-/// reply to is an editable field with its own Post button.
+/// Drafts of an Inbox message, each in a quote with a copy button. A draft that names a GitHub comment to
+/// reply to is an editable field with its own Post button. An empty list draws nothing.
 struct DraftsSection: View {
-  @EnvironmentObject var model: BoardModel
   let session: SessionSummary
   let item: TriageItem
+  let drafts: [InboxDraft]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      SectionTitle(text: item.drafts.count == 1 ? "Draft" : "Drafts")
-      ForEach(Array(item.drafts.enumerated()), id: \.offset) { _, draft in
-        if Self.usesReplyView(draft, in: item) {
-          DraftReplyView(
-            session: session.id, ref: item.ref, draft: draft,
-            field: model.replyField(session: session.id, ref: item.ref, number: draft.number)
-          )
-          .id("\(item.ref)/\(draft.number)")
-        } else {
-          DraftView(draft: draft)
+    if !drafts.isEmpty {
+      VStack(alignment: .leading, spacing: 8) {
+        SectionTitle(text: drafts.count == 1 ? "Draft" : "Drafts")
+        ForEach(Array(drafts.enumerated()), id: \.offset) { _, draft in
+          DraftEntry(session: session, item: item, draft: draft)
         }
       }
     }
@@ -38,6 +32,28 @@ struct DraftsSection: View {
   /// Only the session's own card names a target. A summarizer's draft could carry a target copied from quoted text.
   static func usesReplyView(_ draft: InboxDraft, in item: TriageItem) -> Bool {
     draft.replyTo != nil && item.source == .session
+  }
+}
+
+/// One draft of an Inbox message, in the Drafts section or in the review
+/// thread that it answers. Both places edit the same field, so an edit carries
+/// over when the draft moves between them.
+struct DraftEntry: View {
+  @EnvironmentObject var model: BoardModel
+  let session: SessionSummary
+  let item: TriageItem
+  let draft: InboxDraft
+
+  var body: some View {
+    if DraftsSection.usesReplyView(draft, in: item) {
+      DraftReplyView(
+        session: session.id, ref: item.ref, draft: draft,
+        field: model.replyField(session: session.id, ref: item.ref, number: draft.number)
+      )
+      .id("\(item.ref)/\(draft.number)")
+    } else {
+      DraftView(draft: draft)
+    }
   }
 }
 
