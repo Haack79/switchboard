@@ -71,9 +71,9 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
 }
 
 @Suite struct SidePanelDoneCaption {
-  static let text = "Waits don't resolve on their own while the session is marked Done."
+  static let text = "Waits and schedules don't run on their own while the session is marked Done."
 
-  @Test func saysThatWaitsDontResolveOnASessionMarkedDoneWithAnOpenWait() {
+  @Test func saysThatWaitsDontRunOnASessionMarkedDoneWithOnlyAnOpenWait() {
     let panel = SidePanel(waitingSession([waitFixture("w1")], markedDone: true))
 
     #expect(panel.doneCaption == SidePanelDoneCaption.text)
@@ -154,6 +154,73 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     let beside = SessionView.terminalsMinWidth(Self.session(shellClosed: true))
 
     #expect(SidePanel.fits(width: Self.sessionViewMinimum, beside: beside))
+  }
+}
+
+@Suite struct SidePanelSchedules {
+  @Test(arguments: [nil, []] as [[Schedule]?])
+  func hidesTheSchedulesSectionForASessionWithoutSchedules(_ schedules: [Schedule]?) {
+    #expect(!SidePanel(scheduledSession(schedules)).showsSchedules)
+  }
+
+  @Test func showsTheSchedulesSectionForASessionWithASchedule() {
+    #expect(SidePanel(scheduledSession([scheduleFixture("r1")])).showsSchedules)
+  }
+
+  @Test func showsTheSchedulesSectionWhenEveryScheduleIsPaused() {
+    #expect(SidePanel(scheduledSession([scheduleFixture("r1", paused: true)])).showsSchedules)
+  }
+
+  @Test(arguments: [(nil, "Schedules"), ([], "Schedules")] as [([Schedule]?, String)])
+  func titlesTheSchedulesSectionWithoutACountWhenThereIsNoSchedule(_ schedules: [Schedule]?, _ title: String) {
+    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == title)
+  }
+
+  @Test(arguments: [(1, "Schedules (1)"), (2, "Schedules (2)")])
+  func countsTheSchedulesInTheTitle(_ count: Int, _ title: String) {
+    let schedules = (0..<count).map { scheduleFixture("r\($0)") }
+
+    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == title)
+  }
+
+  @Test func countsAPausedScheduleInTheTitle() {
+    let schedules = [scheduleFixture("r1"), scheduleFixture("r2", paused: true)]
+
+    #expect(SidePanel(scheduledSession(schedules)).schedulesTitle == "Schedules (2)")
+  }
+}
+
+@Suite struct SidePanelDoneCaptionWithSchedules {
+  @Test func saysThatSchedulesDontRunOnASessionMarkedDoneWithOnlySchedules() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], markedDone: true))
+
+    #expect(panel.doneCaption == SidePanelDoneCaption.text)
+  }
+
+  @Test func saysTheSameOnASessionMarkedDoneWithWaitsAndSchedules() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], waits: [waitFixture("w1")], markedDone: true))
+
+    #expect(panel.doneCaption == SidePanelDoneCaption.text)
+  }
+
+  @Test func saysNothingWhenASessionWithSchedulesIsNotMarkedDone() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], markedDone: false))
+
+    #expect(panel.doneCaption == nil)
+  }
+
+  @Test func saysNothingWhenASessionMarkedDoneHasAnEmptyScheduleList() {
+    let panel = SidePanel(scheduledSession([], markedDone: true))
+
+    #expect(panel.doneCaption == nil)
+  }
+
+  /// A merged PR puts a session in Done without `markedDone`. sbd still runs the schedules of such a session.
+  @Test func saysNothingWhenASessionWithSchedulesIsInDoneWithoutBeingMarkedDone() {
+    var session = scheduledSession([scheduleFixture("r1")])
+    session.state = .done
+
+    #expect(SidePanel(session).doneCaption == nil)
   }
 }
 
