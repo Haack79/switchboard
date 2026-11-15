@@ -1,6 +1,12 @@
 import SwitchboardCore
 
 extension SessionSummary {
-  /// The reason line, marked when the user acknowledged it.
-  var reasonLine: String { acknowledged == true ? "\(reason) (acknowledged)" : reason }
+  /// The reason line, marked when the user acknowledged it, while the user's
+  /// snooze holds it, and with the note of a snooze that ended.
+  var reasonLine: String {
+    var line = acknowledged == true ? "\(reason) (acknowledged)" : reason
+    if let until = snoozedUntil { line += " (snoozed until \(Wait.formatTime(until)))" }
+    if let note = snoozeNote { line += " (\(note))" }
+    return line
+  }
 }

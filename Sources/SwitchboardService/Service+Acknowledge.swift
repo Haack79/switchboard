@@ -12,9 +12,10 @@ extension Service {
     if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
       throw APIError("\(e.session.name) can't acknowledge itself out of the Inbox")
     }
-    let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
+    let now = nowMs()
+    let verdict = Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState)
     if args["undo"]?.bool == true {
-      guard shown(id, verdict).acknowledged || verdict.requested else {
+      guard shown(id, verdict, now: now).acknowledged || verdict.requested else {
         throw APIError("\(e.session.name) isn't acknowledged")
       }
       record(id, "unack")
@@ -32,7 +33,7 @@ extension Service {
   /// unless the user already acknowledged it.
   func acknowledge(_ id: String, _ verdict: Verdict) throws {
     let e = entries[id]!
-    guard !shown(id, verdict).acknowledged else { return }
+    guard !shown(id, verdict, now: nowMs()).acknowledged else { return }
     guard AttentionState.inbox.contains(verdict.state) else {
       throw APIError("\(e.session.name) isn't in the Inbox: \(verdict.reason)")
     }
@@ -47,7 +48,7 @@ extension Service {
   func inboxRequest(_ id: String, ref: String, message: String) -> InboxRequest? {
     let e = entries[id]!
     let now = nowMs()
-    let shownVerdict = shown(id, Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState))
+    let shownVerdict = shown(id, Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState), now: now)
     guard let item = Triage.item(e.facts, shownVerdict, kind: e.session.kind), item.ref == ref, item.source == .rule
     else { return nil }
     let verdict = Attention.unheld(e.session, e.facts, now: now, stateOf: lastState)
@@ -61,9 +62,9 @@ extension Service {
   }
 
   /// The verdict that the app and `sb` show for `id`, given the verdict that
-  /// `evaluate` gave. Every caller goes through here, so the acknowledgment
-  /// rules read the same settings everywhere.
-  func shown(_ id: String, _ verdict: Verdict) -> Verdict {
-    Attention.shown(verdict, entries[id]!.facts, now: nowMs(), acknowledgedMs: config.recheck.acknowledgedMs)
+  /// `evaluate` gave at `now`. Every caller goes through here, so the
+  /// acknowledgment rules read the same settings everywhere.
+  func shown(_ id: String, _ verdict: Verdict, now: Int64) -> Verdict {
+    Attention.shown(verdict, entries[id]!.facts, now: now, acknowledgedMs: config.recheck.acknowledgedMs)
   }
 }

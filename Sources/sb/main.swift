@@ -170,6 +170,12 @@ let usage = """
                                   reason or its PR's head commit changes or a new turn starts. Nothing
                                   else about the session changes. --undo puts it back in the Inbox.
                                   Refuses the session that runs it
+    snooze <session> [--until WHEN | --for DURATION]
+                                  take the session's Inbox item out of the Inbox until WHEN (as
+                                  wait --until reads it) or for DURATION, 1 hour by default. A new
+                                  prompt, a failed CI run, or the PR's merge ends it early. The
+                                  session keeps working. Refuses the session that runs it
+    unsnooze <session>            end the session's snooze and put its item back in the Inbox
     import [--all] [--repo R]     list the Claude sessions outside Switchboard that
                                   run in a worktree, or every one with --all, and
                                   only those of the repo named R with --repo
@@ -417,7 +423,7 @@ struct Args {
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
-      "--preset", "--label", "--person", "--steps",
+      "--preset", "--label", "--person", "--steps", "--for",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -505,6 +511,7 @@ func printTable(_ sessions: [SessionSummary]) {
 func printSession(_ s: SessionSummary) {
   print("\(s.id)  \(s.name)".printable)
   print("  state:   \(s.state.title): \(s.reasonLine) (\(ago(s.since)))".printable)
+  if let until = s.snoozedUntil { print("  snoozed: until \(Wait.formatTime(until))") }
   if s.waitsToStart {
     printFollowup(s)
     return printWaitsAndNotes(s)
@@ -879,6 +886,10 @@ case "review":
   review(a)
 case "ack":
   acknowledge(a)
+case "snooze":
+  snoozeCommand(a)
+case "unsnooze":
+  unsnoozeCommand(a)
 case "cleanup":
   let result = call("cleanup", ["session": .string(a.session("cleanup"))], timeout: 300)
   if a.json { printJSON(result) } else { print("cleaned up \(result["cleaned"]?.string ?? "")") }

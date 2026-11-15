@@ -581,6 +581,10 @@ public final class Service {
       return try JSON(encoding: summary(id))
     case "ack":
       return try acknowledgeRequest(args)
+    case "snooze":
+      return try snoozeRequest(args)
+    case "unsnooze":
+      return try unsnoozeRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
@@ -2194,7 +2198,8 @@ public final class Service {
 
   func summary(_ id: String, rowFollowups: PlanRowFollowups? = nil) -> SessionSummary {
     let e = entries[id]!
-    let verdict = shown(id, Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState))
+    let now = nowMs()
+    let verdict = shown(id, Attention.evaluate(e.session, e.facts, now: now, stateOf: lastState), now: now)
     let s = e.session
     var out = SessionSummary(
       id: id, name: s.name, cwd: s.cwd, repo: s.repo, branch: e.branch,
@@ -2242,6 +2247,8 @@ public final class Service {
     out.mergeError = e.facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
     if verdict.requested { out.requested = true }
+    out.snoozedUntil = e.facts.snooze.flatMap { $0.isActive(at: now) ? $0.until : nil }
+    out.snoozeNote = verdict.snoozeNote
     out.permissionMode = e.facts.permissionMode
     out.pr?.mergeMethod = e.facts.mergeMethod
     if verdict.state == .readyToMerge, let since = e.facts.readyToMergeSince { out.since = since }
@@ -2261,7 +2268,8 @@ public final class Service {
     if verdict.state == .readyForReview, let ready = e.facts.readySince { out.since = ready }
     if s.kind == .work && s.docket == nil {
       out.board = BoardColumn.place(
-        state: verdict.state, setAside: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
+        state: verdict.state, setAside: verdict.acknowledged || verdict.snoozed, stateSince: out.since,
+        waits: s.waits ?? [],
         facts: e.facts, created: s.created)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: e.facts.pr, branch: e.branch) }
     }

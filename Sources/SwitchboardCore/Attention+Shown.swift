@@ -7,6 +7,6 @@ extension Attention {
   /// auto-continue, read `evaluate`'s verdict and never this one. A display
   /// layer therefore changes nothing that sbd does.
   public static func shown(_ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64) -> Verdict {
-    acknowledged(verdict, facts, now: now, acknowledgedMs: acknowledgedMs)
+    snoozed(acknowledged(verdict, facts, now: now, acknowledgedMs: acknowledgedMs), facts, now: now)
   }
 }
