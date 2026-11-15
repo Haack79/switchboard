@@ -232,6 +232,21 @@ extension Instance {
     #expect(try sbd.events(a.id).contains { $0.kind == "start-queued" })
   }
 
+  /// A resume's prompt that queues past the cap records who wrote it. A prompt from inside Claude Code is Claude's.
+  @Test(arguments: [true, false])
+  func aQueuedResumePromptRecordsItsAuthor(_ insideClaude: Bool) throws {
+    let sbd = try instance(cap: 1)
+    let a = try stoppedSession(sbd, name: "a")
+    _ = try busySession(sbd, name: "b")
+
+    try sbd.sb(["resume", a.id, "--prompt", "carry on"], env: insideClaude ? ["CLAUDECODE": "1"] : [:])
+
+    try waitForQueued(sbd, a.id, cap: 1)
+    let sent = try #require(try sbd.events(a.id).last { $0.kind == "sent" })
+    #expect(sent.data["text"]?.string == "carry on")
+    #expect(sent.data["by"]?.string == (insideClaude ? "claude" : "you"))
+  }
+
   // MARK: A slot frees
 
   @Test func aQueuedStartRunsWhenAProcessStops() throws {

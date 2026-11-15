@@ -204,7 +204,7 @@ import Testing
 
   /// How a Claude Code outside Switchboard sends the operator a message. It has `CLAUDECODE` but no
   /// `SB_SESSION_ID`, so its message carries no `from`.
-  enum OutsideRoute: CaseIterable { case sbSend, sbOperator }
+  enum OutsideRoute: CaseIterable { case sbSend, sbOperator, mcpSend }
 
   /// A Claude Code outside a session wrote the message, so it leaves the report open.
   @Test(arguments: OutsideRoute.allCases) func aClaudeCodeOutsideASessionLeavesTheReportOpen(_ route: OutsideRoute)
@@ -222,6 +222,9 @@ import Testing
       try sbd.sb(["send", "Operator", text], env: outside)
     case .sbOperator:
       try sbd.sb(["operator", text], env: outside)
+    case .mcpSend:
+      let result = try MCPClient(sbd, env: outside).call("send", ["session": "Operator", "text": .string(text)])
+      try #require(!result.isError, "\(result.text)")
     }
 
     let sent = try sentEvent(sbd, op, text, after: mark)
@@ -251,6 +254,35 @@ import Testing
     #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
     #expect(try inboxItem(sbd, op)?.source == .report)
     try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// An `sb mcp-server` that started before `insideClaude` existed sends `from` alone. sbd still takes the message
+  /// as Claude's, so it leaves the report open.
+  @Test func aSendThatNamesOnlyASenderLeavesTheReportOpen() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+    let text = "Check the queue again."
+    let mark = try sbd.lastEventId(op.id)
+
+    _ = try sbd.client.call("send", ["session": .string(op.id), "text": .string(text), "from": "gone"])
+
+    let sent = try sentEvent(sbd, op, text, after: mark)
+    #expect(sent.data["by"]?.string == "claude", "\(sent.data.text)")
+    try sbd.waitFor(op.id, "the operator's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    #expect(try inboxItem(sbd, op)?.source == .report)
+  }
+
+  /// `from` alone marks an ack as Claude's, so sbd refuses it while a report is open.
+  @Test func anAckThatNamesOnlyASenderIsRefused() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    try reported(sbd, op)
+
+    let error = failure(sbd, "ack", ["session": .string(op.id), "from": "gone"])
+
+    #expect(error.contains("inside Claude Code"), Comment(rawValue: error))
     #expect(try inboxItem(sbd, op)?.source == .report)
   }
 

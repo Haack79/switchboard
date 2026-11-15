@@ -45,13 +45,6 @@ func opSbdSent(_ id: Int64, _ text: String) -> Event {
   Event(id: id, session: "s1", t: id, kind: "sent", data: ["text": .string(text), "delivery": "pasted", "by": "sbd"])
 }
 
-/// A `sent` event for a message from another session, such as a conversation's `send`.
-func opPeerSent(_ id: Int64, _ text: String, from: String = "c1") -> Event {
-  Event(
-    id: id, session: "s1", t: id, kind: "sent",
-    data: ["text": .string(text), "delivery": "pasted", "from": .string(from)])
-}
-
 /// The `ack` event that the Inbox's Acknowledge records.
 func opAck(_ id: Int64, reason: String = "anything", t: Int64? = nil) -> Event {
   Event(id: id, session: "s1", t: t ?? id, kind: "ack", data: ["state": "needs_you", "reason": .string(reason)])
@@ -181,13 +174,6 @@ extension TriageOperatorTests {
     @Test func aMessageThatSbdSentClosesNothing() {
       let text = "Switchboard: kid to reach Done: it did."
       let f = facts(opIdle + [opReport(10, "Merge it?"), opSbdSent(11, text)] + opTurn(12, text))
-
-      #expect(f.openReports.map(\.text) == ["Merge it?"])
-    }
-
-    @Test func aMessageFromAnotherSessionClosesNothing() {
-      let text = "Keep 10 sessions on the queue."
-      let f = facts(opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text))
 
       #expect(f.openReports.map(\.text) == ["Merge it?"])
     }
@@ -433,7 +419,7 @@ let operatorShapes: [OperatorShape] = [
     name: "a report, then a message from a conversation",
     events: {
       let text = "Keep 10 sessions on the queue."
-      return opIdle + [opReport(10, "Merge it?"), opPeerSent(11, text)] + opTurn(12, text)
+      return opIdle + [opReport(10, "Merge it?"), opClaudeSent(11, text, from: "c1")] + opTurn(12, text)
     }, item: .report),
   OperatorShape(
     name: "a report, then a message that a Claude Code outside a session wrote",
