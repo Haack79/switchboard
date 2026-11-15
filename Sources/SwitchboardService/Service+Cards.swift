@@ -165,7 +165,7 @@ extension Service {
       let answers = try card.match(given.map { $0.string ?? "" })
       data["answers"] = .array(answers.map(JSON.string))
       if card.deferred {
-        return answered(try send(id, card.answerMessage(answers), byUser: false, trigger: .card).rawValue)
+        return answered(try send(id, card.answerMessage(answers), by: .sbd, trigger: .card).rawValue)
       }
       reply = (card.decision(answers: answers), .escape(then: card.answerMessage(answers)))
     } else {
@@ -211,7 +211,7 @@ extension Service {
             "card \(card.id)'s dialog still shows after Escape, so sbd didn't send the message. Answer it in the terminal"
           )
         }
-        _ = try send(id, message, byUser: false, trigger: .card)
+        _ = try send(id, message, by: .sbd, trigger: .card)
       }
       return result
     }

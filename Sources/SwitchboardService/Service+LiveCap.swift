@@ -50,7 +50,8 @@ extension Service {
   /// that a restart of sbd keeps it. A start that the user opened or that
   /// `livePriority` ranks runs the live plan at once, so it stops an idle
   /// session and starts now. Other starts wait for the tick to find a free slot.
-  func launch(_ id: String, prompt: String?, trigger: LaunchTrigger) throws {
+  /// `author` is who wrote the prompt, which the queued message's `sent` event records.
+  func launch(_ id: String, prompt: String?, by author: MessageAuthor = .you, trigger: LaunchTrigger) throws {
     let host = entries[id]?.session.host
     if hasRoom(onHost: host) { return try startClaude(id, prompt: prompt, trigger: trigger) }
     _ = try requireStartable(id)
@@ -64,7 +65,7 @@ extension Service {
       // The user now waits on the queued start, so the activity log records the user's trigger.
       entries[id]?.queuedTrigger = trigger
     }
-    if let prompt, !prompt.isEmpty { try queueMessage(id, prompt, byUser: true) }
+    if let prompt, !prompt.isEmpty { try queueMessage(id, prompt, by: author) }
     if entries[id].flatMap(liveStart)?.urgent == true { runQueuedStarts(now: nowMs()) }
   }
 

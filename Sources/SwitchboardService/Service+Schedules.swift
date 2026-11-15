@@ -108,7 +108,7 @@ extension Service {
     }
     let run: Schedule.Run
     do {
-      let delivery = try send(id, schedule.prompt, byUser: false, trigger: .schedule)
+      let delivery = try send(id, schedule.prompt, by: .sbd, trigger: .schedule)
       run = Schedule.Run(t: now, outcome: .init(delivery), skipped: skipped)
     } catch {
       logLine("can't run schedule \(schedule.id) of \(id): \(error)")

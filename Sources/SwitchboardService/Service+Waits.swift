@@ -144,7 +144,7 @@ extension Service {
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
   private func resolve(_ id: String, _ wait: Wait, outcome: String) throws {
-    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), byUser: false, trigger: .wait) }
+    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), by: .sbd, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
     record(id, "wait-resolved", try waitEventData(wait, ["outcome": .string(outcome)]))
   }

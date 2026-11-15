@@ -243,6 +243,16 @@ public struct ImportResult: Codable, Sendable {
   }
 }
 
+/// Who wrote a message that sbd sends to a session. Its `sent` event records it as `by`.
+public enum MessageAuthor: String, Codable, Sendable {
+  /// The user, from a terminal or the app.
+  case you
+  /// A Claude Code, inside a session or outside Switchboard.
+  case claude
+  /// sbd on its own, such as a wait's outcome.
+  case sbd
+}
+
 /// What `send` did with the message.
 public enum Delivery: String, Codable, Sendable {
   /// Pasted into the live session's prompt.

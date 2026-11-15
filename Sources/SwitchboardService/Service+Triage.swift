@@ -53,9 +53,8 @@ extension Service {
       option = try item.option(key)
     }
     // Claude Code may not approve its own prompt, act on its own PR, or answer the operator's report for the user.
-    if args["insideClaude"]?.bool == true, item.source == .card || item.source == .report || option.action.needsClick {
-      throw APIError(
-        "choose answers a prompt or a report, or acts on a PR, for you, so it doesn't run inside Claude Code")
+    if item.source == .card || item.source == .report || option.action.needsClick {
+      try Service.refuseClaude(args, "choose answers a prompt, answers a report, or acts on a PR")
     }
     let session = JSON.string(id)
     // The ref lets `send` record that the user's message answered a rule's item. `send` drops it for a choice

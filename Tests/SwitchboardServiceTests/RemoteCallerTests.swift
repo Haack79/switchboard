@@ -1202,7 +1202,7 @@ private func hold(_ entry: Service.Entry, in service: Service, _ facts: BoxFacts
       try addSession(service, facts)
       service.queue.sync { _ = service.removing.insert("s1") }
 
-      #expect { try service.queue.sync { try service.send("s1", "hello", trigger: .send) } } throws: {
+      #expect { try service.queue.sync { try service.send("s1", "hello", by: .you, trigger: .send) } } throws: {
         "\($0)".contains("is being removed")
       }
 
