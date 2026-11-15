@@ -365,6 +365,27 @@ extension Instance {
     #expect(row["snoozedUntil"] == nil)
   }
 
+  @Test func snoozeOfAPausedSessionEndsOnTimeAndLeavesThePause() throws {
+    let sbd = try Instance()
+    let s = try needsYouSession(sbd)
+    try snooze(sbd, s.id)
+    try sbd.sb("pause", s.id)
+    try sbd.waitForPausedExit(s.id)
+    let until = try #require(try sbd.snoozedUntil(s.id))
+
+    try sbd.advanceClock(until - (try sbd.now()) - SnoozeTests.minuteMs)
+    #expect(try sbd.snoozedUntil(s.id) == until)
+
+    try sbd.advanceClock(2 * SnoozeTests.minuteMs)
+
+    #expect(try sbd.snoozedUntil(s.id) == nil)
+    #expect(try sbd.pauseField(s.id) != nil)
+    #expect(try sbd.listed(s.id)["state"]?.string == "waiting")
+    let refusal = try sbd.run(["unsnooze", s.id])
+    #expect(refusal.status != 0)
+    #expect(refusal.stderr.contains("isn't snoozed"))
+  }
+
   @Test func snoozeThatEndsReturnsTheSessionToTriage() throws {
     let sbd = try Instance()
     let s = try needsYouSession(sbd)
