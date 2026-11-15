@@ -46,6 +46,25 @@ private func refusals(_ result: JSON) -> [String: JSON] {
 }
 
 extension RemovalJobTests {
+  /// The job may be stopping the claude of a session that it holds, so a due schedule sends that session nothing.
+  /// The schedule stays due, and Undo lets it run on the next tick.
+  @Test func aDueScheduleSkipsASessionThatTheJobHoldsAndRunsAfterUndo() throws {
+    let sbd = try undoInstance()
+    let s = try sbd.idleSession()
+    _ = try sbd.sb("schedule", s.id, "--every", "1m", "tick one", "--json")
+    #expect(queued(try sbd.queueRemoval([s.id], scope: "work", worktree: false)) == [s.id])
+
+    try sbd.advanceClock(61_000)
+    try sbd.giveTheWorkerTime()
+
+    #expect(try sbd.events(s.id, "sent", text: "tick one").isEmpty)
+    #expect(try sbd.events(s.id).filter { $0.kind == "schedule-ran" }.isEmpty, "the run was spent while held")
+    #expect(try sbd.removalState(s.id) == "queued")
+    #expect(cancelled(try sbd.cancelRemoval([s.id])) == [s.id])
+    try sbd.advanceClock(1)
+    try sbd.waitFor(s.id, "the reply to the run") { $0.lastReply == "Done: tick one" }
+  }
+
   // MARK: Undo window
 
   /// sbd reads a null `removalDelaySeconds` as absent, so the window is the default 5 s. Both times come from sbd's clock.
