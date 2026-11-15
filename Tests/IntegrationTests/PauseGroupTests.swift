@@ -327,6 +327,36 @@ extension Instance {
     #expect(try sbd.waitForPrompts(b.id, after: marks.b, count: 1) == ["all go"])
   }
 
+  /// A member whose folder went away while it was paused fails the group resume with the folder's error, and
+  /// its pause still ends. The other member resumes.
+  @Test func aGroupResumeEndsThePauseOfAMemberWhoseFolderIsGoneAndResumesTheRest() throws {
+    let sbd = try Instance()
+    // Each session of `pausedStopped` runs in the same folder, so this one gets a folder of its own.
+    let folder = sbd.work + "/gone"
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    let started = try sbd.client.call(
+      "new", ["path": .string(folder), "name": "gone", "prompt": "hello"], as: SessionSummary.self)
+    try sbd.waitFor(started.id, "gone's first reply") { $0.lastReply != nil && $0.claudePid != nil }
+    try sbd.pauseJSON(started.id)
+    let gone = try sbd.waitFor(started.id, "gone's claude to exit") { !$0.live && $0.claudePid == nil }
+    let kept = try sbd.pausedStopped("kept")
+    _ = try sbd.addGroup("Flags", [gone.id, kept.id])
+    let marks = (gone: try sbd.lastEventId(gone.id), kept: try sbd.lastEventId(kept.id))
+    let away = gone.cwd + ".away"
+    try FileManager.default.moveItem(atPath: gone.cwd, toPath: away)
+    defer { try? FileManager.default.moveItem(atPath: away, toPath: gone.cwd) }
+
+    let report = try sbd.resumeJSON(["Flags"])
+
+    #expect(sbd.results(report) == [gone.id: "failed", kept.id: "resumed"])
+    #expect(sbd.row(report, gone.id)?["error"]?.string?.contains("is gone") == true, "\(report)")
+    #expect(try sbd.pauseField(gone.id) == nil)
+    #expect(try sbd.pauseField(kept.id) == nil)
+    #expect(try sbd.waitForPrompts(kept.id, after: marks.kept, count: 1) == [defaultResume])
+    try sbd.tickThrice()
+    #expect(try sbd.launchEvents(gone.id, after: marks.gone).isEmpty)
+  }
+
   // MARK: A ref that names a session and a group
 
   /// How the session's ref collides with the group: the session has the group's name, or the group's name is a

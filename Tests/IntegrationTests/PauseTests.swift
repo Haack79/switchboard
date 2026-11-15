@@ -154,6 +154,22 @@ extension Instance {
     #expect(line.contains("free CPU for flags"), "\(line)")
   }
 
+  /// The app's sidebar label, Board card, and banner read these fields of `ls --json`.
+  @Test func lsCarriesThePauseTheHeldCountAndTheBoardLineThatTheAppReads() throws {
+    let sbd = try Instance()
+    let s = try sbd.pausedStopped("t", ["--reason", "free CPU for flags"])
+    try sbd.sb("send", s.id, "check the logs")
+
+    let listed = try #require(JSON.parse(try sbd.sb("ls", "--json"))?.array?.first { $0["id"]?.string == s.id })
+
+    #expect(listed["pause"]?["by"] == "you")
+    #expect(listed["pause"]?["reason"] == "free CPU for flags")
+    #expect(listed["heldMessages"]?.int == 1)
+    #expect(listed["board"]?["column"] == "waiting")
+    #expect(listed["board"]?["line"] == "Paused by you: free CPU for flags")
+    #expect(listed["board"]?["holder"] == "you")
+  }
+
   @Test(arguments: [("ask which base should it target?", AttentionState.needsYou), ("offer", .canContinue)])
   func aSessionInTheInboxLeavesItWhenPaused(_ prompt: String, _ state: AttentionState) throws {
     let sbd = try Instance()
@@ -756,6 +772,27 @@ extension Instance {
     let launches = try sbd.launchEvents(s.id, after: mark)
     #expect(launches.count == 1)
     #expect(launches.first?.data["trigger"] == "resume")
+  }
+
+  /// A session whose folder went away while it was paused can't start, but its pause still ends, so it is never
+  /// stuck paused. The resume sends nothing and launches nothing, and it reports the folder's error.
+  @Test func aResumeOfASessionWhoseFolderIsGoneEndsThePauseAndLaunchesNothing() throws {
+    let sbd = try Instance()
+    let s = try sbd.pausedStopped()
+    let mark = try sbd.lastEventId(s.id)
+    let away = s.cwd + ".away"
+    try FileManager.default.moveItem(atPath: s.cwd, toPath: away)
+    defer { try? FileManager.default.moveItem(atPath: away, toPath: s.cwd) }
+
+    let r = try sbd.run("resume", s.id)
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("is gone"), "\(r.stderr)")
+    #expect(try sbd.pauseField(s.id) == nil)
+    #expect(try sbd.events(s.id, after: mark).filter { $0.kind == "unpaused" }.count == 1)
+    try sbd.tickThrice()
+    #expect(try sbd.launchEvents(s.id, after: mark).isEmpty)
+    #expect(try sbd.events(s.id, after: mark).filter { $0.kind == "sent" }.isEmpty)
   }
 
   // MARK: Other commands on a paused session

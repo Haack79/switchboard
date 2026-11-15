@@ -231,13 +231,22 @@ extension Service {
   /// stopped claude with nothing held resumes with the message as its prompt. Otherwise the message goes to the
   /// front of the queue. A claude that still runs gets a paste only once it is live and ready. The tick's
   /// relaunch for the queue starts claude after it exits. Each open wait's recheck counts from the resume, so
-  /// the time spent paused doesn't make it overdue.
+  /// the time spent paused doesn't make it overdue. A host that sbd can't read keeps the pause. A folder that is
+  /// gone ends the pause with no resume message and no launch, and then throws the folder's error, so a pause
+  /// can always be cleared.
   func unpause(
     _ id: String, outcome: String?, message: String?, trigger: LaunchTrigger, by: Author?, from: String?
   ) throws {
     guard let session = entries[id]?.session, let pause = session.pause else { throw APIError("\(id) isn't paused") }
     try requireRead(id)
-    try requireFolder(session)
+    var folderGone: Error?
+    do {
+      try requireFolder(session)
+    } catch let error as HostUnread {
+      throw error
+    } catch {
+      folderGone = error
+    }
     let now = nowMs()
     try update(id) { s in
       s.pause = nil
@@ -255,6 +264,7 @@ extension Service {
     if let from { data["from"] = .string(from) }
     record(id, "unpaused", .object(data))
     setClaudeDeadMessage(id, Service.stoppedPaneMessage)
+    if let folderGone { throw folderGone }
     let text = pause.resumeText(outcome: outcome, override: message)
     let byUser = by == .you
     if claudeState(id) == .stopped, entries[id]!.pending.isEmpty {

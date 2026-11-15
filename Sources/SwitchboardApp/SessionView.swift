@@ -25,6 +25,7 @@ struct SessionView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      PauseBanner(session: session)
       Divider()
       CardList(cards: session.cards)
       GeometryReader { geometry in
@@ -219,7 +220,10 @@ struct SessionView: View {
       }
       Spacer()
       HStack {
-        if session.live {
+        if let pause = session.pause {
+          Button("Resume") { model.resume(session.id) }
+            .help(pause.line)
+        } else if session.live {
           Button("Stop") { model.stop(session.id) }
             .help("Stop claude now. It resumes when you send a message or open the session again.")
         } else if session.queued == true {
@@ -229,6 +233,10 @@ struct SessionView: View {
         } else {
           Button("Resume") { model.resume(session.id) }
             .help("Restart claude in this session. It continues the conversation.")
+        }
+        if session.canPause {
+          Button("Pause") { model.pause(session.id) }
+            .help(PauseBanner.pauseHelp)
         }
         Button(session.markedDone ? "Not Done" : "Done") { model.setDone(session.id, !session.markedDone) }
           .help(
