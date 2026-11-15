@@ -231,6 +231,7 @@ public final class Service {
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
   var issueCache = IssueCache()
+  let references = ReferenceFetches()
   var quota: any QuotaBudget = UnlimitedBudget()
   var groups: [String: SessionGroup] = [:]
   var plans: [String: PlanDocument] = [:]
@@ -447,6 +448,9 @@ public final class Service {
         return .success(try JSON(encoding: planFollowup(request.args)))
       case "issues-refresh", "issues-start", "issues-clone":
         return .success(try issueWorkRequest(request.op, request.args))
+      case "ref-details":
+        // A fetch waits on GitHub, so it runs off the state queue.
+        return .success(try JSON(encoding: referenceDetails(request.args)))
       case "poll":
         // A poll waits on GitHub, so it runs off the state queue.
         return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])

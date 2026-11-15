@@ -82,7 +82,7 @@ final class SlashCompletionPanel {
     let panel = self.panel ?? makePanel(list)
     hosting?.rootView = list
     ChildPanel.attach(panel, to: window)
-    let (field, screen) = ChildPanel.frames(of: anchor, in: window)
+    let (field, screen) = ChildPanel.frames(of: HoverAnchor(view: anchor), in: window)
     let frame = Self.frame(field: field, rows: list.rows.count, screen: screen)
     if frame != panel.frame { panel.setFrame(frame, display: true) }
     if !panel.isVisible { panel.orderFront(nil) }
@@ -112,7 +112,7 @@ final class SlashCompletionPanel {
 }
 
 /// The panel never becomes key, so every click on it is a first click into a window that is not key.
-private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

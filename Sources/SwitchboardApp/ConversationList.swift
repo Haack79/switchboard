@@ -56,7 +56,7 @@ struct ConversationRow: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
   let activeAccount: String
-  var hoverCard: HoverCard? = nil
+  var hoverCard: HoverCard<String>? = nil
 
   var body: some View {
     let mark = ChatMark(session)

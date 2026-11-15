@@ -1,9 +1,9 @@
 import Foundation
 import SwiftUI
-import SwitchboardCore
 import Testing
 
 @testable import SwitchboardApp
+@testable import SwitchboardCore
 
 @Suite struct DecisionCardPrimary {
   func item(_ options: [TriageOption], source: TriageSource = .session) -> TriageItem {
@@ -227,5 +227,199 @@ import Testing
   /// The message equals the label, so a button shows no "Sends:" line.
   @Test func yesAndNoShowNothingMore() {
     #expect(Self.yesNo.allSatisfy { !$0.showsEffect })
+  }
+}
+
+/// A review comment target on `repo`#`pr` whose thread root is `root`.
+private func target(
+  repo: String = "PostHog/charts", pr: Int = 18303, kind: ReplyTarget.Kind = .reviewComment, root: Int64 = 1001
+) -> ResolvedTarget {
+  ResolvedTarget(
+    target: ReplyTarget(repo: repo, pr: pr, kind: kind, id: root), root: root, author: "ann", path: "a.swift",
+    line: 3, excerpt: "Why not use a guard?", url: "https://github.com/\(repo)/pull/\(pr)#discussion_r\(root)")
+}
+
+/// The open threads `roots`, read with their comments.
+private func openThreads(_ roots: [Int64?]) -> MergeDetails {
+  MergeDetails(
+    threads: roots.count, threadsRead: roots.count, openThreads: roots.count,
+    threadDetails: roots.map { reviewThread($0) })
+}
+
+/// A session's Ready to merge item on PostHog/charts#18303 with a draft in each state of `posts`, numbered from
+/// 1, and the review of a PR with `details`, whose shown threads hold the drafts that answer them.
+private func reviewItem(_ details: MergeDetails?, _ posts: [DraftPost], reviewed: Bool = true) -> TriageItem {
+  let drafts = posts.enumerated().map { targetedDraft($1, number: $0 + 1) }
+  var review = reviewed ? MergeReview(reviewedPR(details: details)) : nil
+  review?.attach(drafts: drafts, repo: "PostHog/charts", number: 18303)
+  return TriageItem(
+    title: "Merge #18303", kind: .approval, summary: "Approved by stamphog.", drafts: drafts, review: review,
+    source: .session)
+}
+
+/// The drafts that the panel draws in its thread rows, or none when the card hides the panel.
+private func panelDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
+  guard DecisionCard.showsReview(item, listOpen: listOpen) else { return [] }
+  return (item.review?.threads?.shown ?? []).flatMap { MergeReviewPanel.drafts($0, in: item) }
+}
+
+/// The drafts that the Drafts section shows beside the panel.
+private func sectionDrafts(_ item: TriageItem, listOpen: Bool) -> [InboxDraft] {
+  DecisionCard.sectionDrafts(item, held: DecisionCard.heldDrafts(item, listOpen: listOpen))
+}
+
+/// A Ready to merge item and how it places its drafts.
+struct DraftPlacement: Sendable, CustomTestStringConvertible {
+  var label: String
+  var item: TriageItem
+
+  var testDescription: String { label }
+}
+
+private let draftPlacements: [DraftPlacement] = [
+  DraftPlacement(label: "no review", item: reviewItem(openThreads([1001]), everyDraftPost, reviewed: false)),
+  DraftPlacement(label: "details not read", item: reviewItem(nil, everyDraftPost)),
+  DraftPlacement(label: "no open threads", item: reviewItem(greenReviewDetails, [.ready(replyTarget)])),
+  DraftPlacement(label: "one thread, one draft", item: reviewItem(openThreads([1001]), [.ready(replyTarget)])),
+  DraftPlacement(
+    label: "one thread, two drafts",
+    item: reviewItem(openThreads([1001]), [.ready(replyTarget), .failed(replyTarget, error: "refused")])),
+  DraftPlacement(
+    label: "two threads",
+    item: reviewItem(openThreads([1001, 1002]), [.ready(target(root: 1002)), .ready(replyTarget), .checking])),
+  DraftPlacement(label: "every draft state", item: reviewItem(openThreads([1001]), everyDraftPost)),
+  DraftPlacement(
+    label: "targets that are not the thread",
+    item: reviewItem(
+      openThreads([1001]),
+      [
+        .ready(target(repo: "PostHog/other")), .ready(target(pr: 18304)), .ready(target(kind: .issueComment)),
+        .ready(target(kind: .review)), .ready(target(root: 1002)),
+      ])),
+  DraftPlacement(label: "a thread whose URL did not parse", item: reviewItem(openThreads([nil]), everyDraftPost)),
+]
+
+@Suite struct DecisionCardReview {
+  // MARK: The panel's place
+
+  @Test func aReadyItemWithAReviewShowsThePanel() {
+    #expect(DecisionCard.showsReview(reviewItem(greenReviewDetails, []), listOpen: false))
+  }
+
+  @Test func anItemWithoutAReviewShowsNoPanel() {
+    #expect(!DecisionCard.showsReview(reviewItem(greenReviewDetails, [], reviewed: false), listOpen: false))
+  }
+
+  /// The step view takes the card while a decision list is open.
+  @Test func anOpenDecisionListHidesThePanel() {
+    #expect(!DecisionCard.showsReview(reviewItem(greenReviewDetails, []), listOpen: true))
+  }
+
+  // MARK: Each draft shows once
+
+  @Test(arguments: draftPlacements, [false, true])
+  func thePanelAndTheDraftsSectionTogetherShowEachDraftOnce(_ placement: DraftPlacement, _ listOpen: Bool) {
+    let item = placement.item
+
+    let shown = panelDrafts(item, listOpen: listOpen) + sectionDrafts(item, listOpen: listOpen)
+
+    #expect(shown.map(\.number).sorted() == item.drafts.map(\.number).sorted())
+  }
+
+  @Test func aDraftThatAnswersAShownThreadLeavesTheDraftsSection() {
+    let item = reviewItem(openThreads([1001]), [.ready(replyTarget), .checking])
+
+    #expect(panelDrafts(item, listOpen: false).map(\.number) == [1])
+    #expect(sectionDrafts(item, listOpen: false).map(\.number) == [2])
+  }
+
+  /// The panel is hidden, so a draft that a thread holds would otherwise show nowhere.
+  @Test func anOpenDecisionListKeepsEveryDraftInTheDraftsSection() {
+    let item = reviewItem(openThreads([1001]), [.ready(replyTarget), .checking])
+    #expect(item.review?.draftNumbers == [1])
+
+    #expect(sectionDrafts(item, listOpen: true) == item.drafts)
+  }
+
+  @Test func anItemWithoutAReviewKeepsEveryDraftInTheDraftsSection() {
+    let item = reviewItem(openThreads([1001]), everyDraftPost, reviewed: false)
+
+    #expect(sectionDrafts(item, listOpen: false) == item.drafts)
+  }
+
+  @Test func theDraftsSectionKeepsTheItemsOrder() {
+    let item = reviewItem(openThreads([1001]), [.checking, .ready(replyTarget), .copyOnly(reason: nil), .checking])
+
+    #expect(sectionDrafts(item, listOpen: false).map(\.number) == [1, 3, 4])
+  }
+
+  /// A thread row draws its drafts as reply fields, as the Drafts section draws the same drafts.
+  @Test func everyDraftThatAThreadHoldsIsAReplyDraft() {
+    let item = reviewItem(openThreads([1001]), everyDraftPost)
+    let held = panelDrafts(item, listOpen: false)
+    #expect(!held.isEmpty)
+
+    #expect(held.allSatisfy { DraftsSection.usesReplyView($0, in: item) })
+  }
+
+  // MARK: The merge option under amber
+
+  /// The item that sbd's rule gives the session whose PR is `pr`.
+  private func readyItem(_ pr: PullRequest) -> TriageItem {
+    var facts = SessionFacts()
+    facts.pr = pr
+    return Triage.ruleItem(Attention.readyToMerge(pr, facts))
+  }
+
+  /// No option is primary, so every option draws as a secondary button and no key merges.
+  @Test(arguments: panelShapes)
+  func onlyAnAllGreenReviewLeavesTheMergeOptionOnTheShortcut(_ shape: PanelShape) {
+    let item = readyItem(shape.pr)
+
+    #expect(item.review?.amber == shape.amber)
+    #expect((OptionList.shortcutOwner(item) == .option(0)) == shape.amber.isEmpty)
+    #expect((item.primaryIndex == nil) == !shape.amber.isEmpty)
+  }
+
+  @Test(arguments: [MergeMethod.merge, .mergeQueue, .trunk])
+  func anAmberReviewLeavesNoKeyToMerge(_ method: MergeMethod) {
+    let pr = reviewedPR(details: openThreads([1001]), method: method)
+
+    let item = readyItem(pr)
+
+    #expect(OptionList.shortcutOwner(item) == .none)
+    #expect(item.primary == nil)
+  }
+
+  @Test(arguments: [
+    (MergeMethod.merge, "Merge #18303 anyway"), (.mergeQueue, "Enqueue #18303 anyway"),
+    (.trunk, "Enqueue #18303 anyway"),
+  ])
+  func anAmberReviewLabelsTheMergeOptionAnyway(_ method: MergeMethod, _ label: String) throws {
+    let item = readyItem(reviewedPR(details: openThreads([1001]), method: method))
+
+    let merge = try #require(item.options.first { $0.action == .merge })
+
+    #expect(merge.label == label)
+    #expect(!merge.recommended)
+  }
+
+  @Test(arguments: [MergeMethod.merge, .mergeQueue])
+  func anAllGreenReviewKeepsTheMergeOptionOnTheShortcut(_ method: MergeMethod) {
+    let item = readyItem(reviewedPR(method: method))
+
+    #expect(OptionList.shortcutOwner(item) == .option(0))
+    #expect(item.primary?.label == "\(method.verb) #18303")
+  }
+
+  /// The demoted label already names the PR, so VoiceOver reads it as it is.
+  @Test func theDemotedOptionReadsAsItsLabel() {
+    let option = TriageOption(
+      label: "Enqueue #18303 anyway", detail: "#18303 has open review items", action: .merge)
+
+    #expect(option.accessibilityLabel(pr: 18303) == "Enqueue #18303 anyway")
+    #expect(
+      option.accessibilityHint(mergeMethod: .mergeQueue)
+        == "#18303 has open review items. Adds the PR to its merge queue")
   }
 }

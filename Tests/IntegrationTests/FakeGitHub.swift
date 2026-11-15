@@ -4,22 +4,24 @@ import SwitchboardCore
 /// A GitHub API on 127.0.0.1 for one test. It answers the poller's GraphQL
 /// lookup, status, and body queries from the PR nodes and comment bodies that
 /// Fixtures/github-*.json recorded, which a test can change between polls,
-/// and its code owner queries from the configs and changed files that a test
-/// sets. It
+/// its code owner queries from the configs and changed files that a test
+/// sets, and its reference queries from the items that a test puts. It
 /// answers a REST GET from the routes that a test sets, and 404 for any other
 /// path. It also serves issues and contents files that GET, PATCH, and PUT
 /// change, as GitHub does. It records each request.
 final class FakeGitHub {
   struct Request {
     /// lookup, status, base, bodies, codeowners, files, approvals, actions,
-    /// mergeDetails, or issues.
+    /// mergeDetails, issues, or reference.
     var kind: String
     /// The node ids that a status, base, body, files, approvals, or actions query
     /// asked for, each lookup key as owner/name:branch or owner/name#number,
-    /// the owner/name:branch of a codeowners query, or the aliases of an issues
-    /// query, r<i> for a repository and o<i> for an org search.
+    /// the owner/name:branch of a codeowners query, the aliases of an issues
+    /// query, r<i> for a repository and o<i> for an org search, or the
+    /// lowercase owner/name#number of a reference query.
     var ids: [String]
     var authorization: String?
+    var variables: [String: JSON]
   }
 
   struct Reply {
@@ -145,6 +147,49 @@ final class FakeGitHub {
     }
   }
 
+  /// By lowercase owner/name#number.
+  private var references: [String: FakeReference] = [:]
+
+  /// An issue or PR that the reference query reads. The values are GitHub's, such as `MERGED`.
+  struct FakeReference {
+    var repo: String
+    var number: Int
+    var pull = false
+    var title = "Totals round twice"
+    var state = "OPEN"
+    var draft = false
+    var author: String? = "robin-k"
+    var labels: [String] = []
+    var createdAt = "2026-11-01T10:00:00Z"
+    var updatedAt = "2026-11-10T10:00:00Z"
+    var checks: String?
+    var reviewDecision: String?
+    var mergeable: String?
+
+    var node: JSON {
+      var node: [String: JSON] = [
+        "__typename": .string(pull ? "PullRequest" : "Issue"), "number": .number(Double(number)),
+        "title": .string(title), "url": .string("https://github.com/\(repo)/\(pull ? "pull" : "issues")/\(number)"),
+        "state": .string(state), "createdAt": .string(createdAt), "updatedAt": .string(updatedAt),
+        "author": author.map { ["login": .string($0)] } ?? .null,
+        "labels": ["nodes": .array(labels.map { ["name": .string($0)] })],
+      ]
+      if pull {
+        node["isDraft"] = .bool(draft)
+        node["reviewDecision"] = reviewDecision.map(JSON.string) ?? .null
+        node["mergeable"] = mergeable.map(JSON.string) ?? .null
+        let rollup: JSON = checks.map { ["state": .string($0)] } ?? .null
+        node["commits"] = ["nodes": [["commit": ["statusCheckRollup": rollup]]]]
+      }
+      return .object(node)
+    }
+  }
+
+  /// Adds the item, or replaces the one with its repo and number, for the reference query.
+  func putReference(_ reference: FakeReference) {
+    lock.withLock { references["\(reference.repo.lowercased())#\(reference.number)"] = reference }
+  }
+
   /// Adds the issue, or replaces the one with its repo and number. Its repo then exists for a repository source.
   func put(_ issue: FakeIssue) {
     lock.withLock {
@@ -220,6 +265,8 @@ final class FakeGitHub {
     for id in prs.keys {
       if prs[id]!["isMergeQueueEnabled"] == nil { prs[id]!["isMergeQueueEnabled"] = false }
       if prs[id]!["isInMergeQueue"] == nil { prs[id]!["isInMergeQueue"] = false }
+      // Nor the review requests, which GitHub answers as an empty list when nobody is asked.
+      if prs[id]!["reviewRequests"] == nil { prs[id]!["reviewRequests"] = ["totalCount": 0, "nodes": []] }
       // Nor do they hold the fields that the merge details query reads.
       for (key, value) in [
         "additions": 12, "deletions": 3, "changedFiles": 2, "reviewThreads": ["totalCount": 0, "nodes": []],
@@ -280,14 +327,128 @@ final class FakeGitHub {
   }
 
   /// Gives the PR one review thread for each value, resolved or not, and
-  /// `totalCount` as GitHub's count when it differs.
+  /// `totalCount` as GitHub's count when it differs. Each thread has one
+  /// comment by another user.
   func reviewThreads(_ number: Int, resolved: [Bool], totalCount: Int? = nil) {
-    change(number) {
-      $0["reviewThreads"] = [
-        "totalCount": .number(Double(totalCount ?? resolved.count)),
-        "nodes": .array(resolved.map { ["isResolved": .bool($0)] }),
+    reviewThreads(
+      number,
+      details: resolved.enumerated().map { i, resolved in
+        FakeThread(resolved: resolved, path: "file\(i).yaml", discussionId: 2_512_345_678 + Int64(i))
+      }, totalCount: totalCount)
+  }
+
+  /// A review thread with the first and last comments that the merge details
+  /// query reads when its `threads` variable is true.
+  struct FakeThread {
+    var resolved = false
+    var outdated = false
+    var path = "charts/posthog/values.yaml"
+    var line: Int? = 12
+    var originalLine: Int? = 12
+    /// An author that ends in [bot] is a GitHub App, which GraphQL shows as
+    /// a Bot without the suffix.
+    var author = "mariusandra"
+    var body = "Should this default change?"
+    /// The number in the first comment's `#discussion_r` URL fragment.
+    var discussionId: Int64 = 2_512_345_678
+    var comments = 1
+    /// Whether the viewer wrote the thread's last comment.
+    var viewerWroteLast = false
+  }
+
+  /// Gives the PR these review threads, stored under the merge details
+  /// query's `first` and `last` aliases, and `totalCount` as GitHub's count
+  /// when it differs.
+  func reviewThreads(_ number: Int, details threads: [FakeThread], totalCount: Int? = nil) {
+    change(number) { pr in
+      let repo = pr["repository"]?["nameWithOwner"]?.string ?? ""
+      pr["reviewThreads"] = [
+        "totalCount": .number(Double(totalCount ?? threads.count)),
+        "nodes": .array(
+          threads.map { t in
+            [
+              "isResolved": .bool(t.resolved), "isOutdated": .bool(t.outdated), "path": .string(t.path),
+              "line": t.line.map { .number(Double($0)) } ?? .null,
+              "originalLine": t.originalLine.map { .number(Double($0)) } ?? .null,
+              "first": [
+                "nodes": [
+                  [
+                    "url": .string("https://github.com/\(repo)/pull/\(number)#discussion_r\(t.discussionId)"),
+                    "body": .string(t.body), "author": FakeGitHub.author(t.author),
+                  ]
+                ]
+              ],
+              "last": [
+                "totalCount": .number(Double(t.comments)), "nodes": [["viewerDidAuthor": .bool(t.viewerWroteLast)]],
+              ],
+            ]
+          }),
       ]
     }
+  }
+
+  /// A review that the merge details query reads with its body and inline comments.
+  struct FakeReview {
+    var author = "stamphog"
+    var state = "APPROVED"
+    var body = ""
+    /// nil gives a review whose commit GitHub answers as null.
+    var commit: String?
+    var submittedAt = "2026-10-25T20:56:17Z"
+    var reviewId: Int64 = 3_400_000_001
+    /// Each inline comment's path, line, and body.
+    var notes: [(path: String, line: Int, body: String)] = []
+    /// GitHub's count of the inline comments, when it differs from `notes`.
+    var noteCount: Int?
+  }
+
+  /// Sets the PR's latest opinionated reviews, which both the status query
+  /// and the merge details query read.
+  func reviews(_ number: Int, _ reviews: [FakeReview]) {
+    change(number) { pr in
+      let repo = pr["repository"]?["nameWithOwner"]?.string ?? ""
+      let url = "https://github.com/\(repo)/pull/\(number)"
+      pr["latestOpinionatedReviews"] = [
+        "nodes": .array(
+          reviews.map { r in
+            [
+              "author": FakeGitHub.author(r.author), "state": .string(r.state), "body": .string(r.body),
+              "url": .string("\(url)#pullrequestreview-\(r.reviewId)"), "submittedAt": .string(r.submittedAt),
+              "commit": r.commit.map { ["oid": .string($0)] } ?? .null,
+              "comments": [
+                "totalCount": .number(Double(r.noteCount ?? r.notes.count)),
+                "nodes": .array(
+                  r.notes.enumerated().map { i, note in
+                    [
+                      "path": .string(note.path), "line": .number(Double(note.line)),
+                      "originalLine": .number(Double(note.line)), "body": .string(note.body),
+                      "url": .string("\(url)#discussion_r\(r.reviewId + 1 + Int64(i))"),
+                    ]
+                  }),
+              ],
+            ]
+          })
+      ]
+    }
+  }
+
+  /// Sets the PR's commits, oldest first, so the last one should be its
+  /// head. The fake ignores `last:`, so the status query's `commits(last: 1)`
+  /// gets every node and reads the first. Each node keeps the recorded check
+  /// state so that read doesn't change.
+  func commits(_ number: Int, oids: [String]) {
+    change(number) { pr in
+      let rollup = pr["commits"]?["nodes"]?.array?.first?["commit"]?["statusCheckRollup"] ?? .null
+      pr["commits"] = [
+        "nodes": .array(oids.map { ["commit": ["oid": .string($0), "statusCheckRollup": rollup]] })
+      ]
+    }
+  }
+
+  /// An author node. A login that ends in [bot] is a Bot without the suffix.
+  static func author(_ login: String) -> JSON {
+    let bot = login.hasSuffix("[bot]")
+    return ["__typename": bot ? "Bot" : "User", "login": .string(bot ? String(login.dropLast(5)) : login)]
   }
 
   /// Forgets the PR, as GitHub does after a deletion.
@@ -383,10 +544,8 @@ final class FakeGitHub {
     lock.withLock {
       nextComment += 1
       let id = "IC_fake\(nextComment)"
-      let bot = author.hasSuffix("[bot]")
       let node: JSON = [
-        "id": .string(id),
-        "author": ["__typename": bot ? "Bot" : "User", "login": .string(bot ? String(author.dropLast(5)) : author)],
+        "id": .string(id), "author": Self.author(author),
         "createdAt": .string(time), "lastEditedAt": .null, "includesCreatedEdit": false,
       ]
       let pr = prs.first { $0.value["number"]?.int == number }!.key
@@ -763,7 +922,23 @@ final class FakeGitHub {
           ]
           data[alias] = match.1 == "r" ? ["issues": connection] : connection
         }
-      } else if let selection = Selection(query: query, on: "PullRequest") {
+      } else if query.contains("issueOrPullRequest(") {
+        // Before the PullRequest selection, which the query's `... on PullRequest` would match.
+        kind = "reference"
+        let repo = "\(variables["o"]?.string ?? "")/\(variables["n"]?.string ?? "")".lowercased()
+        let key = "\(repo)#\(variables["num"]?.int ?? 0)"
+        ids = [key]
+        if !references.keys.contains(where: { $0.hasPrefix("\(repo)#") }) {
+          data["repository"] = .null
+          errors.append(["type": "NOT_FOUND", "path": ["repository"], "message": "Could not resolve to a Repository"])
+        } else if let reference = references[key] {
+          data["repository"] = ["issueOrPullRequest": reference.node]
+        } else {
+          data["repository"] = ["issueOrPullRequest": .null]
+          errors.append(
+            ["type": "NOT_FOUND", "path": ["repository", "issueOrPullRequest"], "message": "Could not resolve"])
+        }
+      } else if let selection = Selection(query: query, on: "PullRequest", variables: variables) {
         let prQuery: PRQuery
         if query.contains("onBehalfOf(") {
           prQuery = .approvals
@@ -808,7 +983,7 @@ final class FakeGitHub {
           i += 1
         }
       }
-      log.append(Request(kind: kind, ids: ids, authorization: authorization))
+      log.append(Request(kind: kind, ids: ids, authorization: authorization, variables: variables))
       let after = kind == PRQuery.files.rawValue ? afterFiles.take() : nil
       if !queued.isEmpty { return (queued.removeFirst(), after) }
       var response: [String: JSON] = ["data": .object(data)]
