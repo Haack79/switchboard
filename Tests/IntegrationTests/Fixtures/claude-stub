@@ -94,8 +94,9 @@
 # It is checked first, because the snapshot can hold <rows> or <pr-body>. It
 # writes each argument with a NUL after it to $SB_HOME/quick-ask-args,
 # replacing that file, so a test can split the last call's arguments exactly.
-# It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one line per call to $SB_HOME/quick-ask-calls.log, keeps the
-# last prompt in $SB_HOME/quick-ask-input.txt, and writes its pid to
+# It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one
+# line per call to $SB_HOME/quick-ask-calls.log, keeps the last prompt in
+# $SB_HOME/quick-ask-input.txt, and writes its pid to
 # $SB_HOME/quick-ask.pid. A prompt that holds FAIL-ASK makes it exit 1, and
 # SLOW-ASK makes it exec sleep 30, which keeps the pid. Otherwise it prints
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or

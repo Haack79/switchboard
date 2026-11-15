@@ -22,6 +22,11 @@ extension Instance {
     (try? String(contentsOfFile: "\(home.path)/quick-ask-input.txt", encoding: .utf8)) ?? ""
   }
 
+  /// The CLAUDE_CONFIG_DIR of the last quick ask call that the stub saw.
+  func quickAskAccount() throws -> String {
+    try String(contentsOfFile: "\(home.path)/quick-ask-account", encoding: .utf8)
+  }
+
   /// The pid of the last quick ask stub, or nil before one started.
   var quickAskPid: pid_t? { stubPid("quick-ask.pid") }
 
@@ -206,7 +211,7 @@ private final class BackgroundAsk: Sendable {
 
     try sbd.sb("ask", "--json", "which account is active?")
 
-    let account = try String(contentsOfFile: "\(sbd.home.path)/quick-ask-account", encoding: .utf8)
+    let account = try sbd.quickAskAccount()
     #expect(account == sbd.account("B"))
   }
 
