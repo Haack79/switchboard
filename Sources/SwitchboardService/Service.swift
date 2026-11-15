@@ -579,18 +579,17 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
-      // The `sent` event names a session that messages itself as the sender, so the message doesn't count as
-      // the user's and close the operator's reports. Its launch trigger stays `send`. A sender that sbd no
-      // longer knows goes unrecorded.
+      // The `sent` event names a session that messages itself as the sender. Its launch trigger stays `send`.
+      // A sender that sbd no longer knows goes unrecorded.
       let sender = try? lookup(["session": args["from"] ?? .null])
-      // A message from another session, such as the Manager, doesn't hold the session for the user.
-      let fromSession = args["from"] != nil || args["insideClaude"]?.bool == true
+      let author = Service.author(args)
       // claude's prompt shows an attached image as `[Image #n]` after the text, so the request keeps the text alone.
       let typed = (Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text)
         .trimmingCharacters(in: .whitespacesAndNewlines)
-      let request = fromSession ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
+      // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
+      let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, trigger: trigger, from: sender)
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -653,6 +652,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
+      try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id))
     case "issue":
@@ -1036,8 +1036,9 @@ public final class Service {
     if let host = args.host { return try newSession(args, onHost: host) }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
-    // An unknown group, an unknown account, or an account that differs from
-    // the group's fails here, before prepareFolder makes a worktree.
+    // An unknown group, an unknown account, an account that differs from
+    // the group's, or the operator's name fails here, before prepareFolder makes a worktree.
+    try refuseOperatorName(args.name ?? args.branch)
     try queue.sync {
       var probe = Session(id: "", name: "", cwd: "", branch: nil, claudeSessionId: "", model: nil, created: 0)
       probe.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1076,6 +1077,7 @@ public final class Service {
       throw APIError("a folder on \(host) is an absolute path or starts with ~, and \(args.path) is neither")
     }
     args.branch = branch(of: args, repo: args.path, at: site)
+    try refuseOperatorName(args.name ?? args.branch)
     let folder: (cwd: String, branch: String?, repo: String?)
     do {
       folder = try prepareFolder(args, at: site)
@@ -1128,6 +1130,7 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
@@ -1332,21 +1335,20 @@ public final class Service {
     return now - start >= 1500
   }
 
-  /// `byUser` is false for a message that sbd sends on its own, which can't
-  /// answer a deferred question. With `launchesWithPrompt` false, a stopped
+  /// `by` is who wrote the message, which the `sent` event records. With `launchesWithPrompt` false, a stopped
   /// claude starts without a prompt and gets the message as a paste, which
   /// checks that the log still holds the `sent` event. It throws, and pastes
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   func send(
-    _ id: String, _ text: String, byUser: Bool = true, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
     from: String? = nil
   ) throws -> Delivery {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
     if Pause.blocker(e.session) != nil {
-      let sent = try recordSent(id, text, .queued, byUser: byUser, from: from, extra: ["held": true])
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
       return .queued
     }
@@ -1359,11 +1361,11 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, byUser: byUser, from: from)
+      try recordSent(id, text, .resumed, by: by, from: from)
       try startClaude(id, prompt: text, trigger: trigger)
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
-      let sent = try recordSent(id, text, .pasted, byUser: byUser, from: from)
+      let sent = try recordSent(id, text, .pasted, by: by, from: from)
       paste(id, QueuedMessage(text: text, sent: sent))
       return .pasted
     } else {
@@ -1371,15 +1373,15 @@ public final class Service {
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, byUser: byUser, from: from)
+      try queueMessage(id, text, by: by, from: from)
       return .queued
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, byUser: Bool, from: String? = nil) throws {
-    let sent = try recordSent(id, text, .queued, byUser: byUser, from: from)
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil) throws {
+    let sent = try recordSent(id, text, .queued, by: by, from: from)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
   }
@@ -1387,11 +1389,11 @@ public final class Service {
   /// `extra` adds fields to the event, such as `held`.
   @discardableResult
   func recordSent(
-    _ id: String, _ text: String, _ delivery: Delivery, byUser: Bool, from: String?, extra: [String: JSON] = [:]
+    _ id: String, _ text: String, _ delivery: Delivery, by: MessageAuthor, from: String?, extra: [String: JSON] = [:]
   ) throws -> Event {
     var data = extra.merging(["text": .string(text), "delivery": .string(delivery.rawValue)]) { $1 }
     if delivery == .pasted { data[Delivery.awaitsDeliveredKey] = true }
-    if !byUser { data["by"] = "sbd" }
+    data["by"] = .string(by.rawValue)
     if let from { data["from"] = .string(from) }
     return try recordStored(id, "sent", .object(data))
   }

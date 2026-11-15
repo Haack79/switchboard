@@ -125,11 +125,7 @@ struct ReferenceCardView: View {
       }
       if let chip = c.chip {
         Text(verbatim: chip.text)
-          .font(.caption.weight(.medium))
-          .padding(.horizontal, 8)
-          .padding(.vertical, 3)
-          .background(Capsule().fill(chip.tone.color.opacity(0.14)))
-          .foregroundStyle(chip.tone.color)
+          .pill(chip.tone.color, size: .regular, plainText: true)
       }
       if !c.labels.isEmpty {
         WrappingRow(spacing: 4) {

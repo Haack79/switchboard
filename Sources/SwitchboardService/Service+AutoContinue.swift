@@ -37,7 +37,7 @@ extension Service {
     var data: [String: JSON] = ["text": .string(message), "offer": .string(offer)]
     var delivery: Delivery?
     do {
-      let sent = try send(id, message, byUser: false, trigger: .autoContinue)
+      let sent = try send(id, message, by: .sbd, trigger: .autoContinue)
       data["delivery"] = .string(sent.rawValue)
       delivery = sent
     } catch {

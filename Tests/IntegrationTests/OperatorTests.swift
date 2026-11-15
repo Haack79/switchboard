@@ -521,4 +521,234 @@ import Testing
       ((try? String(contentsOfFile: sbd.home.log, encoding: .utf8)) ?? "").contains(newer)
     }
   }
+
+  // MARK: The operator's name belongs to the operator alone (#334)
+
+  /// Checks that `sb get Operator` finds the operator. The lookup reads every session, follow-ups that haven't
+  /// started included. `ls` leaves those out, so it can't check this.
+  func expectOperatorNameFinds(
+    _ sbd: Instance, _ op: SessionSummary, sourceLocation: SourceLocation = #_sourceLocation
+  ) throws {
+    let found = try sbd.run(["get", "--json", Manager.operatorName])
+    try #require(found.status == 0, "\(found.stderr)", sourceLocation: sourceLocation)
+    #expect(try decode(SessionSummary.self, found.stdout).id == op.id, sourceLocation: sourceLocation)
+  }
+
+  /// Checks that the operator is the only session, that no follow-up exists, and that claude launched only for
+  /// the operator.
+  func expectOnlyTheOperator(
+    _ sbd: Instance, _ op: SessionSummary, sourceLocation: SourceLocation = #_sourceLocation
+  ) throws {
+    #expect(try sbd.client.sessions().map(\.id) == [op.id], sourceLocation: sourceLocation)
+    #expect(
+      try sbd.client.call("followup-ls", as: [SessionSummary].self).isEmpty, sourceLocation: sourceLocation)
+    let launches = sbd.stubArgs().filter { $0.hasPrefix("--session-id ") || $0.hasPrefix("--resume ") }
+    #expect(launches.allSatisfy { $0.contains(op.claudeSessionId) }, "\(launches)", sourceLocation: sourceLocation)
+  }
+
+  /// Checks that the repo still has only its main branch and its main worktree, and that sbd made no worktree folder.
+  func expectNoWorktree(_ sbd: Instance, of repo: String?, sourceLocation: SourceLocation = #_sourceLocation) throws {
+    let spawn = SpawnTests()
+    #expect(spawn.worktreeFolders(sbd).isEmpty, sourceLocation: sourceLocation)
+    guard let repo else { return }
+    #expect(try sbd.git(repo, "branch", "--format=%(refname:short)") == "main", sourceLocation: sourceLocation)
+    #expect(try spawn.worktrees(of: repo) == [real(repo)], sourceLocation: sourceLocation)
+  }
+
+  /// Waits for the end of the session's latest turn, whatever the stub replied.
+  @discardableResult
+  func waitForAReply(_ sbd: Instance, _ id: String) throws -> SessionSummary {
+    try sbd.waitFor(id, "a reply", timeout: 30) { $0.lastReply?.hasPrefix("Done: ") == true }
+  }
+
+  // rename
+
+  @Test func renameOnTheOperatorIsRefusedAndKeepsItsName() throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+
+    let refused = try sbd.run(["rename", op.name, "Ops"])
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("keeps the name \(Manager.operatorName)"), "\(refused.stderr)")
+    #expect(try sbd.get(op.id).name == Manager.operatorName)
+    try expectOperatorNameFinds(sbd, op)
+  }
+
+  @Test func renamingAnotherSessionToTheOperatorsNameIsRefused() throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+    let work = try sbd.new(name: "work")
+
+    let refused = try sbd.run(["rename", work.id, Manager.operatorName])
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("belongs to the background operator"), "\(refused.stderr)")
+    #expect(try sbd.get(work.id).name == "work")
+    try expectOperatorNameFinds(sbd, op)
+  }
+
+  @Test func renamingAWorkSessionToANameThatOnlyContainsTheOperatorsStillWorks() throws {
+    let sbd = try Instance()
+    let work = try sbd.new(name: "work")
+
+    let renamed = try decode(SessionSummary.self, sbd.sb("rename", "--json", work.id, "My Operator"))
+
+    #expect(renamed.name == "My Operator")
+  }
+
+  // sb new
+
+  /// The folder that a refused `sb new` names.
+  enum NewFolder: Sendable { case repo, namedOperator }
+
+  /// A way to give `sb new` the operator's name: with --name, or as the branch or folder that a session
+  /// without --name takes its name from.
+  struct NewShape: Sendable, CustomTestStringConvertible {
+    let label: String
+    let folder: NewFolder
+    /// The flags after the folder.
+    let flags: [String]
+    var testDescription: String { label }
+  }
+
+  static let newShapes: [NewShape] = [
+    NewShape(label: "--name with --worktree", folder: .repo, flags: ["--worktree", "--name", Manager.operatorName]),
+    NewShape(label: "--branch Operator without --name", folder: .repo, flags: ["--branch", Manager.operatorName]),
+    NewShape(label: "a folder named Operator without --name", folder: .namedOperator, flags: []),
+  ]
+
+  /// Makes the shape's folder and returns it, with the repo when the folder is one.
+  func folder(_ sbd: Instance, _ shape: NewShape) throws -> (path: String, repo: String?) {
+    switch shape.folder {
+    case .repo:
+      let repo = try sbd.makeRepo()
+      return (repo, repo)
+    case .namedOperator:
+      let path = "\(sbd.home.path)/\(Manager.operatorName)"
+      try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+      return (path, nil)
+    }
+  }
+
+  @Test(arguments: newShapes) func newWithTheOperatorsNameIsRefusedAndLeavesNothingBehind(_ shape: NewShape) throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+    let (path, repo) = try folder(sbd, shape)
+
+    let refused = try sbd.run(["new", path] + shape.flags)
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("belongs to the background operator"), "\(refused.stderr)")
+    try expectOnlyTheOperator(sbd, op)
+    try expectNoWorktree(sbd, of: repo)
+  }
+
+  // Follow-ups, which `ls` leaves out but `sb get` finds
+
+  @Test func aFollowupNamedForTheOperatorIsRefused() throws {
+    let repos = try Repos()
+    try repos.make("acme/widgets")
+    let sbd = try Instance(config: ["repoRoots": [.string(repos.root)]])
+    let op = try openOperator(sbd)
+
+    let error = failure(
+      sbd, "spawn",
+      [
+        "repository": "acme/widgets", "branch": "later", "prompt": "Check the queue.", "followup": true,
+        "name": .string(Manager.operatorName),
+      ])
+
+    #expect(error.contains("belongs to the background operator"), Comment(rawValue: error))
+    try expectOnlyTheOperator(sbd, op)
+  }
+
+  @Test func importingAFollowupLineWhoseTitleIsTheOperatorsNameImportsNoLine() throws {
+    let repos = try Repos()
+    try repos.make("acme/widgets")
+    let sbd = try Instance(config: ["repoRoots": [.string(repos.root)]])
+    let op = try openOperator(sbd)
+    let file = "\(repos.root)/Followups.md"
+    try "# Followups\n\n## Open\n\n- [ ] Check the queue.\n- [ ] \(Manager.operatorName).\n".write(
+      toFile: file, atomically: true, encoding: .utf8)
+
+    let error = failure(sbd, "followup-import", ["file": .string(file)])
+
+    #expect(error.contains("belongs to the background operator"), Comment(rawValue: error))
+    try expectOnlyTheOperator(sbd, op)
+  }
+
+  // Importing a Claude session
+
+  /// Where an imported session's name would come from.
+  enum ImportName: CaseIterable { case nameFlag, claudesName }
+
+  @Test(arguments: ImportName.allCases)
+  func importingASessionAsTheOperatorsNameIsRefused(_ how: ImportName) throws {
+    let sbd = try Instance(accounts: ["A"])
+    let op = try openOperator(sbd)
+    let id = UUID().uuidString.lowercased()
+    try sbd.writeAgents(
+      "A",
+      [
+        [
+          "sessionId": .string(id), "cwd": .string(sbd.work), "kind": "background",
+          "startedAt": .number(Double(nowMs())), "id": "0badf00d", "state": "stopped",
+          "name": .string(how == .claudesName ? Manager.operatorName : "notes"),
+        ]
+      ])
+
+    switch how {
+    case .nameFlag:
+      do {
+        let result = try sbd.client.importSessions([id], name: Manager.operatorName)
+        Issue.record("the import was not refused: \(result.imported.map(\.name))")
+      } catch {
+        #expect("\(error)".contains("belongs to the background operator"), "\(error)")
+      }
+    case .claudesName:
+      let result = try sbd.client.importSessions([id], name: nil)
+      #expect(result.imported.isEmpty, "\(result.imported.map(\.name))")
+      #expect(result.refused.map(\.ref) == [id])
+      #expect(result.refused.allSatisfy { $0.reason.contains("belongs to the background operator") })
+    }
+    try expectOnlyTheOperator(sbd, op)
+  }
+
+  // Manager conversations
+
+  @Test func aConversationNamedForTheOperatorIsRefusedAndCreatesNone() throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+
+    let refused = try sbd.run(["manager", "new", "--name", Manager.operatorName])
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("belongs to the background operator"), "\(refused.stderr)")
+    try expectOnlyTheOperator(sbd, op)
+  }
+
+  @Test func aNewConversationWhoseFirstLineIsTheOperatorsNameStartsAndStaysUntitled() throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+
+    let created = try conversationHelpers.newConversation(sbd, "\(Manager.operatorName)\nThen check the queue")
+
+    #expect(created.name == Manager.untitled)
+    #expect(try waitForAReply(sbd, created.id).name == Manager.untitled)
+    try expectOperatorNameFinds(sbd, op)
+  }
+
+  @Test func anUntitledConversationWhoseFirstPromptIsTheOperatorsNameStaysUntitled() throws {
+    let sbd = try Instance()
+    let op = try openOperator(sbd)
+    let c = try conversationHelpers.newConversation(sbd)
+    try sbd.waitFor(c.id, "the stub") { $0.live }
+
+    try sbd.sb("send", c.id, Manager.operatorName)
+
+    #expect(try waitForAReply(sbd, c.id).name == Manager.untitled)
+    #expect(try !sbd.events(c.id).contains { $0.kind == "renamed" })
+    try expectOperatorNameFinds(sbd, op)
+  }
 }

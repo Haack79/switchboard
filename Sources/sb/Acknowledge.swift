@@ -8,7 +8,7 @@ import SwitchboardCore
 func acknowledge(_ a: Args) {
   var extra = callerArg
   if a.switches.contains("--undo") { extra["undo"] = true }
-  if author == .claude { extra["insideClaude"] = true }
+  extra.merge(insideClaudeArg) { $1 }
   sessionCommand("ack", a, extra: extra)
 }
 
@@ -18,10 +18,15 @@ var callerArg: [String: JSON] {
   ProcessInfo.processInfo.environment["SB_SESSION_ID"].map { ["caller": .string($0)] } ?? [:]
 }
 
-/// `from` set to the session whose Claude runs `sb`. sbd records it on the
-/// `sent` event. The message then doesn't count as the user's, and it doesn't
-/// close the operator's reports.
+/// `insideClaude` when a Claude Code runs `sb`. sbd then takes the request as Claude's, not the user's.
+var insideClaudeArg: [String: JSON] { author == .claude ? ["insideClaude": true] : [:] }
+
+/// The sender fields of a message that a Claude Code runs `sb` to send. They hold `insideClaude`, and `from` set to
+/// its session when it runs in one. sbd records the message as Claude's. The message then doesn't close the
+/// operator's reports.
 var fromArg: [String: JSON] {
-  guard author == .claude, let from = ProcessInfo.processInfo.environment["SB_SESSION_ID"] else { return [:] }
-  return ["from": .string(from)]
+  guard author == .claude else { return [:] }
+  var arg = insideClaudeArg
+  arg["from"] = ProcessInfo.processInfo.environment["SB_SESSION_ID"].map(JSON.string)
+  return arg
 }

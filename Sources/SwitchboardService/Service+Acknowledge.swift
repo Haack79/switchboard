@@ -18,8 +18,8 @@ extension Service {
       record(id, "unack")
     } else {
       // An ack closes the operator's open reports. Claude Code may not ack them for the user, as with `choose`.
-      if args["insideClaude"]?.bool == true, e.session.kind == .operator, e.facts.ackClosesReports {
-        throw APIError("an ack closes the operator's reports for you, so it doesn't run inside Claude Code")
+      if e.session.kind == .operator, e.facts.ackClosesReports {
+        try Service.refuseClaude(args, "an ack closes the operator's reports")
       }
       try acknowledge(id, verdict)
     }
