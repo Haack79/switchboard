@@ -30,12 +30,12 @@ struct IssuesView: View {
         } description: {
           Text("Issues lists open issues from the orgs and repositories you choose.")
         } actions: {
-          let offered = !model.offeredIssueRepos.isEmpty
+          let hasOffer = !model.offeredIssueRepos.isEmpty
           VStack(spacing: 12) {
-            if offered {
+            if hasOffer {
               IssueRepoOffer(unchecked: $uncheckedRepos).frame(width: 360)
             }
-            Button(offered ? "Other Sources…" : "Add Sources…") { model.showingIssueSetup = true }
+            Button(hasOffer ? "Other Sources…" : "Add Sources…") { model.showingIssueSetup = true }
           }
         }
       } else {

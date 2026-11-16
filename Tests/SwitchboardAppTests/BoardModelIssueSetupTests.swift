@@ -125,13 +125,13 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
 
   @Test func addsEverySourceWithTheSharedFiltersInOneRequest() async {
     let sent = await firstRequest { model in
-      model.addIssueSources(batchNames, label: "team/billing", person: "") { _ in }
+      model.addIssueSources(batchNames, label: "team/billing", person: "ana-m") { _ in }
     }
 
     #expect(sent.op == "issues-source-add")
     #expect(
       sent.args["sources"]
-        == .array(batchNames.map { ["source": .string($0), "label": "team/billing", "person": ""] }))
+        == .array(batchNames.map { ["source": .string($0), "label": "team/billing", "person": "ana-m"] }))
   }
 
   @Test func pollsOnceAfterTheSourcesAreAdded() async {

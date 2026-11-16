@@ -30,7 +30,7 @@ struct IssueRepoOffer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       // The list grows with its rows up to about eight, then scrolls.
-      .frame(height: min(CGFloat(offered.count) * 22, 176))
+      .frame(height: CGFloat(min(offered.count, 8)) * 22)
       .scrollBounceBehavior(.basedOnSize)
       HStack {
         TextField("Label", text: $label, prompt: Text("Label (optional)"))
@@ -46,6 +46,9 @@ struct IssueRepoOffer: View {
     }
     .announcesRefusal(addError)
     .onChange(of: labelFocused) { labelFocusChanged(labelFocused) }
+    // The setup sheet removes the offer once every repository is a source. The removed view's onChange never
+    // reports the lost focus, and the sheet's Add and Save buttons would not take Return.
+    .onDisappear { labelFocusChanged(false) }
   }
 
   private func isChecked(_ name: String) -> Binding<Bool> {
