@@ -9,13 +9,17 @@ extension Service {
     case "issues":
       return try JSON(encoding: issueList())
     case "issues-source-add":
-      let source = try IssueSource.parse(
-        args["source"]?.string ?? "", label: args["label"]?.string, person: args["person"]?.string)
+      // `sources` adds several in one write. A refusal of any one adds none of them.
+      let sources = try (args["sources"]?.array ?? [args]).map {
+        try IssueSource.parse($0["source"]?.string ?? "", label: $0["label"]?.string, person: $0["person"]?.string)
+      }
       try updateIssueSettings { settings in
-        guard !settings.sources.contains(where: { $0.key == source.key }) else {
-          throw APIError("\(source.key) is already a source")
+        for source in sources {
+          guard !settings.sources.contains(where: { $0.key == source.key }) else {
+            throw APIError("\(source.key) is already a source")
+          }
+          settings.sources.append(source)
         }
-        settings.sources.append(source)
       }
       return try JSON(encoding: issueSettings.sources)
     case "issues-source-rm":

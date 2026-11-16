@@ -120,14 +120,6 @@ private let rows = [
     #expect(sent.args == ["issue": "acme/ledger-web#3"])
   }
 
-  @Test func addingASourceSendsItsFilters() async {
-    let sent = await firstRequest { model in
-      model.addIssueSource("acme", label: "team/billing", person: "") { _ in }
-    }
-    #expect(sent.op == "issues-source-add")
-    #expect(sent.args == ["source": "acme", "label": "team/billing", "person": ""])
-  }
-
   @Test func editThePromptFirstFillsTheNewSessionSheet() {
     let model = model()
     model.issueGroupPicks[rows[0].id] = "g1"

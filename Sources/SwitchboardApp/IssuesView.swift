@@ -4,6 +4,8 @@ import SwitchboardCore
 /// The open GitHub issues from the configured sources, in buckets, with the selected issue on the right.
 struct IssuesView: View {
   @EnvironmentObject var model: BoardModel
+  /// The offered repositories the user unchecked, shared by the empty state's offer and the setup sheet's.
+  @State private var uncheckedRepos: Set<String> = []
 
   var body: some View {
     VStack(spacing: 0) {
@@ -11,8 +13,13 @@ struct IssuesView: View {
       content
     }
     .overlay(alignment: .bottom) { StartedIssueNotice() }
-    .onAppear { model.refreshIssues() }
-    .sheet(isPresented: $model.showingIssueSetup) { IssueSetupView().environmentObject(model) }
+    .onAppear {
+      model.refreshIssues()
+      if model.knownRepos == nil { model.loadRepos() }
+    }
+    .sheet(isPresented: $model.showingIssueSetup) {
+      IssueSetupView(uncheckedRepos: $uncheckedRepos).environmentObject(model)
+    }
   }
 
   @ViewBuilder private var content: some View {
@@ -23,7 +30,13 @@ struct IssuesView: View {
         } description: {
           Text("Issues lists open issues from the orgs and repositories you choose.")
         } actions: {
-          Button("Add Sources…") { model.showingIssueSetup = true }
+          let hasOffer = !model.offeredIssueRepos.isEmpty
+          VStack(spacing: 12) {
+            if hasOffer {
+              IssueRepoOffer(unchecked: $uncheckedRepos).frame(width: 360)
+            }
+            Button(hasOffer ? "Other Sources…" : "Add Sources…") { model.showingIssueSetup = true }
+          }
         }
       } else {
         // Computing the sections filters, groups, and sorts every issue. Each render computes them once.

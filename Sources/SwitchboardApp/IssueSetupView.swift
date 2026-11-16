@@ -6,6 +6,8 @@ import SwitchboardCore
 struct IssueSetupView: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.dismiss) private var dismiss
+  @Binding var uncheckedRepos: Set<String>
+  @State private var offerLabelFocused = false
   @State private var name = ""
   @State private var label = ""
   @State private var person = ""
@@ -21,6 +23,11 @@ struct IssueSetupView: View {
     let list = model.issueList
     VStack(alignment: .leading, spacing: 14) {
       Text("Issue Sources").font(.title2.bold())
+      if !model.offeredIssueRepos.isEmpty {
+        GroupBox("Your Repositories") {
+          IssueRepoOffer(unchecked: $uncheckedRepos) { offerLabelFocused = $0 }.padding(4)
+        }
+      }
       GroupBox("Sources") {
         VStack(alignment: .leading, spacing: 6) {
           if list?.sources.isEmpty ?? true {
@@ -54,16 +61,21 @@ struct IssueSetupView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.suggestedIssueSources.isEmpty)
-            .help("The orgs and repositories you already have sessions in")
-            TextField("Label", text: $label)
-            TextField("Person", text: $person)
+            .help("The orgs and repositories of your sessions and checkouts")
+            .accessibilityLabel("Suggested sources")
+            TextField("Label", text: $label, prompt: Text(isOrg ? "Label" : "Label (optional)"))
+            TextField("Person", text: $person, prompt: Text(isOrg ? "Person" : "Person (optional)"))
             Button("Add") { add() }
               .disabled(!canAdd || adding)
-              // Return adds a typed source instead of saving the sheet without it.
-              .keyboardShortcut(trimmedName.isEmpty ? nil : .defaultAction)
+              .keyboardShortcut(returnOwner == .add ? .defaultAction : nil)
           }
           if let problem = addProblem ?? addError {
             Text(problem).font(.caption).foregroundStyle(.red)
+          } else {
+            Text(
+              "Sources decide which issues are fetched. A repository needs no filter. An org needs a label or a person."
+            )
+            .font(.caption).foregroundStyle(.secondary)
           }
         }
         .padding(4)
@@ -73,6 +85,8 @@ struct IssueSetupView: View {
         VStack(alignment: .leading, spacing: 6) {
           TextField("Labels", text: $labels, prompt: Text("Labels, separated by commas"))
           TextField("People", text: $people, prompt: Text("Logins, separated by commas"))
+          Text("Sorts fetched issues into the Mine and Team views. It doesn't change which issues are fetched.")
+            .font(.caption).foregroundStyle(.secondary)
         }
         .padding(4)
       }
@@ -92,11 +106,12 @@ struct IssueSetupView: View {
           model.saveIssueSettings(labels: split(labels), people: split(people), defaultPreset: defaultPreset)
           dismiss()
         }
-        .keyboardShortcut(trimmedName.isEmpty ? .defaultAction : nil)
+        .keyboardShortcut(returnOwner == .save ? .defaultAction : nil)
       }
     }
     .padding(20)
     .frame(width: 600)
+    .onAppear { model.loadRepos() }
     .onChange(of: model.issueList == nil, initial: true) {
       guard !loaded, let list = model.issueList else { return }
       loaded = true
@@ -108,11 +123,21 @@ struct IssueSetupView: View {
 
   private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
 
+  /// Whether the typed name is an org, which needs a label or a person. A repository takes either one as an optional
+  /// filter.
+  private var isOrg: Bool { IssueSource(name: trimmedName).isOrg }
+
+  private enum ReturnOwner { case offer, add, save }
+
+  /// The one button that Return presses. Return adds the checked repositories while the offer's label field has
+  /// focus, and it adds a typed source instead of saving the sheet without it.
+  private var returnOwner: ReturnOwner { offerLabelFocused ? .offer : trimmedName.isEmpty ? .save : .add }
+
   private var canAdd: Bool { !trimmedName.isEmpty && addProblem == nil }
 
   /// The rule that sbd also checks, shown before Add.
   private var addProblem: String? {
-    guard !trimmedName.isEmpty, !trimmedName.contains("/") else { return nil }
+    guard !trimmedName.isEmpty, isOrg else { return nil }
     let blank = { (s: String) in s.trimmingCharacters(in: .whitespaces).isEmpty }
     return blank(label) && blank(person) ? IssueSource.orgNeedsFilter : nil
   }
@@ -120,7 +145,7 @@ struct IssueSetupView: View {
   private func add() {
     adding = true
     addError = nil
-    model.addIssueSource(trimmedName, label: label, person: person) { error in
+    model.addIssueSources([trimmedName], label: label, person: person) { error in
       adding = false
       addError = error
       if error == nil {

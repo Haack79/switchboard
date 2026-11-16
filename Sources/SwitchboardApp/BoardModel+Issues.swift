@@ -216,11 +216,14 @@ extension BoardModel {
 }
 
 extension BoardModel {
-  /// Adds a source, then polls it. `done` gets sbd's refusal, or nil.
-  func addIssueSource(_ name: String, label: String, person: String, done: @escaping (String?) -> Void) {
+  /// Adds a source named by each of `names`, all with the same filters, in one request, then polls them. sbd adds
+  /// none of them when it refuses one. `done` gets sbd's refusal, or nil.
+  func addIssueSources(_ names: [String], label: String, person: String, done: @escaping (String?) -> Void) {
+    let sources = names.map {
+      JSON.object(["source": .string($0), "label": .string(label), "person": .string(person)])
+    }
     perform(
-      "issues-source-add",
-      ["source": .string(name), "label": .string(label), "person": .string(person)],
+      "issues-source-add", ["sources": .array(sources)],
       then: { _ in
         done(nil)
         self.pollIssueSources()
@@ -242,11 +245,22 @@ extension BoardModel {
     perform("issues-settings", args) { self.apply(issueReply: $0) }
   }
 
-  /// The orgs and repositories of the sessions, which the setup sheet suggests as sources.
+  /// The known repositories with a GitHub `owner/name` that are not sources yet, in `knownRepos` order. The Issues
+  /// view offers them as sources. Two checkouts of one repository give one entry.
+  var offeredIssueRepos: [String] { newIssueSources(knownGitHubRepos) }
+
+  /// The orgs and repositories of the sessions and the known repositories, which the setup sheet suggests as
+  /// sources.
   var suggestedIssueSources: [String] {
-    let repos = Set(allSessions.compactMap(\.repository))
-    let orgs = Set(repos.map { GitHub.ownerAndName($0).owner })
-    let taken = Set((issueList?.sources ?? []).map { $0.name.lowercased() })
-    return (orgs.sorted() + repos.sorted()).filter { !taken.contains($0.lowercased()) }
+    let repos = allSessions.compactMap(\.repository) + knownGitHubRepos
+    return newIssueSources(repos.map { GitHub.ownerAndName($0).owner }.sorted()) + newIssueSources(repos.sorted())
+  }
+
+  private var knownGitHubRepos: [String] { (knownRepos ?? []).map(\.name).filter(Issues.validRepo) }
+
+  /// `names` without the ones that are sources already and without later names that differ only in case.
+  private func newIssueSources(_ names: [String]) -> [String] {
+    var seen = Set((issueList?.sources ?? []).map { $0.name.lowercased() })
+    return names.filter { seen.insert($0.lowercased()).inserted }
   }
 }
