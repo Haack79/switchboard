@@ -78,6 +78,29 @@ func firstRequest(_ action: (BoardModel) -> Void) async -> (op: String, args: [S
   return (op, args, sent.value)
 }
 
+extension SentRequests {
+  /// Waits until sbd has got a request of `op`, for at most 3 seconds.
+  @MainActor func wait(for op: String) async {
+    await settle { self.ops.contains(op) }
+  }
+}
+
+/// A model whose `send` records every request. sbd refuses a request with the message that `refuse` returns, and
+/// answers the rest with null. `perform`'s trailing refresh reads through the client, so it never shows here.
+@MainActor
+func recordingModel(refuse: @escaping @Sendable (String, [String: JSON]) -> String? = { _, _ in nil })
+  -> (BoardModel, SentRequests)
+{
+  let model = offlineModel()
+  let sent = SentRequests()
+  model.send = { op, args in
+    sent.append(op, args)
+    if let refusal = refuse(op, args) { throw Refusal(description: refusal) }
+    return .null
+  }
+  return (model, sent)
+}
+
 @MainActor
 final class Field {
   var text: String

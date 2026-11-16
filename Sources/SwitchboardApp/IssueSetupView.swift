@@ -21,6 +21,11 @@ struct IssueSetupView: View {
     let list = model.issueList
     VStack(alignment: .leading, spacing: 14) {
       Text("Issue Sources").font(.title2.bold())
+      if !model.offeredIssueRepos.isEmpty {
+        GroupBox("Your Repositories") {
+          IssueRepoOffer().padding(4)
+        }
+      }
       GroupBox("Sources") {
         VStack(alignment: .leading, spacing: 6) {
           if list?.sources.isEmpty ?? true {
@@ -54,9 +59,12 @@ struct IssueSetupView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.suggestedIssueSources.isEmpty)
-            .help("The orgs and repositories you already have sessions in")
-            TextField("Label", text: $label)
-            TextField("Person", text: $person)
+            .help("The orgs and repositories of your sessions and checkouts")
+            .accessibilityLabel("Suggested sources")
+            if isOrg {
+              TextField("Label", text: $label)
+              TextField("Person", text: $person)
+            }
             Button("Add") { add() }
               .disabled(!canAdd || adding)
               // Return adds a typed source instead of saving the sheet without it.
@@ -64,6 +72,11 @@ struct IssueSetupView: View {
           }
           if let problem = addProblem ?? addError {
             Text(problem).font(.caption).foregroundStyle(.red)
+          } else {
+            Text(
+              "Sources decide which issues are fetched. A repository needs no filter. An org needs a label or a person."
+            )
+            .font(.caption).foregroundStyle(.secondary)
           }
         }
         .padding(4)
@@ -73,6 +86,8 @@ struct IssueSetupView: View {
         VStack(alignment: .leading, spacing: 6) {
           TextField("Labels", text: $labels, prompt: Text("Labels, separated by commas"))
           TextField("People", text: $people, prompt: Text("Logins, separated by commas"))
+          Text("Sorts fetched issues into the Mine and Team views. It doesn't change which issues are fetched.")
+            .font(.caption).foregroundStyle(.secondary)
         }
         .padding(4)
       }
@@ -97,6 +112,7 @@ struct IssueSetupView: View {
     }
     .padding(20)
     .frame(width: 600)
+    .onAppear { model.loadRepos() }
     .onChange(of: model.issueList == nil, initial: true) {
       guard !loaded, let list = model.issueList else { return }
       loaded = true
@@ -108,11 +124,14 @@ struct IssueSetupView: View {
 
   private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
 
+  /// Whether the typed name is an org, the only kind of source that uses Label and Person.
+  private var isOrg: Bool { IssueSource(name: trimmedName).isOrg }
+
   private var canAdd: Bool { !trimmedName.isEmpty && addProblem == nil }
 
   /// The rule that sbd also checks, shown before Add.
   private var addProblem: String? {
-    guard !trimmedName.isEmpty, !trimmedName.contains("/") else { return nil }
+    guard !trimmedName.isEmpty, isOrg else { return nil }
     let blank = { (s: String) in s.trimmingCharacters(in: .whitespaces).isEmpty }
     return blank(label) && blank(person) ? IssueSource.orgNeedsFilter : nil
   }
@@ -120,7 +139,8 @@ struct IssueSetupView: View {
   private func add() {
     adding = true
     addError = nil
-    model.addIssueSource(trimmedName, label: label, person: person) { error in
+    // A repository's hidden fields may still hold what was typed for an org.
+    model.addIssueSources([trimmedName], label: isOrg ? label : "", person: isOrg ? person : "") { error in
       adding = false
       addError = error
       if error == nil {

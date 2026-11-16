@@ -11,7 +11,10 @@ struct IssuesView: View {
       content
     }
     .overlay(alignment: .bottom) { StartedIssueNotice() }
-    .onAppear { model.refreshIssues() }
+    .onAppear {
+      model.refreshIssues()
+      if model.knownRepos == nil { model.loadRepos() }
+    }
     .sheet(isPresented: $model.showingIssueSetup) { IssueSetupView().environmentObject(model) }
   }
 
@@ -23,7 +26,11 @@ struct IssuesView: View {
         } description: {
           Text("Issues lists open issues from the orgs and repositories you choose.")
         } actions: {
-          Button("Add Sources…") { model.showingIssueSetup = true }
+          let offered = !model.offeredIssueRepos.isEmpty
+          VStack(spacing: 12) {
+            if offered { IssueRepoOffer().frame(width: 360) }
+            Button(offered ? "Other Sources…" : "Add Sources…") { model.showingIssueSetup = true }
+          }
         }
       } else {
         // Computing the sections filters, groups, and sorts every issue. Each render computes them once.

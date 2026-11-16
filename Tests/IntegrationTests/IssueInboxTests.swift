@@ -148,6 +148,38 @@ private final class Inbox {
     #expect(try inbox.sources() == [IssueSource(name: ledger)])
   }
 
+  @Test func sourceAddOfSeveralSourcesAddsThemAll() throws {
+    let inbox = try Inbox()
+
+    let added = try inbox.sbd.client.call(
+      "issues-source-add",
+      ["sources": [["source": .string(ledger), "label": "bug"], ["source": "acme", "person": "ana-m"]]],
+      as: [IssueSource].self)
+
+    let expected = [IssueSource(name: ledger, label: "bug"), IssueSource(name: "acme", person: "ana-m")]
+    #expect(added == expected)
+    #expect(try inbox.sources() == expected)
+  }
+
+  /// One bad source refuses the batch: a name that isn't a repo or an org, an org without a filter, one that is a
+  /// source already, and one named twice in the batch.
+  @Test(
+    arguments: [
+      [["source": "robin-k/dotkit"], ["source": "acme/"]],
+      [["source": "robin-k/dotkit"], ["source": "acme"]],
+      [["source": "robin-k/dotkit"], ["source": .string(ledger)]],
+      [["source": "robin-k/dotkit"], ["source": "ROBIN-K/dotkit"]],
+    ] as [[JSON]])
+  func sourceAddOfSeveralSourcesWithOneRefusedAddsNone(_ sources: [JSON]) throws {
+    let inbox = try Inbox()
+    try inbox.sbd.sb("issues", "source", "add", ledger)
+
+    #expect(throws: (any Error).self) {
+      try inbox.sbd.client.call("issues-source-add", ["sources": .array(sources)], as: [IssueSource].self)
+    }
+    #expect(try inbox.sources() == [IssueSource(name: ledger)])
+  }
+
   @Test(arguments: [[String](), ["--label", ""], ["--person", " "]])
   func sourceAddOfAnOrgWithoutALabelOrAPersonIsRefusedAndAddsNothing(_ filter: [String]) throws {
     let inbox = try Inbox()
