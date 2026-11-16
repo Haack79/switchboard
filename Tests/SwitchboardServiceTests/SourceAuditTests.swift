@@ -285,6 +285,7 @@ enum SourceAudit {
     #expect(resolve.isEmpty)
     #expect(exists == [SourceAudit.Finding(file: file, line: 1, rule: "Processes.exists(")])
     #expect(read == [SourceAudit.Finding(file: file, line: 1, rule: "ProcessTable.readLocal(")])
+    #expect(SourceAudit.rules.filter { $0.allowed.contains(file) }.map(\.name) == ["realPath("])
   }
 
   @Test func theProcessAndSnapshotRulesCoverOnlyTheService() {

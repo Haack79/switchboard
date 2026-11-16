@@ -127,6 +127,8 @@ public func ownExecutable() -> URL {
 }
 
 public enum Processes {
+  /// The text of a C string that the kernel stores in a fixed-size char tuple, such as `vip_path` or `p_comm`. The
+  /// tuple must hold a NUL byte, because the read stops only at the first NUL.
   public static func pathString<T>(_ tuple: inout T) -> String {
     withUnsafeBytes(of: &tuple) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
   }
