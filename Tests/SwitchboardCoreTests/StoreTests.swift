@@ -606,3 +606,155 @@ func tempFolder() throws -> String {
     #expect(try store.removedSessions().map(\.id) == [s.id])
   }
 }
+
+/// A delete or a deletion check refuses a session with an open to-do that the removal does not resolve.
+@Suite struct OpenTodoDeleteGuardTests {
+  enum Call: String, CaseIterable, Sendable {
+    case delete, checkDeletable
+
+    func run(_ store: Store, _ removal: SessionRemoval) throws {
+      switch self {
+      case .delete: try store.delete(session: removal)
+      case .checkDeletable: try store.checkDeletable(session: removal)
+      }
+    }
+  }
+
+  /// The notes a stored session has, and the note ids its removal resolves.
+  struct Shape: Sendable, CustomTestStringConvertible {
+    let label: String
+    let notes: [Note]
+    let resolves: [String]
+    var testDescription: String { label }
+  }
+
+  static func todo(_ id: String) -> Note { ResolvedTodoStoreTests.todo(id) }
+
+  static func resolvedTodo(_ id: String) -> Note {
+    var n = todo(id)
+    n.resolved = Note.Resolution(t: 15, by: .you, how: "resolved")
+    return n
+  }
+
+  static func plainNote(_ id: String, kind: Note.Kind? = nil) -> Note {
+    Note(id: id, text: "a note", by: .claude, t: 10, kind: kind)
+  }
+
+  static func session(_ notes: [Note]) -> Session {
+    var s = RemovedSessionStoreTests.session()
+    s.notes = notes
+    return s
+  }
+
+  /// Runs `body` with a store in a new folder that holds the seeded session, and the database's path.
+  static func withSeeded(_ notes: [Note], _ body: (Store, Session, String) throws -> Void) throws {
+    let dir = try tempFolder()
+    defer { try? FileManager.default.removeItem(atPath: dir) }
+    let path = "\(dir)/sb.db"
+    let store = try Store(path: path)
+    let s = session(notes)
+    try RemovedSessionStoreTests.seed(store, s)
+    try body(store, s, path)
+  }
+
+  static func removal(_ s: Session, resolving ids: [String]) -> SessionRemoval {
+    SessionRemoval(
+      id: s.id, name: s.name,
+      todos: ids.map { ResolvedTodoStoreTests.record(s, todo($0), how: "resolved and deleted the session") })
+  }
+
+  static let refused: [Shape] = [
+    Shape(label: "one open to-do, nothing resolved", notes: [todo("n1")], resolves: []),
+    Shape(label: "two open to-dos, one resolved", notes: [todo("n1"), todo("n2")], resolves: ["n1"]),
+    Shape(label: "two open to-dos, the second resolved", notes: [todo("n1"), todo("n2")], resolves: ["n2"]),
+    Shape(label: "one open to-do, another note id resolved", notes: [todo("n1")], resolves: ["n9"]),
+    Shape(
+      label: "one open to-do, only the resolved to-do named", notes: [resolvedTodo("n0"), todo("n1")],
+      resolves: ["n0"]),
+    Shape(
+      label: "one open to-do among plain notes", notes: [plainNote("p1"), todo("n1"), plainNote("p2", kind: .note)],
+      resolves: ["p1", "p2"]),
+    Shape(label: "id differs only in case", notes: [todo("n1")], resolves: ["N1"]),
+  ]
+
+  static let allowed: [Shape] = [
+    Shape(label: "no notes", notes: [], resolves: []),
+    Shape(label: "one open to-do resolved", notes: [todo("n1")], resolves: ["n1"]),
+    Shape(label: "two open to-dos resolved", notes: [todo("n1"), todo("n2")], resolves: ["n2", "n1"]),
+    Shape(
+      label: "resolved to-do and plain notes",
+      notes: [resolvedTodo("n1"), plainNote("p1"), plainNote("p2", kind: .note)], resolves: []),
+    Shape(label: "open to-do resolved plus an unknown note id", notes: [todo("n1")], resolves: ["n1", "n9"]),
+    Shape(label: "no notes, an unknown note id resolved", notes: [], resolves: ["n9"]),
+  ]
+
+  @Test(arguments: Call.allCases, refused)
+  func aRemovalThatLeavesAnOpenToDoThrowsAndChangesNothing(_ call: Call, _ shape: Shape) throws {
+    try Self.withSeeded(shape.notes) { store, s, db in
+      let events = try store.events(session: s.id)
+
+      #expect(throws: APIError.self) { try call.run(store, Self.removal(s, resolving: shape.resolves)) }
+
+      let reopened = try Store(path: db)
+      #expect(try reopened.sessions() == [s])
+      #expect(try reopened.events(session: s.id) == events)
+      #expect(try reopened.snapshot(session: s.id) != nil)
+      #expect(try reopened.removedSessions().isEmpty)
+      #expect(try reopened.resolvedTodos(limit: 50).isEmpty)
+    }
+  }
+
+  @Test(arguments: allowed)
+  func aDeleteThatResolvesEveryOpenToDoRemovesTheSession(_ shape: Shape) throws {
+    try Self.withSeeded(shape.notes) { store, s, _ in
+      try store.delete(session: Self.removal(s, resolving: shape.resolves))
+
+      #expect(try store.sessions().isEmpty)
+      #expect(try store.removedSessions().map(\.id) == [s.id])
+      #expect(try store.resolvedTodos(limit: 50).map(\.note).sorted() == shape.resolves.sorted())
+    }
+  }
+
+  @Test(arguments: allowed)
+  func checkDeletableAllowsARemovalThatResolvesEveryOpenToDo(_ shape: Shape) throws {
+    try Self.withSeeded(shape.notes) { store, s, _ in
+      try store.checkDeletable(session: Self.removal(s, resolving: shape.resolves))
+
+      #expect(try store.sessions() == [s])
+    }
+  }
+
+  @Test(arguments: Call.allCases)
+  func aSessionWithNoStoredRowIsDeletable(_ call: Call) throws {
+    let dir = try tempFolder()
+    defer { try? FileManager.default.removeItem(atPath: dir) }
+    let store = try Store(path: "\(dir)/sb.db")
+
+    try call.run(store, SessionRemoval(id: "gone", name: "gone"))
+  }
+
+  @Test(arguments: Call.allCases)
+  func aStoredRowThatDoesNotDecodeThrowsAndChangesNothing(_ call: Call) throws {
+    try Self.withSeeded([]) { store, s, db in
+      let corrupt = try runCommand("/usr/bin/sqlite3", [db, "UPDATE sessions SET json = '{}' WHERE id = '\(s.id)';"])
+      try #require(corrupt.status == 0, Comment(rawValue: corrupt.stderr))
+
+      #expect(throws: (any Error).self) { try call.run(store, Self.removal(s, resolving: [])) }
+
+      let count = try runCommand("/usr/bin/sqlite3", [db, "SELECT count(*) FROM sessions WHERE id = '\(s.id)';"])
+      #expect(count.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+      #expect(try Store(path: db).removedSessions().isEmpty)
+    }
+  }
+
+  /// The guard reads the stored row, not the caller's copy. A to-do added after the caller read the session
+  /// still blocks the delete.
+  @Test(arguments: Call.allCases)
+  func aToDoAddedToTheStoredRowAfterTheCallerReadItThrows(_ call: Call) throws {
+    try Self.withSeeded([Self.todo("n1")]) { store, read, _ in
+      try store.save(Self.session([Self.todo("n1"), Self.todo("n2")]))
+
+      #expect(throws: APIError.self) { try call.run(store, Self.removal(read, resolving: ["n1"])) }
+    }
+  }
+}

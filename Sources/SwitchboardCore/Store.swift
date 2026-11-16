@@ -76,15 +76,16 @@ public final class Store {
   /// `removed_sessions`, in one transaction. A failure leaves all of it as it
   /// was. For a session on `host`, the same transaction records it in
   /// `removed_host_sessions`. The same transaction saves `group` when the
-  /// removal has one.
+  /// removal has one. It refuses, and changes nothing, when the stored session
+  /// has an open to-do that `removal.todos` does not resolve.
   public func delete(session removal: SessionRemoval) throws {
     try transaction { try deleteRows(removal) }
   }
 
-  /// Throws when `delete(session:)` hits an abort or a constraint, a
-  /// read-only connection, or a write lock held past the busy timeout. It runs
-  /// the same statements in a transaction that it rolls back. It does not see
-  /// a failure that only the commit causes.
+  /// Throws when `delete(session:)` refuses an open to-do or hits an abort or
+  /// a constraint, a read-only connection, or a write lock held past the busy
+  /// timeout. It runs the same statements in a transaction that it rolls back.
+  /// It does not see a failure that only the commit causes.
   public func checkDeletable(session removal: SessionRemoval) throws {
     try exec("BEGIN IMMEDIATE")
     defer { try? exec("ROLLBACK") }
@@ -92,6 +93,7 @@ public final class Store {
   }
 
   private func deleteRows(_ removal: SessionRemoval) throws {
+    try refuseUnresolvedTodos(removal)
     if let group = removal.group { try save(group: group) }
     for todo in removal.todos { try insert(todo) }
     try run("DELETE FROM sessions WHERE id = ?", [removal.id])
@@ -101,6 +103,21 @@ public final class Store {
       "INSERT OR REPLACE INTO removed_sessions (id, name, removed) VALUES (?, ?, ?)",
       [removal.id, removal.name, nowMs()])
     if let host = removal.host { try recordRemovedHostSession(removal.id, host: host) }
+  }
+
+  /// It reads the session's row inside the caller's transaction. No write can
+  /// land between the check and the delete. A row that does not decode throws.
+  private func refuseUnresolvedTodos(_ removal: SessionRemoval) throws {
+    let rows = try query("SELECT json FROM sessions WHERE id = ?", [removal.id]) { row in
+      try JSONCoding.decode(Session.self, from: row.text(0))
+    }
+    let resolved = Set(removal.todos.map(\.note))
+    let unresolved = rows.flatMap { $0.unresolvedTodos(resolving: resolved) }
+    guard unresolved.isEmpty else {
+      throw APIError(
+        "\(removal.id) has an open to-do that the delete does not resolve: \(unresolved.map(\.id).joined(separator: ", "))."
+      )
+    }
   }
 
   /// The sessions that sbd removed, newest first. A second removal of an id replaces its row.
