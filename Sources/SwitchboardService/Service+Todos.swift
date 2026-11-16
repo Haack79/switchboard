@@ -71,7 +71,7 @@ extension Service {
     if let stray = resolving.sorted().first(where: { ref in !open.contains { $0.id == ref } }) {
       throw APIError("\(stray) is not an open to-do of \(mention(id)).")
     }
-    let unresolved = open.filter { !resolving.contains($0.id) }
+    let unresolved = entry.session.unresolvedTodos(resolving: resolving)
     guard unresolved.isEmpty else {
       let command = entry.session.waitsToStart ? "sb followup rm" : "sb rm"
       throw OpenTodoError(
@@ -99,12 +99,13 @@ extension Service {
     return SessionRemoval(id: id, name: session.name, todos: todos, host: session.host, group: group)
   }
 
-  /// The one function that deletes a session record. It refuses unless
-  /// `resolving` names exactly the session's open to-dos, and it refuses the
-  /// operator while it has an open wait or report. It records each of
-  /// them in `resolved_todos` in the same transaction as the delete. A
-  /// failed delete leaves them open. It refuses a session whose worktree
-  /// sits in the trash unchecked, as `trashRefusal` says. The same
+  /// Deletes a session record. It refuses unless `resolving` names exactly
+  /// the session's open to-dos, with the `OpenTodoError` that the user sees.
+  /// `Store.delete(session:)` refuses an unresolved open to-do too, for any
+  /// caller. It records each resolved to-do in `resolved_todos` in the same
+  /// transaction as the delete. A failed delete leaves them open. It refuses
+  /// the operator while it has an open wait or report. It refuses a session
+  /// whose worktree sits in the trash unchecked, as `trashRefusal` says. The same
   /// transaction records the session's name in `removed_sessions`, and
   /// `removedNames` gets it only after the delete commits. For a session on
   /// a host, the same transaction records it in `removed_host_sessions`, so

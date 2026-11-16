@@ -92,6 +92,11 @@ extension Array where Element == Note {
 extension Session {
   /// The open to-dos, in the order they were added.
   public var openTodos: [Note] { (notes ?? []).openTodos }
+
+  /// The open to-dos whose ids `resolving` does not name. A delete of the session refuses while any remain.
+  public func unresolvedTodos(resolving: Set<String>) -> [Note] {
+    openTodos.filter { !resolving.contains($0.id) }
+  }
 }
 
 extension SessionSummary {
