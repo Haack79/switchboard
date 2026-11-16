@@ -70,7 +70,7 @@ struct IssueSetupView: View {
             Button("Add") { add() }
               .disabled(!canAdd || adding)
               // Return adds a typed source instead of saving the sheet without it.
-              .keyboardShortcut(trimmedName.isEmpty ? nil : .defaultAction)
+              .keyboardShortcut(trimmedName.isEmpty || offerLabelFocused ? nil : .defaultAction)
           }
           if let problem = addProblem ?? addError {
             Text(problem).font(.caption).foregroundStyle(.red)
