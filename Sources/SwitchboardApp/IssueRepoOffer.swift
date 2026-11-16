@@ -9,9 +9,10 @@ struct IssueRepoOffer: View {
   /// The names the user unchecked. A repository that loads after the view appears starts checked. The empty state
   /// and the setup sheet share one set, so the sheet opened from the empty state keeps the user's choices.
   @Binding var unchecked: Set<String>
-  /// Whether the label field has focus. Add takes Return while it does. The setup sheet takes Save's default action
-  /// away then, so Return does not close the sheet without adding.
-  var labelFocused: FocusState<Bool>.Binding
+  /// Gets whether the label field has focus. Add takes Return while it does, so the setup sheet's other buttons give
+  /// Return up then.
+  var labelFocusChanged: (Bool) -> Void = { _ in }
+  @FocusState private var labelFocused: Bool
   @State private var label = ""
   @State private var adding = false
   @State private var addError: String?
@@ -33,17 +34,18 @@ struct IssueRepoOffer: View {
       .scrollBounceBehavior(.basedOnSize)
       HStack {
         TextField("Label", text: $label, prompt: Text("Label (optional)"))
-          .focused(labelFocused)
+          .focused($labelFocused)
           .help(
             "Fetches only the issues with this label in each checked repository. Without one, a repository gives up to 1,000 open issues."
           )
         Button(checked.count == 1 ? "Add 1 Repository" : "Add \(checked.count) Repositories") { add(checked) }
           .disabled(checked.isEmpty || adding)
-          .keyboardShortcut(labelFocused.wrappedValue ? .defaultAction : nil)
+          .keyboardShortcut(labelFocused ? .defaultAction : nil)
       }
       RefusalLabel(refusal: addError)
     }
     .announcesRefusal(addError)
+    .onChange(of: labelFocused) { labelFocusChanged(labelFocused) }
   }
 
   private func isChecked(_ name: String) -> Binding<Bool> {

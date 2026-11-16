@@ -7,7 +7,7 @@ struct IssueSetupView: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.dismiss) private var dismiss
   @Binding var uncheckedRepos: Set<String>
-  @FocusState private var offerLabelFocused: Bool
+  @State private var offerLabelFocused = false
   @State private var name = ""
   @State private var label = ""
   @State private var person = ""
@@ -25,7 +25,7 @@ struct IssueSetupView: View {
       Text("Issue Sources").font(.title2.bold())
       if !model.offeredIssueRepos.isEmpty {
         GroupBox("Your Repositories") {
-          IssueRepoOffer(unchecked: $uncheckedRepos, labelFocused: $offerLabelFocused).padding(4)
+          IssueRepoOffer(unchecked: $uncheckedRepos) { offerLabelFocused = $0 }.padding(4)
         }
       }
       GroupBox("Sources") {
@@ -69,8 +69,7 @@ struct IssueSetupView: View {
             }
             Button("Add") { add() }
               .disabled(!canAdd || adding)
-              // Return adds a typed source instead of saving the sheet without it.
-              .keyboardShortcut(trimmedName.isEmpty || offerLabelFocused ? nil : .defaultAction)
+              .keyboardShortcut(returnOwner == .add ? .defaultAction : nil)
           }
           if let problem = addProblem ?? addError {
             Text(problem).font(.caption).foregroundStyle(.red)
@@ -109,7 +108,7 @@ struct IssueSetupView: View {
           model.saveIssueSettings(labels: split(labels), people: split(people), defaultPreset: defaultPreset)
           dismiss()
         }
-        .keyboardShortcut(trimmedName.isEmpty && !offerLabelFocused ? .defaultAction : nil)
+        .keyboardShortcut(returnOwner == .save ? .defaultAction : nil)
       }
     }
     .padding(20)
@@ -129,6 +128,12 @@ struct IssueSetupView: View {
   /// Whether the typed name is an org, which needs a label or a person. The sheet offers Label and Person only for
   /// an org, though a repository source accepts both.
   private var isOrg: Bool { IssueSource(name: trimmedName).isOrg }
+
+  private enum ReturnOwner { case offer, add, save }
+
+  /// The one button that Return presses. Return adds the checked repositories while the offer's label field has
+  /// focus, and it adds a typed source instead of saving the sheet without it.
+  private var returnOwner: ReturnOwner { offerLabelFocused ? .offer : trimmedName.isEmpty ? .save : .add }
 
   private var canAdd: Bool { !trimmedName.isEmpty && addProblem == nil }
 
