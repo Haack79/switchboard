@@ -90,18 +90,22 @@ extension GitHubPoller {
     }
     for ref in pr.dependsOn ?? [] {
       if let i = edges.firstIndex(where: { ref.same(repo: $0.repo, number: $0.number) }) {
-        edges[i].deploy = edges[i].deploy || ref.deploy
+        if ref.deploy {
+          edges[i].deploy = true
+          edges[i].service = ref.service
+          edges[i].environments = ref.environments
+        }
         continue
       }
       let session = owned.first { ref.same(repo: $0.pr.repo, number: $0.pr.number) }?.id
-      edges.append(Dependency(via: .body, repo: ref.repo, number: ref.number, deploy: ref.deploy, session: session))
+      edges.append(Dependency(ref: ref, session: session))
     }
     return edges.map { e in withState(e, before: recorded.first { $0.same(repo: e.repo, number: e.number) }) }
   }
 
   /// The edge with its PR's state as this poller last read it. A deploy edge
-  /// whose PR merged is deployed once the deploy comment shows both prod
-  /// regions deployed. `before` is the edge as the session recorded it.
+  /// whose PR merged is deployed once it reached each of its environments,
+  /// as `deployState` decides. `before` is the edge as the session recorded it.
   ///
   /// The poller's reads and comment bodies are in memory, so they are empty
   /// after sbd restarts. An edge whose PR this poller has not read keeps the
@@ -114,15 +118,81 @@ extension GitHubPoller {
     guard let read = lastRead(edge) else {
       d.state = before?.state
       d.deployed = d.deploy ? before?.deployed : nil
+      d.problem = d.deploy ? before?.problem : nil
       return d
     }
     d.state = read.pr.state
     guard d.deploy, read.pr.state == .merged else {
       d.deployed = nil
+      d.problem = nil
       return d
     }
-    d.deployed = (before?.state == .merged && before?.deployed == true) || deployedToProd(read.comments)
+    (d.deployed, d.problem) = deployState(d, read.pr, read.comments, before: before)
     return d
+  }
+
+  /// Whether a merged deploy edge's PR reached its environments, and why it
+  /// can't when it can't. An edge that the session recorded as deployed stays
+  /// deployed. A named service's state file decides it. Without a service,
+  /// the deploy comment decides a PostHog/posthog PR, and nothing that sbd
+  /// reads shows a PR in another repository deploy.
+  private func deployState(_ d: Dependency, _ pr: PullRequest, _ comments: [PRComment], before: Dependency?) -> (
+    deployed: Bool, problem: String?
+  ) {
+    if before?.state == .merged && before?.deployed == true { return (true, nil) }
+    guard let service = d.service else {
+      if Dependencies.sameRepo(pr.repo, Wait.posthogRepository) {
+        return (deployed(comments, to: d.deployEnvironments), nil)
+      }
+      return (
+        false,
+        "Switchboard has no deploy signal for \(pr.repo); name the \(Wait.chartsRepository) service that deploys it with `service: <name>` on the Depends on line"
+      )
+    }
+    let id = GitHubPoller.edgeTargetId(d)
+    guard let since = deploys.firstSeen[id], let read = serviceRead(service, id: id, since: since) else {
+      return (false, before?.problem)
+    }
+    switch ServiceDeployVerdict.of(
+      service: service, read.state, pr: pr, environments: d.deployEnvironments, progress: read.progress)
+    {
+    case .deployed?: return (true, nil)
+    case .stuck(let reason)?: return (false, reason)
+    case nil: return (false, nil)
+    }
+  }
+
+  /// The merged PRs that deploy edges with a service wait on, from the open
+  /// PRs' `Depends on` lines and from the recorded edges that still hold. A
+  /// line whose recorded edge resolved needs no more checks.
+  func edgeDeployTargets(_ sessions: [Watched], now: Int64) -> [DeployTarget] {
+    var edges: [Dependency] = []
+    for s in sessions {
+      let recorded = s.facts.dependencies
+      if let pr = currentPR(s), pr.state == .open {
+        edges += (pr.dependsOn ?? []).filter { ref in
+          !recorded.contains { $0.resolved && ref.same(repo: $0.repo, number: $0.number) }
+        }.map { Dependency(ref: $0) }
+      }
+      edges += recorded.filter(\.holds)
+    }
+    var targets: [String: DeployTarget] = [:]
+    for d in edges where d.deploy {
+      guard let service = d.service, let pr = lastRead(d)?.pr, pr.state == .merged, let merge = pr.mergeCommit else {
+        continue
+      }
+      let id = GitHubPoller.edgeTargetId(d)
+      let since = deploys.firstSeen[id] ?? now
+      deploys.firstSeen[id] = since
+      targets[id] = DeployTarget(
+        id: id, service: service, pr: pr, merge: merge, environments: d.deployEnvironments, since: since)
+    }
+    return targets.values.sorted { $0.id < $1.id }
+  }
+
+  static func edgeTargetId(_ d: Dependency) -> String {
+    "edge \(d.service ?? "") \(d.repo.lowercased())#\(d.number) "
+      + d.deployEnvironments.map(\.rawValue).joined(separator: ",")
   }
 
   private func lastRead(_ edge: Dependency) -> (pr: PullRequest, comments: [PRComment], polled: Int64)? {
@@ -131,7 +201,9 @@ extension GitHubPoller {
 
   static func resolvedLine(_ d: Dependency, _ pr: PullRequest) -> String {
     let label = d.label(from: pr.repo)
-    if d.deploy { return "\(label) deployed to prod, so #\(pr.number) no longer waits on it." }
+    if d.deploy {
+      return "\(label) deployed to \(d.environmentsText), so #\(pr.number) no longer waits on it."
+    }
     if d.via == .stack { return "\(label) merged; retarget and rebase #\(pr.number)." }
     return "\(label) merged, so #\(pr.number) no longer waits on it."
   }

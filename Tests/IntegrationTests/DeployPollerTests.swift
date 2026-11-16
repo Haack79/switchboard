@@ -65,13 +65,16 @@ func deployResponse(_ name: String) throws -> String {
 
   /// Routes the feature-flags state file, the compare of its commit with the
   /// merge, the charts deploy commit, its state-deploy.yml run, and the run's
-  /// jobs.
-  func serveFeatureFlags(_ github: FakeGitHub, jobs: String) throws {
+  /// jobs. `repository` is the repository that the state file says
+  /// feature-flags builds from.
+  func serveFeatureFlags(_ github: FakeGitHub, jobs: String, repository: String = "PostHog/posthog") throws {
     let p = DeployPollerTests.self
+    let state = try deployResponse("state-feature-flags.yaml").replacingOccurrences(
+      of: "repository: PostHog/posthog\n", with: "repository: \(repository)\n")
+    github.route(p.statePath, etag: "\"state-1\"", contentType: "text/plain; charset=utf-8", state)
     github.route(
-      p.statePath, etag: "\"state-1\"", contentType: "text/plain; charset=utf-8",
-      try deployResponse("state-feature-flags.yaml"))
-    github.route(p.comparePath, #"{"status":"behind","ahead_by":0,"behind_by":3,"total_commits":0,"files":[]}"#)
+      "repos/\(repository)/compare/\(p.flagsCommit)...\(p.merge)",
+      #"{"status":"behind","ahead_by":0,"behind_by":3,"total_commits":0,"files":[]}"#)
     let commits: JSON = [
       [
         "sha": "9f0e1d2c3b4a59687766554433221100ffeeddcc",
@@ -81,7 +84,7 @@ func deployResponse(_ name: String) throws -> String {
         "sha": .string(p.chartsCommit),
         "commit": [
           "message": .string(
-            "deploy feature-flags from PostHog/posthog@\(p.flagsCommit) by Piccirello\n\n"
+            "deploy feature-flags from \(repository)@\(p.flagsCommit) by Piccirello\n\n"
               + "feat(security): log out-of-band interaction domains in the rust guards (#118875)"
           )
         ],
