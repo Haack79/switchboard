@@ -46,8 +46,9 @@ extension GitHubPoller {
   /// deploy edges that name one are in `edgeDeployTargets`.
   func deployTargets(_ interest: Interest) -> [DeployTarget] {
     interest.waits.compactMap { session, wait in
-      guard wait.kind == .deploy, let service = wait.service, let id = prId(of: wait, session: session.id),
-        let pr = prs[id]?.pr, pr.state == .merged, let merge = pr.mergeCommit
+      guard wait.kind == .deploy, let service = wait.service, mayRead(Wait.chartsRepository, for: session.host),
+        let id = prId(of: wait, session: session), let pr = prs[id]?.pr, pr.state == .merged,
+        let merge = pr.mergeCommit
       else { return nil }
       return DeployTarget(
         id: wait.id, service: service, pr: pr, merge: merge, environments: wait.deployEnvironments,
@@ -122,10 +123,11 @@ extension GitHubPoller {
   }
 
   /// What happened to a deploy wait, from its PR and comments, or from the
-  /// last check of its service.
-  func deployOutcome(_ wait: Wait, _ pr: PullRequest, _ comments: [PRComment]) -> String? {
+  /// last check of its service. The state files are shared by every session, so a session on a host whose `repos`
+  /// don't list the charts repo gets no outcome from them.
+  func deployOutcome(_ wait: Wait, _ pr: PullRequest, _ comments: [PRComment], host: String?) -> String? {
     if let outcome = wait.deployResolution(of: pr, comments: comments) { return outcome }
-    guard pr.state == .merged, let service = wait.service,
+    guard pr.state == .merged, let service = wait.service, mayRead(Wait.chartsRepository, for: host),
       let read = serviceRead(service, id: wait.id, since: wait.created)
     else { return nil }
     return wait.serviceDeployResolution(read.state, pr: pr, environments: read.progress)

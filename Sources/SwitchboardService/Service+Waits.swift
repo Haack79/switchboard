@@ -9,14 +9,14 @@ extension Service {
   /// snapshot first, as for `send`. A `clear-wait` or `resolve-wait` that names
   /// a conversation also reaches the waits that it handed to the operator. The
   /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared.
-  func waitRequest(_ op: String, _ args: JSON) throws -> JSON {
+  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac) throws -> JSON {
     let id = try lookup(args)
     switch op {
     case "wait":
-      return try JSON(encoding: summary(setWait(args, waiter: id)))
+      return try JSON(encoding: summary(setWait(args, waiter: id, from: origin), for: origin))
     case "clear-wait":
       let cleared = try clearWaits(id, args["wait"]?.string)
-      var answer = try JSON(encoding: summary(id)).object ?? [:]
+      var answer = try JSON(encoding: summary(id, for: origin)).object ?? [:]
       answer["cleared"] = .array(cleared.map(JSON.string))
       return .object(answer)
     case "resolve-wait":
@@ -33,7 +33,7 @@ extension Service {
     default:
       throw APIError("unknown request \(op)")
     }
-    return try JSON(encoding: summary(id))
+    return try JSON(encoding: summary(id, for: origin))
   }
 
   /// Builds the wait that `args` describe for the session `named`, and stores
@@ -42,12 +42,14 @@ extension Service {
   /// `here` in `args` keeps the wait on `named`. It records the `wait` event
   /// on the session that holds the wait, with `from` for a handed-off wait,
   /// and returns the id of that session. The caller holds the state queue.
-  func setWait(_ args: JSON, waiter named: String) throws -> String {
+  /// A wait from a host must pass `requireGitHubWait`.
+  func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin = .mac) throws -> String {
     let session = entries[named]!.session
     try refuseNotStarted(session)
     let request = try JSONCoding.convert(args, to: WaitRequest.self)
     // The checks run against `named`, so a conversation still can't wait on itself.
     var wait = try request.makeWait(id: "", waiter: named, now: nowMs(), findSession: waitTarget)
+    if case .remote(let host) = origin { try requireGitHubWait(wait, on: named, from: host) }
     if wait.kind == .ci && wait.pr == nil {
       wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
     }
@@ -216,7 +218,7 @@ extension Service {
       kind: kind == .todo ? .todo : nil)
   }
 
-  func noteRequest(_ op: String, _ args: JSON) throws -> JSON {
+  func noteRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac) throws -> JSON {
     let id = try lookup(args)
     let notes = entries[id]?.session.notes ?? []
     switch op {
@@ -237,6 +239,6 @@ extension Service {
     default:
       throw APIError("unknown request \(op)")
     }
-    return try JSON(encoding: summary(id))
+    return try JSON(encoding: summary(id, for: origin))
   }
 }

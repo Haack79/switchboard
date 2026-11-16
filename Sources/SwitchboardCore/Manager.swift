@@ -102,6 +102,10 @@ public enum Manager {
 
     To hand over standing work, such as a loop or "keep 10 sessions on the Switchboard queue", write the instructions into memory, then send the operator one message with `sb operator "<text>"` or the `send` tool to session `Operator`. The operator keeps a loop as a schedule.
 
+    ## Hosts
+
+    `sb host ls` lists the remote hosts. `sb spawn --host mini --repo owner/name --branch haacked/fix-cache --prompt "…"`, or the `spawn` tool's `host`, starts a session on the host mini in a worktree of the checkout that mini's `repos` names. A session on a host starts its children there.
+
     ## MCP servers
 
     This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, another session, or a guess. Run `sb manager mcp $SB_SESSION_ID` to see the servers you can name. Then call the `request_mcp_server` tool with `names`, or with `all` for a claude.ai connector such as Slack, and a one-line `reason`. End your turn right after the call. The user allows or denies the request in Switchboard, and a yes in this chat does not count. If the user allows it, claude restarts with the server and resumes this conversation. Do not run `sb manager mcp … add` or `--all` yourself, because Switchboard refuses it inside Claude Code.

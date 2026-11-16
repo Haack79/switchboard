@@ -97,6 +97,8 @@ extension MCPToolServer {
         "wait": string(
           "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state. In a Manager conversation, the operator resumes instead of you. To be resumed yourself, omit `wait` and call `set_wait` with `here: true`."
         ),
+        "host": string(
+          "The remote host from config.json to run on, or local for this Mac. Default: the calling session's host."),
       ], required: ["repository", "branch", "prompt"]),
     Tool(
       "set_wait",

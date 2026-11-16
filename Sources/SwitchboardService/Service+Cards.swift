@@ -96,8 +96,9 @@ extension Service {
   /// answers with a message to the session. A card whose hook closed answers
   /// by typing into the terminal. An allow with an extra's argument, such as
   /// `autoMode` or `always`, also applies that extra, which only a held card's
-  /// hook can do. An allow takes at most one extra.
-  func answer(_ args: JSON) throws -> JSON {
+  /// hook can do. An allow takes at most one extra. A host may answer a group message only when every target is on
+  /// that host, since the answer decides what those sessions receive.
+  func answer(_ args: JSON, origin: RequestOrigin) throws -> JSON {
     let card = try chosenCard(args)
     let extras = AllowExtra.allCases.filter { args[$0.argument]?.bool == true }
     if extras.count > 1 { throw APIError("card \(card.id): pick one of \(englishList(extras.map(\.argument)))") }
@@ -111,7 +112,7 @@ extension Service {
       }
     }
     switch card.kind {
-    case .send: return try answerGroupMessage(card, args)
+    case .send: return try answerGroupMessage(card, args, origin: origin)
     case .trust: return try answerTrust(card, args)
     case .mcp: return try answerMCPRequest(card, args)
     case .permission, .question: return try answerPrompt(card, args, extra: extra)
@@ -126,8 +127,13 @@ extension Service {
     return try decideMCPRequest(card, request, allow: behavior == "allow")
   }
 
-  private func answerGroupMessage(_ card: Card, _ args: JSON) throws -> JSON {
+  private func answerGroupMessage(_ card: Card, _ args: JSON, origin: RequestOrigin) throws -> JSON {
     guard let message = card.send else { throw APIError("card \(card.id) has no group message") }
+    if case .remote(let host) = origin,
+      let off = message.targets.first(where: { entries[$0.id]?.session.host != host })
+    {
+      throw APIError("card \(card.id) sends to \(off.name), which is not on \(host)")
+    }
     switch args["behavior"]?.string {
     case "allow": return try decideGroupMessage(card, message, send: true)
     case "deny": return try decideGroupMessage(card, message, send: false)
