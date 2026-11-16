@@ -987,7 +987,8 @@ final class FakeGitHub {
       log.append(Request(kind: kind, ids: ids, authorization: authorization, variables: variables))
       let after = kind == PRQuery.files.rawValue ? afterFiles.take() : nil
       if !queued.isEmpty { return (queued.removeFirst(), after) }
-      var response: [String: JSON] = ["data": .object(data)]
+      // GitHub answers a validation error without data. sbd's request throws when data is missing or null.
+      var response: [String: JSON] = ["data": kind == "unknown" ? .null : .object(data)]
       if !errors.isEmpty { response["errors"] = .array(errors) }
       return (Reply(status: 200, headers: [:], body: JSON.object(response).text), after)
     }
