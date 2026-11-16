@@ -609,7 +609,7 @@ func tempFolder() throws -> String {
 
 /// A delete or a deletion check refuses a session with an open to-do that the removal does not resolve.
 @Suite struct OpenTodoDeleteGuardTests {
-  enum Path: String, CaseIterable, Sendable {
+  enum Call: String, CaseIterable, Sendable {
     case delete, checkDeletable
 
     func run(_ store: Store, _ removal: SessionRemoval) throws {
@@ -688,12 +688,12 @@ func tempFolder() throws -> String {
     Shape(label: "no notes, an unknown note id resolved", notes: [], resolves: ["n9"]),
   ]
 
-  @Test(arguments: Path.allCases, refused)
-  func aRemovalThatLeavesAnOpenToDoThrowsAndChangesNothing(_ path: Path, _ shape: Shape) throws {
+  @Test(arguments: Call.allCases, refused)
+  func aRemovalThatLeavesAnOpenToDoThrowsAndChangesNothing(_ call: Call, _ shape: Shape) throws {
     try Self.withSeeded(shape.notes) { store, s, db in
       let events = try store.events(session: s.id)
 
-      #expect(throws: APIError.self) { try path.run(store, Self.removal(s, resolving: shape.resolves)) }
+      #expect(throws: APIError.self) { try call.run(store, Self.removal(s, resolving: shape.resolves)) }
 
       let reopened = try Store(path: db)
       #expect(try reopened.sessions() == [s])
@@ -724,23 +724,37 @@ func tempFolder() throws -> String {
     }
   }
 
-  @Test(arguments: Path.allCases)
-  func aSessionWithNoStoredRowIsDeletable(_ path: Path) throws {
+  @Test(arguments: Call.allCases)
+  func aSessionWithNoStoredRowIsDeletable(_ call: Call) throws {
     let dir = try tempFolder()
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let store = try Store(path: "\(dir)/sb.db")
 
-    try path.run(store, SessionRemoval(id: "gone", name: "gone"))
+    try call.run(store, SessionRemoval(id: "gone", name: "gone"))
+  }
+
+  @Test(arguments: Call.allCases)
+  func aStoredRowThatDoesNotDecodeThrowsAndChangesNothing(_ call: Call) throws {
+    try Self.withSeeded([]) { store, s, db in
+      let corrupt = try runCommand("/usr/bin/sqlite3", [db, "UPDATE sessions SET json = '{}' WHERE id = '\(s.id)';"])
+      try #require(corrupt.status == 0, Comment(rawValue: corrupt.stderr))
+
+      #expect(throws: (any Error).self) { try call.run(store, Self.removal(s, resolving: [])) }
+
+      let count = try runCommand("/usr/bin/sqlite3", [db, "SELECT count(*) FROM sessions WHERE id = '\(s.id)';"])
+      #expect(count.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+      #expect(try Store(path: db).removedSessions().isEmpty)
+    }
   }
 
   /// The guard reads the stored row, not the caller's copy. A to-do added after the caller read the session
   /// still blocks the delete.
-  @Test(arguments: Path.allCases)
-  func aToDoAddedToTheStoredRowAfterTheCallerReadItThrows(_ path: Path) throws {
+  @Test(arguments: Call.allCases)
+  func aToDoAddedToTheStoredRowAfterTheCallerReadItThrows(_ call: Call) throws {
     try Self.withSeeded([Self.todo("n1")]) { store, read, _ in
       try store.save(Self.session([Self.todo("n1"), Self.todo("n2")]))
 
-      #expect(throws: APIError.self) { try path.run(store, Self.removal(read, resolving: ["n1"])) }
+      #expect(throws: APIError.self) { try call.run(store, Self.removal(read, resolving: ["n1"])) }
     }
   }
 }
