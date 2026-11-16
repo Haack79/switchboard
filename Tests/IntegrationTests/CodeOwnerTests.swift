@@ -197,6 +197,24 @@ extension Instance {
         == CodeOwnerStatus(satisfied: false, groups: [CodeOwnerGroup(owners: [Self.hogql], approved: false)]))
   }
 
+  /// GitHub ignores the case of a repo name. FakeGitHub does too.
+  @Test func configSetUnderTheRepoNameInAnotherCaseIsRead() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    github.changed(Self.number, [Self.hogqlPath])
+    github.ownedPR(Self.number, requests: [FakeGitHub.teamRequest("PostHog/hogql")])
+    github.codeOwners(
+      repo: DepotTests.posthog.lowercased(), base: "master", rules: [FakeGitHub.codeOwnerRule()], protection: nil,
+      files: [".github/CODEOWNERS": Self.codeowners], errors: [])
+    let s = try session(sbd)
+
+    try sbd.poll()
+
+    #expect(
+      try sbd.owners(s.id)
+        == CodeOwnerStatus(satisfied: false, groups: [CodeOwnerGroup(owners: [Self.hogql], approved: false)]))
+  }
+
   @Test func requiredTeamShowsAsJSONWithItsOwnersAndApproval() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withGitHub(github)
