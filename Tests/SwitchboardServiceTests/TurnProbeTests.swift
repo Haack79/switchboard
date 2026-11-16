@@ -1,6 +1,6 @@
 import Testing
 
-@testable import SwitchboardCore
+@testable import SwitchboardService
 
 @Suite struct TurnProbeTests {
   private func check(_ p: inout TurnProbe, activity: Int64, now: Int64) -> Bool {

@@ -127,6 +127,10 @@ public func ownExecutable() -> URL {
 }
 
 public enum Processes {
+  public static func pathString<T>(_ tuple: inout T) -> String {
+    withUnsafeBytes(of: &tuple) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+  }
+
   /// Whether the number can name one process. A pid below 1 names a process
   /// group, and a pid above `Int32.max` names no process.
   public static func isValidPid(_ pid: Int) -> Bool { pid >= 1 && pid <= Int(Int32.max) }

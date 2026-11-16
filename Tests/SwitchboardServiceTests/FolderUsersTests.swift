@@ -1,7 +1,8 @@
 import Foundation
+import SwitchboardCore
 import Testing
 
-@testable import SwitchboardCore
+@testable import SwitchboardService
 
 @Suite struct FolderUsersTests {
   /// A folder in the temporary folder, whose path goes through the /var symlink, and a sibling whose

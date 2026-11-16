@@ -1,10 +1,11 @@
 import Foundation
+import SwitchboardCore
 import os
 
 /// A Model Context Protocol client for `docket mcp`, docket's only interface
 /// for programs. Each `run` starts docket, makes its calls, and closes stdin,
 /// which ends the server.
-public final class DocketClient {
+final class DocketClient {
   private let input: FileHandle
   private var output: UnixSocket.LineReader
   private var nextId = 1
@@ -14,14 +15,14 @@ public final class DocketClient {
     self.output = UnixSocket.LineReader(fd: output.fileDescriptor)
   }
 
-  public struct Failure: Error, CustomStringConvertible {
-    public let description: String
+  struct Failure: Error, CustomStringConvertible {
+    let description: String
   }
 
   /// Runs `<docket> mcp` with `env`, initializes the session, and passes the
   /// client to `body`. docket gets SIGTERM after `timeout` seconds, which
   /// fails the call that waits.
-  public static func run<T>(
+  static func run<T>(
     docket: String, env: [String: String], timeout: Double, _ body: (DocketClient) throws -> T
   ) throws -> T {
     let p = Process()
@@ -80,7 +81,7 @@ public final class DocketClient {
 
   /// Calls a docket tool and returns its structured result. A tool error
   /// throws with docket's text.
-  public func call(_ tool: String, _ arguments: JSON = [:]) throws -> JSON {
+  func call(_ tool: String, _ arguments: JSON = [:]) throws -> JSON {
     let result = try request("tools/call", ["name": .string(tool), "arguments": arguments])
     let text = result["content"]?.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? ""
     if result["isError"]?.bool == true {
@@ -92,13 +93,13 @@ public final class DocketClient {
   }
 
   /// The open reviews, which `list_reviews` reads from claude and GitHub first.
-  public func listReviews() throws -> [DocketReview] {
+  func listReviews() throws -> [DocketReview] {
     try (call("list_reviews")["reviews"]?.array ?? []).map(DocketClient.review)
   }
 
   /// Starts a review of `pullRequest`, or restarts the review docket could
   /// not start. `existing` is append or overwrite.
-  public func startReview(_ pullRequest: String, existing: String?) throws -> DocketReview {
+  func startReview(_ pullRequest: String, existing: String?) throws -> DocketReview {
     var arguments: [String: JSON] = ["pull_request": .string(pullRequest)]
     if let existing { arguments["existing"] = .string(existing) }
     guard let started = try call("start_review", .object(arguments))["review"] else {
@@ -114,7 +115,7 @@ public final class DocketClient {
   }()
 
   /// A review from a tool result's `review`, or from an element of `reviews`.
-  public static func review(_ value: JSON) throws -> DocketReview {
+  static func review(_ value: JSON) throws -> DocketReview {
     try snakeCase.decode(DocketReview.self, from: Data(value.text.utf8))
   }
 

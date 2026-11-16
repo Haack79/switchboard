@@ -38,6 +38,8 @@ enum SourceAudit {
   static let local = sessionless.union([siteFile])
   /// `Service+Sites.swift` holds the accessors that every session read of the snapshot goes through.
   static let snapshotReaders = local.union(["\(service)Service+Sites.swift"])
+  /// `FolderUsers.swift` holds `Processes.using`, which reads this Mac's processes for the site file.
+  static let folderUsersFile = "\(service)FolderUsers.swift"
 
   /// A name counts as bare when no identifier and no `.` comes before it. `site.realPath(` and
   /// `mac.snapshot.panes` name their site, so they are not bare. `self.` names no site.
@@ -50,7 +52,7 @@ enum SourceAudit {
     Rule("Processes.waitForExit(", #"Processes\.waitForExit\("#, under: service, allowed: local),
     Rule("Processes.using(", #"Processes\.using\("#, under: service, allowed: local),
     Rule("ProcessTable.readLocal(", #"(?<![A-Za-z0-9_])readLocal(?![A-Za-z0-9_])"#, under: service, allowed: local),
-    Rule("realPath(", bare + #"realPath\("#, under: service, allowed: local),
+    Rule("realPath(", bare + #"realPath\("#, under: service, allowed: local.union([folderUsersFile])),
     Rule("snapshot.panes", bare + #"snapshot\.panes\b"#, under: service, allowed: snapshotReaders),
     Rule("snapshot.claudePids", bare + #"snapshot\.claudePids\b"#, under: service, allowed: snapshotReaders),
     Rule("snapshot.processes", bare + #"snapshot\.processes\b"#, under: service, allowed: snapshotReaders),
@@ -209,7 +211,7 @@ enum SourceAudit {
 
   @Test(arguments: [
     ("SwitchboardCore/ProcessTable.swift", "    let table = ProcessTable.readLocal()"),
-    ("SwitchboardCore/FolderUsers.swift", "    let rows = ProcessTable.readLocal().all"),
+    ("SwitchboardCore/Processes.swift", "    let rows = ProcessTable.readLocal().all"),
     ("sb/main.swift", "    print(ProcessTable.readLocal().all.count)"),
   ])
   func aLocalProcessReadOutsideTheServicePasses(file: String, line: String) {
@@ -272,10 +274,23 @@ enum SourceAudit {
     #expect(SourceAudit.scan(file: "SwitchboardService/Service.swift", text: line).isEmpty)
   }
 
+  /// `Processes.using` resolves the folder with `realPath`. Every other rule still checks its file.
+  @Test func theFolderUsersFileMayResolveAPathButNotReadOtherLocalNames() {
+    let file = SourceAudit.folderUsersFile
+
+    let resolve = SourceAudit.scan(file: file, text: "    guard let root = realPath(folder) else { return [] }")
+    let exists = SourceAudit.scan(file: file, text: "      guard Processes.exists(pid) else { return nil }")
+    let read = SourceAudit.scan(file: file, text: "    let table = ProcessTable.readLocal()")
+
+    #expect(resolve.isEmpty)
+    #expect(exists == [SourceAudit.Finding(file: file, line: 1, rule: "Processes.exists(")])
+    #expect(read == [SourceAudit.Finding(file: file, line: 1, rule: "ProcessTable.readLocal(")])
+  }
+
   @Test func theProcessAndSnapshotRulesCoverOnlyTheService() {
     let line = "    guard let root = realPath(folder), Processes.exists(pid), snapshot.panes.isEmpty else { return [] }"
 
-    #expect(SourceAudit.scan(file: "SwitchboardCore/FolderUsers.swift", text: line).isEmpty)
+    #expect(SourceAudit.scan(file: "SwitchboardCore/Home.swift", text: line).isEmpty)
     #expect(SourceAudit.scan(file: "SwitchboardApp/Snapshot.swift", text: line).isEmpty)
   }
 
