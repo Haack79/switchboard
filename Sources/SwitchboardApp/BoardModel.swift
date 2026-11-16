@@ -14,12 +14,12 @@ enum MainView {
 /// state in memory and answers in a few milliseconds.
 @MainActor
 final class BoardModel: ObservableObject {
-  /// The sessions that the org filter shows. Every list, count, badge, and
-  /// action target reads this. A lookup of a session that a shown session
+  /// The sessions that the org filter shows and sbd's removal job does not hold. Every list, count, badge,
+  /// and action target reads this. A lookup of a session that a shown session
   /// names, such as a card's asker or a parent, reads `allSessions` or
   /// `allBoard`, because that session may be hidden.
-  var sessions: [SessionSummary] { allSessions.filter(orgFilter.shows) }
-  /// Every session that sbd lists, whatever the org filter says.
+  var sessions: [SessionSummary] { allSessions.filter { !$0.isBeingRemoved && orgFilter.shows($0) } }
+  /// Every session that sbd lists, whatever the org filter says, including the sessions that the removal job holds.
   @Published private(set) var allSessions: [SessionSummary] = []
   /// The GitHub orgs whose sessions the app shows. The installed app saves it.
   @Published var orgFilter: OrgFilter {
@@ -31,16 +31,25 @@ final class BoardModel: ObservableObject {
   }
   @Published var showingOrgFilter = false
   /// Decides when a session tile's hover card shows. Tests replace it.
-  var hoverCard: HoverCard?
+  var hoverCard: HoverCard<String>?
+  /// Decides when a reference's hover card shows. Tests replace it.
+  var referenceCard: HoverCard<ReferenceCardID>?
+  let references: ReferenceStore
   /// Why sbd can't be reached, or nil while it answers.
   @Published var unreachable: String?
   /// The last failed action, shown until the next one succeeds.
   @Published var actionError: String?
   /// Selecting a session that the org filter hides adds its org to the filter. The filter change runs inside
-  /// the navigation, so it records nothing of its own.
+  /// the navigation, so it records nothing of its own. Every change ends a multi-selection.
   @Published var selection: String? {
-    didSet { navigate { if let selection, selection != oldValue { showOrg(of: selection) } } }
+    didSet {
+      if !multiSelection.isEmpty { multiSelection = [] }
+      navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
+    }
   }
+  /// The sessions that the sidebar selects with ⌘-click or ⇧-click: two or more ids, or none. `selection` stays
+  /// the one session that history records. `sidebarSelection` sets it.
+  @Published var multiSelection: Set<String> = []
   /// The New Session sheet's opening, or nil while it is closed.
   @Published var newSession: NewSessionRequest?
   @Published var showingImport = false
@@ -56,10 +65,19 @@ final class BoardModel: ObservableObject {
   @Published var confirmingCleanup: String?
   /// The ids of the sessions whose cleanup is running.
   @Published var cleaningUp: Set<String> = []
-  /// The Delete All sheet's state, or nil while it is closed.
+  /// The Delete All sheet's confirmation, or nil while the sheet doesn't ask.
   @Published var doneRemoval: DoneRemoval?
+  /// The branches that sbd's removal job kept after it forgot their sessions, read with `removal-notices` in a
+  /// refresh after an `ls` that listed a held session, while a notice shows, and every 5 s.
+  @Published var removalNotices: [RemovalNotice] = []
+  /// The failed removals whose Retry or Keep is on its way to sbd, and the queued ones whose Undo is.
+  @Published var answeringRemovals: Set<String> = []
+  var showingDoneRemoval: Bool { doneRemoval != nil }
+  /// The quick-ask panel's state, or nil while it is closed.
+  @Published var quickAsk: QuickAskState?
   var presentingSheet: Bool {
-    newSession != nil || showingImport || showingSearch || doneRemoval != nil || showingIssueSetup
+    newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
+      || pickingSnoozeTime != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -81,6 +99,10 @@ final class BoardModel: ObservableObject {
   @Published var listFocusRequests = 0
   /// The session whose Claude terminal takes keyboard focus when it shows. The terminal clears it.
   @Published var terminalFocus: String?
+  /// The session whose empty Message Claude field shows under its terminal. A field with a draft always shows.
+  @Published var revealedMessageField: String?
+  /// The session whose Message Claude field takes keyboard focus when it shows. The field clears it.
+  @Published var messageFieldFocus: String?
   /// The Board's open cards as it last drew them. BoardView keeps it current. The Session menu's ⌘T state and
   /// the Board's ring read it, so a change redraws them.
   @Published var boardGrid = BoardGrid(lanes: [])
@@ -120,6 +142,10 @@ final class BoardModel: ObservableObject {
   @Published var merging: Set<String> = []
   /// Sessions whose acknowledgment or its undo is on its way to sbd.
   @Published var acknowledging: Set<String> = []
+  /// Sessions whose snooze or unsnooze is on its way to sbd.
+  @Published var snoozing: Set<String> = []
+  /// The session whose snooze end the Pick a Time… sheet asks for.
+  @Published var pickingSnoozeTime: String?
   /// Follow-ups whose start is on its way to sbd. Their Start buttons stay
   /// disabled until sbd replies, because making a worktree can take seconds.
   @Published var starting: Set<String> = []
@@ -130,6 +156,8 @@ final class BoardModel: ObservableObject {
   /// stay disabled until sbd replies, so a second click can't report that
   /// the first one already started claude.
   @Published var startingNow: Set<String> = []
+  /// Sessions whose wake is on its way to sbd, so a burst of keys sends one request at a time. No view reads it.
+  private(set) var waking: Set<String> = []
   /// Group suggestions whose Accept or Decline is on its way to sbd. Their
   /// rows stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringSuggestions: Set<String> = []
@@ -138,6 +166,9 @@ final class BoardModel: ObservableObject {
   /// Artifact plans whose Apply or Reject is on its way to sbd. Their buttons
   /// stay disabled until sbd replies, so a second click can't answer again.
   @Published var answeringArtifacts: Set<String> = []
+  /// The artifacts, as `<group> <url>`, that "Use as plan" is attaching. Their buttons stay disabled until sbd
+  /// replies, so a second click can't ask the group's chat to read the artifact again.
+  @Published var usingAsPlan: Set<String> = []
   /// The decision requests that wait for sbd: `<session>/<number>` for an
   /// answer, and `<session>/submit` and `<session>/discard`.
   @Published var deciding: Set<String> = []
@@ -232,6 +263,14 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// Sends a quick ask to sbd. Tests replace it.
+  lazy var ask: @Sendable (String, CallCancel) throws -> JSON = { [client = self.client] question, cancel in
+    try client.call("quick-ask", ["question": .string(question)], timeout: QuickAsk.clientTimeout, cancel: cancel)
+  }
+  /// Quick asks run apart from `worker`, because one can take a minute and `worker` runs one action at a time.
+  let quickAskWork = DispatchQueue(label: "switchboard.quick-ask")
+  /// Cancels the running quick ask. Only the ask that holds this token may show its result.
+  var quickAskCancel: CallCancel?
   /// Polls run apart from actions, because an action such as `open` or `new`
   /// can take seconds.
   private let poller = DispatchQueue(label: "switchboard.poll")
@@ -242,11 +281,15 @@ final class BoardModel: ObservableObject {
   /// The queue is serial, so two reads for one session answer in the order the user asked for them.
   private let contextWork = DispatchQueue(label: "switchboard.context")
   private let worker = DispatchQueue(label: "switchboard.actions")
+  /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
+  /// on `worker`, such as the header's `rm --worktree`.
+  let undos = DispatchQueue(label: "switchboard.undo")
   /// Merges wait on gh for up to 120 s, and review requests for up to 60 s.
   /// They run apart from other actions and from each other.
   private let merges = DispatchQueue(label: "switchboard.merges", attributes: .concurrent)
   /// A plan apply waits for sbd's GitHub poll and then writes to GitHub, so
-  /// it runs apart from other actions too.
+  /// it runs apart from other actions too. An artifact attach runs here because
+  /// it can wait for the group's chat to start.
   private let planWrites = DispatchQueue(label: "switchboard.plan-writes", attributes: .concurrent)
   private var timer: Timer?
   /// Whether Switchboard is the active app. A chat's replies count as read only while it is. Tests replace it.
@@ -258,8 +301,16 @@ final class BoardModel: ObservableObject {
   /// The session that `create` or `openManager` selected before a refresh
   /// listed it.
   private(set) var pendingSelection: String?
+  /// The session that `focus` named before a refresh listed it, the successful
+  /// refreshes that have not listed it, and the selection when it started. It
+  /// waits for `focusRefreshLimit` refreshes. Selecting another session ends it.
+  private var focusWait: (id: String, misses: Int, selection: String?)?
+  var pendingFocus: String? { focusWait?.id }
+  private static let focusRefreshLimit = 3
   private var loaded = false
   private var followupsRead = Date.distantPast
+  /// Whether the next refresh reads `followup-ls` and the other lists that it reads every 5 s.
+  var followupsDue: Bool { Date().timeIntervalSince(followupsRead) >= 5 }
   /// sbd reads the usage every few minutes, so the app asks once a minute.
   private var usageRead = Date.distantPast
 
@@ -276,24 +327,31 @@ final class BoardModel: ObservableObject {
     orgFilter: OrgFilter = OrgFilter()
   ) {
     self.client = client
+    references = ReferenceStore()
     messageDrafts = MessageDrafts(folder: draftsFolder)
     self.orgFilterStore = orgFilterStore
     self.orgFilter = orgFilterStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
-    hoverCard = HoverCard.panel(for: self)
+    makeHoverCards()
   }
 
-  /// Clears a selection that the org filter hides, closes the hover card of a session that is no longer
-  /// shown, and counts the shown sessions in the Dock badge. The current history entry follows what the window
-  /// shows, because a refresh can change the Inbox's first item.
+  /// Clears a selection that the org filter hides or the removal job holds, drops those sessions from the
+  /// multi-selection, closes the hover card of a session that is no longer shown, and counts the shown sessions
+  /// in the Dock badge. The current history entry follows what the window shows, because a refresh can change
+  /// the Inbox's first item.
   private func clearHiddenSelectionAndUpdateBadge() {
     let listed = shownIDs
-    navigate(.replace) { if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil } }
+    navigate(.replace) {
+      // Clearing `selection` ends the multi-selection, so the listed rest is read first.
+      let multi = multiSelection.intersection(listed)
+      if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil }
+      keepMultiSelection(multi)
+    }
     hoverCard?.sessionsChanged(shown: listed)
     if NSApp != nil { NSApp.dockTile.badgeLabel = needsUser.isEmpty ? nil : "\(needsUser.count)" }
   }
 
   /// Changes the session before sbd lists the change.
-  private func update(_ id: String, _ change: (inout SessionSummary) -> Void) {
+  func update(_ id: String, _ change: (inout SessionSummary) -> Void) {
     for i in allSessions.indices where allSessions[i].id == id { change(&allSessions[i]) }
     for i in allFollowups.indices where allFollowups[i].id == id { change(&allFollowups[i]) }
   }
@@ -307,6 +365,9 @@ final class BoardModel: ObservableObject {
     return allSessions + allFollowups.filter { !ids.contains($0.id) }
   }
 
+  /// `allBoard` without the sessions that sbd's removal job holds.
+  var listedBoard: [SessionSummary] { allBoard.filter { !$0.isBeingRemoved } }
+
   /// The ids of the sessions and follow-ups that the org filter shows.
   var shownIDs: Set<String> { Set(board.map(\.id)) }
 
@@ -317,8 +378,8 @@ final class BoardModel: ObservableObject {
     orgFilter.isAll ? shownIDs : Set(board.filter { OrgFilter.key(of: $0) != nil }.map(\.id))
   }
 
-  /// The org filter's menu rows, counted over every session.
-  var orgEntries: [OrgFilter.Entry] { orgFilter.entries(allBoard) }
+  /// The org filter's menu rows, counted over every session that the removal job does not hold.
+  var orgEntries: [OrgFilter.Entry] { orgFilter.entries(listedBoard) }
 
   /// The groups that the Board shows: all of them under All Orgs, else each
   /// group that is empty or has a member that the filter shows.
@@ -337,15 +398,15 @@ final class BoardModel: ObservableObject {
   }
 
   /// How many sessions and follow-ups the org filter hides.
-  var hiddenCount: Int { allBoard.count - board.count }
+  var hiddenCount: Int { listedBoard.count - board.count }
   /// How many hidden sessions would be in the Inbox.
-  var hiddenNeedingYou: Int { allBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
+  var hiddenNeedingYou: Int { listedBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
 
   /// Adds the session's org to the filter when the filter hides it, so a
   /// session that the app opens never stays out of sight.
   func showOrg(of id: String) {
     // An insert of a key that the filter already holds still publishes. `apply` calls this every second.
-    guard !orgFilter.isAll, let s = allBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
+    guard !orgFilter.isAll, let s = listedBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
       let key = OrgFilter.key(of: s)
     else { return }
     orgFilter.insert(key)
@@ -362,6 +423,11 @@ final class BoardModel: ObservableObject {
 
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
+
+  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
+  var operatorSession: SessionSummary? {
+    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  }
 
   /// A state's sessions in the sidebar, each one followed by its children.
   struct SidebarGroup: Identifiable {
@@ -405,7 +471,7 @@ final class BoardModel: ObservableObject {
   var repoLabels: [String: String] { RepoLabels.labels(board) }
 
   /// The sessions and the follow-ups that wait to start, as the org filter shows them.
-  var board: [SessionSummary] { allBoard.filter(orgFilter.shows) }
+  var board: [SessionSummary] { listedBoard.filter(orgFilter.shows) }
 
   var selected: SessionSummary? { board.first { $0.id == selection } }
 
@@ -425,6 +491,7 @@ final class BoardModel: ObservableObject {
   func start() {
     guard timer == nil else { return }
     hoverCard?.closeOnEvents()
+    referenceCard?.closeOnEvents()
     if Bundle.main.bundleIdentifier != nil {
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
@@ -436,10 +503,11 @@ final class BoardModel: ObservableObject {
 
   func refresh(followups: Bool = false) {
     let client = client
-    let readFollowups = followups || Date().timeIntervalSince(followupsRead) >= 5
+    let readFollowups = followups || followupsDue
     if readFollowups { followupsRead = Date() }
     let readUsage = Date().timeIntervalSince(usageRead) >= 60
     if readUsage { usageRead = Date() }
+    let readNotices = readFollowups || !removalNotices.isEmpty || allSessions.contains(where: \.isBeingRemoved)
     let readRemoved = takeRemovedRead()
     poller.async {
       let (result, more) = Self.read(
@@ -447,6 +515,7 @@ final class BoardModel: ObservableObject {
         followups: readFollowups ? { try client.call("followup-ls", as: [SessionSummary].self) } : nil)
       let accounts = readFollowups ? try? client.accounts() : nil
       let groups = try? client.call("group-ls", as: GroupList.self).groups
+      let notices = readNotices ? try? client.call("removal-notices", as: [RemovalNotice].self) : nil
       let suggestions = readFollowups ? try? client.call("group-suggest", as: [GroupSuggestion].self) : nil
       let proposals = readFollowups ? try? client.call("plan-proposals", as: [PlanProposal].self) : nil
       let issues = readFollowups ? try? client.call("issues", as: IssueList.self) : nil
@@ -459,6 +528,7 @@ final class BoardModel: ObservableObject {
         if let proposals, self.planProposals != proposals { self.planProposals = proposals }
         if let issues, self.issueList != issues { self.issueList = issues }
         if let usage, self.usage != usage { self.usage = usage }
+        if let notices, self.removalNotices != notices { self.removalNotices = notices }
         self.apply(result, followups: more, removed: removed, readRemoved: readRemoved)
       }
     }
@@ -523,6 +593,7 @@ final class BoardModel: ObservableObject {
       // A selected session that is hidden here therefore had no known org until this refresh.
       if let id = selection { showOrg(of: id) }
       if let id = pendingSelection, allBoard.contains(where: { $0.id == id }) { pendingSelection = nil }
+      resolvePendingFocus()
       clearHiddenSelectionAndUpdateBadge()
       // A follow-up that fires appears in `ls` as Needs you. The last seen sessions
       // include the follow-ups, so that change from Not started notifies.
@@ -553,7 +624,8 @@ final class BoardModel: ObservableObject {
   /// with its place in the last refresh's Inbox, not with its last state.
   func sessionsToNotify(_ list: [SessionSummary]) -> [SessionSummary] {
     list.filter { s in
-      guard Triage.needsYou(s), let last = lastSeen[s.id], !Triage.needsYou(last), orgFilter.shows(s)
+      guard Triage.needsYou(s), !s.isBeingRemoved, let last = lastSeen[s.id], !Triage.needsYou(last),
+        orgFilter.shows(s)
       else { return false }
       // A follow-up that starts passes through Needs you until its first
       // prompt. Only a follow-up that fired and is still unstarted notifies.
@@ -562,7 +634,7 @@ final class BoardModel: ObservableObject {
   }
 
   /// The session's Inbox line, with names in place of ids. The menu bar and the notification both show it.
-  func inboxLine(_ s: SessionSummary) -> String { sessionNames.replacingIDs(in: s.triage?.title ?? s.reason) }
+  func inboxLine(_ s: SessionSummary) -> String { sessionNames.replacingIDs(in: s.inboxTitle) }
 
   private func notify(_ s: SessionSummary) {
     guard Bundle.main.bundleIdentifier != nil else { return }
@@ -680,6 +752,13 @@ final class BoardModel: ObservableObject {
     }
   }
 
+  /// Selects the operator. sbd creates it when none exists, and resumes a stopped one.
+  func openOperator() {
+    perform("operator", [:]) { value in
+      if let id = value["id"]?.string { self.selectUnlisted(id) }
+    }
+  }
+
   /// Selects the group's chat. The first time, it starts the chat. A chat
   /// that exists resumes only when the user sends it a message or shows its terminal.
   func openChat(_ group: String) {
@@ -706,6 +785,13 @@ final class BoardModel: ObservableObject {
   }
   func stop(_ id: String) { perform("stop", ["session": .string(id)]) }
   func resume(_ id: String) { perform("resume", ["session": .string(id)]) }
+  /// Starts claude in a stopped session after a key or a click in its terminal. It sends `open`, not `resume`.
+  /// sbd launches on `open` only while claude is stopped, so the keys that arrive before the summary shows
+  /// claude starting do nothing. A second `resume` would fail with "already running".
+  func wake(_ id: String) {
+    guard waking.insert(id).inserted else { return }
+    perform("open", ["session": .string(id)], finally: { self.waking.remove(id) })
+  }
   /// Starts a queued session now. When the live cap is full, sbd stops the
   /// lowest-priority idle session to make room. When the start still waits,
   /// the error banner shows why.
@@ -794,7 +880,7 @@ final class BoardModel: ObservableObject {
   /// Sends an answer to an item once. `answering` holds the item's id until
   /// sbd replies. `remove` takes the item out of its list when sbd takes the
   /// answer.
-  private func answer(
+  func answer(
     _ id: String, in answering: ReferenceWritableKeyPath<BoardModel, Set<String>>, _ op: String,
     _ args: [String: JSON], on queue: DispatchQueue? = nil, remove: @escaping (BoardModel) -> Void
   ) {
@@ -847,6 +933,30 @@ final class BoardModel: ObservableObject {
       finally: { self.answeringArtifacts.remove(plan) })
   }
 
+  /// Attaches the artifact as a plan of the group. The group's chat reads it, which may start the chat. The
+  /// request can wait on that start, so it runs on `planWrites`. `then` lists the plan on the group unless a
+  /// refresh already did, so the row shows "Plan" as soon as its button turns back on.
+  func useArtifactAsPlan(url: String, group: String) {
+    let key = usingAsPlanKey(url: url, group: group)
+    guard usingAsPlan.insert(key).inserted else { return }
+    perform(
+      "plan-attach", ["doc": .string(url), "group": .string(group)], on: planWrites,
+      then: { result in
+        guard let doc = try? JSONCoding.convert(result, to: PlanDocument.self),
+          let g = self.groups.firstIndex(where: { $0.id == group }),
+          self.groups[g].plans?.contains(where: { $0.id == doc.id }) != true
+        else { return }
+        self.groups[g].plans = (self.groups[g].plans ?? []) + [PlanSummary(doc)]
+      },
+      finally: { self.usingAsPlan.remove(key) })
+  }
+
+  func isUsingAsPlan(url: String, group: String) -> Bool {
+    usingAsPlan.contains(usingAsPlanKey(url: url, group: group))
+  }
+
+  private func usingAsPlanKey(url: String, group: String) -> String { "\(group) \(url)" }
+
   private func followUpKey(plan: String, row: String) -> String { "\(plan) \(row)" }
 
   /// `sent` runs only when sbd accepted the message. A second send to the
@@ -894,19 +1004,79 @@ final class BoardModel: ObservableObject {
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
   var showWindow: (() -> Void)?
 
-  /// Selects the session and brings its window forward, opening the window first when it is closed.
+  /// Selects the listed session as a sidebar click does and brings its window forward. A closed window opens
+  /// first. A session that the app does not list is left alone.
   func reveal(_ id: String) {
-    selection = id
+    guard let session = summary(id) else { return }
+    showInSidebar(session)
     showWindow?()
   }
 
-  /// Reveals the session that a session link names, and returns whether the
-  /// URL is a session link. A link to a session that is gone does nothing,
-  /// because the system cannot open the scheme either.
+  /// Reveals the session that an in-app session link names. It returns
+  /// whether the URL has the app's scheme. A link to a session that is gone
+  /// does nothing. Every `switchboard:` URL counts as handled, so that Launch
+  /// Services never hands the app's own link to another copy of the app.
   func openSessionLink(_ url: URL) -> Bool {
-    guard let id = SessionLink.id(from: url) else { return false }
-    if sessionNames.entry(id)?.removed == false { reveal(id) }
+    guard url.scheme?.lowercased() == SessionLink.scheme else { return false }
+    if let id = SessionLink.id(from: url) { reveal(id) }
     return true
+  }
+
+  /// Focuses the session that a URL from another app or from `sb focus` names.
+  func openExternalLink(_ url: URL) {
+    guard let id = SessionLink.id(from: url) else {
+      actionError = "Switchboard can't open \(url.absoluteString)"
+      // The error banner shows only in the window.
+      showWindow?()
+      return
+    }
+    focus(id)
+  }
+
+  /// Closes the search panel, the quick-ask panel, and Recent Places, then shows the session as a
+  /// sidebar click does. A session that no refresh has listed yet, such as one
+  /// that `sb new` just made or any session at a cold launch, is focused when
+  /// a refresh lists it.
+  func focus(_ id: String) {
+    showingSearch = false
+    closeQuickAsk()
+    showingRecentPlaces = false
+    focusWait = nil
+    if !settleFocus(id) {
+      focusWait = (id, 0, selection)
+      // An unstarted follow-up shows only in `followup-ls`. A refresh reads
+      // that list every 5 s, which can be after the wait gives up.
+      followupsRead = .distantPast
+      // A closed window has not started the refreshes that list the session.
+      showWindow?()
+    }
+  }
+
+  /// Reveals the session when a refresh lists it, or reports a removed one.
+  /// It returns false while the session can still appear.
+  private func settleFocus(_ id: String) -> Bool {
+    if summary(id) != nil {
+      reveal(id)
+    } else if sessionNames.entry(id)?.removed == true {
+      actionError = "Session \(id) was removed"
+      showWindow?()
+    } else {
+      return false
+    }
+    return true
+  }
+
+  private func resolvePendingFocus() {
+    guard let wait = focusWait else { return }
+    focusWait = nil
+    // The user picked another session while the focus waited.
+    if selection != nil && selection != wait.selection { return }
+    if settleFocus(wait.id) { return }
+    if wait.misses + 1 >= Self.focusRefreshLimit {
+      actionError = "Switchboard has no session \(wait.id)"
+    } else {
+      focusWait = (wait.id, wait.misses + 1, wait.selection)
+    }
   }
 
   /// Answers a card: allow, deny with an optional message, or one answer per
@@ -950,19 +1120,29 @@ final class BoardModel: ObservableObject {
     var args: [String: JSON] = ["session": .string(id)]
     if undo {
       args["undo"] = true
-    } else if currentInboxItem == id {
-      navigate(.replace) { moveInbox(by: 1) }
-      // A field in the item that scrolls away would keep the keystrokes. A
-      // session's terminal outside the Inbox keeps them.
-      if visibleView == .inbox { NSApp.keyWindow?.makeFirstResponder(nil) }
+    } else {
+      stepInboxPast(id)
     }
     perform(
       "ack", args,
-      then: { value in
-        // The user put the item back, so the refresh must not notify about it.
-        if undo, let s = try? JSONCoding.convert(value, to: SessionSummary.self) { self.lastSeen[id] = s }
-      },
+      then: { if undo { self.storeLastSeen(id, reply: $0) } },
       finally: { self.acknowledging.remove(id) })
+  }
+
+  /// Stores sbd's reply to a request by which the user put the session's item
+  /// back in the Inbox. The next refresh then doesn't notify about the item.
+  func storeLastSeen(_ id: String, reply: JSON) {
+    if let s = try? JSONCoding.convert(reply, to: SessionSummary.self) { lastSeen[id] = s }
+  }
+
+  /// Moves the Inbox's focus to the next item when `id` is the current one,
+  /// because the user set that item aside.
+  func stepInboxPast(_ id: String) {
+    guard currentInboxItem == id else { return }
+    navigate(.replace) { moveInbox(by: 1) }
+    // A field in the item that scrolls away would keep the keystrokes. A
+    // session's terminal outside the Inbox keeps them.
+    if visibleView == .inbox { NSApp.keyWindow?.makeFirstResponder(nil) }
   }
 
   /// The session that the Session menu's Acknowledge acts on: the current
@@ -1331,25 +1511,11 @@ final class BoardModel: ObservableObject {
       name: s.name, worktree: s.repo == nil ? nil : s.cwd, branch: branch)
   }
 
-  /// The request that the icon sends: the same `rm` as the trash dialog, with the worktree, the
-  /// branch, and the remote branch on. The branch is on only for a merged PR, because sbd
-  /// refuses the whole delete for a branch with no merged PR.
-  nonisolated static func deleteRequest(_ s: SessionSummary, resolve: [String] = []) -> [String: JSON] {
-    let plan = deletePlan(s)
-    return resolving(
-      [
-        "session": .string(s.id), "worktree": .bool(plan.worktree != nil), "branch": .bool(plan.branch != nil),
-        "remote_branch": .bool(plan.branch != nil),
-      ], resolve)
-  }
-
-  /// Deletes a Done session with everything `deletePlan` names. sbd runs the safety checks of `rm`.
+  /// Hands a Done session to sbd's removal job, which deletes everything `deletePlan` names after the
+  /// safety checks of `rm`. The request runs on `worker`, in order with the other actions.
   func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    perform(
-      "rm", Self.deleteRequest(s, resolve: resolve),
-      then: { _ in self.deselect([s.id]) },
-      finally: { self.deleting.remove(s.id) })
+    queueRemovals([s.id], scope: .done, resolve: resolve, finally: { self.deleting.remove(s.id) })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.

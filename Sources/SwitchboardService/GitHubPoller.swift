@@ -1,5 +1,6 @@
 import Foundation
 import SwitchboardCore
+import os
 
 /// Finds each session's PR and polls GitHub for its state. One poll runs at
 /// a time, on `queue`. A poll reads the sessions from the service, asks
@@ -14,12 +15,20 @@ final class GitHubPoller {
   let queue = DispatchQueue(label: "sbd.github")
   private var timer: DispatchSourceTimer?
 
-  private var token: String?
-  /// After GitHub's rate limit, no request to that quota goes out before this
-  /// time. GitHub counts GraphQL and REST (`core`) requests separately. Other
-  /// `gh` calls with the same token spend `core`.
-  private(set) var graphQLPausedUntil: Int64 = 0
-  private var restPausedUntil: Int64 = 0
+  /// The state that `send` reads and writes. A request can run off `queue`,
+  /// so the state sits behind a lock. No request or `gh` call runs while the
+  /// lock is held.
+  private struct HTTPState {
+    var token: String?
+    /// After GitHub's rate limit, no request to that quota goes out before
+    /// this time. GitHub counts GraphQL and REST (`core`) requests separately.
+    /// Other `gh` calls with the same token spend `core`.
+    var graphQLPausedUntil: Int64 = 0
+    var restPausedUntil: Int64 = 0
+  }
+  private let http = OSAllocatedUnfairLock(initialState: HTTPState())
+
+  var graphQLPausedUntil: Int64 { http.withLock { $0.graphQLPausedUntil } }
   var tracked: [String: Tracked] = [:]
   /// The PRs that this sbd has read, by node id, with their comments from
   /// `GitHub.bodyAuthors`.
@@ -274,7 +283,7 @@ final class GitHubPoller {
     if let codeOwnersError { result["codeOwnersError"] = .string(codeOwnersError) }
     if let mergeDetailsError { result["mergeDetailsError"] = .string(mergeDetailsError) }
     if let problem = trunk.problem { result["trunkError"] = .string(problem) }
-    let paused = max(graphQLPausedUntil, restPausedUntil)
+    let paused = http.withLock { max($0.graphQLPausedUntil, $0.restPausedUntil) }
     if paused > nowMs() { result["pausedUntil"] = .number(Double(paused)) }
     return .object(result)
   }
@@ -600,7 +609,9 @@ final class GitHubPoller {
     return result.error
   }
 
-  func idsVariable(_ ids: [String]) -> JSON { ["ids": .array(ids.map(JSON.string))] }
+  func idsVariable(_ ids: [String], with more: [String: JSON] = [:]) -> JSON {
+    .object(more.merging(["ids": .array(ids.map(JSON.string))]) { $1 })
+  }
 
   /// Sends one GraphQL request and returns the response, whose `data` isn't
   /// null.
@@ -635,7 +646,7 @@ final class GitHubPoller {
     status: Int, headers: [String: String], body: Data, json: JSON?
   ) {
     let graphQL = request.url?.lastPathComponent == "graphql"
-    if (graphQL ? graphQLPausedUntil : restPausedUntil) > nowMs() {
+    if http.withLock({ graphQL ? $0.graphQLPausedUntil : $0.restPausedUntil }) > nowMs() {
       throw APIError("paused after a GitHub \(graphQL ? "GraphQL" : "core") rate limit")
     }
     func attempt() throws -> (Int, [String: String], Data) {
@@ -646,28 +657,35 @@ final class GitHubPoller {
     }
     var (status, headers, body) = try attempt()
     if status == 401 {
-      token = nil
+      http.withLock { $0.token = nil }
       (status, headers, body) = try attempt()
     }
     let json = JSON.parse(String(decoding: body, as: UTF8.self))
     let limit = GitHub.rateLimit(status: status, headers: headers, response: json, now: Date().timeIntervalSince1970)
     if let pause = limit.pause {
       let until = nowMs() + Int64(pause * 1000)
-      if graphQL { graphQLPausedUntil = until } else { restPausedUntil = until }
+      // Requests run at once, so a later answer must not shorten the pause that an earlier one set.
+      http.withLock {
+        if graphQL {
+          $0.graphQLPausedUntil = max($0.graphQLPausedUntil, until)
+        } else {
+          $0.restPausedUntil = max($0.restPausedUntil, until)
+        }
+      }
     }
     if limit.limited { throw APIError("GitHub rate limit: \(GitHub.message(json))") }
     return (status, headers, body, json)
   }
 
   private func currentToken() throws -> String {
-    if let token { return token }
+    if let token = http.withLock({ $0.token }) { return token }
     guard let gh = findExecutable(settings.gh) else { throw APIError("can't find \(settings.gh)") }
     let r = try runCommand(gh, ["auth", "token"])
     let t = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     guard r.status == 0, !t.isEmpty else {
       throw APIError("gh auth token failed: \(oneLine(r.stderr, max: 120))")
     }
-    token = t
+    http.withLock { $0.token = t }
     return t
   }
 

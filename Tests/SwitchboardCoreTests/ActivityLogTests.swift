@@ -8,6 +8,15 @@ import Testing
     #expect(LaunchTrigger(rawValue: "auto-continue") == .autoContinue)
   }
 
+  @Test func aScheduleRunReadsAsSchedule() {
+    #expect(LaunchTrigger(rawValue: "schedule") == .schedule)
+  }
+
+  /// sbd starts the run on its own, though the user set up the schedule.
+  @Test func aScheduleRunIsNotUserCaused() {
+    #expect(!LaunchTrigger.schedule.userCaused)
+  }
+
   @Test func aResumeSetsTheResumeTriggerAndAFreshStartClearsIt() {
     var f = SessionFacts()
     f.apply(Event(session: "s1", t: 1, kind: "resumed", data: ["trigger": "open"]))
@@ -117,7 +126,7 @@ import Testing
       let event = try store.append(
         activity: ActivityEvent(t: 10, kind: "resume.ready", session: "s1", data: ["trigger": "open", "ms": 3500]))
 
-      try store.delete(session: "s1", name: "one")
+      try store.delete(session: SessionRemoval(id: "s1", name: "one"))
 
       #expect(try store.sessions().isEmpty)
       #expect(try store.activity() == [event])

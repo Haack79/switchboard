@@ -13,6 +13,9 @@ import Testing
     switch kind {
     case .work: break
     case .manager: s.manager = true
+    case .operator:
+      s.manager = true
+      s.isOperator = true
     case .chat: s.chat = "g1"
     }
     return s
@@ -36,6 +39,7 @@ import Testing
     case .question: facts(questionTurn()).cards[0]
     case .send: facts([sendPending()]).cards[0]
     case .trust: trustCard()
+    case .mcp: mcpCard()
     }
   }
 
@@ -161,8 +165,9 @@ import Testing
   // MARK: The guard
 
   @Test(
-    arguments: [[], [.permission], [.question], [.trust], [.send], [.send, .permission], [.send, .send]]
-      as [[Card.Kind]],
+    arguments: [
+      [], [.permission], [.question], [.trust], [.send], [.send, .permission], [.send, .send], [.mcp], [.send, .mcp],
+    ] as [[Card.Kind]],
     [false, true])
   func blockingPromptReadsCardKindsAndTheOpenPrompt(_ kinds: [Card.Kind], _ openPrompt: Bool) {
     let blocks = Triage.hasBlockingPrompt(cards: kinds.map(Self.card), openPrompt: openPrompt)
@@ -198,6 +203,9 @@ import Testing
     SummaryShape(cards: [.send, .permission], openPrompt: true, item: .card, included: true),
     SummaryShape(cards: [.send], openPrompt: true, item: .rule, included: true),
     SummaryShape(cards: [], openPrompt: true, item: .rule, included: true),
+    SummaryShape(cards: [.mcp], openPrompt: false, item: nil, included: false),
+    SummaryShape(cards: [.mcp], openPrompt: false, item: .card, included: true),
+    SummaryShape(cards: [.send, .mcp], openPrompt: false, item: .card, included: true),
   ]
 
   func summary(_ kind: SessionKind, _ shape: SummaryShape) -> SessionSummary {
@@ -207,7 +215,7 @@ import Testing
       cards: shape.cards.map(Self.card), openPrompt: shape.openPrompt)
     s.triage = shape.item.map { TriageItem(title: "t", kind: .approval, summary: "", source: $0) }
     s.kind = kind
-    s.manager = kind == .manager ? true : nil
+    s.manager = kind == .manager || kind == .operator ? true : nil
     s.chat = kind == .chat ? "g1" : nil
     return s
   }
@@ -218,6 +226,103 @@ import Testing
 
     #expect(Triage.inInbox(s) == shape.included)
     #expect(Triage.needsYou(s) == shape.included)
+  }
+
+  // MARK: A request for an MCP server
+
+  static let mcpReason = "Read the \"deploy\" dashboard. *Not* `markdown`."
+
+  /// A Manager conversation whose turn ended after it asked for `servers`.
+  func mcpRequestFacts(_ servers: [String]? = ["grafana"]) -> SessionFacts {
+    facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), mcpRequestEvent(servers, reason: Self.mcpReason),
+      event("Stop", 11, ["last_assistant_message": "I asked for grafana."]),
+    ])
+  }
+
+  @Test func aManagersMCPCardIsItsItem() throws {
+    let item = try #require(conversationItem(mcpRequestFacts(), .manager))
+
+    #expect(item.source == .card)
+    #expect(item.ref == "card:9")
+    #expect(item.kind == .approval)
+  }
+
+  @Test(
+    arguments: [
+      (["grafana"], "Add grafana to this conversation"),
+      (["grafana", "posthog-db"], "Add grafana and posthog-db to this conversation"),
+      (nil, "Load every MCP server in this conversation"),
+    ] as [([String]?, String)])
+  func aManagersMCPItemIsTitledByTheRequest(_ servers: [String]?, _ title: String) throws {
+    let item = try #require(conversationItem(mcpRequestFacts(servers), .manager))
+
+    #expect(item.title == title)
+  }
+
+  @Test func aManagersMCPItemOffersAllowRecommendedAndDeny() throws {
+    let item = try #require(conversationItem(mcpRequestFacts(), .manager))
+
+    #expect(item.options.map(\.label) == ["Allow", "Deny"])
+    #expect(item.options.map(\.action) == [.allow, .deny])
+    #expect(item.options.map(\.recommended) == [true, false])
+  }
+
+  @Test func aManagersMCPItemHoldsTheReasonVerbatimInItsDetails() throws {
+    let item = try #require(conversationItem(mcpRequestFacts(), .manager))
+
+    let details = item.details
+    let texts = [details.toolInput?.text, details.lastReply].compactMap { $0 } + details.notes
+    #expect(texts.contains(Self.mcpReason), "\(details)")
+  }
+
+  @Test func aManagersMCPItemSaysClaudeRestartsAndNothingChangesUntilAllow() throws {
+    let item = try #require(conversationItem(mcpRequestFacts(), .manager))
+
+    #expect(item.summary.contains("Claude restarts with the servers and resumes this conversation."), "\(item.summary)")
+    #expect(item.summary.contains("Nothing changes until you allow it."), "\(item.summary)")
+    #expect(item.summary.contains("Send the conversation a message after the restart"), "\(item.summary)")
+  }
+
+  @Test func anAllRequestsItemSaysTheFullSetupIncludesConnectors() throws {
+    let names = try #require(conversationItem(mcpRequestFacts(), .manager))
+    let all = try #require(conversationItem(mcpRequestFacts(nil), .manager))
+
+    #expect(all.summary.contains("Slack"), "\(all.summary)")
+    #expect(!names.summary.contains("Slack"), "\(names.summary)")
+  }
+
+  @Test func aManagerWithAnMCPCardNeedsYouWithTheCardsReason() {
+    let v = verdict(mcpRequestFacts(), .manager)
+
+    #expect(v.state == .needsYou)
+    #expect(v.reason == "add grafana to this conversation")
+  }
+
+  @Test func aManagerWithAnMCPCardIsInTheInbox() throws {
+    let f = mcpRequestFacts()
+    let item = try #require(conversationItem(f, .manager))
+    var s = summary(.manager, SummaryShape(cards: [], openPrompt: false, item: nil, included: false))
+    s.cards = f.cards
+    s.triage = item
+
+    #expect(Triage.inInbox(s))
+    #expect(Triage.needsYou(s))
+  }
+
+  @Test func anMCPCardBlocks() {
+    #expect(Triage.blocks(.mcp))
+    #expect(Triage.hasBlockingPrompt(cards: [mcpCard()], openPrompt: false))
+  }
+
+  /// A send card that came first does not hide a later request.
+  @Test func aRequestBehindASendCardIsTheItem() throws {
+    let f = facts([TriageConversations.earlySend, mcpRequestEvent(), event("Stop", 11)])
+    try #require(f.cards.count == 2)
+
+    let item = try #require(conversationItem(f, .manager))
+
+    #expect(item.ref == "card:9")
   }
 
   // MARK: The name
@@ -231,6 +336,8 @@ import Testing
       (.manager, "Manager", nil, "Manager"),
       (.manager, "deploy watch", nil, "Manager: deploy watch"),
       (.manager, "deploy watch", "Flags", "Manager: deploy watch"),
+      (.operator, "Operator", nil, "Operator"),
+      (.operator, "Operator", "Flags", "Operator"),
       (.work, "fix-bug", "Flags", "fix-bug"),
       (.work, "fix-bug", nil, "fix-bug"),
     ] as [(SessionKind, String, String?, String)])

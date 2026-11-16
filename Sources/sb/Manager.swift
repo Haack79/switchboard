@@ -61,6 +61,12 @@ private func managerMCP(_ a: Args, _ words: [String]) {
   }
   if a.switches.contains("--all") { args["all"] = true }
   if a.switches.contains("--none") { args["none"] = true }
+  // A conversation that read injected instructions could otherwise widen its own servers.
+  if args["add"] != nil || args["all"] != nil {
+    refuseInsideClaudeCode(
+      "manager mcp add and --all need the user's approval, so they don't run inside Claude Code. Call the request_mcp_server tool instead"
+    )
+  }
   let result = call("manager-mcp", args)
   if a.json { return printJSON(result) }
   let answer = decode(result, as: ManagerMCPAnswer.self)

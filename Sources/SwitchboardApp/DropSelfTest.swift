@@ -15,7 +15,7 @@ enum DropSelfTest {
     let env = ProcessInfo.processInfo.environment
     guard let folder = env["SB_DROP_TEST"], let session = env["SB_SELECT"] ?? env["SB_INBOX"] else { return }
     Task { @MainActor in
-      if let field = await DraftSelfTest.waitForField(model, session, select: env["SB_INBOX"] == nil),
+      if let field = await DraftSelfTest.waitForField(model, session, select: env["SB_INBOX"] == nil, reveal: true),
         let draft = DraftSelfTest.draft(model, session)
       {
         do {

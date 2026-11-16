@@ -44,6 +44,9 @@ public struct Wait: Codable, Equatable, Sendable {
       case .date, .manual: ["until"]
       }
     }
+
+    /// What a wait of this kind does when it resolves, unless the request says otherwise.
+    var defaultThen: Then { self == .manual ? .notify : .resume }
   }
 
   /// What happens when the wait resolves.
@@ -67,30 +70,20 @@ public struct Wait: Codable, Equatable, Sendable {
       self.number = number
     }
 
-    /// Reads `1204`, `#1204`, `owner/name#1204`, or a PR URL such as
-    /// `https://github.com/owner/name/pull/1204/files`. A leading `pr:`, as
-    /// in `pr:1204`, is dropped.
+    /// Reads `1204`, `#1204`, or what `GitHubRef(parsing:)` reads, except an
+    /// issue URL. A leading `pr:`, as in `pr:1204`, is dropped.
     public init?(parsing text: String) {
-      var number = text.trimmingCharacters(in: .whitespaces)
-      if number.hasPrefix("pr:") { number.removeFirst(3) }
-      if let url = URL(string: number), url.scheme == "https" || url.scheme == "http" {
-        let parts = url.path.split(separator: "/").map(String.init)
-        guard url.host?.lowercased() == "github.com", parts.count >= 4, parts[2] == "pull" else { return nil }
-        repository = "\(parts[0])/\(parts[1])"
-        number = parts[3]
-      } else if let hash = number.lastIndex(of: "#") {
-        let repo = number[..<hash]
-        if !repo.isEmpty {
-          let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
-          guard parts.count == 2, !parts.contains(where: \.isEmpty) else { return nil }
-          repository = String(repo)
-        }
-        number = String(number[number.index(after: hash)...])
+      var text = text.trimmingCharacters(in: .whitespaces)
+      if text.hasPrefix("pr:") { text.removeFirst(3) }
+      if let ref = GitHubRef(trimmed: text) {
+        // A PR URL counts only with its scheme in lowercase.
+        let pullURL = ref.form == .pullURL && (text.hasPrefix("https:") || text.hasPrefix("http:"))
+        guard ref.form == .shorthand || pullURL else { return nil }
+        self.init(repository: ref.repo, number: ref.number)
+        return
       }
-      guard !number.isEmpty, number.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int(number), n > 0 else {
-        return nil
-      }
-      self.number = n
+      guard let number = Issues.number(text.hasPrefix("#") ? String(text.dropFirst()) : text) else { return nil }
+      self.init(number: number)
     }
 
     /// `#1204`, or `owner/name#1204`.
@@ -142,6 +135,17 @@ public struct Wait: Codable, Equatable, Sendable {
   /// Needs you. It is nil for a `date` wait, for a manual wait, whose `until`
   /// serves instead, and for a wait that sbd has not stamped yet.
   public var recheck: Int64?
+  /// The Manager conversation that set the wait, when sbd stored it on the operator instead.
+  public var handedFrom: SessionTarget?
+
+  /// Whether the wait's resolution reads the session that holds it. A PR kind with no repository reads
+  /// that session's own repository. A `ci` wait on it reads the session's checked-out branch.
+  var readsWaiter: Bool {
+    switch kind {
+    case .session, .date, .manual: false
+    case .ci, .review, .botReview, .approval, .queue, .merge, .deploy: pr?.repository == nil
+    }
+  }
 
   /// The time after which a review or a queue change counts.
   public var countsAfter: Int64 { since ?? created }
@@ -227,11 +231,13 @@ public struct Wait: Codable, Equatable, Sendable {
   /// The message that resumes the session when the wait resolves with `resume`.
   public func message(outcome: String) -> String {
     var text = "Switchboard: " + Wait.sentence(outcomeLine(outcome))
+    if let handedFrom { text += " For Manager conversation \"\(handedFrom.name)\"." }
     if kind != .manual, let note { text += " Your note: " + Wait.sentence(note) }
     return text
   }
 
-  static func sentence(_ text: String) -> String {
+  /// `text` ended with a period, unless it already ends with `.`, `!` or `?`.
+  public static func sentence(_ text: String) -> String {
     text.last.map { ".!?".contains($0) } == true ? text : text + "."
   }
 
@@ -474,11 +480,15 @@ extension Attention {
   /// its recheck time, naming each overdue wait. Otherwise Waiting while the
   /// session has an open wait.
   static func waitVerdict(_ session: Session, _ facts: SessionFacts, now: Int64) -> Verdict? {
-    if let outcome = facts.waitOutcome { return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info) }
+    if let outcome = facts.waitOutcome {
+      return Verdict(state: .needsYou, reason: oneLine(outcome), kind: .info, byWaitRule: true)
+    }
     guard let waits = session.waits, !waits.isEmpty else { return nil }
     let overdue = waits.filter { $0.isOverdue(now: now) }
     if !overdue.isEmpty {
-      return Verdict(state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info)
+      return Verdict(
+        state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info,
+        byWaitRule: true)
     }
     return Verdict(state: .waiting, reason: oneLine(waits.map(\.line).joined(separator: "; ")))
   }

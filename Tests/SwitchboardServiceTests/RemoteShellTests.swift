@@ -31,6 +31,19 @@ func withService(_ body: (Service, Home) throws -> Void) throws {
   try body(try Service(home: home, sbPath: "/usr/bin/true"), home)
 }
 
+func makeSession(_ id: String, name: String) -> Session {
+  Session(id: id, name: name, cwd: "/tmp", branch: nil, claudeSessionId: "c-\(id)", model: nil, created: 0)
+}
+
+extension Service {
+  /// Adds a live session to the service and to the store.
+  func addLive(_ id: String, name: String) throws {
+    let s = makeSession(id, name: name)
+    try store.save(s)
+    queue.sync { entries[id] = Entry(session: s) }
+  }
+}
+
 func withSleepingChild(_ body: (Process) throws -> Void) throws {
   let child = Process()
   child.executableURL = URL(fileURLWithPath: "/bin/sleep")

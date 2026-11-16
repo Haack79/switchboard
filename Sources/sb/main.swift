@@ -71,7 +71,26 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    ask <question>                answer a question about Switchboard from a
+                                  snapshot of its state. The answer comes from
+                                  claude with no tools, so it changes nothing.
+                                  Ctrl-C ends it
+    operator [<text>]             open the operator, the one background Manager
+                                  session that follows through on the waits that
+                                  conversations hand it, creating it the first
+                                  time. With text, send it a message
+    operator --log                the operator's last messages
+    operator report [--needs-you] [--session S] <text>
+                                  record a report. Only the operator runs it.
+                                  --needs-you puts it in the Inbox until you
+                                  answer the operator or acknowledge it. S is
+                                  the session that it is about
+    operator reports [--all]      list the operator's reports, oldest first, and
+                                  whether each is open. --all lifts the limit of
+                                  \(Event.defaultLimit)
     get <session>                 show one session
+    focus <session>               show the session in the Switchboard app, launching
+                                  the app if it isn't running
     slash <session>               the commands that the session's claude takes
                                   after /: its skills, its commands, and Claude
                                   Code's built-ins
@@ -91,13 +110,35 @@ let usage = """
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
     stop <session>                stop the session's claude
-    resume <session> [--prompt P] resume the session's claude
+    pause <session|group> [--until WHEN] [--reason R] [--message M]
+                                  stop the session's claude and keep it stopped.
+                                  Nothing starts it or types into it, and every
+                                  message waits until the resume. --message sets
+                                  the text that the resume sends. --until resumes
+                                  it on its own at a time (2h, 2026-11-15 09:00),
+                                  when a PR merges (#123, pr:owner/name#123, a PR
+                                  URL), or when another session reaches a state
+                                  (session:<name>[=<state>], Done by default).
+                                  A group pauses each session in it that has
+                                  started, isn't done, and isn't paused
+    resume <session|group> [--message M]
+                                  resume the session's claude. A paused session
+                                  gets M, else the pause's message, else a note
+                                  that it was paused, then the messages that
+                                  waited. --prompt is another name for --message.
+                                  A group resumes each paused session in it
+    pause|resume --group G ...    name the group when a session has its name
     done <session>, undone <session>
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
          [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
+         [--here]
                                   wait on a PR, a deploy, another session, or a
-                                  time. Inside a session, the session is optional
+                                  time. Inside a session, the session is optional.
+                                  A wait that Claude sets in a Manager
+                                  conversation and that resumes goes to the
+                                  operator, unless it reads the conversation's
+                                  own PR. --here keeps it on the conversation
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -105,8 +146,20 @@ let usage = """
                                   can't be reached, and 1 when it is cleared. The
                                   session doesn't resume. The timeout and Ctrl-C
                                   clear the wait
-    wait <session> --clear [--id W]
+    wait [<session>] --clear [--id W]
+                                  clear the waits, and a conversation's waits
+                                  that went to the operator
     wait <session> --resolve <what happened> [--id W]
+    schedule <session> --every <interval> <prompt>
+                                  send the prompt to the session on an interval,
+                                  one number and one unit (s, m, h, d, or w) of
+                                  at least 1m, such as 30m. sbd keeps it across
+                                  restarts. A session holds 10 at most. Inside
+                                  a session, name it too: $SB_SESSION_ID
+    schedule ls [<session>]       list the schedules, the next due first
+    schedule rm <id>              remove a schedule
+    schedule pause|resume <id>    pause a schedule, or resume it one interval
+                                  from now
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
     note <session> --todo <text>  add a to-do, a task for you that blocks
@@ -130,12 +183,15 @@ let usage = """
                                   It refuses a session with an open to-do unless a
                                   --resolve names each one, which resolves them all.
                                   --resolve doesn't run inside Claude
-    rm --done [--worktree [--delete-remote-branch]] [--yes]
+    rm --done [--worktree [--delete-remote-branch]] [--yes] [--no-wait]
                                   remove every Done session the same way, after listing
                                   them and the ones whose checks fail, which it skips.
                                   --worktree also deletes each branch whose PR merged.
-                                  Without a terminal or inside Claude, it needs --yes.
-                                  With --json and without --yes, it removes nothing
+                                  sbd's removal job waits 5 s by default, while the app's
+                                  Undo can bring them back, then deletes them one at a time,
+                                  and sb waits for it. --no-wait prints what the job queued
+                                  and returns. Without a terminal or inside Claude, it needs
+                                  --yes. With --json and without --yes, it removes nothing
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits
                                   after the merge, a running turn, and a folder sbd didn't make.
@@ -155,6 +211,12 @@ let usage = """
                                   reason or its PR's head commit changes or a new turn starts. Nothing
                                   else about the session changes. --undo puts it back in the Inbox.
                                   Refuses the session that runs it
+    snooze <session> [--until WHEN | --for DURATION]
+                                  take the session's Inbox item out of the Inbox until WHEN (as
+                                  wait --until reads it) or for DURATION, 1 hour by default. A new
+                                  prompt, a failed CI run, or the PR's merge ends it early. The
+                                  session keeps working. Refuses the session that runs it
+    unsnooze <session>            end the session's snooze and put its item back in the Inbox
     import [--all] [--repo R]     list the Claude sessions outside Switchboard that
                                   run in a worktree, or every one with --all, and
                                   only those of the repo named R with --repo
@@ -298,6 +360,12 @@ let usage = """
     issues source ls              list the sources
     issues team [--label L]... [--person P]...
                                   show or set the labels and logins of your team
+    ref <owner/name#N | URL | #N> [--repo owner/name]
+                                  show an issue or PR: its kind, state, title,
+                                  author, and labels, and a PR's checks, review,
+                                  and mergeability. It reads a session's PR or
+                                  the cached issues first, else GitHub. #N needs
+                                  --repo
 
   Follow-ups, sessions that haven't started:
     followup add <text> [--title T] [--repo owner/name] [--branch B] [--on WHEN]
@@ -397,13 +465,14 @@ struct Args {
   init(_ argv: ArraySlice<String>, literalAfter: Int = .max) {
     let valued = Set([
       "--branch", "--base", "--name", "--prompt", "--model", "--account", "--until", "--timeout", "--session",
-      "--since", "--host",
+      "--since", "--host", "--every",
       "--id", "--resolve", "--rm", "--card",
       "--title", "--repo", "--on", "--after", "--link", "--parent", "--path", "--file",
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
-      "--preset", "--label", "--person", "--steps",
+      "--preset", "--label", "--person", "--steps", "--for",
+      "--reason", "--message",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -496,6 +565,7 @@ func printTable(_ sessions: [SessionSummary]) {
 func printSession(_ s: SessionSummary) {
   print("\(s.id)  \(s.name)".printable)
   print("  state:   \(s.state.title): \(s.reasonLine) (\(ago(s.since)))".printable)
+  if let until = s.snoozedUntil { print("  snoozed: until \(Wait.formatTime(until))") }
   if s.waitsToStart {
     printFollowup(s)
     return printWaitsAndNotes(s)
@@ -536,9 +606,12 @@ func printSession(_ s: SessionSummary) {
     )
   }
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
+  for a in (s.artifacts ?? []).newestFirst { print("  artifact: \(a.title)  \(a.url)  (\(a.caption()))".printable) }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
+  printPause(s)
   printWaitsAndNotes(s)
+  printSchedules(s)
 }
 
 /// The sessions that `sb import` can import, grouped by repo. ● marks a
@@ -565,9 +638,10 @@ func printImportable(_ list: ImportList, repo: String? = nil) {
   }
 }
 
-func sessionCommand(_ op: String, _ a: Args, extra: [String: JSON] = [:]) {
+/// Sends `op` for `session`, or for the session that `a` names when `session` is nil, and prints the answer.
+func sessionCommand(_ op: String, _ a: Args, session: String? = nil, extra: [String: JSON] = [:]) {
   var args = extra
-  args["session"] = .string(a.session(op))
+  args["session"] = .string(session ?? a.session(op))
   let result = call(op, args)
   if a.json { printJSON(result) } else { printSession(summary(result)) }
 }
@@ -610,6 +684,24 @@ func attach(_ a: Args) -> Never {
   let argv = command.map { strdup($0) } + [nil]
   execv(command[0], argv)
   die("can't run \(command[0]): \(UnixSocket.errnoText())")
+}
+
+/// Opens the session's `switchboard://session/<id>` link. When this sb sits in
+/// a Switchboard app, `open -a` sends the link to that app, so Launch Services
+/// can't pick one of the build/Switchboard.app copies in the checkouts.
+func focus(_ a: Args) -> Never {
+  let result = call("get", ["session": .string(a.session("focus"))])
+  let s = summary(result)
+  let app = AppBundle.containing(executable: ownExecutable())
+  // SB_OPEN lets a test keep `focus` away from Launch Services.
+  let open = ProcessInfo.processInfo.environment["SB_OPEN"] ?? "/usr/bin/open"
+  let opened: CommandResult
+  do {
+    opened = try runCommand(open, (app.map { ["-a", $0.path] } ?? []) + [SessionLink.url(for: s.id).absoluteString])
+  } catch { die("can't open Switchboard: \(error)") }
+  guard opened.status == 0 else { die("can't open Switchboard: \(opened.problem)") }
+  if a.json { printJSON(result) } else { printSession(s) }
+  exit(0)
 }
 
 func watch(_ a: Args) -> Never {
@@ -734,7 +826,7 @@ if ["new", "spawn"].contains(command), argv.contains("--plan") {
 // The text of these commands is everything after the session. All but
 // `send` and `rename` read flags instead when the word after the session is
 // one. `send` reads its leading --image pairs itself, in Send.swift.
-let flagsAfterSession = ["wait", "note", "deny", "answer"]
+let flagsAfterSession = ["wait", "note", "deny", "answer", "schedule"]
 var a = Args(argv, literalAfter: (["send", "rename", "choose"] + flagsAfterSession).contains(command) ? 1 : .max)
 // The text of `sb group note` and `sb group describe` is everything after the
 // group. `describe` reads flags instead when the word after the group is
@@ -746,6 +838,7 @@ if ["group", "groups"].contains(command), ["note", "describe"].contains(argv.fir
   }
 }
 if flagsAfterSession.contains(command), a.positional.count > 1, a.positional[1].hasPrefix("--") { a = Args(argv) }
+if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(argv.first ?? "") { a = Args(argv) }
 
 switch command {
 case "hook":
@@ -799,8 +892,14 @@ case "usage":
   usageCommand(a)
 case "manager":
   manager(a)
+case "ask":
+  askCommand(a)
+case "operator":
+  operatorCommand(a)
 case "get", "show":
   sessionCommand("get", a)
+case "focus":
+  focus(a)
 case "open":
   if a.switches.contains("--terminals") {
     printJSON(call("open", ["session": .string(a.session("open")), "terminals": true]))
@@ -809,8 +908,10 @@ case "open":
   }
 case "stop":
   sessionCommand("stop", a)
+case "pause":
+  targetCommand("pause", a, flags: ["until", "reason", "message"])
 case "resume":
-  sessionCommand("resume", a, extra: a.values["--prompt"].map { ["prompt": .string($0)] } ?? [:])
+  targetCommand("resume", a, flags: ["message", "prompt"])
 case "done":
   sessionCommand("done", a, extra: ["done": .bool(true)])
 case "undone":
@@ -819,6 +920,8 @@ case "wait":
   waitCommand(a)
 case "note":
   noteCommand(a)
+case "schedule", "schedules":
+  scheduleCommand(a)
 case "shell":
   let open = a.switches.contains("--open")
   guard open != a.switches.contains("--close") else { die("shell needs --open or --close") }
@@ -853,6 +956,10 @@ case "review":
   review(a)
 case "ack":
   acknowledge(a)
+case "snooze":
+  snoozeCommand(a)
+case "unsnooze":
+  unsnoozeCommand(a)
 case "cleanup":
   let result = call("cleanup", ["session": .string(a.session("cleanup"))], timeout: 300)
   if a.json { printJSON(result) } else { print("cleaned up \(result["cleaned"]?.string ?? "")") }
@@ -940,6 +1047,8 @@ case "followup", "followups":
   followup(a)
 case "issues":
   issues(a)
+case "ref":
+  refCommand(a)
 case "poll":
   let result = call("poll", ["all": .bool(a.switches.contains("--all"))], timeout: 300)
   if a.json {

@@ -777,3 +777,114 @@ func replyFixture(_ name: String) throws -> String {
     #expect(!line.contains("head branch"), "\(line)")
   }
 }
+
+/// A ready PR #42 approved on its head, with one open review thread.
+private func reviewedReadyPR() -> PullRequest {
+  var pr = readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("stamphog", "APPROVED", on: samplePRHead)])
+  pr.mergeDetails = MergeDetails(threads: 1, threadsRead: 1, openThreads: 1)
+  return pr
+}
+
+/// The session's turn ended, then the poller read `pr`, then `more` events.
+private func readyFacts(_ pr: PullRequest = reviewedReadyPR(), _ more: [Event] = []) throws -> SessionFacts {
+  facts([event("UserPromptSubmit", 0, ["prompt": "go"]), stop(1, 1, "Pushed."), try prEvent(2, pr)] + more)
+}
+
+private func readyVerdict(_ f: SessionFacts) throws -> Verdict {
+  let v = Attention.evaluate(session(), f, now: 1000)
+  try #require(v.state == .readyToMerge, "the fixture gave \(v.state): \(v.reason)")
+  return v
+}
+
+/// The Ready to merge verdict's review rides on the item, whichever builder
+/// makes the item.
+@Suite struct TriageMergeReview {
+  @Test func theRuleItemCarriesTheVerdictsReview() throws {
+    let v = try readyVerdict(try readyFacts())
+
+    let item = Triage.ruleItem(v)
+
+    #expect(item.review != nil)
+    #expect(item.review == v.review)
+  }
+
+  @Test func theRuleItemOfAReadyPRHasTheReview() throws {
+    let f = try readyFacts()
+    let v = try readyVerdict(f)
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(built.source == .rule)
+    #expect(built.review == v.review)
+    #expect(built.review?.amber == [.threads])
+  }
+
+  @Test func addRuleCopiesTheReviewOntoAnItemThatHadNone() throws {
+    let v = try readyVerdict(try readyFacts())
+    var item = TriageItem(title: "Pick how to land #42", kind: .decision, summary: "It needs a call.", source: .session)
+
+    Triage.addRule(v, to: &item)
+
+    #expect(item.review != nil)
+    #expect(item.review == v.review)
+  }
+
+  /// A session that wrote its own card with `sb summary set` still gets the panel.
+  @Test func aSessionCardOnAReadyPRCarriesTheReview() throws {
+    let f = try readyFacts(reviewedReadyPR(), [try summaryEvent(5, 3, sessionCard)])
+    let v = try readyVerdict(f)
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(built.source == .session)
+    #expect(built.review != nil)
+    #expect(built.review == v.review)
+  }
+
+  /// The card's main option stays the main option, and the demoted merge
+  /// option joins after the card's options.
+  @Test func aSessionCardKeepsItsMainOptionBesideADemotedMerge() throws {
+    let f = try readyFacts(reviewedReadyPR(), [try summaryEvent(5, 3, sessionCard)])
+
+    let built = try #require(Triage.item(f, try readyVerdict(f), kind: .work))
+
+    #expect(built.primary?.label == "Fix it")
+    let merge = try #require(built.options.first { $0.action == .merge })
+    #expect(merge.label == "Merge #42 anyway")
+    #expect(!merge.recommended)
+  }
+
+  /// A card's own merge option would skip the rule's demoted one, so the
+  /// card's option loses its recommendation while a row is amber.
+  @Test func aSessionCardsOwnMergeOptionIsNotTheMainOptionWhileARowIsAmber() throws {
+    var card = sessionCard
+    card.options = [TriageOption(label: "Land it", action: .merge, recommended: true)]
+    let f = try readyFacts(reviewedReadyPR(), [try summaryEvent(5, 3, card)])
+
+    let built = try #require(Triage.item(f, try readyVerdict(f), kind: .work))
+
+    #expect(built.options.filter { $0.action == .merge }.map(\.label) == ["Land it"])
+    #expect(built.options.allSatisfy { !$0.recommended })
+    #expect(built.primary == nil)
+  }
+
+  @Test func aSessionCardsOwnMergeOptionStaysTheMainOptionWhenEveryRowIsGreen() throws {
+    var card = sessionCard
+    card.options = [TriageOption(label: "Land it", action: .merge, recommended: true)]
+    var pr = reviewedReadyPR()
+    pr.mergeDetails = MergeDetails()
+    let f = try readyFacts(pr, [try summaryEvent(5, 3, card)])
+
+    let built = try #require(Triage.item(f, try readyVerdict(f), kind: .work))
+
+    #expect(built.primary?.label == "Land it")
+  }
+
+  @Test func anItemForAnotherVerdictHasNoReview() throws {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"])])
+
+    let built = try #require(Triage.item(f, Verdict(state: .needsYou, reason: "tidy the folder"), kind: .work))
+
+    #expect(built.review == nil)
+  }
+}

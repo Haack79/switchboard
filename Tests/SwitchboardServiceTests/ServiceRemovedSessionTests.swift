@@ -20,23 +20,12 @@ private struct SeededGenerator: RandomNumberGenerator {
 
 private let seed: UInt64 = 20_261_113
 
-private func makeSession(_ id: String, name: String) -> Session {
-  Session(id: id, name: name, cwd: "/tmp", branch: nil, claudeSessionId: "c-\(id)", model: nil, created: 0)
-}
-
 extension Service {
   /// The id that `newSessionID(using:)` returns for a generator with `seed`, given the current live and
   /// removed sessions.
   fileprivate func sessionID(seed: UInt64) -> String {
     var generator = SeededGenerator(state: seed)
     return queue.sync { newSessionID(using: &generator) }
-  }
-
-  /// Adds a live session to the service and to the store.
-  fileprivate func addLive(_ id: String, name: String) throws {
-    let s = makeSession(id, name: name)
-    try store.save(s)
-    queue.sync { entries[id] = Entry(session: s) }
   }
 }
 

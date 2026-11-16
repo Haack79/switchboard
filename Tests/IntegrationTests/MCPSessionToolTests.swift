@@ -277,4 +277,43 @@ import Testing
     let properties = try #require(tool["inputSchema"]?["properties"]?.object)
     #expect(properties["todo"]?["type"]?.string == "boolean")
   }
+
+  // MARK: Artifacts
+
+  @Test func getSessionCarriesTheSessionsArtifacts() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(name: "alpha")
+    try sbd.postArtifactHook(s.id)
+    let mcp = try MCPClient(sbd)
+
+    let got = try #require(try mcp.call("get_session", ["session": .string(s.id)]).json)
+
+    #expect(got["artifacts"]?.array?.compactMap { $0["url"]?.string } == [artifactPageURL])
+    #expect(got["artifacts"]?.array?.first?["title"]?.string == "Delta Rates")
+  }
+
+  @Test func listSessionsCarriesEachSessionsArtifacts() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "alpha")
+    let b = try sbd.new(name: "bravo")
+    try sbd.postArtifactHook(a.id)
+    let mcp = try MCPClient(sbd)
+
+    let listed = try #require(try mcp.call("list_sessions").json?.array)
+
+    let alpha = try #require(listed.first { $0["id"]?.string == a.id })
+    let bravo = try #require(listed.first { $0["id"]?.string == b.id })
+    #expect(alpha["artifacts"]?.array?.compactMap { $0["url"]?.string } == [artifactPageURL])
+    #expect(bravo["artifacts"] == nil)
+  }
+
+  @Test(arguments: ["list_sessions", "get_session"])
+  func theSessionToolsDescriptionsNameArtifacts(_ name: String) throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let tool = try #require(try mcp.tools().first { $0["name"]?.string == name })
+
+    #expect(tool["description"]?.string?.contains("artifacts") == true, "\(tool["description"]?.string ?? "")")
+  }
 }

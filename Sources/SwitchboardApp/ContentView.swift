@@ -48,6 +48,9 @@ struct ContentView: View {
   static let windowMinWidth: CGFloat = 900
   static let sidebarMinWidth: CGFloat = 240
 
+  /// A view picker segment's label, such as `Inbox 5`. A zero count does not show.
+  static func viewLabel(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) \(count)" : name }
+
   @EnvironmentObject var model: BoardModel
 
   private var viewChoice: Binding<MainView?> {
@@ -65,7 +68,15 @@ struct ContentView: View {
   }
 
   private var isShowingDoneRemoval: Binding<Bool> {
-    Binding(get: { model.doneRemoval != nil }, set: { if !$0 { model.doneRemoval = nil } })
+    Binding(get: { model.showingDoneRemoval }, set: { if !$0 { model.doneRemoval = nil } })
+  }
+
+  private var isPickingSnoozeTime: Binding<Bool> {
+    Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
+  }
+
+  private var isShowingQuickAsk: Binding<Bool> {
+    Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
   }
 
   private var isConfirmingCleanup: Binding<Bool> {
@@ -84,7 +95,9 @@ struct ContentView: View {
         if let error = model.actionError {
           WarningBanner(error) { Button("Dismiss") { model.actionError = nil } }
         }
-        if let s = model.selected, let f = s.followup, f.started == nil {
+        if model.showsMultiSelection {
+          MultiSelectionView()
+        } else if let s = model.selected, let f = s.followup, f.started == nil {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
@@ -115,9 +128,9 @@ struct ContentView: View {
       ToolbarItem(placement: .navigation) {
         // No segment is selected while a session shows.
         Picker("View", selection: viewChoice) {
-          Text("Inbox (\(model.triage.count))").tag(MainView?.some(.inbox))
+          Text(Self.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
           Text("Board").tag(MainView?.some(.board))
-          Text("Issues (\(model.issueCount))").tag(MainView?.some(.issues))
+          Text(Self.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -161,10 +174,16 @@ struct ContentView: View {
     .sheet(isPresented: $model.showingSearch) {
       SessionSearchView().environmentObject(model)
     }
-    .sheet(isPresented: isShowingDoneRemoval) {
-      if let state = model.doneRemoval { DoneRemovalSheet(state: state).environmentObject(model).sessionLinks(model) }
+    .sheet(isPresented: isShowingQuickAsk) {
+      QuickAskView().environmentObject(model)
     }
-    .sessionLinks(model)
+    .sheet(isPresented: isShowingDoneRemoval) {
+      DoneRemovalSheet().environmentObject(model).inlineLinks(model)
+    }
+    .sheet(isPresented: isPickingSnoozeTime) {
+      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
+    .inlineLinks(model)
   }
 }
 
@@ -205,21 +224,28 @@ struct Sidebar: View {
   var body: some View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
-    List(selection: $model.selection) {
-      ConversationsSection(activeAccount: activeAccount)
+    let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
+    List(selection: model.sidebarSelection) {
+      ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
+      OperatorRow(activeAccount: activeAccount)
       ForEach(model.sidebarGroups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
           ForEach(group.rows) { row in
             HStack(spacing: 4) {
               SessionRow(
-                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard)
+                session: row.session, activeAccount: activeAccount, repo: repos[row.id], hoverCard: model.hoverCard
+              )
+              .clickAnchor(row.id)
               NotesButton(session: row.session)
               if CleanupOffer.canCleanUp(row.session) { CleanupButton(session: row.session) }
               if row.session.isRemovableDone { DeleteButton(session: row.session) }
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              SnoozeMenuItems(session: row.session)
+              DeleteSelectedMenuItem(id: row.id, count: removableSelection)
+              PauseMenuItem(model: model, session: row.session)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -252,6 +278,13 @@ struct Sidebar: View {
         return .ignored
       }
       model.focusTerminal()
+      return .handled
+    }
+    .onKeyPress(keys: [.delete]) { press in
+      guard press.modifiers.intersection([.command, .option, .control, .shift]) == .command,
+        model.showsMultiSelection, removableSelection > 0, !model.showingDoneRemoval
+      else { return .ignored }
+      model.checkSelectionRemoval()
       return .handled
     }
     .takesListFocus(.sidebar, $focused, model: model)
@@ -309,6 +342,7 @@ struct Sidebar: View {
         .padding(8)
         .help("Create an empty group on the Board (⇧⌘G)")
         .accessibilityIdentifier("sidebar-new-group")
+        RemovalStatusView()
       }
     }
     .overlay {
@@ -345,6 +379,24 @@ struct Sidebar: View {
     Binding(
       get: { !model.collapsed.contains(state) },
       set: { if $0 { model.collapsed.remove(state) } else { model.collapsed.insert(state) } })
+  }
+}
+
+/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
+/// `removableSelectionCount`, which the sidebar reads once for every row.
+struct DeleteSelectedMenuItem: View {
+  @EnvironmentObject var model: BoardModel
+  let id: String
+  let count: Int
+
+  var body: some View {
+    if model.showsMultiSelection, model.multiSelection.contains(id) {
+      Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
+        model.checkSelectionRemoval()
+      }
+      .disabled(count == 0 || model.showingDoneRemoval)
+      Divider()
+    }
   }
 }
 
@@ -445,7 +497,7 @@ struct SessionRow: View {
   /// The active account's folder. The hover card names the session's account only when it differs.
   let activeAccount: String
   var repo: String? = nil
-  var hoverCard: HoverCard? = nil
+  var hoverCard: HoverCard<String>? = nil
   @Environment(\.backgroundProminence) private var prominence
 
   var body: some View {
@@ -462,6 +514,10 @@ struct SessionRow: View {
       VStack(alignment: .leading, spacing: 2) {
         HStack {
           Text(session.name).fontWeight(.medium).lineLimit(1)
+          if let pause = session.pause {
+            Image(systemName: "pause.circle").font(.caption).foregroundStyle(.secondary)
+              .help(pause.line).accessibilityLabel("Paused")
+          }
           Spacer()
           IssueBadge(session: session)
           if let pr = session.pr, let url = pr.link {
@@ -480,6 +536,7 @@ struct SessionRow: View {
         // The sidebar can be too narrow for the badge beside the PR number.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           if let pr = session.pr { QueueBadge(pr: pr) }
+          if let until = session.snoozedUntil { SnoozeMark(until: until) }
           subtitle
         }
         CleanupNote(session: session)
@@ -537,6 +594,22 @@ struct BoardView: View {
   @FocusState private var focused: Bool
   static let labelWidth: CGFloat = 140
   static let columnWidth: CGFloat = 200
+  static let minColumnWidth: CGFloat = 165
+  static let maxColumnWidth: CGFloat = 280
+  static let columnSpacing: CGFloat = 12
+  static let boardPadding: CGFloat = 16
+  static var legacyScrollerWidth: CGFloat { NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) }
+
+  /// How wide each column draws in a Board `width` points wide with `columns` columns. The columns fill the width
+  /// that a legacy vertical scroller leaves, kept between `minColumnWidth` and `maxColumnWidth`. A Board too narrow
+  /// for every column at the minimum scrolls sideways.
+  static func fittedColumnWidth(available width: CGFloat, columns: Int) -> CGFloat {
+    guard columns > 0 else { return minColumnWidth }
+    // Overlay scrollers take no width. The Board reserves the legacy width anyway, so a mouse plugged in later
+    // does not make it scroll sideways.
+    let room = width - legacyScrollerWidth - 2 * boardPadding - labelWidth - columnSpacing * CGFloat(columns)
+    return min(max(room / CGFloat(columns), minColumnWidth), maxColumnWidth)
+  }
 
   /// Makes the same moves as a drag, because keyboard and VoiceOver users
   /// can't start a drag. It also offers Ungrouped when the Board hides the
@@ -572,88 +645,98 @@ struct BoardView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
-      ScrollViewReader { proxy in
-        ScrollView([.horizontal, .vertical]) {
-          LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-            Section {
-              ForEach(layout.lanes) { lane in
-                Divider()
-                HStack(alignment: .top, spacing: 12) {
-                  LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
-                    .frame(width: Self.labelWidth, alignment: .leading)
-                  ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
-                    VStack(spacing: 8) {
-                      ForEach(stack) { s in
-                        Group {
-                          if drops {
-                            BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                              .contextMenu { moveMenu(s.id, from: lane.group?.id) }
-                          } else {
-                            BoardCard(session: s, keyboardFocused: s.id == ring)
+      GeometryReader { geometry in
+        let fittedWidth = Self.fittedColumnWidth(available: geometry.size.width, columns: layout.columns.count)
+        ScrollViewReader { proxy in
+          ScrollView([.horizontal, .vertical]) {
+            LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+              Section {
+                ForEach(layout.lanes) { lane in
+                  Divider()
+                  HStack(alignment: .top, spacing: Self.columnSpacing) {
+                    LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
+                      .frame(width: Self.labelWidth, alignment: .leading)
+                    ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
+                      VStack(spacing: 8) {
+                        ForEach(stack) { s in
+                          Group {
+                            if drops {
+                              BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
+                            } else {
+                              BoardCard(session: s, keyboardFocused: s.id == ring)
+                            }
                           }
+                          .contextMenu {
+                            SnoozeMenuItems(session: s)
+                            PauseMenuItem(model: model, session: s)
+                            if drops { moveMenu(s.id, from: lane.group?.id) }
+                          }
+                          .id(s.id)
                         }
-                        .id(s.id)
                       }
+                      .frame(width: fittedWidth, alignment: .top)
                     }
-                    .frame(width: Self.columnWidth, alignment: .top)
+                  }
+                  .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
+                  .accessibilityElement(children: .contain)
+                  .accessibilityLabel(lane.title)
+                  .accessibilityIdentifier("board-row-\(lane.id)")
+                }
+                DoneFooter(sessions: layout.done)
+              } header: {
+                HStack(alignment: .center, spacing: Self.columnSpacing) {
+                  VStack(alignment: .leading, spacing: 4) {
+                    Picker("Lanes", selection: $laneKind) {
+                      ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .help("Show a lane per repo or per group")
+                    // The header stays pinned, so the name field shows without a scroll.
+                    if laneKind == .group { NewGroupRow() }
+                    GroupSuggestionButton()
+                  }
+                  .frame(width: Self.labelWidth)
+                  ForEach(layout.columns, id: \.self) { column in
+                    HStack(spacing: 4) {
+                      Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
+                      if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
+                    }
+                    .frame(width: fittedWidth, alignment: .leading)
                   }
                 }
-                .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(lane.title)
-                .accessibilityIdentifier("board-row-\(lane.id)")
+                .padding(.vertical, 4)
+                .background(.background)
               }
-              DoneFooter(sessions: layout.done)
-            } header: {
-              HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Picker("Lanes", selection: $laneKind) {
-                    ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
-                  }
-                  .pickerStyle(.segmented)
-                  .labelsHidden()
-                  .help("Show a lane per repo or per group")
-                  // The header stays pinned, so the name field shows without a scroll.
-                  if laneKind == .group { NewGroupRow() }
-                  GroupSuggestionButton()
-                }
-                .frame(width: Self.labelWidth)
-                ForEach(layout.columns, id: \.self) { column in
-                  HStack(spacing: 4) {
-                    Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
-                    if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
-                  }
-                  .frame(width: Self.columnWidth, alignment: .leading)
-                }
-              }
-              .padding(.vertical, 4)
-              .background(.background)
             }
+            .padding(Self.boardPadding)
           }
-          .padding()
-        }
-        .defaultScrollAnchor(.topLeading)
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) { press in
-          // SwiftUI offers a key to this handler before a text field inside the Board. The new group's name
-          // field and a lane's description field keep their own arrows and Return.
-          if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
-          switch NavKey.action(press.key, modifiers: press.modifiers) {
-          case .move(let direction): model.moveBoardFocus(direction)
-          case .open:
-            guard let id = model.currentBoardCard else { return .ignored }
-            model.openFromBoard(id)
-          case nil: return .ignored
+          // macOS hides overlay scrollers until a scroll, so nothing would show that more columns sit to the right.
+          .scrollIndicators(.visible)
+          .defaultScrollAnchor(.topLeading)
+          .focusable()
+          .focused($focused)
+          .focusEffectDisabled()
+          .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) {
+            press in
+            // SwiftUI offers a key to this handler before a text field inside the Board. The new group's name
+            // field and a lane's description field keep their own arrows and Return.
+            if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
+            switch NavKey.action(press.key, modifiers: press.modifiers) {
+            case .move(let direction): model.moveBoardFocus(direction)
+            case .open:
+              guard let id = model.currentBoardCard else { return .ignored }
+              model.openFromBoard(id)
+            case nil: return .ignored
+            }
+            return .handled
           }
-          return .handled
-        }
-        .takesListFocus(.board, $focused, model: model)
-        // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
-        .onAppear { if !model.namingGroup { focused = true } }
-        .onChange(of: model.boardFocus) {
-          if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+          .takesListFocus(.board, $focused, model: model)
+          // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
+          .onAppear { if !model.namingGroup { focused = true } }
+          .onChange(of: model.boardFocus) {
+            if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+          }
         }
       }
       .groupDeleteDialog(model)
@@ -733,6 +816,8 @@ private struct LaneLabel: View {
             .help(group.sessions.isEmpty ? "Delete this group" : "Delete this group and move its sessions to Ungrouped")
             .accessibilityLabel("Delete group \(group.name)")
         }
+        GroupPauseButtons(group: group)
+        GroupArtifactsLink(group: group)
       }
       let plans = group?.plans ?? []
       PlanFollowupList(plans: plans)
@@ -773,7 +858,11 @@ private struct DoneFooter: View {
           .padding(.top, 8)
         } label: {
           HStack {
-            Text("Done and merged (\(collapsed.count))").fontWeight(.semibold)
+            HStack {
+              Text("Done and merged").fontWeight(.semibold)
+              Text("\(collapsed.count)").foregroundStyle(.secondary).monospacedDigit()
+            }
+            .accessibilityElement(children: .combine)
             DeleteAllDoneButton()
           }
         }
@@ -964,19 +1053,26 @@ extension BoardHolder {
   }
 }
 
-/// Who holds a Waiting card, in a capsule.
-struct HolderBadge: View {
-  let holder: BoardHolder
-
-  var body: some View {
-    Text(holder.badgeTitle)
-      .font(.caption2.bold())
+extension View {
+  /// Small secondary text on one line in a gray capsule.
+  func capsuleBadge() -> some View {
+    font(.caption2.bold())
       .lineLimit(1)
       .fixedSize()
       .padding(.horizontal, 5)
       .padding(.vertical, 1)
       .background(Capsule().fill(Color.secondary.opacity(0.15)))
       .foregroundStyle(.secondary)
+  }
+}
+
+/// Who holds a Waiting card, in a capsule.
+struct HolderBadge: View {
+  let holder: BoardHolder
+
+  var body: some View {
+    Text(holder.badgeTitle)
+      .capsuleBadge()
       .help("Held by \(holder.badgeTitle)")
       .accessibilityLabel("Held by \(holder.badgeTitle)")
   }
@@ -1040,6 +1136,8 @@ struct BoardCard: View {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let pr = s.pr { QueueBadge(pr: pr) }
             if let holder = s.holderBadge { HolderBadge(holder: holder) }
+            if let until = s.snoozedUntil { SnoozeMark(until: until) }
+            if let pause = s.pause { PausedBadge(pause: pause) }
             Text(statusLine)
               .font(.caption2).foregroundStyle(.tertiary)
           }
@@ -1082,6 +1180,7 @@ struct BoardCard: View {
       TimelineView(.everyMinute) { _ in
         HStack(spacing: 4) {
           NotesButton(session: s)
+          if s.pause != nil { ResumeButton(session: s) }
           if Nudge.shows(s, now: nowMs()) { NudgeButton(session: s) }
           if s.canMerge { MergeButton(session: s) }
           if let base = s.mergeBase { MergeBaseButton(session: s, base: base) }

@@ -27,7 +27,8 @@ extension Service {
       let parent = try args["parent"]?.string.map { try lookup(["session": .string($0)]) }
       return (parent, try groupOfNew(args["group"]?.string, parent: parent))
     }
-    // A bad parent or group fails before docket starts a review that no row would track.
+    // A bad parent, group, or name fails before docket starts a review that no row would track.
+    try refuseOperatorName(args["name"]?.string)
     _ = try queue.sync(execute: placement)
     // A bare number that sbd can't complete skips both checks. docket's start_review then names the PR.
     let wanted = DocketRef(input, defaultRepo: DocketRef.defaultRepo(docketHome: docketHome()))

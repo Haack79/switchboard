@@ -652,6 +652,12 @@ private final class OutcomeList: @unchecked Sendable {
     return s
   }
 
+  static func operatorSession(cwd: String) -> Session {
+    var s = session(cwd: cwd, manager: true)
+    s.isOperator = true
+    return s
+  }
+
   static let trusted: [(Session, String)] = [
     (session(cwd: home.chatFolder("g1"), chat: "g1"), home.chatFolder("g1")),
     (session(cwd: home.chatFolder("g1") + "/", chat: "g1"), home.chatFolder("g1")),
@@ -659,6 +665,8 @@ private final class OutcomeList: @unchecked Sendable {
     (session(cwd: "\(home.chatsFolder)/./g1", chat: "g1"), home.chatFolder("g1")),
     (session(cwd: home.managerFolder, manager: true), home.managerFolder),
     (session(cwd: home.managerFolder + "/", manager: true), home.managerFolder),
+    (operatorSession(cwd: home.managerFolder), home.managerFolder),
+    (operatorSession(cwd: home.managerFolder + "/"), home.managerFolder),
   ]
 
   @Test(arguments: trusted)
@@ -680,6 +688,9 @@ private final class OutcomeList: @unchecked Sendable {
     // The Manager in a chat's folder or near its own.
     session(cwd: home.chatFolder("g1"), manager: true), session(cwd: home.managerFolder + "-x", manager: true),
     session(cwd: home.path, manager: true), session(cwd: "\(home.managerFolder)/sub", manager: true),
+    // The operator in a chat's folder or near the Manager's.
+    operatorSession(cwd: home.chatFolder("g1")), operatorSession(cwd: home.managerFolder + "-x"),
+    operatorSession(cwd: home.path), operatorSession(cwd: "\(home.managerFolder)/sub"),
   ]
 
   @Test(arguments: refused)

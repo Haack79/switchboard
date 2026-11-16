@@ -73,16 +73,29 @@ import Testing
     #expect(otherLaunches.allSatisfy { !$0.contains(#""switchboard""#) })
   }
 
+  /// The first word of each `` `sb `` command that the text names.
+  func commands(in text: String) -> [String] {
+    text.components(separatedBy: "`sb ").dropFirst().map { String($0.prefix { $0.isLetter }) }
+  }
+
   @Test func theGuideNamesOnlyCommandsThatSbHas() throws {
     let sbd = try Instance()
     let usage = try sbd.sb("help")
-    let commands = Manager.guide.components(separatedBy: "`sb ").dropFirst().map {
-      String($0.prefix { $0.isLetter })
-    }
-    #expect(commands.count >= 8)
-    for command in commands {
+    let guideCommands = commands(in: Manager.guide)
+    let operatorCommands = commands(in: Manager.operatorPrompt)
+    #expect(guideCommands.count >= 8)
+    #expect(!operatorCommands.isEmpty)
+    for command in guideCommands + operatorCommands {
       #expect(usage.contains("\n  \(command) "), "sb \(command)")
     }
+  }
+
+  @Test func helpListsTheOperatorCommand() throws {
+    let sbd = try Instance()
+
+    let usage = try sbd.sb("help")
+
+    #expect(usage.contains("\n  operator "), "\(usage)")
   }
 
   @Test func theGuideStatesTheSafetyRules() {

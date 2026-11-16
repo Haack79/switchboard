@@ -135,7 +135,8 @@ private struct IssueRows: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(section.title), \(section.issues.count), \(collapsed ? "collapsed" : "expanded")")
+            .accessibilityLabel(
+              ListSectionHeader.spoken(title: section.title, count: section.issues.count, collapsed: collapsed))
             if !collapsed {
               ForEach(section.issues) { row in
                 IssueRow(row: row, current: row.id == current).id(row.id)
@@ -219,7 +220,7 @@ private struct IssueDetail: View {
           if let url = URL(string: issue.url) {
             Link(destination: url) { Text(verbatim: issue.ref) }
           }
-          Text("opened \(ago(isoMs(issue.createdAt))) ago · updated \(ago(isoMs(issue.updatedAt))) ago")
+          Text(verbatim: ages(opened: issue.createdAt, updated: issue.updatedAt).joined(separator: " · "))
             .foregroundStyle(.secondary)
         }
         .font(.caption)
@@ -242,7 +243,7 @@ private struct IssueDetail: View {
         if issue.body.isEmpty {
           Text("No description").foregroundStyle(.secondary).padding(12)
         } else {
-          MarkdownView(text: issue.body).padding(12)
+          MarkdownView(text: issue.body).padding(12).environment(\.referenceRepo, issue.repo)
         }
       }
     }

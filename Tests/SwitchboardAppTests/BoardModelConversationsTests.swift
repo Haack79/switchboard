@@ -152,7 +152,7 @@ private func conversation(
     #expect(ManagerStar(model.managers) == .needsMe)
   }
 
-  @Test(arguments: [Card.Kind.permission, .question, .trust, .send])
+  @Test(arguments: [Card.Kind.permission, .question, .trust, .send, .mcp])
   func theStarIsNeedsMeForEveryCardKind(_ kind: Card.Kind) throws {
     let model = appliedModel([try carded(conversation("m"), kind: kind)])
 

@@ -7,9 +7,10 @@
 # It then quits the app, and separately kills it, and starts it again each
 # time. It checks through sb and tmux that the session and both its panes are
 # the same processes with the same screens.
-# Next it types into a session's message field through the app's DraftSelfTest,
-# selects another session and comes back, presses Esc, quits, and checks the
-# draft after a relaunch and after two Escs.
+# Next it shows a session's hidden message field and types into it through the app's
+# DraftSelfTest, selects another session, whose field stays hidden, and comes back,
+# presses Esc, quits, and checks that the draft shows the field after a relaunch,
+# that two Escs clear it, and that a third hides the field.
 # Then it closes the shell pane of the Manager, a work session, an Inbox item, and a chat
 # through the app's ShellSelfTest: the pane's close button, `exit`, Ctrl-D, and
 # the Session menu. It checks that the shell stays closed after a relaunch and
@@ -28,20 +29,26 @@
 # it checks that Return sees an input method's marked text, then presses
 # Shift+Return and Return, and checks that Claude got one message with the new
 # line in it.
-# The slash check types `/` into a session's and a group chat's message field
-# through the app's SlashSelfTest. Each session's folder holds the commands and
+# The slash check types `/` into a group chat's message field through the app's
+# SlashSelfTest, and checks sbd's rows for a session and the chat. Each session's folder holds the commands and
 # skills of Tests/SwitchboardCoreTests/Fixtures/SkillListing/probe-repo, and its
 # account folder is empty, so the rows are sbd's folder scan plus the built-ins.
 # It checks the rows, Down, Tab, Return, keypad Enter, Esc, held Tab, Return, and
 # Enter, and what Claude got.
-# Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash). With
-# none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
+# The multiselect check clicks one row in the sidebar through the app's ShellSelfTest commands, adds another
+# row to the selection as a ⌘-click does, checks that the detail pane shows "2 sessions selected", clicks
+# Delete 2 Sessions…, and checks that the confirmation opens and that sbd still lists both sessions.
+# The wake check stops a session's claude three times through the app's WakeSelfTest,
+# and checks that three keys in its terminal start it once, that a click starts it,
+# and that a drag does not.
+# Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, multiselect,
+# wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
 # The script ends the app, sbd, the tmux server, the stand-in, and its folder
 # in /tmp when it exits, whether or not the checks passed. It keeps the app's
 # log, the screen, and the pane PNGs in .build/gui-test/terminal. After any
 # failure it also keeps sbd's log in .build/gui-test/sbd.log.
 # Each launch sets SB_TERMINAL_TEST, SB_QUIT_FILE, SB_DRAFT_TEST, SB_SHELL_TEST,
-# SB_DROP_TEST, SB_KEY_TEST, or SB_SLASH_TEST, so the app runs hidden and never takes focus. SB_TEST_VISIBLE=1
+# SB_DROP_TEST, SB_KEY_TEST, SB_SLASH_TEST, or SB_WAKE_TEST, so the app runs hidden and never takes focus. SB_TEST_VISIBLE=1
 # shows the app as a normal launch does.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -50,9 +57,9 @@ checks=("$@")
 read -r -a skips <<<"${SB_GUI_SKIP:-}"
 for name in ${checks[@]+"${checks[@]}"} ${skips[@]+"${skips[@]}"}; do
   case $name in
-  terminal | relaunch | drafts | shell | drops | keys | slash) ;;
+  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | wake) ;;
   *)
-    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, and slash." >&2
+    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, and wake." >&2
     exit 2
     ;;
   esac
@@ -127,6 +134,16 @@ end_app() {
   kill -KILL "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=''
+}
+
+# ShellSelfTest checks run one app command at a time in the caller's "$shots".
+cmd_done() { [ ! -e "$shots/cmd" ]; }
+app() { # runs one ShellSelfTest command and prints its result
+  # The app polls for cmd. The rename makes the whole command appear at once.
+  echo "$*" >"$shots/cmd.tmp"
+  mv "$shots/cmd.tmp" "$shots/cmd"
+  wait_for 20 cmd_done || fail "the app did not run: $*"
+  grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
 }
 
 # Replaces the last run's files in .build/gui-test/<check> with this run's.
@@ -357,7 +374,7 @@ check_drafts() {
 
   run_step type
   logged "typed: $typed"
-  logged "other session: "
+  logged "other session: <no field>"
   logged "after switch: $typed"
   logged "after one esc: $typed hint true"
   logged "hint after the window: false"
@@ -367,6 +384,8 @@ check_drafts() {
   run_step check
   logged "after relaunch: $typed"
   logged "after two escs: "
+  logged "after two escs: field shows true"
+  logged "after a third esc: field shows false"
   wait_for 5 jq -e 'length == 0' "$home/drafts/drafts.json" >/dev/null || fail "drafts.json still holds a draft after two Escs"
   save_shots
   echo "ok: drafts (switch, Esc, relaunch)"
@@ -392,14 +411,6 @@ check_shell() {
   shell_gone() { ! tmux -S "$tmux_socket" has-session -t "=$1-shell" 2>/dev/null; }
   closed() { sb get "$1" --json | jq -e '.shellClosed == true' >/dev/null; }
   is_open() { ! closed "$1"; }
-  cmd_done() { [ ! -e "$shots/cmd" ]; }
-  app() { # runs one ShellSelfTest command and prints its result
-    # The app polls for cmd. The rename makes the whole command appear at once.
-    echo "$*" >"$shots/cmd.tmp"
-    mv "$shots/cmd.tmp" "$shots/cmd"
-    wait_for 20 cmd_done || fail "the app did not run: $*"
-    grep "^shelltest: " "$shots/app.log" | tail -n 1 | sed 's/.*-> //'
-  }
   panes_are() { [ "$(app panes)" = "$1" ]; }
   click() { # <close | open> <where>
     local result
@@ -718,36 +729,101 @@ check_slash() {
     got=$(probe_rows "${!view}")
     [ "$got" = "$probe" ] || fail "sb slash gave the $view the probe rows $got, not $probe"
   done
-  for view in session chat; do
-    SB_SELECT="${!view}" SB_SLASH_TEST=1 "$bin_dir/Switchboard" >"$shots/$view.log" 2>&1 &
-    app_pid=$!
-    wait_for 120 app_gone || fail "the app did not finish the slash check in the $view"
-    end_app
-    field_logged slashtest "$view" "slash: open true rows true focused true"
-    field_logged slashtest "$view" "probe-: probe-cmd-plain probe-cmd-user-only probe-default probe-user-only focused true"
-    field_logged slashtest "$view" 'down, tab: "/probe-cmd-user-only " open false focused true cursor at end true'
-    field_logged slashtest "$view" 'return on /probe-d: "/probe-default " open false'
-    field_logged slashtest "$view" 'return again: ""'
-    field_logged slashtest "$view" 'enter on /probe-d: "/probe-default " open false focused true'
-    field_logged slashtest "$view" 'enter again: ""'
-    field_logged slashtest "$view" "exact name: open true rows probe-user-only"
-    field_logged slashtest "$view" "return on the exact name: open false"
-    field_logged slashtest "$view" 'sent: ""'
-    field_logged slashtest "$view" "/co: open true"
-    field_logged slashtest "$view" 'esc on /co: "/co" open false hint false'
-    field_logged slashtest "$view" 'two more escs: ""'
-    field_logged slashtest "$view" 'held return on /probe-d: "/probe-default " focused true'
-    field_logged slashtest "$view" 'held enter on /probe-d: "/probe-default " focused true'
-    field_logged slashtest "$view" 'held tab on /probe-d: "/probe-default " focused true'
-    field_logged slashtest "$view" done
-  done
+  # A session's terminal view hides the field after each send, so the keystroke check runs in the chat only.
+  view=chat
+  SB_SELECT="$chat" SB_SLASH_TEST=1 "$bin_dir/Switchboard" >"$shots/$view.log" 2>&1 &
+  app_pid=$!
+  wait_for 120 app_gone || fail "the app did not finish the slash check in the $view"
+  end_app
+  field_logged slashtest "$view" "slash: open true rows true focused true"
+  field_logged slashtest "$view" "probe-: probe-cmd-plain probe-cmd-user-only probe-default probe-user-only focused true"
+  field_logged slashtest "$view" 'down, tab: "/probe-cmd-user-only " open false focused true cursor at end true'
+  field_logged slashtest "$view" 'return on /probe-d: "/probe-default " open false'
+  field_logged slashtest "$view" 'return again: ""'
+  field_logged slashtest "$view" 'enter on /probe-d: "/probe-default " open false focused true'
+  field_logged slashtest "$view" 'enter again: ""'
+  field_logged slashtest "$view" "exact name: open true rows probe-user-only"
+  field_logged slashtest "$view" "return on the exact name: open false"
+  field_logged slashtest "$view" 'sent: ""'
+  field_logged slashtest "$view" "/co: open true"
+  field_logged slashtest "$view" 'esc on /co: "/co" open false hint false'
+  field_logged slashtest "$view" 'two more escs: ""'
+  field_logged slashtest "$view" 'held return on /probe-d: "/probe-default " focused true'
+  field_logged slashtest "$view" 'held enter on /probe-d: "/probe-default " focused true'
+  field_logged slashtest "$view" 'held tab on /probe-d: "/probe-default " focused true'
+  field_logged slashtest "$view" done
 
-  for view in session chat; do
-    got=$(sent_texts "${!view}")
-    [ "$got" = '["/probe-default","/probe-default","/probe-user-only"]' ] || fail "the $view sent $got"
-  done
+  got=$(sent_texts "$chat")
+  [ "$got" = '["/probe-default","/probe-default","/probe-user-only"]' ] || fail "the chat sent $got"
   save_shots
-  echo "ok: slash (session, chat)"
+  echo "ok: slash (session rows, chat)"
 }
 
 if wants slash; then check_slash; fi
+
+# The multi-selection lives in the app, so the app's answers to ShellSelfTest commands are the evidence. The
+# commands click with mouse events at the row's and the button's places in the window, so a layout that does not
+# fit the 1024 pt CI window makes the click miss.
+check_multiselect() {
+  check=multiselect
+  local shots="$home/shots/multiselect" first second result
+  mkdir "$shots"
+  echo "Checking multi-select in the sidebar…"
+  new_session multiselect-one
+  first=$session
+  new_session multiselect-two
+  second=$session
+  shows() { [ "$(app where)" = "session(\"$1\")" ]; }
+  detail_is() { [ "$(app detail)" = "$1" ]; }
+  confirming() { [ "$(app sheet)" = "confirming 2" ]; }
+  # A queued delete keeps the session listed until its delay passes, so "listed" also requires no removal.
+  listed() { sb get "$1" --json | jq -e --arg id "$1" '.id == $id and .removal == null' >/dev/null; }
+
+  SB_SELECT="$first" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
+  app_pid=$!
+  wait_for 60 shows "$first" || fail "the app did not select $first: $(app where)"
+  # The sidebar can build a row a moment after the click scrolls it into view, so each click is retried.
+  row_clicked() { result=$(app "$1" "$2"); [[ $result == "clicked at "* ]]; }
+  # SB_SELECT selects the first session in the model only. extend-row extends the sidebar table's own selection,
+  # so the first row is clicked first.
+  wait_for 10 row_clicked click-row "$first" || fail "the app could not click the row of $first: $result"
+  wait_for 5 shows "$first" || fail "clicking the row of $first did not show it: $(app where)"
+  result=$(app extend-row "$second")
+  [[ $result == "selected row "* ]] || fail "the app could not add the row of $second to the selection: $result"
+  wait_for 5 detail_is "2 sessions selected" || fail "the detail pane does not show 2 sessions selected: $(app detail)"
+  app snapshot "$shots/multiselect.png" >/dev/null
+  result=$(app click-delete-selected)
+  [[ $result == "clicked at "* ]] || fail "the app could not click Delete 2 Sessions…: $result"
+  wait_for 60 confirming || fail "Delete 2 Sessions… did not open the confirmation: $(app sheet)"
+  app snapshot "$shots/confirmation.png" >/dev/null
+  end_app
+  listed "$first" && listed "$second" || fail "opening the confirmation queued or deleted a session"
+  save_shots
+  echo "ok: multiselect (click, extend, detail pane, Delete 2 Sessions… confirmation)"
+}
+
+if wants multiselect; then check_multiselect; fi
+
+# sbd records each start of claude with what caused it, so `sb events` is the evidence.
+check_wake() {
+  check=wake
+  local shots="$home/shots/wake" line got
+  mkdir "$shots"
+  echo "Checking that input in a stopped terminal starts claude…"
+  new_session wake
+  SB_SELECT="$session" SB_WAKE_TEST=1 "$bin_dir/Switchboard" >"$shots/app.log" 2>&1 &
+  app_pid=$!
+  wait_for 240 app_gone || fail "the app did not finish the wake check"
+  end_app
+  for line in "after keys: claude runs true" "after click: claude runs true" "after drag: claude runs false" done; do
+    grep -qxF "waketest: $line" "$shots/app.log" || fail "the app did not log: $line"
+  done
+  # The stand-in writes no transcript, so sbd records each start as "started". The first one creates the session.
+  got=$(sb events --session "$session" --json |
+    jq -c -s '[.[] | select(.kind == "started" or .kind == "resumed") | .data.trigger] | .[1:]')
+  [ "$got" = '["open","open"]' ] || fail "claude started again with the triggers $got, not two opens"
+  save_shots
+  echo "ok: wake (keys, click, drag)"
+}
+
+if wants wake; then check_wake; fi

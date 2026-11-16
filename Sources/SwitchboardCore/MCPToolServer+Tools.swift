@@ -28,22 +28,26 @@ extension MCPToolServer {
   private static func property(_ type: String, _ description: String) -> JSON {
     ["type": .string(type), "description": .string(description)]
   }
-  private static func string(_ description: String) -> JSON { property("string", description) }
+  static func string(_ description: String) -> JSON { property("string", description) }
   private static func integer(_ description: String) -> JSON { property("integer", description) }
   private static func boolean(_ description: String) -> JSON { property("boolean", description) }
   private static func strings(_ description: String) -> JSON {
     ["type": "array", "items": ["type": "string"], "description": .string(description)]
   }
 
-  private static let session = string("A session: an id, a unique id prefix, or a unique name.")
-  private static let group = string("A group: an id, a unique id prefix, or a unique name.")
+  static let session = string("A session: an id, a unique id prefix, or a unique name.")
+  static let group = string("A group: an id, a unique id prefix, or a unique name.")
 
-  static let allTools: [Tool] = [
+  static let allTools = sessionTools + pauseTools
+
+  static let sessionTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions with their state, reason, PR, waits, and notes. The sessions that need the user come first."),
+      "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."
+    ),
     Tool(
-      "get_session", "Shows one session, with its group's name and description.", ["session": session],
+      "get_session", "Shows one session, with its group's name and description, and its artifacts.",
+      ["session": session],
       required: ["session"]),
     Tool(
       "read_reply", "Reads the session's last reply from its transcript, as Markdown.", ["session": session],
@@ -91,14 +95,14 @@ extension MCPToolServer {
           "Starts claude in plan mode, so it writes a plan and waits for approval before it edits a file."),
         "after": string("For a follow-up, a PR such as pr:123 whose merge moves it to Needs you."),
         "wait": string(
-          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state."
+          "A state such as done. Sets a session wait on the new session in the same call, and you resume when it reaches that state. In a Manager conversation, the operator resumes instead of you. To be resumed yourself, omit `wait` and call `set_wait` with `here: true`."
         ),
         "host": string(
           "The remote host from config.json to run on, or local for this Mac. Default: the calling session's host."),
       ], required: ["repository", "branch", "prompt"]),
     Tool(
       "set_wait",
-      "Sets a wait on a session, by default the calling session. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
+      "Sets a wait on a session, by default the calling session. In a Manager conversation, a wait that resumes goes to the operator, and the operator gets the message instead of you. A PR wait stays on the conversation when it has no `target`, which means the session's own PR, or a PR given without its repository. A wait that notifies also stays, and a manual wait notifies by default. Pass `here` to keep any other wait on the conversation. The kinds ci, review, bot-review, approval, queue, merge, and deploy wait on a PR. Pass it as `target`, or leave `target` out to use the session's own PR. review needs `who`. deploy needs `environment`. session waits on another session, given as `target`, until it reaches `state` (default done). date waits until `until`. manual, the default, waits on something outside Switchboard, which `note` describes.",
       [
         "session": session,
         "kind": string(
@@ -115,6 +119,9 @@ extension MCPToolServer {
         "note": string("What the wait is for."),
         "then": string(
           "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you."),
+        "here": boolean(
+          "In a Manager conversation, keeps the wait on the conversation, so it resumes the conversation and not the operator."
+        ),
       ]),
     Tool(
       "clear_wait",
@@ -128,7 +135,8 @@ extension MCPToolServer {
         "todo": boolean("Adds a to-do. The user must resolve it before the session can be deleted."),
       ], required: ["session", "text"]),
     Tool(
-      "list_groups", "Lists the groups with their descriptions, sessions, and notes, then the sessions in no group."),
+      "list_groups",
+      "Lists the groups with their descriptions, sessions, notes, and artifacts, then the sessions in no group."),
     Tool(
       "add_group", "Adds a group.",
       [
@@ -161,5 +169,39 @@ extension MCPToolServer {
         "text": string("The same text, when you did not save it to a file. Send file or text, not both."),
         "version": string("The version or update time that the Artifact tool showed, if any."),
       ], required: ["plan", "kind"]),
+    Tool(
+      "add_schedule",
+      "Adds a schedule to a session, by default the calling session. Switchboard sends the prompt to the session on the interval, as is, so a slash command runs as one. The shortest interval is 1m. A run that comes due while the session is busy runs once when the session is free. A stopped session resumes with the prompt. A schedule survives restarts, so use one for a recurring check instead of /loop or a chain of date waits.",
+      [
+        "session": session,
+        "every": string("The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m."),
+        "prompt": string("The prompt to send on each run."),
+      ], required: ["every", "prompt"]),
+    Tool(
+      "list_schedules",
+      "Lists the schedules with their session, prompt, interval, next run, and last result, the next due first. Pass a session to list only its schedules. A next run in the past means the run waits for the session to be free.",
+      ["session": session]),
+    Tool(
+      "remove_schedule", "Removes a schedule. Get its id from list_schedules or from add_schedule's result.",
+      ["schedule": string("The id of the schedule.")],
+      required: ["schedule"]),
+    Tool(
+      "request_mcp_server",
+      "Asks the user to add MCP servers to this Manager conversation. It changes nothing itself. Switchboard shows the user an Allow/Deny card. Allow restarts claude with the servers and resumes this conversation. Deny leaves the servers as they are. Call it when a task needs a tool that no loaded server provides, and do not work around the missing tool. End your turn right after the call. A name that no config holds is refused with the names that exist. A claude.ai connector such as Slack needs `all`. It works only in a Manager conversation.",
+      [
+        "names": strings("The servers to add, such as grafana. Send names or all, not both."),
+        "all": boolean(
+          "Set true to ask for every MCP server, which includes the claude.ai connectors such as Slack. Send all or names, not both."
+        ),
+        "reason": string("Why this conversation needs the servers, in one line. The user reads it on the card."),
+      ], required: ["reason"]),
+    Tool(
+      "report",
+      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it.",
+      [
+        "text": string("What happened, or the question for the user, in one line."),
+        "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
+        "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
+      ], required: ["text"]),
   ]
 }

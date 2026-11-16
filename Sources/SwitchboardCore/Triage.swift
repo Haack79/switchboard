@@ -21,6 +21,8 @@ public enum TriageSource: String, Codable, Sendable {
   case summary
   /// The last paragraph of the reply, because no summary exists.
   case fallback
+  /// The operator's open reports that need the user.
+  case report
 }
 
 /// What a click on an option does. Each one runs a request that sbd already
@@ -220,6 +222,9 @@ public struct TriageItem: Codable, Equatable, Sendable {
   /// Messages that the session wrote for the user to send to someone else.
   /// The JSON carries them only in `message.summary`.
   public var drafts: [InboxDraft]
+  /// The "Before you merge" panel of a Ready to merge item. The JSON carries
+  /// it only as `message.review`.
+  public var review: MergeReview?
   public var source: TriageSource
   /// What the user can open after the Summary and the Action. The builder
   /// fills in the card's parts. The service adds the session's fields,
@@ -232,9 +237,10 @@ public struct TriageItem: Codable, Equatable, Sendable {
 
   public init(
     title: String, kind: TriageKind, summary: String, options: [TriageOption] = [], callouts: [Callout] = [],
-    multiSelect: Bool = false, decisions: [PendingDecision] = [], drafts: [InboxDraft] = [], source: TriageSource,
-    ref: String = "", details: TriageDetails = TriageDetails()
+    multiSelect: Bool = false, decisions: [PendingDecision] = [], drafts: [InboxDraft] = [],
+    review: MergeReview? = nil, source: TriageSource, ref: String = "", details: TriageDetails = TriageDetails()
   ) {
+    self.review = review
     self.ref = ref
     self.details = details
     self.title = title
@@ -262,14 +268,16 @@ public struct TriageItem: Codable, Equatable, Sendable {
   private struct Sections: Decodable {
     struct Summary: Decodable { var drafts: [InboxDraft]? }
     var summary: Summary?
+    var review: MergeReview?
     var details: TriageDetails?
   }
 
-  /// An item that an older sbd wrote has no multiSelect, decisions, drafts, or message.
+  /// An item that an older sbd wrote has no multiSelect, decisions, drafts, review, or message.
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let sections = try c.decodeIfPresent(Sections.self, forKey: .message)
     details = sections?.details ?? TriageDetails()
+    review = sections?.review
     drafts = (sections?.summary?.drafts ?? []).enumerated().map { i, draft in
       var draft = draft
       draft.number = i + 1
@@ -419,6 +427,8 @@ public enum Triage {
       return (item(facts, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live))
     case .blockingPrompts:
       return (promptItem(facts, verdict), nil, false)
+    case .operatorItems:
+      return (operatorItem(facts, verdict), nil, false)
     }
   }
 
@@ -439,9 +449,11 @@ public enum Triage {
 
   /// Whether a card of this kind stops the session's turn until the user
   /// answers it. A send card does not: the turn goes on, and the card expires.
+  /// An MCP server request does, because the conversation ends its turn to
+  /// wait for the server.
   static func blocks(_ kind: Card.Kind) -> Bool {
     switch kind {
-    case .permission, .question, .trust: true
+    case .permission, .question, .trust, .mcp: true
     case .send: false
     }
   }
@@ -464,6 +476,7 @@ public enum Triage {
         item.drafts[i].post = .copyOnly(reason: nil)
       }
     }
+    if let pr = facts.pr { item.review?.attach(drafts: item.drafts, repo: pr.repo, number: pr.number) }
     return item
   }
 
@@ -513,8 +526,11 @@ public enum Triage {
   /// Adds what a rule found after the session wrote its card. The rule's
   /// reason and callouts come before the card's callouts. The rule's options
   /// come after the card's options, except an action the card already offers.
-  /// The card's main option stays the main option.
+  /// The card's main option stays the main option, except a merge option of
+  /// the card while the rule's review has an amber row. The rule's review
+  /// becomes the item's.
   static func addRule(_ verdict: Verdict, to item: inout TriageItem) {
+    if let review = verdict.review { item.review = review }
     let kind: Callout.Kind = verdict.state == .needsYou ? .warning : .info
     item.callouts.insert(contentsOf: [Callout(kind: kind, title: title(verdict.reason))] + verdict.callouts, at: 0)
     let lead = item.primary
@@ -527,6 +543,10 @@ public enum Triage {
       return option
     }
     if let lead, let i = item.options.firstIndex(of: lead) { item.options[i].recommended = true }
+    // A card can offer its own merge option, which would skip the rule's demoted one.
+    if verdict.review?.amber.isEmpty == false {
+      for i in item.options.indices where item.options[i].action == .merge { item.options[i].recommended = false }
+    }
   }
 
   /// Whether the verdict is the one that the session's last reply gives, and
@@ -543,19 +563,19 @@ public enum Triage {
   }
 
   static func cardItem(_ card: Card) -> TriageItem {
-    if let message = card.send {
+    switch card.kind {
+    case .send:
       return TriageItem(
         title: title(card.reason), kind: .approval,
-        summary: "Claude asks to send \(message.summary). Nothing is sent until you send it.",
+        summary: "Claude asks to send \(card.summary). Nothing is sent until you send it.",
         options: [
           TriageOption(label: "Send", action: .allow),
           TriageOption(label: "Cancel", action: .deny),
         ], source: .card,
         details: TriageDetails(
-          openByDefault: true, toolInput: .init(tool: card.tool, text: message.text),
-          targets: message.targets.map { sessionMention(name: $0.name, id: $0.id) }))
-    }
-    if card.kind == .trust {
+          openByDefault: true, toolInput: .init(tool: card.tool, text: card.send?.text ?? ""),
+          targets: (card.send?.targets ?? []).map { sessionMention(name: $0.name, id: $0.id) }))
+    case .trust:
       return TriageItem(
         title: title(card.reason), kind: .approval,
         summary:
@@ -564,8 +584,16 @@ public enum Triage {
           TriageOption(label: "Trust", action: .allow, recommended: true),
           TriageOption(label: "Exit", action: .deny),
         ], source: .card)
-    }
-    if card.kind == .permission {
+    case .mcp:
+      return TriageItem(
+        title: title(card.reason), kind: .approval, summary: card.mcpRequest?.effect ?? "",
+        options: [
+          TriageOption(label: "Allow", action: .allow, recommended: true),
+          TriageOption(label: "Deny", action: .deny),
+        ], source: .card,
+        details: TriageDetails(
+          openByDefault: true, toolInput: .init(tool: card.tool, text: card.mcpRequest?.reason ?? "")))
+    case .permission:
       return TriageItem(
         title: title(card.reason), kind: .approval, summary: permissionSummary(card),
         options: [
@@ -578,16 +606,17 @@ public enum Triage {
         source: .card,
         details: TriageDetails(
           openByDefault: !summaryShowsCall(card), toolInput: .init(tool: card.tool, text: card.details)))
+    case .question:
+      // Several questions take more than a click or a set of ticks.
+      let only = card.questions.count == 1 ? card.questions.first : nil
+      let options = (only?.options ?? []).map {
+        TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
+      }
+      return TriageItem(
+        title: title(card.reason), kind: .question,
+        summary: card.questions.map(\.question).joined(separator: " "), options: options,
+        multiSelect: only?.multiSelect ?? false, source: .card)
     }
-    // Several questions take more than a click or a set of ticks.
-    let only = card.questions.count == 1 ? card.questions.first : nil
-    let options = (only?.options ?? []).map {
-      TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
-    }
-    return TriageItem(
-      title: title(card.reason), kind: .question,
-      summary: card.questions.map(\.question).joined(separator: " "), options: options,
-      multiSelect: only?.multiSelect ?? false, source: .card)
   }
 
   static func ruleItem(_ verdict: Verdict) -> TriageItem {
@@ -595,7 +624,7 @@ public enum Triage {
     return TriageItem(
       title: title(verdict.reason), kind: verdict.kind,
       summary: verdict.summary ?? (text.hasSuffix(".") ? text : text + "."),
-      options: verdict.options, callouts: verdict.callouts, source: .rule)
+      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule)
   }
 
   /// The reply's closing section as the summary. An offer's title starts
@@ -703,6 +732,10 @@ public enum Triage {
     text.prefix(1).uppercased() + text.dropFirst()
   }
 
+  public static func uncapitalized(_ text: String) -> String {
+    text.prefix(1).lowercased() + text.dropFirst()
+  }
+
   // MARK: Order
 
   /// The list's groups, first to last: a held prompt or question; a decision,
@@ -726,6 +759,14 @@ public enum Triage {
     switch s.kind.inboxItems {
     case .all: true
     case .blockingPrompts: s.triage != nil && hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+    case .operatorItems:
+      // The summary doesn't say which rule gave a `.rule` item. sbd gives the operator one only for the wait
+      // rule or a dialog without a card, and both reach the Inbox.
+      switch s.triage?.source {
+      case .report, .rule: true
+      case .card: hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+      case .session, .summary, .fallback, nil: false
+      }
     }
   }
 
@@ -737,6 +778,7 @@ public enum Triage {
     case .work: s.name
     case .chat: groupName.map { Chat.name(group: $0) } ?? s.name
     case .manager: s.name == Manager.name ? s.name : "Manager: \(s.name)"
+    case .operator: Manager.operatorName
     }
   }
 

@@ -53,7 +53,8 @@ extension Service {
 
   /// What the hook prints: `answer` for a hook that sbd does not hold, else the held request's reply. A held
   /// request that closes with no reply is dropped. `closedByClaude` then says, off the state queue, whether
-  /// Claude Code closed it, and only then does this record `card_closed`.
+  /// Claude Code closed it, and only then does this record `card_closed`. This also covers a card that left while
+  /// its hook was already gone, because `releaseCards` replies only to a request whose hook is still open.
   func awaitAnswer(
     _ opened: (card: Int64, request: HeldRequest)?, else answer: JSON, closedByClaude: () -> Bool
   ) -> JSON {
@@ -72,13 +73,14 @@ extension Service {
   }
 
   /// Drops the session's held requests whose card is gone or deferred. A
-  /// request that has no reply yet gets an empty body, which Claude Code
-  /// reads as no decision.
+  /// request whose hook is still open gets an empty body, which Claude Code
+  /// reads as no decision. A request whose hook is already gone gets no
+  /// reply, so `awaitAnswer` still checks the close and records `card_closed`.
   func releaseCards(_ id: String) {
     guard !held.isEmpty else { return }
     let open = Set(entries[id]?.facts.cards.filter { !$0.deferred }.map(\.id) ?? [])
     for (card, request) in held where request.session == id && !open.contains(card) {
-      request.resolve([:])
+      if !request.hookGone() { request.resolve([:]) }
       held[card] = nil
     }
   }
@@ -98,7 +100,6 @@ extension Service {
   /// that host, since the answer decides what those sessions receive.
   func answer(_ args: JSON, origin: RequestOrigin) throws -> JSON {
     let card = try chosenCard(args)
-    let id = card.session
     let extras = AllowExtra.allCases.filter { args[$0.argument]?.bool == true }
     if extras.count > 1 { throw APIError("card \(card.id): pick one of \(englishList(extras.map(\.argument)))") }
     let extra = extras.first
@@ -106,39 +107,64 @@ extension Service {
       guard args["answers"] == nil, args["behavior"]?.string == "allow" else {
         throw APIError("card \(card.id): \(extra.argument) goes only with a behavior of allow")
       }
-      if let refusal = card.refusal(extra, sessionName: entries[id]?.session.name) { throw refused(refusal, extra) }
-    }
-    if let message = card.send {
-      if case .remote(let host) = origin,
-        let off = message.targets.first(where: { entries[$0.id]?.session.host != host })
-      {
-        throw APIError("card \(card.id) sends to \(off.name), which is not on \(host)")
-      }
-      switch args["behavior"]?.string {
-      case "allow": return try decideGroupMessage(card, message, send: true)
-      case "deny": return try decideGroupMessage(card, message, send: false)
-      default: throw APIError("card \(card.id) is a group message. Send it with allow, or cancel it with deny")
+      if let refusal = card.refusal(extra, sessionName: entries[card.session]?.session.name) {
+        throw refused(refusal, extra)
       }
     }
+    switch card.kind {
+    case .send: return try answerGroupMessage(card, args, origin: origin)
+    case .trust: return try answerTrust(card, args)
+    case .mcp: return try answerMCPRequest(card, args)
+    case .permission, .question: return try answerPrompt(card, args, extra: extra)
+    }
+  }
+
+  private func answerMCPRequest(_ card: Card, _ args: JSON) throws -> JSON {
+    guard let request = card.mcpRequest else { throw APIError("card \(card.id) has no MCP server request") }
+    // The conversation's turn already ended, so a deny message has no one to read it.
+    guard args["answers"] == nil, let behavior = args["behavior"]?.string, behavior == "allow" || behavior == "deny"
+    else { throw APIError("card \(card.id) asks to add an MCP server. Allow it or deny it") }
+    return try decideMCPRequest(card, request, allow: behavior == "allow")
+  }
+
+  private func answerGroupMessage(_ card: Card, _ args: JSON, origin: RequestOrigin) throws -> JSON {
+    guard let message = card.send else { throw APIError("card \(card.id) has no group message") }
+    if case .remote(let host) = origin,
+      let off = message.targets.first(where: { entries[$0.id]?.session.host != host })
+    {
+      throw APIError("card \(card.id) sends to \(off.name), which is not on \(host)")
+    }
+    switch args["behavior"]?.string {
+    case "allow": return try decideGroupMessage(card, message, send: true)
+    case "deny": return try decideGroupMessage(card, message, send: false)
+    default: throw APIError("card \(card.id) is a group message. Send it with allow, or cancel it with deny")
+    }
+  }
+
+  private func answerTrust(_ card: Card, _ args: JSON) throws -> JSON {
+    let message = args["message"]?.string ?? ""
+    guard args["answers"] == nil, message.isEmpty, let behavior = args["behavior"]?.string,
+      behavior == "allow" || behavior == "deny"
+    else {
+      throw APIError("card \(card.id) asks to trust a folder. Trust it with allow, or exit with deny and no message")
+    }
+    let trust = behavior == "allow"
+    try typeTrust(trust, card)
+    let result = recordAnswer(card, ["card": .number(Double(card.id)), "behavior": .string(behavior)], "terminal")
+    if !trust { closeTrust(card) }
+    return result
+  }
+
+  /// Records the `answered` event and returns the answer's result.
+  private func recordAnswer(_ card: Card, _ data: [String: JSON], _ delivery: String) -> JSON {
+    record(card.session, "answered", .object(data))
+    return ["card": .number(Double(card.id)), "session": .string(card.session), "delivery": .string(delivery)]
+  }
+
+  private func answerPrompt(_ card: Card, _ args: JSON, extra: AllowExtra?) throws -> JSON {
+    let id = card.session
     var data: [String: JSON] = ["card": .number(Double(card.id)), "behavior": "allow"]
-    func answered(_ delivery: String) -> JSON {
-      record(id, "answered", .object(data))
-      return ["card": .number(Double(card.id)), "session": .string(id), "delivery": .string(delivery)]
-    }
-    if card.kind == .trust {
-      let message = args["message"]?.string ?? ""
-      guard args["answers"] == nil, message.isEmpty, let behavior = args["behavior"]?.string,
-        behavior == "allow" || behavior == "deny"
-      else {
-        throw APIError("card \(card.id) asks to trust a folder. Trust it with allow, or exit with deny and no message")
-      }
-      let trust = behavior == "allow"
-      try typeTrust(trust, card)
-      data["behavior"] = .string(behavior)
-      let result = answered("terminal")
-      if !trust { closeTrust(card) }
-      return result
-    }
+    func answered(_ delivery: String) -> JSON { recordAnswer(card, data, delivery) }
     // What the hook prints, and what sbd types when Claude Code no longer
     // waits on the hook.
     let reply: (decision: Decision, typed: TypedAnswer)
@@ -147,7 +173,7 @@ extension Service {
       let answers = try card.match(given.map { $0.string ?? "" })
       data["answers"] = .array(answers.map(JSON.string))
       if card.deferred {
-        return answered(try send(id, card.answerMessage(answers), byUser: false, trigger: .card).rawValue)
+        return answered(try send(id, card.answerMessage(answers), by: .sbd, trigger: .card).rawValue)
       }
       reply = (card.decision(answers: answers), .escape(then: card.answerMessage(answers)))
     } else {
@@ -193,7 +219,7 @@ extension Service {
             "card \(card.id)'s dialog still shows after Escape, so sbd didn't send the message. Answer it in the terminal"
           )
         }
-        _ = try send(id, message, byUser: false, trigger: .card)
+        _ = try send(id, message, by: .sbd, trigger: .card)
       }
       return result
     }

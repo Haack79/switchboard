@@ -37,7 +37,7 @@ extension Service {
     var data: [String: JSON] = ["text": .string(message), "offer": .string(offer)]
     var delivery: Delivery?
     do {
-      let sent = try send(id, message, byUser: false, trigger: .autoContinue)
+      let sent = try send(id, message, by: .sbd, trigger: .autoContinue)
       data["delivery"] = .string(sent.rawValue)
       delivery = sent
     } catch {
@@ -51,9 +51,20 @@ extension Service {
   /// The sessions whose tracked state is Claude can continue, oldest first,
   /// each with its verdict.
   private func autoContinueCandidates(now: Int64) -> [(id: String, verdict: Verdict)] {
-    entries.values.filter { $0.facts.lastState == .canContinue }
+    entries.values.filter { $0.facts.lastState == .canContinue && $0.session.removal?.holdsSession != true }
       .sorted { ($0.facts.stateSince, $0.session.id) < ($1.facts.stateSince, $1.session.id) }
       .map { ($0.session.id, Attention.evaluate($0.session, $0.facts, now: now)) }
+  }
+
+  /// The state of the session's claude, or nil when its host has sent no
+  /// snapshot.
+  func promptProcess(_ id: String) -> PromptGuard.Process? {
+    switch claudeState(id) {
+    case .running: .running
+    case .starting: .starting
+    case .stopped: .stopped
+    case .unknown: nil
+    }
   }
 
   /// `live` is this Mac's count of live sessions. A session on a host counts against its host's cap.
@@ -62,12 +73,8 @@ extension Service {
     var input = AutoContinueInput(session: e.session, facts: e.facts, verdict: verdict, now: now)
     input.settings = config.autoContinue
     input.liveCap = liveCap(onHost: e.session.host)
-    switch claudeState(id) {
-    case .running: input.process = .running
-    case .starting: input.process = .starting
-    case .stopped: input.process = .stopped
-    case .unknown: return "\(e.session.host ?? "its host") is not connected"
-    }
+    guard let process = promptProcess(id) else { return "\(e.session.host ?? "its host") is not connected" }
+    input.process = process
     input.busy = e.messageWaiting(now: now)
     input.onScreen = attached(id)
     input.lastViewed = e.lastViewed

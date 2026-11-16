@@ -192,9 +192,13 @@ private func longCommandTurn() -> [Event] {
   @Test func aGroupMessageCardPutsItsTargetsAndTextInDetails() throws {
     var f = facts(permissionTurn())
     var card = f.cards[0]
-    card.send = GroupMessage(
+    let group = GroupMessage(
       group: "g1", groupName: "inbox", text: "Rebase now.",
       targets: [GroupSend.Target(id: "s2", name: "alpha"), GroupSend.Target(id: "s3", name: "beta")], expires: 9)
+    card.kind = .send
+    card.tool = "send_group"
+    card.summary = group.summary
+    card.send = group
     f.cards = [card]
 
     let m = try #require(message(f))
@@ -441,5 +445,103 @@ private func longCommandTurn() -> [Event] {
     s.triage = nil
 
     #expect(Triage.branchCallout(for: s) == nil)
+  }
+}
+
+/// A ready PR #42 approved two commits back, with an open thread and a test gap.
+private func panelPR() -> PullRequest {
+  var pr = readyPR(reviewDecision: .approved, verdicts: [sampleVerdict("stamphog", "APPROVED", on: "c0")])
+  pr.mergeDetails = MergeDetails(
+    threads: 1, threadsRead: 1, openThreads: 1, testGaps: ["Tested by hand"],
+    threadDetails: [
+      MergeDetails.ThreadDetail(
+        rootId: 1001, url: "https://github.com/acme/widgets/pull/42#discussion_r1001", path: "a.swift", line: 3,
+        outdated: false, author: "greptile-apps", bot: true, excerpt: "This default changes the replica count.",
+        replied: false)
+    ],
+    reviews: [
+      MergeDetails.ReviewDetail(
+        author: "stamphog", bot: nil, state: "APPROVED", commit: "c0", commitsSince: 2, body: "Looks good.",
+        url: "https://github.com/acme/widgets/pull/42#pullrequestreview-3001", notes: [], noteCount: 0)
+    ])
+  return pr
+}
+
+private func panelItem() throws -> TriageItem {
+  let f = facts([
+    event("UserPromptSubmit", 0, ["prompt": "go"]), stop(1, 1, "Pushed."), try prEvent(2, panelPR()),
+  ])
+  let v = Attention.evaluate(session(), f, now: 1000)
+  try #require(v.state == .readyToMerge, "the fixture gave \(v.state): \(v.reason)")
+  return try #require(Triage.item(f, v, kind: .work))
+}
+
+/// The panel travels as `triage.message.review`, between the Summary and the Action.
+@Suite struct TriageMessageReview {
+  @Test func theMessageCarriesTheItemsReview() throws {
+    let item = try panelItem()
+
+    #expect(item.message.review != nil)
+    #expect(item.message.review == item.review)
+  }
+
+  @Test func theJSONCarriesTheReviewUnderMessage() throws {
+    let json = try JSON(encoding: try panelItem())
+
+    let review = try #require(json["message"]?["review"])
+    #expect(review["amber"] == ["approval", "threads", "testPlan"])
+    let thread = try #require(review["threads"]?["shown"]?.array?.first)
+    #expect(thread["path"]?.string == "a.swift")
+    #expect(thread["line"]?.int == 3)
+    #expect(thread["bot"]?.bool == true)
+    #expect(thread["excerpt"]?.string == "This default changes the replica count.")
+    #expect(thread["drafts"] == [])
+    #expect(review["approvals"]?.array?.first?["commitsSince"]?.int == 2)
+  }
+
+  /// Scripts read the review in one place, as they read drafts only under `message.summary`.
+  @Test func theJSONHasNoFlatReview() throws {
+    #expect(try JSON(encoding: try panelItem())["review"] == nil)
+  }
+
+  @Test func anItemWithoutAReviewLeavesItOutOfTheMessage() throws {
+    let item = TriageItem(title: "t", kind: .info, summary: "s", source: .rule)
+
+    let message = try #require(try JSON(encoding: item)["message"]?.object)
+
+    #expect(message["review"] == nil)
+  }
+
+  @Test func anItemWithAReviewRoundTrips() throws {
+    let item = try panelItem()
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: item), to: TriageItem.self)
+
+    #expect(decoded == item)
+    #expect(decoded.review == item.review)
+  }
+
+  @Test func anItemFromAnOlderSbdWithAMessageButNoReviewHasNoReview() throws {
+    var json = try JSON(encoding: try panelItem())
+    guard case .object(var top) = json, case .object(var message)? = top["message"] else {
+      Issue.record("the item did not encode a message object")
+      return
+    }
+    message["review"] = nil
+    top["message"] = .object(message)
+    json = .object(top)
+
+    let decoded = try JSONCoding.convert(json, to: TriageItem.self)
+
+    #expect(decoded.review == nil)
+    #expect(decoded.options.map(\.action) == [.merge, .dismiss])
+  }
+
+  @Test func anItemFromAnOlderSbdWithoutAMessageHasNoReview() throws {
+    let old: JSON = [
+      "title": "t", "kind": "approval", "summary": "s", "options": [], "callouts": [], "source": "rule", "ref": "r",
+    ]
+
+    #expect(try JSONCoding.convert(old, to: TriageItem.self).review == nil)
   }
 }

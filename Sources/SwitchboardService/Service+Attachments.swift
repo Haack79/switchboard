@@ -7,7 +7,7 @@ extension Service {
   /// the state queue. Each image arrives as its bytes, because sbd can't read
   /// the folders that macOS protects, such as ~/Desktop, where screenshots
   /// land. A refused send queues nothing, so it deletes the copies.
-  func sendWithImages(_ request: Request, hookGone: @escaping () -> Bool) throws -> Response {
+  func sendWithImages(_ request: Request, hookGone: @escaping @Sendable () -> Bool) throws -> Response {
     let (send, saved) = try savingImages(request)
     let response = handle(send, hookGone: hookGone)
     if !response.ok { for path in saved { try? FileManager.default.removeItem(atPath: path) } }

@@ -13,6 +13,9 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// The normalized config folder of the Claude account that the group's
   /// sessions run under, or nil when they use the account Switchboard picks.
   public var account: String?
+  /// Artifact rows that outlive their session on this group: those of removed sessions and of a merged group's
+  /// chat. Nil in a group that an older sbd stored.
+  public var keptArtifacts: [GroupArtifact]?
 
   /// The longest description, in characters.
   public static let descriptionLimit = 280
@@ -33,15 +36,29 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 
+  /// The text on one line, or nil when nothing remains. It refuses text over `limit` characters.
+  /// The refusal names the text as `noun`.
+  static func cleanLine(_ text: String?, limit: Int, noun: String) throws -> String? {
+    guard let text else { return nil }
+    let clean = collapsingWhitespace(text)
+    guard clean.count <= limit else {
+      throw APIError("\(noun) has at most \(limit) characters, and this one has \(clean.count)")
+    }
+    return clean.isEmpty ? nil : clean
+  }
+
   /// The description with its whitespace runs joined into single spaces, or
   /// nil when nothing remains. It refuses text over `descriptionLimit`.
   public static func cleanDescription(_ text: String?) throws -> String? {
-    guard let text else { return nil }
-    let clean = collapsingWhitespace(text)
-    guard clean.count <= descriptionLimit else {
-      throw APIError("a group description has at most \(descriptionLimit) characters, and this one has \(clean.count)")
-    }
-    return clean.isEmpty ? nil : clean
+    try cleanLine(text, limit: descriptionLimit, noun: "a group description")
+  }
+
+  /// The group with `rows` added after its kept artifact rows. No rows leave the group unchanged.
+  public func keeping(_ rows: [GroupArtifact]) -> SessionGroup {
+    guard !rows.isEmpty else { return self }
+    var kept = self
+    kept.keptArtifacts = (keptArtifacts ?? []) + rows
+    return kept
   }
 
   /// This group with `other`'s notes added, oldest first. A note of `other`
@@ -49,9 +66,9 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// description. Without one, it takes `other`'s, or a line that names both
   /// groups when neither has one. When both have one, `other`'s becomes a
   /// note at `now`, so no text is lost. This group keeps its account and
-  /// never takes `other`'s.
+  /// never takes `other`'s. It adds `other`'s kept artifact rows after its own.
   public func absorbing(_ other: SessionGroup, now: Int64) -> SessionGroup {
-    var kept = self
+    var kept = keeping(other.keptArtifacts ?? [])
     for var note in other.notes {
       if kept.notes.contains(where: { $0.id == note.id }) { note.id = shortId("n", taken: kept.notes.map(\.id)) }
       kept.notes.append(note)
@@ -80,6 +97,8 @@ public struct GroupSummary: Codable, Equatable, Sendable, Identifiable {
   public var sessions: [String]
   /// The plans attached to the group, or nil when it has none.
   public var plans: [PlanSummary]?
+  /// The artifacts of the group's sessions, its chat, and its removed sessions, newest first, or nil when it has none.
+  public var artifacts: [GroupArtifact]?
 
   public init(_ group: SessionGroup, sessions: [String]) {
     id = group.id

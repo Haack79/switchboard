@@ -3,8 +3,9 @@ import SwitchboardCore
 
 /// The Inbox message of a session, in sections that never change their
 /// order: the Summary (what it did and needs, and what to read before
-/// deciding), the Drafts when the session wrote a message for the user to
-/// send, the Details (behind a disclosure), and the Action (the buttons).
+/// deciding), Before you merge on a Ready to merge item, the Drafts when the
+/// session wrote a message for the user to send, the Details (behind a
+/// disclosure), and the Action (the buttons).
 /// An item with decisions shows them one step at a time in its Action. Its
 /// Summary shrinks to its first line, and its callouts move into Details.
 /// The step view owns ⌘⇧Return.
@@ -18,6 +19,7 @@ struct DecisionCard: View {
 
   var body: some View {
     let list = session.stepList
+    let held = Self.heldDrafts(item, listOpen: list != nil)
     VStack(alignment: .leading, spacing: Self.rowSpacing) {
       header
       VStack(alignment: .leading, spacing: 8) {
@@ -34,7 +36,10 @@ struct DecisionCard: View {
           if !item.callouts.isEmpty { callouts }
         }
       }
-      if !item.drafts.isEmpty { DraftsSection(session: session, item: item) }
+      if Self.showsReview(item, listOpen: list != nil), let review = item.review {
+        MergeReviewPanel(session: session, item: item, review: review, held: held).id(item.ref)
+      }
+      DraftsSection(session: session, item: item, drafts: Self.sectionDrafts(item, held: held))
       // A new item starts with its own open or closed Details.
       CardDetails(session: session, ref: item.ref, details: item.details, callouts: list == nil ? [] : item.callouts)
         .id(item.ref)
@@ -58,6 +63,25 @@ struct DecisionCard: View {
     !item.summary.isEmpty && !item.callouts.isEmpty
   }
 
+  /// Whether the card shows Before you merge. The step view takes the card
+  /// while a decision list is open.
+  static func showsReview(_ item: TriageItem, listOpen: Bool) -> Bool {
+    item.review != nil && !listOpen
+  }
+
+  /// The numbers of the drafts that the threads of Before you merge show.
+  /// None while the card hides the panel.
+  static func heldDrafts(_ item: TriageItem, listOpen: Bool) -> Set<Int> {
+    guard showsReview(item, listOpen: listOpen) else { return [] }
+    return Set(item.review?.draftNumbers ?? [])
+  }
+
+  /// The drafts that the Drafts section shows: every draft not in `held`, so
+  /// each draft shows once.
+  static func sectionDrafts(_ item: TriageItem, held: Set<Int>) -> [InboxDraft] {
+    item.drafts.filter { !held.contains($0.number) }
+  }
+
   /// Whether the Action says that the item has no summary: a fallback item
   /// with no options whose reply gave no closing section.
   static func showsMissingSummary(_ item: TriageItem) -> Bool {
@@ -76,7 +100,7 @@ struct DecisionCard: View {
 
   private var header: some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
-      InlineText(plain: item.title).font(.title3.bold()).textSelection(.enabled)
+      InlineText(plain: session.inboxTitle).font(.title3.bold()).textSelection(.enabled)
       Text(item.kind.rawValue).font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 2)
         .background(Capsule().fill(session.state.color.opacity(0.18)))
         .foregroundStyle(session.state.color)

@@ -13,7 +13,7 @@ extension Service {
     let id = try lookup(args)
     let audience = RequestOrigin(host: entries[id]?.session.host)
     if let message = args["message"]?.string, entries[id]?.session.done == false, showsGitHub(id, to: audience) {
-      _ = try send(id, message, byUser: false, trigger: .dependency)
+      _ = try send(id, message, by: .sbd, trigger: .dependency)
     }
     record(id, "dependencies", ["dependencies": args["dependencies"] ?? []])
     return try JSON(encoding: summary(id))

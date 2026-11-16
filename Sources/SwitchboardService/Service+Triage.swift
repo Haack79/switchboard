@@ -57,9 +57,9 @@ extension Service {
       guard let key = args["option"]?.string else { throw APIError("name an option, by number or label") }
       option = try item.option(key)
     }
-    // Claude Code may not approve its own prompt or act on its own PR.
-    if args["insideClaude"]?.bool == true, item.source == .card || option.action.needsClick {
-      throw APIError("choose answers a prompt or acts on a PR for you, so it doesn't run inside Claude Code")
+    // Claude Code may not approve its own prompt, act on its own PR, or answer the operator's report for the user.
+    if item.source == .card || item.source == .report || option.action.needsClick {
+      try Service.refuseClaude(args, "choose answers a prompt, answers a report, or acts on a PR")
     }
     let session = JSON.string(id)
     // The ref lets `send` record that the user's message answered a rule's item. `send` drops it for a choice
@@ -188,7 +188,9 @@ extension Service {
       record(id, "triage", ["stop": .number(Double(stop)), "skipped": .string(skip)])
       return
     }
-    let session = summary(id)
+    var session = summary(id)
+    // The summary describes the turn for when the item shows, so the model reads sbd's state, not a snooze's Waiting.
+    session.state = verdict.state
     guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)

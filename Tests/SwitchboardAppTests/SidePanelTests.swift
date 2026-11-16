@@ -39,15 +39,15 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
 }
 
 @Suite struct SidePanelTitles {
-  @Test(arguments: [(0, "Waits"), (1, "Waits (1)"), (2, "Waits (2)")])
-  func countsTheOpenWaitsInTheTitleAboveZero(_ count: Int, _ title: String) {
+  @Test(arguments: [0, 1, 2])
+  func countsTheOpenWaitsInTheTitle(_ count: Int) {
     let waits = (0..<count).map { waitFixture("w\($0)") }
 
-    #expect(SidePanel(waitingSession(waits)).waitsTitle == title)
+    #expect(SidePanel(waitingSession(waits)).waitsCount == count)
   }
 
-  @Test func titlesTheNotesSectionWithoutACountWhenThereIsNoNote() {
-    #expect(SidePanel(notedSession([])).notesTitle == "Notes")
+  @Test func countsNoNoteWhenThereIsNoNote() {
+    #expect(SidePanel(notedSession([])).notesCount == 0)
   }
 
   @Test func countsEveryNoteInTheTitleIncludingResolvedTodos() {
@@ -56,7 +56,7 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
       todoFixture("r1", "done already", resolved: true),
     ]
 
-    #expect(SidePanel(notedSession(notes)).notesTitle == "Notes (3)")
+    #expect(SidePanel(notedSession(notes)).notesCount == 3)
   }
 }
 
@@ -71,9 +71,9 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
 }
 
 @Suite struct SidePanelDoneCaption {
-  static let text = "Waits don't resolve on their own while the session is marked Done."
+  static let text = "Waits and schedules don't run on their own while the session is marked Done."
 
-  @Test func saysThatWaitsDontResolveOnASessionMarkedDoneWithAnOpenWait() {
+  @Test func saysThatWaitsDontRunOnASessionMarkedDoneWithOnlyAnOpenWait() {
     let panel = SidePanel(waitingSession([waitFixture("w1")], markedDone: true))
 
     #expect(panel.doneCaption == SidePanelDoneCaption.text)
@@ -154,5 +154,148 @@ func waitingSession(_ waits: [Wait], notes: [Note] = [], markedDone: Bool = fals
     let beside = SessionView.terminalsMinWidth(Self.session(shellClosed: true))
 
     #expect(SidePanel.fits(width: Self.sessionViewMinimum, beside: beside))
+  }
+}
+
+@Suite struct SidePanelSchedules {
+  @Test(arguments: [nil, []] as [[Schedule]?])
+  func hidesTheSchedulesSectionForASessionWithoutSchedules(_ schedules: [Schedule]?) {
+    #expect(!SidePanel(scheduledSession(schedules)).showsSchedules)
+  }
+
+  @Test func showsTheSchedulesSectionForASessionWithASchedule() {
+    #expect(SidePanel(scheduledSession([scheduleFixture("r1")])).showsSchedules)
+  }
+
+  @Test func showsTheSchedulesSectionWhenEveryScheduleIsPaused() {
+    #expect(SidePanel(scheduledSession([scheduleFixture("r1", paused: true)])).showsSchedules)
+  }
+
+  @Test(arguments: [nil, []] as [[Schedule]?])
+  func countsNoScheduleWhenThereIsNoSchedule(_ schedules: [Schedule]?) {
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == 0)
+  }
+
+  @Test(arguments: [1, 2])
+  func countsTheSchedulesInTheTitle(_ count: Int) {
+    let schedules = (0..<count).map { scheduleFixture("r\($0)") }
+
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == count)
+  }
+
+  @Test func countsAPausedScheduleInTheTitle() {
+    let schedules = [scheduleFixture("r1"), scheduleFixture("r2", paused: true)]
+
+    #expect(SidePanel(scheduledSession(schedules)).schedulesCount == 2)
+  }
+}
+
+@Suite struct SidePanelDoneCaptionWithSchedules {
+  @Test func saysThatSchedulesDontRunOnASessionMarkedDoneWithOnlySchedules() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], markedDone: true))
+
+    #expect(panel.doneCaption == SidePanelDoneCaption.text)
+  }
+
+  @Test func saysTheSameOnASessionMarkedDoneWithWaitsAndSchedules() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], waits: [waitFixture("w1")], markedDone: true))
+
+    #expect(panel.doneCaption == SidePanelDoneCaption.text)
+  }
+
+  @Test func saysNothingWhenASessionWithSchedulesIsNotMarkedDone() {
+    let panel = SidePanel(scheduledSession([scheduleFixture("r1")], markedDone: false))
+
+    #expect(panel.doneCaption == nil)
+  }
+
+  @Test func saysNothingWhenASessionMarkedDoneHasAnEmptyScheduleList() {
+    let panel = SidePanel(scheduledSession([], markedDone: true))
+
+    #expect(panel.doneCaption == nil)
+  }
+
+  /// A merged PR puts a session in Done without `markedDone`. sbd still runs the schedules of such a session.
+  @Test func saysNothingWhenASessionWithSchedulesIsInDoneWithoutBeingMarkedDone() {
+    var session = scheduledSession([scheduleFixture("r1")])
+    session.state = .done
+
+    #expect(SidePanel(session).doneCaption == nil)
+  }
+}
+
+@Suite struct SidePanelTests {
+  static let now: Int64 = 1_800_000_000_000
+  static let minute: Int64 = 60_000
+  static let hour: Int64 = 60 * minute
+
+  static func session(_ artifacts: [SessionArtifact]?) -> SessionSummary {
+    var s = notedSession([])
+    s.artifacts = artifacts
+    return s
+  }
+
+  @Test func countsNoArtifactWhenThereIsNoArtifact() {
+    #expect(SidePanel(Self.session(nil)).artifactsCount == 0)
+  }
+
+  @Test func countsOnlyTheArtifactsThatAreNotRemovedInTheTitle() {
+    let artifacts = [artifactFixture("a"), artifactFixture("b", removed: 5), artifactFixture("c")]
+
+    #expect(SidePanel(Self.session(artifacts)).artifactsCount == 2)
+  }
+
+  @Test func countsNoArtifactWhenEveryArtifactIsRemoved() {
+    let artifacts = [artifactFixture("a", removed: 5), artifactFixture("b", removed: 6)]
+
+    #expect(SidePanel(Self.session(artifacts)).artifactsCount == 0)
+  }
+
+  @Test func hasNoArtifactsForASessionWithoutAnArtifact() {
+    #expect(!SidePanel(Self.session(nil)).hasArtifacts)
+  }
+
+  /// Removed artifacts still show as rows, so the empty text stays hidden.
+  @Test func hasArtifactsWhenEveryArtifactIsRemoved() {
+    #expect(SidePanel(Self.session([artifactFixture("a", removed: 5)])).hasArtifacts)
+  }
+
+  @Test func theEmptyTextSaysThereAreNoArtifacts() {
+    #expect(SidePanel.noArtifacts == "No artifacts.")
+  }
+
+  /// sbd lists a session's artifacts in first-publish order. The panel shows the newest update first.
+  @Test func sortsTheArtifactsByTheirLastUpdateNewestFirst() {
+    let artifacts = [
+      artifactFixture("a", published: 1, updated: 1),
+      artifactFixture("b", published: 2, updated: 9),
+      artifactFixture("c", published: 3, updated: 5),
+    ]
+
+    #expect(SidePanel(Self.session(artifacts)).artifacts.map(\.title) == ["b", "c", "a"])
+  }
+
+  /// Equal updates sort by URL, the order that sbd gives a group's list.
+  @Test func sortsArtifactsWithTheSameUpdateByTheirLink() {
+    let artifacts = [artifactFixture("b", updated: 5), artifactFixture("a", updated: 5)]
+
+    #expect(SidePanel(Self.session(artifacts)).artifacts.map(\.title) == ["a", "b"])
+  }
+
+  @Test func listsNoArtifactsForASessionWithoutAnArtifact() {
+    #expect(SidePanel(Self.session(nil)).artifacts.isEmpty)
+  }
+
+  @Test func captionSaysWhenALiveArtifactWasLastUpdated() {
+    let artifact = artifactFixture("a", published: Self.now - Self.hour, updated: Self.now - 5 * Self.minute)
+
+    #expect(artifact.caption(now: Self.now) == "updated 5m ago")
+  }
+
+  @Test func captionSaysWhenARemovedArtifactWasRemoved() {
+    let artifact = artifactFixture(
+      "a", published: Self.now - 3 * Self.hour, updated: Self.now - 2 * Self.hour, removed: Self.now - 5 * Self.minute)
+
+    #expect(artifact.caption(now: Self.now) == "removed 5m ago")
   }
 }

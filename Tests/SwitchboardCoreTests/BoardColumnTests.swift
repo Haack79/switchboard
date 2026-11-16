@@ -70,11 +70,11 @@ private func prEvents(_ prs: [(Int64, PullRequest?)]) throws -> [Event] {
 
 /// The placement of a session in `state` since `stateSince`, after `events`.
 private func place(
-  _ state: AttentionState, acknowledged: Bool = false, events: [Event] = [], stateSince: Int64 = 50,
+  _ state: AttentionState, setAside: Bool = false, events: [Event] = [], stateSince: Int64 = 50,
   waits: [Wait] = [], created: Int64 = 0
 ) -> BoardPlacement {
   BoardColumn.place(
-    state: state, acknowledged: acknowledged, stateSince: stateSince, waits: waits, facts: facts(events),
+    state: state, setAside: setAside, stateSince: stateSince, waits: waits, facts: facts(events),
     created: created)
 }
 
@@ -87,7 +87,7 @@ private func shownPlace(_ events: [Event], waits: [Wait] = []) -> BoardPlacement
   let v = Attention.shown(
     Attention.evaluate(s, f, now: 100), f, now: 100, acknowledgedMs: RecheckSettings().acknowledgedMs)
   return BoardColumn.place(
-    state: v.state, acknowledged: v.acknowledged, stateSince: 50, waits: waits, facts: f, created: 0)
+    state: v.state, setAside: v.setAside, stateSince: 50, waits: waits, facts: f, created: 0)
 }
 
 /// The `ack` event at `t` for the Inbox item in `state` that a session shows after `events`.
@@ -526,7 +526,7 @@ extension BoardColumnTests {
     }
 
     @Test func acknowledgedItemIsHeldByYou() throws {
-      let p = place(.waiting, acknowledged: true, waits: [wait(.ci)])
+      let p = place(.waiting, setAside: true, waits: [wait(.ci)])
 
       #expect(p.holder == .you)
     }
@@ -535,6 +535,12 @@ extension BoardColumnTests {
       let before = turn("Want me to push?")
 
       #expect(shownPlace(before + [try ackOfShown(.canContinue, after: before, at: 2)]).holder == .you)
+    }
+
+    @Test func snoozedOfferIsHeldByYou() {
+      let snooze = event("snooze", 2, ["until": .number(1_000)])
+
+      #expect(shownPlace(turn("Want me to push?") + [snooze]).holder == .you)
     }
 
     /// sbd clears an acknowledgment only at a turn, an unack, or a new
@@ -1235,6 +1241,66 @@ extension BoardColumnTests {
 
       #expect(lanes.map(\.title) == ["PostHog/posthog", "haacked/switchboard"])
       #expect(lanes.map { Set($0.sessions.map(\.id)) } == [["foreign", "withPR", "noPR"], ["switchboard"]])
+    }
+  }
+}
+
+// MARK: A paused card
+
+/// The placement of a paused session, which the verdict puts in Waiting, with its PR read at t=10.
+private func pausedPlace(_ pause: Pause, pr: PullRequest? = nil, waits: [Wait] = []) throws -> BoardPlacement {
+  let events = try pr.map { [try prEvent(10, $0)] } ?? []
+  return BoardColumn.place(
+    state: .waiting, stateSince: pause.since, waits: waits, facts: facts(events), created: 0, pause: pause)
+}
+
+extension BoardColumnTests {
+  @Suite struct PausedCard {
+    @Test func aCardThatYouPausedIsWaitingOnYouWithThePauseLine() throws {
+      let p = try pausedPlace(pauseOf(reason: "free CPU"))
+
+      #expect(p.column == .waiting)
+      #expect(p.line == "Paused by you: free CPU")
+      #expect(p.holder == .you)
+    }
+
+    @Test(arguments: [managerPauser, flagsChatPauser, workPauser, nil] as [Pause.Pauser?])
+    func aCardThatClaudePausedIsHeldByASession(_ from: Pause.Pauser?) throws {
+      let pause = pauseOf(by: .claude, from: from)
+
+      let p = try pausedPlace(pause)
+
+      #expect(p.column == .waiting)
+      #expect(p.line == pause.line)
+      #expect(p.holder == .session)
+    }
+
+    @Test(arguments: Wait.Kind.allCases)
+    func thePauseLineReplacesTheLineOfAnOpenWait(_ kind: Wait.Kind) throws {
+      let p = try pausedPlace(pauseOf(by: .claude, from: managerPauser), waits: [wait(kind)])
+
+      #expect(p.line == "Paused by Manager")
+      #expect(p.holder == .session)
+    }
+
+    @Test(arguments: [
+      ("a conflict", samplePR(mergeable: .conflicting)), ("failed checks", samplePR(checks: "FAILURE")),
+      ("running checks", samplePR(checks: "PENDING")), ("changes requested", changesRequestedPR()),
+    ])
+    func thePauseLineReplacesTheLineOfAnOpenPR(_ label: String, _ pr: PullRequest) throws {
+      let p = try pausedPlace(pauseOf(), pr: pr)
+
+      #expect(p.column == .waiting, "\(label)")
+      #expect(p.line == "Paused by you", "\(label)")
+      #expect(p.holder == .you, "\(label)")
+    }
+
+    @Test(arguments: [
+      ("approved", approvedPR(), BoardColumn.approved), ("awaiting review", awaitingReviewPR(), .inReview),
+      ("in Trunk's queue", approvedPR(queue: .testing), .merging), ("merged", samplePR(state: .merged), .done),
+    ])
+    func aPRColumnStillWins(_ label: String, _ pr: PullRequest, _ column: BoardColumn) throws {
+      #expect(try pausedPlace(pauseOf(), pr: pr).column == column, "\(label)")
     }
   }
 }

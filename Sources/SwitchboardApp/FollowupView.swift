@@ -78,6 +78,7 @@ struct FollowupView: View {
     } message: { todos in
       Text(model.sessionNames.replacingIDs(in: todos.message(before: "An import of Followups.md won't add it again.")))
     }
+    .referenceRepo(session)
   }
 
   private func detail(_ label: String, _ value: String) -> some View { DetailRow(label: label, value: value) }

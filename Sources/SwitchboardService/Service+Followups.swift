@@ -74,6 +74,7 @@ extension Service {
       id: newSessionID(), name: title ?? Followup.title(followup.prompt), cwd: "",
       branch: branch.flatMap { $0.isEmpty ? nil : $0 }, claudeSessionId: UUID().uuidString.lowercased(),
       model: model, created: nowMs())
+    try refuseOperatorName(session.name)
     session.parent = parent
     session.group = try groupOfNew(group, parent: parent)
     // Without a group account, a named account, or a parent, the follow-up
@@ -294,8 +295,11 @@ extension Service {
     }
     return try queue.sync {
       var seen = try store.importedLines()
+      let new = items.filter { item, _, _ in seen.insert(item.key).inserted }
+      // sbd checks every line before it saves any, so a refused import saves nothing.
+      for (_, title, _) in new { try refuseOperatorName(title) }
       var imported: [SessionSummary] = []
-      for (item, title, followup) in items where seen.insert(item.key).inserted {
+      for (item, title, followup) in new {
         var session = Session(
           id: newSessionID(), name: title, cwd: "", claudeSessionId: UUID().uuidString.lowercased(),
           created: item.added ?? now)

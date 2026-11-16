@@ -69,9 +69,11 @@ public struct Session: Codable, Equatable, Sendable {
   public var waits: [Wait]?
   /// Nil in a session that an older sbd stored.
   public var notes: [Note]?
+  /// Nil when the session has none, and in a session that an older sbd stored.
+  public var schedules: [Schedule]?
   /// The session that added this one, such as the session that captured a follow-up.
   public var parent: String?
-  /// True for a Manager conversation. Several can exist.
+  /// True for a Manager conversation, of which several can exist, and for the operator.
   public var manager: Bool?
   /// Set on a follow-up. Until it starts, `cwd` is empty and claude never runs.
   public var followup: Followup?
@@ -110,15 +112,22 @@ public struct Session: Codable, Equatable, Sendable {
   public var issue: IssueRef?
   /// The name of the remote host that the session runs on, as config.json lists it. Nil means this Mac.
   public var host: String?
-  /// The MCP servers that a Manager conversation loads besides switchboard,
+  /// The MCP servers that a Manager conversation or the operator loads besides switchboard,
   /// by name. Nil launches claude with the full setup, as for every other
   /// session. An empty list loads only switchboard.
   public var mcp: [String]?
   /// True once sbd gave a Manager conversation its first `mcp` list. A
   /// conversation that the user later set to the full setup keeps nil.
   public var mcpScoped: Bool?
+  /// Set while the session is paused.
+  public var pause: Pause?
+  /// Set while sbd's removal job holds the session, and after it failed.
+  public var removal: Removal?
+  /// True for the operator, the one background Manager session. It also has
+  /// `manager` set, so an older sbd treats it as a conversation.
+  public var isOperator: Bool?
 
-  public var kind: SessionKind { SessionKind(manager: manager, chat: chat) }
+  public var kind: SessionKind { SessionKind(isOperator: isOperator, manager: manager, chat: chat) }
 
   public init(
     id: String, name: String, cwd: String, repo: String? = nil, branch: String? = nil,
@@ -144,9 +153,12 @@ public enum SessionKind: String, Codable, Sendable {
   case work
   case manager
   case chat
+  /// The background Manager session that follows through on the waits that
+  /// conversations hand it. Only one exists.
+  case `operator`
 
-  public init(manager: Bool?, chat: String?) {
-    self = manager == true ? .manager : chat != nil ? .chat : .work
+  public init(isOperator: Bool? = nil, manager: Bool?, chat: String?) {
+    self = isOperator == true ? .operator : manager == true ? .manager : chat != nil ? .chat : .work
   }
 
   /// Whether the app shows a session of this kind as a chat. `chat-log`
@@ -155,7 +167,15 @@ public enum SessionKind: String, Codable, Sendable {
   public var showsAsChat: Bool {
     switch self {
     case .work: false
-    case .manager, .chat: true
+    case .manager, .chat, .operator: true
+    }
+  }
+
+  /// Whether sbd starts a session of this kind in the Manager folder: a Manager conversation or the operator.
+  public var runsInManagerFolder: Bool {
+    switch self {
+    case .work, .chat: false
+    case .manager, .operator: true
     }
   }
 
@@ -165,6 +185,7 @@ public enum SessionKind: String, Codable, Sendable {
     case .work: nil
     case .manager: "the Manager"
     case .chat: "a group chat"
+    case .operator: "the operator"
     }
   }
 
@@ -174,6 +195,7 @@ public enum SessionKind: String, Codable, Sendable {
     switch self {
     case .work: .all
     case .manager, .chat: .blockingPrompts
+    case .operator: .operatorItems
     }
   }
 }
@@ -185,6 +207,9 @@ public enum InboxItems: Sendable {
   /// sessions it manages, and those sessions have their own items. A reply
   /// waits on the user's next message, which the chat pane takes.
   case blockingPrompts
+  /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
+  /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
+  case operatorItems
 }
 
 /// One entry in the event log: a hook payload, or something sbd did.
@@ -249,6 +274,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var lastReply: String?
   public var waits: [Wait]
   public var notes: [Note]
+  /// Nil when the session has none.
+  public var schedules: [Schedule]?
   /// Open and deferred permission prompts and questions, oldest first.
   public var cards: [Card]
   /// True while Claude Code shows a permission or question dialog, with or
@@ -298,16 +325,27 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var dependencies: [Dependency]?
   /// The plans attached to the session and to its group, or nil when there are none.
   public var plans: [PlanSummary]?
+  /// The artifacts that the session published, in first-publish order, or nil when there are none.
+  public var artifacts: [SessionArtifact]?
   /// The review that a docket row tracks, or nil for any other session.
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.
   public var mergeError: String?
   /// True when the user acknowledged the session's Inbox item, which moves
   /// it to Waiting until its reason changes or a new turn starts.
+  /// For the operator it is also true while an undo would reopen the reports that the acknowledgment closed.
+  /// It lasts until the user writes to the operator or a new report arrives. The state doesn't change.
   public var acknowledged: Bool?
   /// True while the session works on a message that the user sent to answer
   /// its rule's Inbox item, which holds it in Waiting.
   public var requested: Bool?
+  /// When the user's snooze of the session ends, while the snooze holds. It is
+  /// set whatever the state, so a working snoozed session has it too.
+  public var snoozedUntil: Int64?
+  /// The note of a snooze that ended, such as "snoozed until 2026-11-15 09:00",
+  /// while the item that came back is in the Inbox and the user hasn't acted
+  /// on the session. Never set together with `snoozedUntil`.
+  public var snoozeNote: String?
   /// True while the session's start of claude waits behind the live cap.
   public var queued: Bool?
   /// Claude Code's permission mode, such as `default` or `auto`, or nil when
@@ -327,6 +365,13 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var host: String?
   /// The state of the host's link, or nil for a session on this Mac and for a host that has no link.
   public var link: LinkState?
+  /// The session's pause, or nil when it isn't paused.
+  public var pause: Pause?
+  /// How many messages wait for the resume of a paused session, or nil when it isn't paused.
+  public var heldMessages: Int?
+  /// The session's place in sbd's removal job, or nil when no removal is
+  /// queued, running, or failed.
+  public var removal: Removal?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,
@@ -405,7 +450,12 @@ public func firstLine(_ text: String) -> String? {
 public func oneLine(_ text: String, max: Int = 70) -> String {
   let line = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
     .filter { !$0.isEmpty }.joined(separator: " ")
-  return line.count <= max ? line : String(line.prefix(max - 1)) + "…"
+  return truncated(line, max: max)
+}
+
+/// The text cut to `max` characters, the last of which is an ellipsis.
+public func truncated(_ text: String, max: Int) -> String {
+  text.count <= max ? text : String(text.prefix(max - 1)) + "…"
 }
 
 /// The parts joined as an English list: "a", "a and b", or "a, b, and c".

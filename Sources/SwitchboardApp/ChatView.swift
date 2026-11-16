@@ -1,8 +1,8 @@
 import SwiftUI
 import SwitchboardCore
 
-/// A group chat or a Manager conversation: its last messages and a field that
-/// sends it one. The terminals are behind a toggle.
+/// A group chat, a Manager conversation, or the operator: its last messages
+/// and a field that sends it one. The terminals are behind a toggle.
 struct ChatView: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
@@ -11,6 +11,7 @@ struct ChatView: View {
     VStack(spacing: 0) {
       ChatHeader(session: session)
       if session.kind == .manager { ManagerStatusStrip(session: session) }
+      SchedulesStrip(session: session)
       Divider()
       if model.showingTerminal {
         SessionView(session: session)
@@ -18,9 +19,7 @@ struct ChatView: View {
         ChatMessages(
           log: model.chatLogs[session.id],
           pending: pending,
-          emptyText: session.kind == .manager
-            ? "No messages yet. Ask the Manager about your sessions."
-            : "No messages yet. Ask the chat about this group's sessions.",
+          emptyText: emptyText,
           session: session.id)
         Divider()
         // The Inbox leaves out the cards of a chat and a Manager, such as a group message that waits for the user.
@@ -28,6 +27,7 @@ struct ChatView: View {
         CardList(cards: session.cards)
         let proposals = session.chat.map { g in model.planProposals.filter { $0.group == g } } ?? []
         if !proposals.isEmpty { PlanProposalList(proposals: proposals) }
+        PauseBanner(session: session)
         MessageField(
           session: session.id, draft: model.messageDraft(for: session),
           shortcut: KeyboardShortcut(.return, modifiers: [.command])
@@ -51,6 +51,15 @@ struct ChatView: View {
     .onChange(of: pending.last(where: \.failed)) { _, failed in
       if let error = failed?.error { AccessibilityNotification.Announcement("Not sent: \(error)").post() }
     }
+    .referenceRepo(session)
+  }
+
+  private var emptyText: String {
+    switch session.kind {
+    case .manager: "No messages yet. Ask the Manager about your sessions."
+    case .operator: "The operator hasn't run yet. It follows through on waits that your conversations hand it."
+    case .chat, .work: "No messages yet. Ask the chat about this group's sessions."
+    }
   }
 
   private struct Polling: Hashable {
@@ -70,8 +79,8 @@ private struct ChatHeader: View {
       Text(session.name).fontWeight(.medium).lineLimit(1)
       StateBadge(state: session.state)
       Spacer()
+      if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
       if session.kind == .manager {
-        MCPServerMenu(session: session)
         Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
           .help("Start a session that this conversation follows")
           .fixedSize()

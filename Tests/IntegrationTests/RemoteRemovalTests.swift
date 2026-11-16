@@ -884,6 +884,29 @@ private func placeholders(_ text: String, id: String, cwd: String, repo: String)
     #expect(try sbd.git(origin, "branch", "--list", Instance.mergedBranch) != "", "sbd deleted the remote branch")
   }
 
+  // MARK: The removal job
+
+  /// The box's folders are on this Mac's volume, so a rename into the trash would succeed. Only the job's check
+  /// that the session runs on this Mac keeps the folder out of the trash. sbd makes the trash folder only after
+  /// that check passes.
+  @Test func theRemovalJobRemovesARemoteWorktreeInPlaceOnTheBoxAndNeverUsesTheTrash() throws {
+    let sbd = try Instance.remoteForRemoval()
+    let (s, _) = try cleanWorktree(sbd)
+    let listed = real(s.cwd)
+
+    let result = try sbd.queueRemoval([s.id], scope: "work")
+
+    #expect(queued(result) == [s.id], "\(result)")
+    try sbd.waitUntilGone(s.id)
+    #expect(!FileManager.default.fileExists(atPath: s.cwd))
+    let worktrees = try sbd.git(s.repo, "worktree", "list", "--porcelain")
+    #expect(!worktrees.contains(listed) && !worktrees.contains(s.cwd), "\(worktrees)")
+    #expect(try sbd.boxTmuxSessions().isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: "\(sbd.home.path)/trash"), "sbd made a trash folder")
+    #expect(try sbd.removedHostSessions() == [s.id])
+    #expect(try sbd.macCalls(for: s).isEmpty)
+  }
+
   // MARK: The box's git that these tests drive
 
   /// The wrapper needs no sbd change, so this passes before Stage 5 does. A bug in it would show up as failures of

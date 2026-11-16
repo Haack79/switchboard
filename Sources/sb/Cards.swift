@@ -14,7 +14,7 @@ func cards(_ a: Args) {
     return
   }
   if cards.isEmpty {
-    print("No permission prompts, questions, group messages, or folder trust prompts are open.")
+    print("No permission prompts, questions, group messages, folder trust prompts, or MCP server requests are open.")
     return
   }
   // Claude chose this text, so control characters print as escapes.
@@ -22,7 +22,8 @@ func cards(_ a: Args) {
   for (name, card) in cards {
     let head =
       "\(card.id)  \(sessionMention(name: name, id: card.session))  \(ago(card.since))\(card.deferred ? ", deferred" : "")\(card.hookClosed ? ", hook closed" : "")"
-    if card.kind == .permission {
+    switch card.kind {
+    case .permission:
       // `allow` approves the whole call, so the whole call prints.
       let extras = card.offeredExtras
       out("\(head)  approve \(card.tool)\(extras.map { ", \($0.flag) offered" }.joined())")
@@ -30,24 +31,26 @@ func cards(_ a: Args) {
       for extra in extras {
         if let note = card.note(extra) { out("      \(extra.flag): \(note)") }
       }
-      continue
-    }
-    if card.kind == .trust {
+    case .trust:
       out("\(head)  trust \(card.summary)")
       out("      allow trusts the folder, deny exits claude")
-      continue
-    }
-    if let message = card.send {
+    case .send:
       // `allow` sends exactly this text to exactly these sessions, so both print in full.
-      out("\(head)  send \(message.summary)")
-      for t in message.targets { out("      to \(t.id)  \(t.name)") }
-      for line in message.text.split(separator: "\n", omittingEmptySubsequences: false) { out("      | \(line)") }
-      continue
-    }
-    out("\(head)  question")
-    for q in card.questions {
-      out("      \(q.header.map { "\($0): " } ?? "")\(q.question)\(q.multiSelect ? " (pick any)" : "")")
-      for o in q.options { out("        \(o.label)\(o.description.map { ": \($0)" } ?? "")") }
+      out("\(head)  send \(card.summary)")
+      for t in card.send?.targets ?? [] { out("      to \(t.id)  \(t.name)") }
+      for line in (card.send?.text ?? "").split(separator: "\n", omittingEmptySubsequences: false) {
+        out("      | \(line)")
+      }
+    case .mcp:
+      out("\(head)  \(card.summary)")
+      out("      reason: \(card.mcpRequest?.reason ?? "")")
+      out("      allow restarts claude with it, deny leaves the servers as they are")
+    case .question:
+      out("\(head)  question")
+      for q in card.questions {
+        out("      \(q.header.map { "\($0): " } ?? "")\(q.question)\(q.multiSelect ? " (pick any)" : "")")
+        for o in q.options { out("        \(o.label)\(o.description.map { ": \($0)" } ?? "")") }
+      }
     }
   }
 }
@@ -78,10 +81,14 @@ func answer(_ command: String, _ a: Args) {
   }
   let result = call("answer", args)
   if a.json { return printJSON(result) }
-  if result["decision"] != nil {
+  if result["targets"] != nil {
     let sent = decode(result, as: GroupSend.self)
     print(sent.decision?.rawValue ?? "")
     return printDeliveries(sent)
+  }
+  if result["reason"] != nil {
+    let status = decode(result, as: MCPServerRequestStatus.self)
+    return print("\(status.decision.rawValue). \(status.name): \(Manager.serversText(status.loaded))".printable)
   }
   print(result["delivery"]?.string ?? "answered")
 }

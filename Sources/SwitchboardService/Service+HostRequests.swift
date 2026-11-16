@@ -7,7 +7,8 @@ extension Service {
   /// other op runs only when `HostScope.authorize` admits it, and then with the request that `authorize`
   /// returned. `reply` gets the answer, and it throws only before it replies.
   func handleHostRequest(
-    _ request: Request, host: String, caller: Caller, hookGone: @escaping () -> Bool, reply: (Response) -> Void
+    _ request: Request, host: String, caller: Caller, hookGone: @escaping @Sendable () -> Bool,
+    reply: (Response) -> Void
   ) throws {
     switch request.op {
     case "hook":

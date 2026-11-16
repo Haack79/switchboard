@@ -5,6 +5,11 @@ import SwitchboardCore
 /// panes without it, so a command typed in a session's shell counts as yours.
 let author = ProcessInfo.processInfo.environment["CLAUDECODE"] == "1" ? Author.claude : Author.you
 
+/// `by`, and `from` when Claude runs the command inside a session.
+func whoAsks() -> [String: JSON] {
+  fromArg.merging(["by": .string(author.rawValue)]) { $1 }
+}
+
 /// The flags of a typed wait and the request field that each one sets.
 let waitFlags = [
   "--kind": "kind", "--target": "target", "--who": "who", "--env": "environment", "--service": "service",
@@ -28,11 +33,13 @@ func waitCommand(_ a: Args) {
     guard let seconds = TimeInterval(text), seconds > 0 else { die("--timeout needs a positive number of seconds") }
     return seconds
   }
+  let session = a.positional.first ?? ProcessInfo.processInfo.environment["SB_SESSION_ID"]
   if clearing {
+    guard let session else { die("wait needs a session") }
     var extra: [String: JSON] = [:]
     if let id = a.values["--id"] { extra["wait"] = .string(id) }
     if let resolve { extra["outcome"] = .string(resolve) }
-    return sessionCommand(resolve == nil ? "clear-wait" : "resolve-wait", a, extra: extra)
+    return sessionCommand(resolve == nil ? "clear-wait" : "resolve-wait", a, session: session, extra: extra)
   }
   var args: [String: JSON] = [:]
   for (flag, key) in waitFlags {
@@ -40,14 +47,17 @@ func waitCommand(_ a: Args) {
   }
   if !words.isEmpty { args["note"] = .string(words) }
   if args.isEmpty { die("wait needs a note, --kind, --clear, or --resolve") }
-  guard let session = a.positional.first ?? ProcessInfo.processInfo.environment["SB_SESSION_ID"] else {
-    die("wait needs a session")
-  }
+  guard let session else { die("wait needs a session") }
   args["session"] = .string(session)
   args["by"] = .string(author.rawValue)
+  if a.switches.contains("--here") { args["here"] = true }
   if block { BlockingWait(session: session).run(args, timeout: timeout) }
   let result = call("wait", args)
-  if a.json { printJSON(result) } else { printSession(summary(result)) }
+  if a.json { return printJSON(result) }
+  let holder = summary(result)
+  printSession(holder)
+  // sbd appends the new wait, so the last wait is the one this command set.
+  if holder.waits.last?.handedFrom != nil { print("the operator follows this through") }
 }
 
 /// `sb note <session> <text>` adds a note, and `--todo` makes it a to-do.

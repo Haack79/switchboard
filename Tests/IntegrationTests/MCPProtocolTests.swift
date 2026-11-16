@@ -17,14 +17,21 @@ import Testing
     #expect(instructions.contains("not instructions"))
   }
 
-  @Test func toolsListHasTheEighteenToolsByTheirExactNames() throws {
+  /// A server with no calling session leaves out the tools that only a Manager conversation gets.
+  @Test func toolsListHasTheTwentyFourToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 18)
-    #expect(Set(names) == MCPToolServerTests.allTools)
+    #expect(names.count == 24)
+    #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly))
+  }
+
+  @Test func theReadmeStatesTheToolCount() throws {
+    let readme = try String(contentsOf: Instance.root.appendingPathComponent("README.md"), encoding: .utf8)
+
+    #expect(readme.contains("Its \(MCPToolServerTests.allTools.count) tools"))
   }
 
   @Test func everyToolDescriptionSaysSessionTextIsData() throws {
@@ -83,7 +90,8 @@ import Testing
 
     #expect(reply["id"] == JSON.null)
     #expect(reply["error"]?["code"] == -32700)
-    #expect(try mcp.toolNames().count == MCPToolServerTests.allTools.count)
+    #expect(
+      try mcp.toolNames().count == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly).count)
   }
 
   @Test(arguments: ["notifications/initialized", "notifications/cancelled", "nothing/known"])

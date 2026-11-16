@@ -156,6 +156,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var reviewRequest: ReviewRequestAttempt?
   /// The Inbox item that the user acknowledged during this turn.
   public var acknowledgment: Acknowledgment?
+  /// The user's snooze of the session, from the last `snooze` event, until
+  /// `unsnooze` or, once it ended, until the user acts on the session.
+  public var snooze: Snooze?
   /// The rule's Inbox item that the user last answered with a message.
   public var request: InboxRequest?
   /// Claude Code's permission mode, as the last main-session hook or launch
@@ -187,6 +190,13 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Set from a `link_down` until the next `link_up`: sbd can't read the session's host, so the events that
   /// would update these facts are not arriving.
   public var unread: UnreadHost?
+  /// The artifacts that the session published, in first-publish order.
+  public var artifacts: [SessionArtifact] = []
+  /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
+  public var openReports: [OperatorReport] = []
+  /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
+  /// is open, because a new report clears it.
+  public var acknowledgedReports: [OperatorReport] = []
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -219,7 +229,10 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     let turnWasRunning = turnRunning
     // Only an acknowledgment needs the snapshot. Startup replay applies every event, so most events skip it.
     let promptsBefore = acknowledgment == nil ? nil : openPrompts
+    let snoozeBefore = snooze?.isActive(at: event.t) == true ? SnoozeTriggers(self) : nil
+    let touchedBefore = lastTouched
     applyWait(event, userPrompt: userPrompt)
+    applyArtifact(event)
     // A subagent's tool calls don't change what the main session waits on.
     let fromSubagent = event.fromSubagent
     let tool = d["tool_name"]?.string ?? ""
@@ -374,7 +387,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     applyDraftReplies(event)
     applyAutoContinue(event, userPrompt: userPrompt)
     applyAcknowledgment(event, promptsBefore: promptsBefore)
+    applySnooze(event, before: snoozeBefore, touchedBefore: touchedBefore)
     applyRequest(event, userPrompt: userPrompt, turnEnded: turnWasRunning && !turnRunning)
+    applyReports(event)
   }
 
   /// A reply is a main-session Stop with a message. A `chat-read` event marks
@@ -401,6 +416,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       turnRunning = true
       turnStarted = t
       acknowledgment = nil
+      if let s = snooze, !s.isActive(at: t) { snooze = nil }
     }
   }
 
@@ -446,11 +462,20 @@ public struct Verdict: Equatable, Sendable {
   public var reason: String
   public var kind: TriageKind = .action
   public var source: VerdictSource = .rule
-  /// True when `Attention.shown` moved an acknowledged Inbox verdict to Waiting.
+  /// True when `Attention.shown` moved an acknowledged Inbox verdict to Waiting, or when an `unack` would reopen
+  /// the operator's reports. In the second case the state stays as it was. Either way, an undo is possible.
   public var acknowledged = false
   /// True when `Attention.requested` holds a rule verdict in Waiting while
   /// the session works on the user's request.
   public var requested = false
+  /// True when `Attention.shown` moved an Inbox verdict to Waiting because the
+  /// user snoozed the session.
+  public var snoozed = false
+  /// The note of a snooze that ended, which `Attention.shown` adds to an
+  /// Inbox verdict until the user acts on the session.
+  public var snoozeNote: String?
+  /// True when a layer of `Attention.shown` moved an Inbox verdict to Waiting because the user set it aside.
+  public var setAside: Bool { acknowledged || snoozed }
   /// What the session's card offers for a rule that knows the next step.
   public var options: [TriageOption] = []
   /// What the user should read before deciding.
@@ -460,6 +485,11 @@ public struct Verdict: Equatable, Sendable {
   /// True for the Ready to merge verdict, the only one that asks the user to
   /// merge or enqueue the PR. Its summary says what the PR does.
   public var summarizesPR = false
+  /// The "Before you merge" panel. Only the Ready to merge verdict has one.
+  public var review: MergeReview?
+  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
+  /// blocking prompts, the operator's Inbox admits only this one.
+  public var byWaitRule = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -498,6 +528,7 @@ public enum Attention {
   public static func evaluate(
     _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState? = { _ in nil }
   ) -> Verdict {
+    if let paused = pausedVerdict(session) { return paused }
     let verdict = unheld(session, facts, now: now, stateOf: stateOf)
     // A held verdict is Waiting. The hold comes after `readyForReview`, which would turn it into Ready for review.
     // While sbd can't read the host, the hold must not move the kept state either.
@@ -509,6 +540,7 @@ public enum Attention {
   public static func unheld(
     _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState? = { _ in nil }
   ) -> Verdict {
+    if let paused = pausedVerdict(session) { return paused }
     var facts = facts
     // Only a work session has a PR. A pr event recorded for a Manager or a chat must not fire a PR rule.
     if session.kind != .work { facts.pr = nil }
@@ -516,6 +548,13 @@ public enum Attention {
     // A PR that became ready while sbd can't read the host must not move the kept state.
     if facts.unread != nil { return verdict }
     return readyForReview(verdict, facts) ?? verdict
+  }
+
+  /// The verdict of a paused session that isn't marked done. Only Done outranks it, so no other rule, the
+  /// user's request hold, or `readyForReview` changes it.
+  static func pausedVerdict(_ session: Session) -> Verdict? {
+    guard !session.done, let pause = session.pause else { return nil }
+    return Verdict(state: .waiting, reason: pause.line, kind: .info)
   }
 
   /// The verdict of a Claude Code permission or question dialog that waits
@@ -534,6 +573,10 @@ public enum Attention {
   static func rules(
     _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState?
   ) -> Verdict {
+    // A failed removal comes first, because the sessions that Delete All takes are Done.
+    if let removal = session.removal, removal.state == .failed {
+      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"))
+    }
     if session.done { return Verdict(state: .done, reason: "marked done") }
     if let verdict = followupVerdict(session) { return verdict }
     if let verdict = docketVerdict(session, facts) { return verdict }
@@ -546,6 +589,7 @@ public enum Attention {
         state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
     }
     if let v = openPromptVerdict(facts) { return v }
+    if let v = reportVerdict(session, facts) { return v }
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning {
       if let tool = facts.runningTool {

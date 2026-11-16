@@ -17,21 +17,60 @@ struct InboxView: View {
   @ViewBuilder
   private var sessions: some View {
     if model.triage.isEmpty && model.currentInboxItem == nil {
-      VStack(spacing: 12) {
-        Image(systemName: "checkmark.circle").font(.system(size: 40)).foregroundStyle(.secondary)
-        Text(model.planProposals.isEmpty ? "Nothing needs you" : "No session needs you").foregroundStyle(.secondary)
+      let hidden = model.hiddenNeedingYou
+      ContentUnavailableView {
+        Label(
+          Self.emptyTitle(hiddenNeedingYou: hidden, hasPlanProposals: !model.planProposals.isEmpty),
+          systemImage: "checkmark.circle")
+      } description: {
+        Text(Self.emptyMessage(hiddenNeedingYou: hidden))
+      } actions: {
+        if hidden > 0 { Button("Show All Orgs") { model.orgFilter = OrgFilter() } }
+        Button("Show Board") { model.show(.board) }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
       ListDetailSplit {
+        // The list stays mounted under the empty state. A new list would take the focus from the detail's message
+        // field when an item arrives, and ⌘L would have no list to focus.
         TriageList()
+          .overlay {
+            if model.triage.isEmpty {
+              ContentUnavailableView(
+                Self.emptyTitle(
+                  hiddenNeedingYou: model.hiddenNeedingYou, hasPlanProposals: !model.planProposals.isEmpty),
+                systemImage: "checkmark.circle")
+            }
+          }
       } detail: {
         if let id = model.currentInboxItem, let session = model.sessions.first(where: { $0.id == id }) {
-          TriageDetail(session: session).id(session.id)
+          VStack(spacing: 0) {
+            // The detail keeps an answered item while Claude works on it, so the banner says that it left the list.
+            if model.leftInboxItem != nil {
+              LeftInboxBanner(session: session, hasNext: !model.triage.isEmpty)
+              Divider()
+            }
+            TriageDetail(session: session).id(session.id)
+          }
         } else {
-          Text("Pick an item").foregroundStyle(.secondary)
+          ContentUnavailableView("Select an item", systemImage: "tray")
         }
       }
+    }
+  }
+
+  /// The empty Inbox's title. It adds "in these orgs" when the org filter hides sessions that need the user.
+  static func emptyTitle(hiddenNeedingYou: Int, hasPlanProposals: Bool) -> String {
+    let subject = hasPlanProposals ? "No session" : "Nothing"
+    return hiddenNeedingYou > 0 ? "\(subject) in these orgs needs you" : "\(subject) needs you"
+  }
+
+  /// The line under the empty Inbox's title. With no hidden sessions that need the user, it says what the Inbox lists.
+  /// Otherwise it gives how many of those sessions the org filter hides.
+  static func emptyMessage(hiddenNeedingYou: Int) -> String {
+    switch hiddenNeedingYou {
+    case 0: "Sessions show here when they need an answer, an approval, or a decision."
+    case 1: "1 session in an org the filter hides needs you."
+    default: "\(hiddenNeedingYou) sessions in orgs the filter hides need you."
     }
   }
 }
@@ -88,7 +127,6 @@ struct TriageRow: View {
   let current: Bool
 
   var body: some View {
-    let item = session.triage
     HStack(alignment: .top, spacing: 8) {
       Circle()
         .fill(session.state.color)
@@ -96,7 +134,7 @@ struct TriageRow: View {
         .padding(.top, 5)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
-        InlineText(plain: item?.title ?? session.reason, links: false).fontWeight(.medium).lineLimit(2)
+        InlineText(plain: session.inboxTitle, links: false).fontWeight(.medium).lineLimit(2)
         Text(
           [repo, model.inboxName(session), ago(session.since)]
             .compactMap { $0 }.joined(separator: " · ")
@@ -112,7 +150,42 @@ struct TriageRow: View {
     .listRowChrome(current: current)
     .hoverCard(session, activeAccount: model.activeAccountFolder, card: model.hoverCard)
     .onTapGesture { model.inboxFocus = session.id }
+    .contextMenu { SnoozeMenuItems(session: session) }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(current ? .isSelected : [])
+  }
+}
+
+/// The line above an Inbox item that is no longer in the Inbox, such as one Claude works on after an answer. The
+/// header below it has the Open button.
+struct LeftInboxBanner: View {
+  @EnvironmentObject var model: BoardModel
+  let session: SessionSummary
+  let hasNext: Bool
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "arrow.uturn.right.circle").foregroundStyle(.secondary).accessibilityHidden(true)
+      Text(Self.message(session.state)).foregroundStyle(.secondary).lineLimit(1)
+      Spacer(minLength: 0)
+      if hasNext {
+        Button("Next Item") { model.moveInbox(by: 1) }.fixedSize()
+          .help("Show the first item that still needs you")
+      }
+    }
+    .font(.callout)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+  }
+
+  /// What the banner says for a session in `state`.
+  static func message(_ state: AttentionState) -> String { "Left the Inbox: \(state.title)" }
+}
+
+extension BoardModel {
+  /// The shown Inbox session when it is not in the Inbox list, such as one Claude works on after an answer.
+  var leftInboxItem: SessionSummary? {
+    guard let id = currentInboxItem, !triage.contains(where: { $0.id == id }) else { return nil }
+    return sessions.first { $0.id == id }
   }
 }

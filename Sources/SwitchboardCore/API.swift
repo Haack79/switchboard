@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One request on sbd's socket: a line of JSON.
 public struct Request: Codable, Sendable {
@@ -38,10 +39,15 @@ private func unreachable<T>(_ body: () throws -> T) throws -> T {
   do { return try body() } catch { throw SbdUnreachable(description: "\(error)") }
 }
 
+/// Whether `key` names the item by an id prefix or its whole name.
+public func refMatches(_ key: String, _ item: (id: String, name: String)) -> Bool {
+  item.id.hasPrefix(key) || item.name == key
+}
+
 /// The id that `key` names: an id, a unique id prefix, or a unique name.
 public func resolveRef(_ key: String, _ noun: String, _ items: [(id: String, name: String)]) throws -> String {
   if items.contains(where: { $0.id == key }) { return key }
-  let matches = items.filter { $0.id.hasPrefix(key) || $0.name == key }
+  let matches = items.filter { refMatches(key, $0) }
   guard matches.count == 1 else {
     throw APIError(matches.isEmpty ? "no \(noun) \(key)" : "\(key) matches \(matches.count) \(noun)s")
   }
@@ -243,6 +249,25 @@ public struct ImportResult: Codable, Sendable {
   }
 }
 
+/// Who wrote a message that sbd sends to a session. Its `sent` event records it as `by`.
+public enum MessageAuthor: String, Codable, Sendable {
+  /// The user, from a terminal or the app.
+  case you
+  /// A Claude Code, inside a session or outside Switchboard.
+  case claude
+  /// sbd on its own, such as a wait's outcome.
+  case sbd
+
+  /// The author of a message that `author` asked sbd to send. Nil means that sbd sends it on its own.
+  public init(_ author: Author?) {
+    switch author {
+    case .you: self = .you
+    case .claude: self = .claude
+    case nil: self = .sbd
+    }
+  }
+}
+
 /// What `send` did with the message.
 public enum Delivery: String, Codable, Sendable {
   /// Pasted into the live session's prompt.
@@ -276,6 +301,38 @@ public enum Delivery: String, Codable, Sendable {
   }
 }
 
+/// Cancels a `Client.call` from another thread. `cancel()` shuts down the
+/// call's socket, which wakes the call's blocked read and makes sbd's side
+/// read the connection as closed. A `close` from another thread wakes neither.
+public final class CallCancel: Sendable {
+  private struct State {
+    var fd: Int32?
+    var cancelled = false
+  }
+
+  private let state = OSAllocatedUnfairLock(initialState: State())
+
+  public init() {}
+
+  public var isCancelled: Bool { state.withLock { $0.cancelled } }
+
+  public func cancel() {
+    state.withLock { s in
+      s.cancelled = true
+      if let fd = s.fd { shutdown(fd, SHUT_RDWR) }
+    }
+  }
+
+  func attach(_ fd: Int32) {
+    state.withLock { s in
+      s.fd = fd
+      if s.cancelled { shutdown(fd, SHUT_RDWR) }
+    }
+  }
+
+  func detach() { state.withLock { $0.fd = nil } }
+}
+
 /// Sends requests to sbd. Each call opens a new connection, sends one
 /// request, and reads one response.
 public final class Client: Sendable {
@@ -285,13 +342,27 @@ public final class Client: Sendable {
     self.home = home
   }
 
-  public func call(_ op: String, _ args: [String: JSON] = [:], timeout: TimeInterval = 30) throws -> JSON {
+  /// Sends one request and returns its result. When `cancel` is cancelled,
+  /// the call throws `CancellationError`, and sbd sees the connection close.
+  public func call(
+    _ op: String, _ args: [String: JSON] = [:], timeout: TimeInterval = 30, cancel: CallCancel? = nil
+  ) throws -> JSON {
+    if cancel?.isCancelled == true { throw CancellationError() }
     let fd = try unreachable { try UnixSocket.connect(path: home.socket, timeout: timeout) }
-    defer { close(fd) }
-    let line = try JSONCoding.encode(Request(op: op, args: .object(args))) + "\n"
-    try unreachable { try UnixSocket.write(fd, Data(line.utf8)) }
-    var reader = UnixSocket.LineReader(fd: fd)
-    guard let reply = try reader.next() else { throw SbdUnreachable(description: "sbd closed the connection") }
+    cancel?.attach(fd)
+    defer {
+      cancel?.detach()
+      close(fd)
+    }
+    let read = Result {
+      let line = try JSONCoding.encode(Request(op: op, args: .object(args))) + "\n"
+      try unreachable { try UnixSocket.write(fd, Data(line.utf8)) }
+      var reader = UnixSocket.LineReader(fd: fd)
+      return try reader.next()
+    }
+    // A shutdown from `cancel` makes the read fail or end early, so a cancelled call reports only the cancel.
+    if cancel?.isCancelled == true { throw CancellationError() }
+    guard let reply = try read.get() else { throw SbdUnreachable(description: "sbd closed the connection") }
     let response = try JSONCoding.decoder.decode(Response.self, from: reply)
     guard response.ok else { throw APIError(response.error ?? "sbd failed") }
     return response.result ?? .null

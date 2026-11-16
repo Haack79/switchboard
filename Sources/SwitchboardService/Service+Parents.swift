@@ -91,7 +91,7 @@ extension Service {
       }
       guard let lines = parentNotices.unsent[parent], !lines.isEmpty, canTakeNotice(e, now: now) else { continue }
       do {
-        _ = try send(parent, ParentNotice.message(lines), byUser: false, trigger: .notice)
+        _ = try send(parent, ParentNotice.message(lines), by: .sbd, trigger: .notice)
         parentNotices.unsent[parent] = nil
       } catch {
         logLine("can't tell \(parent) about its children: \(error)")
@@ -137,16 +137,17 @@ extension Service {
     return ParentDigest.text(lines, elsewhere: counts)
   }
 
-  /// The digest that a Manager conversation gets when its conversation
-  /// starts, which a SessionStart with `source` startup reports. It is nil
-  /// for every other kind and source. It leaves out every Manager conversation.
+  /// The digest that a Manager conversation or the operator gets when its
+  /// conversation starts, which a SessionStart with `source` startup reports.
+  /// It is nil for every other kind and source. It leaves out every Manager
+  /// conversation and the operator.
   func startDigest(_ id: String, source: String?) -> String? {
-    guard let session = entries[id]?.session, session.kind == .manager, source == "startup" else { return nil }
-    let all = summaries(for: RequestOrigin(host: session.host)).filter { $0.id != id && $0.kind != .manager }
+    guard let session = entries[id]?.session, session.kind.runsInManagerFolder, source == "startup" else { return nil }
+    let all = summaries(for: RequestOrigin(host: session.host)).filter { $0.id != id && !$0.kind.runsInManagerFolder }
     return ParentDigest.startText(all, inbox: Triage.order(all))
   }
 
   func canTakeNotice(_ e: Entry, now: Int64) -> Bool {
-    !e.messageWaiting(now: now) && !e.facts.turnRunning && !mcpStarting(now: now)
+    Pause.blocker(e.session) == nil && !e.messageWaiting(now: now) && !e.facts.turnRunning && !mcpStarting(now: now)
   }
 }

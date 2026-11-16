@@ -123,6 +123,8 @@ public struct TriageMessage: Codable, Equatable, Sendable {
   }
 
   public var summary: Summary
+  /// The "Before you merge" panel, which only a Ready to merge item has.
+  public var review: MergeReview?
   public var action: Action
   public var details: TriageDetails
 }
@@ -130,7 +132,7 @@ public struct TriageMessage: Codable, Equatable, Sendable {
 extension TriageItem {
   public var message: TriageMessage {
     TriageMessage(
-      summary: .init(text: summary, callouts: callouts, drafts: drafts),
+      summary: .init(text: summary, callouts: callouts, drafts: drafts), review: review,
       action: .init(options: options, multiSelect: multiSelect, primary: primaryIndex, decisions: decisions),
       details: details)
   }

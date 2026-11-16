@@ -209,7 +209,8 @@ private let otherDestination = "haacked@other.local"
     "send_pending", "send_decided", "sent", "delivered", "delivery_unknown", "answered", "card_closed", "dialog_closed",
     "stopped", "exited", "running", "idle", "job", "pr", "branch", "worktree", "cleanup", "triage", "merge", "docket",
     "dependencies", "created", "imported", "started", "resumed", "followup", "followup-started", "wait", "wait-cleared",
-    "note", "done", "undone", "ack", "account-moved", "digest", "link_down", "link_up", "reconciled", "unknown",
+    "note", "done", "undone", "ack", "snooze", "unsnooze", "account-moved", "digest", "link_down", "link_up",
+    "reconciled", "unknown",
   ]
 
   /// A payload for mini's own session whose `hook_event_name` is `kind`, or is left out when `kind` is nil. It
@@ -375,7 +376,10 @@ private let otherDestination = "haacked@other.local"
   private static let refusedOps = [
     "rm", "cleanup", "rm-done", "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move",
     "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat",
-    "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "import", "importable", "accounts",
+    "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
+    "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "schedule",
+    "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
+    "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",
     "account-use",
     "account-move",
     "usage", "mcp",

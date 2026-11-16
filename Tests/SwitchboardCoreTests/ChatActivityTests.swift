@@ -35,7 +35,7 @@ private func chatSession() -> Session {
   return s
 }
 
-/// A card as sbd lists it. A send card holds a message to group g1.
+/// A card as sbd lists it. A send card holds a message to group g1. An mcp card asks to add grafana.
 private func markCard(_ id: Int64, _ kind: Card.Kind, summary: String = "`touch x`") -> Card {
   var json: [String: JSON] = [
     "id": .number(Double(id)), "session": "c", "kind": .string(kind.rawValue), "tool": "Bash",
@@ -44,6 +44,11 @@ private func markCard(_ id: Int64, _ kind: Card.Kind, summary: String = "`touch 
   if kind == .send {
     json["tool"] = "send_group"
     json["send"] = ["group": "g1", "groupName": "Flags", "text": "Rebase.", "targets": [], "expires": 0]
+  }
+  if kind == .mcp {
+    json["tool"] = "request_mcp_server"
+    json["summary"] = "add grafana to this conversation"
+    json["mcpRequest"] = ["servers": ["grafana"], "reason": "Read the deploy dashboards."]
   }
   return try! JSONCoding.convert(JSON.object(json), to: Card.self)
 }
@@ -349,7 +354,7 @@ private func chatSummary(
       e("UserPromptSubmit", ["prompt": "three"]),
     ]
     for cut in 1..<events.count {
-      try store.delete(session: chat.id, name: chat.name)
+      try store.delete(session: SessionRemoval(id: chat.id, name: chat.name))
       try store.save(chat)
       for event in events[..<cut] { try store.append(event) }
       _ = try Snapshots.refresh(store, chat, build: "b1")
@@ -397,6 +402,7 @@ struct ChatMarkRow: Sendable, CustomTestStringConvertible {
   static let permission = markCard(2, .permission)
   static let question = markCard(3, .question, summary: "Which fruit?")
   static let trust = markCard(4, .trust, summary: "/tmp/chats/g1")
+  static let mcp = markCard(5, .mcp)
 
   static let rows: [ChatMarkRow] = [
     ChatMarkRow(name: "no chat", summary: nil, expected: .none),
@@ -449,6 +455,16 @@ struct ChatMarkRow: Sendable, CustomTestStringConvertible {
       summary: chatSummary(reason: trust.reason, cards: [trust]),
       expected: .needsMe(trust.reason)),
     ChatMarkRow(
+      name: "an mcp card",
+      summary: chatSummary(reason: mcp.reason, cards: [mcp]),
+      expected: .needsMe(mcp.reason)),
+    ChatMarkRow(
+      name: "an mcp card with unread replies",
+      summary: chatSummary(
+        state: .needsYou, reason: mcp.reason, activity: ChatActivity(replies: 3, unread: 2, lastMessageAt: 50),
+        cards: [mcp]),
+      expected: .needsMe(mcp.reason)),
+    ChatMarkRow(
       name: "a question card",
       summary: chatSummary(reason: question.reason, cards: [question], openPrompt: true),
       expected: .needsMe(question.reason)),
@@ -491,12 +507,12 @@ struct ChatMarkRow: Sendable, CustomTestStringConvertible {
   }
 
   /// A send card waits on the user to send or cancel its message, though it stays out of the Inbox.
-  @Test(arguments: [Card.Kind.permission, .question, .trust, .send])
+  @Test(arguments: [Card.Kind.permission, .question, .trust, .send, .mcp])
   func everyCardKindNeedsMe(_ kind: Card.Kind) {
     #expect(ChatMark.needsMe(cards: [markCard(1, kind)], openPrompt: false))
   }
 
-  @Test(arguments: [Card.Kind.permission, .question, .trust, .send])
+  @Test(arguments: [Card.Kind.permission, .question, .trust, .send, .mcp])
   func everyCardKindGivesTheNeedsMeMarkWithItsReason(_ kind: Card.Kind) {
     let card = markCard(1, kind)
 
@@ -509,6 +525,11 @@ struct ChatMarkRow: Sendable, CustomTestStringConvertible {
 
   @Test func noCardAndNoPromptDoesNotNeedMe() {
     #expect(!ChatMark.needsMe(cards: [], openPrompt: false))
+  }
+
+  @Test func anMCPCardsMarkIsItsSummary() {
+    #expect(ChatMark.needsMe(.mcp))
+    #expect(Self.mcp.reason == "add grafana to this conversation")
   }
 
   /// `ChatMark` counts send cards, while the Inbox keeps leaving them out.

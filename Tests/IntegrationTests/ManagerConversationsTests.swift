@@ -57,10 +57,13 @@ import Testing
   }
 
   /// The arguments in the session's claude.sh, which holds the latest launch. sh reads the quoting.
+  /// The command follows the comment header and spans several lines when an argument holds a newline.
   func scriptArgs(_ sbd: Instance, _ id: String) throws -> [String] {
     let text = try String(contentsOfFile: "\(sbd.home.sessionFolder(id))/claude.sh", encoding: .utf8)
-    let line = try #require(text.split(separator: "\n").last { !$0.hasPrefix("#") }.map(String.init))
-    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", line])
+    let command = text.split(separator: "\n", omittingEmptySubsequences: false).drop { $0.hasPrefix("#") }
+      .joined(separator: "\n")
+    try #require(!command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "claude.sh has no command")
+    let r = try runCommand("/bin/sh", ["-c", #"eval "set -- $1"; printf '%s\0' "$@""#, "sh", command])
     try #require(r.status == 0, "sh could not read claude.sh: \(r.stderr)")
     return r.stdout.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map(String.init)
   }
@@ -759,6 +762,97 @@ import Testing
     #expect(missing?.data["servers"] == ["notes"])
   }
 
+  // MARK: Inside Claude Code
+
+  /// A change that widens what the conversation can do, which only the user may make.
+  enum WideningChange: CaseIterable {
+    case add, all
+
+    var args: [String] { self == .add ? ["add", "grafana"] : ["--all"] }
+  }
+
+  /// The session whose servers the command inside Claude Code changes.
+  enum MCPTarget: CaseIterable { case itself, anotherConversation, theOperator }
+
+  @Test(arguments: WideningChange.allCases, MCPTarget.allCases)
+  func aWideningChangeInsideClaudeCodeIsRefusedAndNamesTheTool(_ change: WideningChange, _ target: MCPTarget)
+    throws
+  {
+    let sbd = try Instance(config: Self.sharedServers)
+    let caller = try idleConversation(sbd, name: "caller")
+    let changed: SessionSummary
+    switch target {
+    case .itself: changed = caller
+    case .anotherConversation: changed = try idleConversation(sbd, name: "target")
+    case .theOperator: changed = try OperatorTests().idleOperator(sbd)
+    }
+    let before = launches(sbd, changed).count
+
+    let refused = try sbd.run(["manager", "mcp", changed.id] + change.args, env: inside(caller.id))
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("request_mcp_server"), "\(refused.stderr)")
+    Thread.sleep(forTimeInterval: 1)
+    #expect(launches(sbd, changed).count == before)
+    let shown = try decode(JSON.self, sbd.sb("manager", "mcp", changed.id, "--json"))
+    #expect(shown[Self.serversKey] == [], "\(shown.text)")
+  }
+
+  /// CLAUDECODE alone marks a command that Claude runs, with or without SB_SESSION_ID.
+  @Test(arguments: WideningChange.allCases) func aWideningChangeWithOnlyClaudeCodeSetIsRefused(_ change: WideningChange)
+    throws
+  {
+    let sbd = try Instance(config: Self.sharedServers)
+    let c = try idleConversation(sbd)
+
+    let refused = try sbd.run(["manager", "mcp", c.id] + change.args, env: ["CLAUDECODE": "1"])
+
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("request_mcp_server"), "\(refused.stderr)")
+    #expect(try decode(JSON.self, sbd.sb("manager", "mcp", c.id, "--json"))[Self.serversKey] == [])
+  }
+
+  /// A command typed in a session's shell pane has SB_SESSION_ID but not CLAUDECODE, so the user may widen there.
+  @Test func aWideningChangeInTheShellPaneRuns() throws {
+    let sbd = try Instance(config: Self.sharedServers)
+    let c = try idleConversation(sbd)
+    let before = launches(sbd, c).count
+
+    try sbd.sb(["manager", "mcp", c.id, "add", "grafana"], env: ["SB_SESSION_ID": c.id])
+
+    try launch(sbd, c, after: before)
+    #expect(serverNames(try scriptArgs(sbd, c.id)) == ["grafana", "switchboard"])
+  }
+
+  /// A change that never widens what the conversation can do, which still runs inside Claude Code.
+  enum NarrowingChange: CaseIterable { case show, rm, none }
+
+  @Test(arguments: NarrowingChange.allCases) func aNarrowingChangeStillRunsInsideClaudeCode(_ change: NarrowingChange)
+    throws
+  {
+    let sbd = try Instance(config: Self.sharedServers)
+    let c = try idleConversation(sbd)
+    try changeServers(sbd, c, "add", "grafana")
+    let before = launches(sbd, c).count
+
+    let args: [String] =
+      switch change {
+      case .show: ["--json"]
+      case .rm: ["rm", "grafana"]
+      case .none: ["--none"]
+      }
+    let r = try sbd.run(["manager", "mcp", c.id] + args, env: inside(c.id))
+
+    #expect(r.status == 0, "\(r.stderr)")
+    let shown = try decode(JSON.self, sbd.sb("manager", "mcp", c.id, "--json"))
+    let expected: JSON = change == .show ? ["grafana"] : []
+    #expect(shown[Self.serversKey] == expected, "\(shown.text)")
+    if change != .show {
+      try launch(sbd, c, after: before)
+      #expect(serverNames(try scriptArgs(sbd, c.id)) == ["switchboard"])
+    }
+  }
+
   // MARK: The manager-mcp answer that the app reads
 
   /// Sends `manager-mcp` with the arguments that the app's server menu sends, and decodes the answer as the app does.
@@ -1055,7 +1149,8 @@ import Testing
     #expect(spawn["inputSchema"]?["properties"]?["wait"] != nil)
   }
 
-  @Test func spawnWithWaitDoneSetsASessionWaitOnTheCaller() throws {
+  /// A conversation hands the wait to the operator (`OperatorHandoffTests`).
+  @Test func spawnWithWaitDoneSetsASessionWaitThatTheOperatorHoldsForTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
@@ -1064,35 +1159,39 @@ import Testing
 
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
 
-    let waits = try sbd.get(c.id).waits
-    #expect(waits.count == 1)
-    let wait = try #require(waits.first)
+    #expect(try sbd.get(c.id).waits.isEmpty)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    #expect(op.waits.count == 1)
+    let wait = try #require(op.waits.first)
     #expect(wait.kind == .session)
     #expect(wait.session?.id == kid.id)
     #expect(wait.state == .done)
+    #expect(wait.handedFrom?.id == c.id)
     #expect(try sbd.get(kid.id).waits.isEmpty)
   }
 
-  @Test func theChildReachingDoneResumesTheCallerOnce() throws {
+  @Test func theChildReachingDoneResumesTheOperatorOnceAndNotTheCaller() throws {
     let sbd = try Instance()
     let c = try idleConversation(sbd)
     let mcp = try MCPClient(sbd, env: inside(c.id))
     var args = try spawnArgs(sbd, "kid")
     args["wait"] = "done"
     let kid = try mcp.call("spawn", args).decode(SessionSummary.self)
-    try #require(try sbd.get(c.id).waits.count == 1)
+    let op = try #require(try OperatorTests().operators(sbd).first)
+    try #require(op.waits.count == 1)
     try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply == "Done: hello" }
 
     try sbd.sb("done", kid.id)
 
-    let resumed = try sbd.waitFor(c.id, "the resumed turn", timeout: 30) {
-      $0.lastReply == "Done: Switchboard: kid to reach Done: it did."
+    let resumed = try sbd.waitFor(op.id, "the operator's resumed turn", timeout: 30) {
+      $0.lastReply == "Done: Switchboard: kid to reach Done: it did. For Manager conversation \"\(c.name)\"."
     }
     #expect(resumed.waits.isEmpty)
     try sbd.sb("undone", kid.id)
     try sbd.sb("done", kid.id)
     Thread.sleep(forTimeInterval: 1)
-    #expect(try sbd.sbdMessages(c.id).count == 1)
+    #expect(try sbd.sbdMessages(op.id).count == 1)
+    #expect(try sbd.sbdMessages(c.id).isEmpty)
   }
 
   @Test func spawnWithoutWaitSetsNoWait() throws {

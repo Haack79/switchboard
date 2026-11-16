@@ -1,6 +1,29 @@
 import Foundation
 import SQLite3
 
+/// What `Store.delete(session:)` writes when it removes a session.
+public struct SessionRemoval: Equatable, Sendable {
+  public var id: String
+  /// The name that `removed_sessions` records.
+  public var name: String
+  /// The open to-dos that the delete resolves.
+  public var todos: [ResolvedTodo]
+  /// The host of a session on a remote host, which `removed_host_sessions` records.
+  public var host: String?
+  /// The group to save in the same transaction, with the session's artifacts added to its kept rows.
+  public var group: SessionGroup?
+
+  public init(
+    id: String, name: String, todos: [ResolvedTodo] = [], host: String? = nil, group: SessionGroup? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.todos = todos
+    self.host = host
+    self.group = group
+  }
+}
+
 /// sbd's SQLite database: the sessions and their event log. Each session is a
 /// JSON row, so a new field needs no table migration.
 public final class Store {
@@ -36,6 +59,9 @@ public final class Store {
     try exec(
       "CREATE TABLE IF NOT EXISTS removed_host_sessions (id TEXT NOT NULL, host TEXT NOT NULL, PRIMARY KEY (id, host))")
     try exec(
+      "CREATE TABLE IF NOT EXISTS removal_notices (id INTEGER PRIMARY KEY, session TEXT NOT NULL, name TEXT NOT NULL, message TEXT NOT NULL)"
+    )
+    try exec(
       "CREATE TABLE IF NOT EXISTS removed_sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, removed INTEGER NOT NULL)")
   }
 
@@ -49,34 +75,32 @@ public final class Store {
   /// to-dos, and records the session's `name` and the time in
   /// `removed_sessions`, in one transaction. A failure leaves all of it as it
   /// was. For a session on `host`, the same transaction records it in
-  /// `removed_host_sessions`.
-  public func delete(
-    session id: String, name: String, resolving todos: [ResolvedTodo] = [], onHost host: String? = nil
-  ) throws {
-    try transaction { try deleteRows(session: id, name: name, resolving: todos, onHost: host) }
+  /// `removed_host_sessions`. The same transaction saves `group` when the
+  /// removal has one.
+  public func delete(session removal: SessionRemoval) throws {
+    try transaction { try deleteRows(removal) }
   }
 
-  /// Throws when `delete(session:name:resolving:onHost:)` hits an abort or a
-  /// constraint, a read-only connection, or a write lock held past the busy
-  /// timeout. It runs the same statements in a transaction that it rolls back.
-  /// It does not see a failure that only the commit causes.
-  public func checkDeletable(
-    session id: String, name: String, resolving todos: [ResolvedTodo], onHost host: String? = nil
-  ) throws {
+  /// Throws when `delete(session:)` hits an abort or a constraint, a
+  /// read-only connection, or a write lock held past the busy timeout. It runs
+  /// the same statements in a transaction that it rolls back. It does not see
+  /// a failure that only the commit causes.
+  public func checkDeletable(session removal: SessionRemoval) throws {
     try exec("BEGIN IMMEDIATE")
     defer { try? exec("ROLLBACK") }
-    try deleteRows(session: id, name: name, resolving: todos, onHost: host)
+    try deleteRows(removal)
   }
 
-  private func deleteRows(session id: String, name: String, resolving todos: [ResolvedTodo], onHost host: String?)
-    throws
-  {
-    for todo in todos { try insert(todo) }
-    try run("DELETE FROM sessions WHERE id = ?", [id])
-    try run("DELETE FROM events WHERE session = ?", [id])
-    try run("DELETE FROM snapshots WHERE session = ?", [id])
-    try run("INSERT OR REPLACE INTO removed_sessions (id, name, removed) VALUES (?, ?, ?)", [id, name, nowMs()])
-    if let host { try recordRemovedHostSession(id, host: host) }
+  private func deleteRows(_ removal: SessionRemoval) throws {
+    if let group = removal.group { try save(group: group) }
+    for todo in removal.todos { try insert(todo) }
+    try run("DELETE FROM sessions WHERE id = ?", [removal.id])
+    try run("DELETE FROM events WHERE session = ?", [removal.id])
+    try run("DELETE FROM snapshots WHERE session = ?", [removal.id])
+    try run(
+      "INSERT OR REPLACE INTO removed_sessions (id, name, removed) VALUES (?, ?, ?)",
+      [removal.id, removal.name, nowMs()])
+    if let host = removal.host { try recordRemovedHostSession(removal.id, host: host) }
   }
 
   /// The sessions that sbd removed, newest first. A second removal of an id replaces its row.
@@ -115,6 +139,23 @@ public final class Store {
         branch: row.optionalText(4), pr: row.optionalInt(5), note: row.text(6), text: row.text(7),
         by: Author(rawValue: row.text(8)) ?? .you, added: row.int(9), resolved: row.int(10), how: row.text(11))
     }
+  }
+
+  @discardableResult
+  public func addRemovalNotice(session: String, name: String, message: String) throws -> RemovalNotice {
+    try run("INSERT INTO removal_notices (session, name, message) VALUES (?, ?, ?)", [session, name, message])
+    return RemovalNotice(id: sqlite3_last_insert_rowid(db), session: session, name: name, message: message)
+  }
+
+  /// The removal notices, oldest first.
+  public func removalNotices() throws -> [RemovalNotice] {
+    try query("SELECT id, session, name, message FROM removal_notices ORDER BY id", []) { row in
+      RemovalNotice(id: row.int(0), session: row.text(1), name: row.text(2), message: row.text(3))
+    }
+  }
+
+  public func deleteRemovalNotice(id: Int64) throws {
+    try run("DELETE FROM removal_notices WHERE id = ?", [id])
   }
 
   /// The snapshot that `Snapshots` saved for the session, as JSON text.
@@ -285,15 +326,20 @@ public final class Store {
   /// Events with an id above `since`, oldest first, for one session or for
   /// all. It returns at most `limit` events: the oldest ones, or with
   /// `newest`, the newest ones.
-  /// `sessions` limits the events to those sessions. `session` limits them to one.
+  /// `sessions` limits the events to those sessions. `session` limits them to one. `kind` limits them to one kind.
   public func events(
-    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, limit: Int = Int.max, newest: Bool = false
+    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, kind: String? = nil, limit: Int = Int.max,
+    newest: Bool = false
   ) throws -> [Event] {
     let ids = sessions ?? session.map { [$0] }
     if ids?.isEmpty == true { return [] }
-    let filter = ids.map { " AND session IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))" } ?? ""
+    var filter = ids.map { " AND session IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))" } ?? ""
     var args: [Any] = [since]
     args += ids ?? []
+    if let kind {
+      filter += " AND kind = ?"
+      args.append(kind)
+    }
     args.append(limit)
     let order = newest ? "DESC" : "ASC"
     let rows = try query(

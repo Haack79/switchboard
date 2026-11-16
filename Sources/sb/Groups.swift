@@ -117,6 +117,9 @@ private func printGroups(_ list: GroupList) {
     if let description = g.description { print("  \(description)".printable) }
     if let account = g.account { print("  \(accountLine(account))".printable) }
     for note in g.notes { print("  note: \(oneLine(note.text, max: 200))".printable) }
+    for a in g.artifacts ?? [] {
+      print("  artifact: \(a.title)  \(a.url)  by \(a.sessionName)\(a.removed == nil ? "" : " (removed)")".printable)
+    }
     for p in g.plans ?? [] { printPlan(p, indent: "  ") }
     print(g.sessions.isEmpty ? "  no sessions" : "  " + g.sessions.joined(separator: " "))
   }

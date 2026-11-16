@@ -15,6 +15,10 @@ public final class Service {
   let queue = DispatchQueue(label: "sbd.state")
   /// Each paste waits 300 ms before its Enter, so pastes run here, in order.
   let pasteQueue = DispatchQueue(label: "sbd.paste")
+  /// The removal job runs here, one session at a time.
+  let removalQueue = DispatchQueue(label: "sbd.removal")
+  /// Deletes the trash folders, one at a time.
+  let trashQueue = DispatchQueue(label: "sbd.trash", qos: .background)
 
   struct Entry {
     var session: Session
@@ -68,6 +72,12 @@ public final class Service {
     /// Set when a running claude's MCP servers changed. `applyMCPChanges`
     /// relaunches claude once it can take the change.
     var mcpRelaunch: MCPRelaunch?
+    /// When sbd last stopped the claude of the paused session.
+    var pauseStopAt: Int64?
+    /// The trigger of a resume that came while the paused claude still ran. The tick launches claude for the
+    /// queued resume message once that claude exits, even when it exited before its SessionStart. It stays set
+    /// until a launch starts claude or the running claude reports SessionStart.
+    var resumeLaunch: LaunchTrigger?
 
     /// Whether a message is queued for the session or on its way. A launch's
     /// prompt stays on its way until SessionStart, for up to `startingMs`.
@@ -108,8 +118,8 @@ public final class Service {
   var starting: Set<String> = []
   /// The sessions whose PR `merge` is merging.
   var merging: Set<String> = []
-  /// The sessions on a host whose `rm` stopped them. Nothing launches them again, because sbd closes no pane on
-  /// a host after it forgets the session.
+  /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
+  /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
@@ -127,6 +137,10 @@ public final class Service {
   var ghLogin: String?
   /// The sessions whose decision list `decision-submit` is sending.
   var submittingDecisions: Set<String> = []
+  /// The sessions that the removal job takes next, in order.
+  var removalOrder: [String] = []
+  /// The timer that starts a pass of the removal job at the earliest `notBefore` of the queued removals.
+  var removalWake: DispatchWorkItem?
   /// The main checkout of each session folder that a lookup read, or nil for
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
@@ -231,6 +245,7 @@ public final class Service {
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
   var issueCache = IssueCache()
+  let references = ReferenceFetches()
   var quota: any QuotaBudget = UnlimitedBudget()
   var groups: [String: SessionGroup] = [:]
   var plans: [String: PlanDocument] = [:]
@@ -342,13 +357,16 @@ public final class Service {
         if case .running = claudeState(id) { deliverPending(id, after: 0) }
       }
       superviseSites(now: nowMs())
+      purgeUnnamedTrash()
+      resumeRemovals()
     }
   }
 
   // MARK: Requests
 
   static let actsOnProcesses: Set<String> = [
-    "send", "send-group", "stop", "resume", "open", "terminals", "shell", "resolve-wait", "answer", "account-move",
+    "send", "send-group", "stop", "pause", "resume", "open", "terminals", "shell", "resolve-wait", "answer",
+    "account-move",
     "dependency-resolved", "live-next",
   ]
   static let launches: Set<String> = [
@@ -356,7 +374,7 @@ public final class Service {
   ]
   /// The requests that wait for the host of the session they name, and read its panes and processes first.
   static let needsHost: Set<String> = [
-    "open", "resume", "stop", "send", "answer", "screen", "terminals", "shell", "live-next",
+    "open", "pause", "resume", "stop", "send", "answer", "screen", "terminals", "shell", "live-next",
   ]
   /// The requests that can send claude a message. Each one first waits up to 5 s for a starting claude
   /// to go live. `open` sends nothing, so it doesn't wait.
@@ -364,10 +382,11 @@ public final class Service {
 
   /// `origin` is the socket that the request arrived on. `caller` lets a request that stops a session's
   /// panes refuse a client inside that session. `hookGone` reports whether the client closed its
-  /// connection, which a held PermissionRequest checks while it waits.
+  /// connection, which a held PermissionRequest checks while it waits. A quick ask ends its claude turn when it
+  /// turns true.
   public func handle(
     _ request: Request, origin: RequestOrigin = .mac, caller: Caller = .inProcess,
-    hookGone: @escaping () -> Bool = { false }
+    hookGone: @escaping @Sendable () -> Bool = { false }
   ) -> Response {
     var answer = Response.failure("sbd gave no answer")
     handle(request, origin: origin, caller: caller, hookGone: hookGone) { answer = $0 }
@@ -378,7 +397,7 @@ public final class Service {
   /// `cli` request calls `reply` while its run still holds one of the host's slots, so the slot stays taken
   /// until the answer is sent.
   public func handle(
-    _ request: Request, origin: RequestOrigin, caller: Caller, hookGone: @escaping () -> Bool,
+    _ request: Request, origin: RequestOrigin, caller: Caller, hookGone: @escaping @Sendable () -> Bool,
     reply: (Response) -> Void
   ) {
     var replied = false
@@ -398,7 +417,7 @@ public final class Service {
   /// Runs a request from this Mac, or a request from a host that `HostScope.authorize` returned. In the state queue
   /// block that runs the op, each session that a host's request names is checked again to be on that host: by
   /// `requireOnHost`, or for the parent of `new` and `spawn`, by `create`.
-  func route(_ request: Request, origin: RequestOrigin, caller: Caller, hookGone: @escaping () -> Bool) throws
+  func route(_ request: Request, origin: RequestOrigin, caller: Caller, hookGone: @escaping @Sendable () -> Bool) throws
     -> Response
   {
     switch request.op {
@@ -415,6 +434,8 @@ public final class Service {
       return try .success(JSON(encoding: addRepo(request.args)))
     case "manager":
       return managerRequest(request.args)
+    case "operator":
+      return operatorRequest(request.args)
     case "chat":
       return chatRequest(request.args)
     case "chat-log":
@@ -427,6 +448,10 @@ public final class Service {
       return .success(try cleanup(request.args, caller: caller))
     case "rm-done":
       return .success(try removeDone(request.args, caller: caller))
+    case "rm-plan":
+      return .success(try removalPlan(request.args, caller: caller))
+    case "rm-queue":
+      return .success(try queueRemovals(request.args, caller: caller))
     case "merge":
       return .success(try mergeRequest(request.args))
     case "review":
@@ -438,7 +463,11 @@ public final class Service {
     // and not in `dispatch`.
     case "clock":
       let now = try queue.sync { try clockRequest(request.args) }
-      if request.args["advance"] != nil { tick() }
+      if request.args["advance"] != nil {
+        tick()
+        // The removal job's timer runs on real time, so a removal whose `notBefore` the clock passed starts now.
+        runRemovals()
+      }
       return .success(now)
     case "followup-add", "followup-ls", "followup-start", "followup-rm", "followup-import":
       return .success(try followupRequest(request.op, request.args))
@@ -465,12 +494,18 @@ public final class Service {
     case "poll":
       // A poll waits on GitHub, so it runs off the state queue.
       return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])
+    case "ref-details":
+      // A fetch waits on GitHub, so it runs off the state queue.
+      return .success(try JSON(encoding: referenceDetails(request.args)))
     case "docket-start":
       return .success(try JSON(encoding: startDocket(request.args)))
     case "usage":
       // `usage` runs off the state queue. The reader takes that queue itself
       // to list the accounts, and a refresh waits on the network.
       return .success(try JSON(encoding: usageRequest(request.args)))
+    case "quick-ask":
+      // A quick ask can run claude for minutes. It runs off the state queue.
+      return .success(try quickAsk(request.args, clientGone: hookGone))
     case "send" where request.args["images"] != nil:
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
@@ -485,7 +520,7 @@ public final class Service {
   /// on the state queue.
   func prepared(_ request: Request, origin: RequestOrigin, _ body: () throws -> JSON) throws -> JSON {
     let hostRead = try readHost(for: request)
-    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try lookup(request.args) }) {
+    if Service.settles.contains(request.op), let id = try? queue.sync(execute: { try messaged(request) }) {
       settle(id)
     }
     if Service.waitsForMCP.contains(request.op) { awaitMCPServers(for: request) }
@@ -508,6 +543,11 @@ public final class Service {
       try requireOnHost(request, origin: origin)
       if let fresh { install(fresh) }
       if let hostRead { install(hostRead.snapshot, onHost: hostRead.host) }
+      if Service.actsOnProcesses.contains(request.op), let id = try? lookup(request.args),
+        let refusal = removalRefusal(id)
+      {
+        throw refusal
+      }
       return try body()
     }
   }
@@ -520,6 +560,16 @@ public final class Service {
     for id in HostScope.sessionIds(of: request) where entries[id]?.session.host != host {
       throw HostScope.notOnHost(host)
     }
+  }
+
+  /// The session whose claude `request` can message: the session it names, or
+  /// the operator for a `resolve-wait` of a wait that a conversation handed it.
+  /// A met pause condition resumes the session that it names.
+  private func messaged(_ request: Request) throws -> String {
+    let id = try lookup(request.args)
+    let waitId = request.args["wait"]?.string
+    guard request.op == "resolve-wait", pauseCondition(id, waitId) == nil else { return id }
+    return try openWait(id, waitId).holder
   }
 
   /// For a request that acts on a session on a host: waits for the host, then reads its panes and processes.
@@ -573,52 +623,80 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
-      // A sender that sbd no longer knows, or the session itself, goes unrecorded.
-      let from = (try? lookup(["session": args["from"] ?? .null])).flatMap { $0 == id ? nil : $0 }
-      // A message from another session, such as the Manager, doesn't hold the session for the user.
-      let fromSession = args["from"] != nil || args["insideClaude"]?.bool == true
+      // The `sent` event names a session that messages itself as the sender. Its launch trigger stays `send`.
+      // A sender that sbd no longer knows goes unrecorded.
+      let sender = try? lookup(["session": args["from"] ?? .null])
+      let author = Service.author(args)
       // claude's prompt shows an attached image as `[Image #n]` after the text, so the request keeps the text alone.
       let typed = (Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text)
         .trimmingCharacters(in: .whitespacesAndNewlines)
-      let request = fromSession ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
-      let delivery = try send(id, text, trigger: from == nil ? .send : .session, from: from)
+      // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
+      let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
+      let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
-      return ["delivery": .string(delivery.rawValue)]
+      var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
+      if let session = entries[id]?.session, let pause = session.pause {
+        reply["held"] = .string(pause.line)
+        reply["name"] = .string(session.name)
+      }
+      return .object(reply)
     case "dependency-resolved":
       return try dependencyResolved(args)
     case "stop":
       let id = try lookup(args)
       try stop(id, reason: "asked")
       return try JSON(encoding: summary(id, for: origin))
+    case "pause":
+      return try pauseRequest(args)
     case "resume":
-      let id = try lookup(args)
-      try launch(id, prompt: args["prompt"]?.string, trigger: .resume)
-      return try JSON(encoding: summary(id, for: origin))
+      return try resumeRequest(args, origin: origin)
     case "done":
       let id = try lookup(args)
       let done = args["done"]?.bool ?? true
+      // sbd skips a done session's waits, so the operator's waits would stop without a message.
+      if done, entries[id]?.session.kind == .operator {
+        throw APIError(
+          "the operator can't be marked done, because its waits would stop without a message. "
+            + "To remove it, run: sb rm \(Manager.operatorName)")
+      }
       try update(id) { $0.done = done }
       record(id, done ? "done" : "undone")
       return try JSON(encoding: summary(id, for: origin))
     case "ack":
       return try acknowledgeRequest(args)
+    case "snooze":
+      return try snoozeRequest(args)
+    case "unsnooze":
+      return try unsnoozeRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
       return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
+    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
+    case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":
+      return try removalRequest(op, args)
     case "manager-ls":
       return try JSON(encoding: managerList())
     case "manager-mcp":
       return try managerMCP(args)
+    case "manager-mcp-request":
+      return try openMCPRequest(args)
+    case "operator-report":
+      return try operatorReport(args)
+    case "operator-reports":
+      return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
+      try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id, for: origin))
     case "issue":
@@ -700,12 +778,22 @@ public final class Service {
     return try resolveRef(key, "session", entries.values.map { ($0.session.id, $0.session.name) })
   }
 
+  /// The session that `args` names, refused when it is the asking session
+  /// `caller`. The refusal says that the session can't do `action`.
+  func lookupOther(_ args: JSON, refusing action: String) throws -> String {
+    let id = try lookup(args)
+    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
+      throw APIError("\(entries[id]!.session.name) can't \(action)")
+    }
+    return id
+  }
+
   // MARK: Hooks
 
   /// Records a hook event and returns it with what the hook prints, or nil
   /// for an unknown session. A UserPromptSubmit of a Manager or a chat prints
   /// the digest of its children, and the SessionStart of a new Manager
-  /// conversation prints the digest of the whole board. sbd records each
+  /// conversation or the operator prints the digest of the whole board. sbd records each
   /// digest as a `digest` event. A work session's UserPromptSubmit prints
   /// the replies that the user posted from its drafts since it last heard.
   /// `stamp` is set for an event that a host's shim made. Such an event is recorded with its id and its own
@@ -755,6 +843,8 @@ public final class Service {
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
       if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
+      // This claude takes the queued resume message, so the tick launches no other claude for the resume.
+      entries[id]?.resumeLaunch = nil
       refreshSoon()
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
@@ -1010,8 +1100,9 @@ public final class Service {
     if let host = args.host { return try startSession(args, onHost: host, origin: origin) }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
-    // An unknown group, an unknown account, or an account that differs from
-    // the group's fails here, before prepareFolder makes a worktree.
+    // An unknown group, an unknown account, an account that differs from
+    // the group's, or the operator's name fails here, before prepareFolder makes a worktree.
+    try refuseOperatorName(args.name ?? args.branch)
     try queue.sync {
       var probe = Session(id: "", name: "", cwd: "", branch: nil, claudeSessionId: "", model: nil, created: 0)
       probe.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1050,6 +1141,7 @@ public final class Service {
       throw APIError("a folder on \(host) is an absolute path or starts with ~, and \(args.path) is neither")
     }
     args.branch = branch(of: args, repo: args.path, at: site)
+    try refuseOperatorName(args.name ?? args.branch)
     let folder: (cwd: String, branch: String?, repo: String?)
     do {
       folder = try prepareFolder(args, at: site)
@@ -1116,6 +1208,7 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
@@ -1181,10 +1274,27 @@ public final class Service {
     let shell = paneName(id, .shell)
     if paneRow(id, .shell)?.dead == true { try closeShell(id) }
     if entries[id]?.session.shellClosed != true { try startShell(id) }
-    if paneRow(id, .claude) == nil { try launch(id, prompt: nil, trigger: .open) }
+    if paneRow(id, .claude) == nil {
+      if let pause = session.pause {
+        // A pane whose command exits at once shows the pause, and a keystroke in it starts nothing.
+        try site(for: session).terminals().create(
+          paneName(id, .claude), cwd: session.cwd, env: try newPaneEnv(id), command: "true",
+          deadMessage: Service.pausedPaneMessage(pause))
+      } else {
+        try launch(id, prompt: nil, trigger: .open)
+      }
+    }
     let terminals = try site(for: session).terminals()
     return Terminals(
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
+  }
+
+  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
+  /// comes first. A blank line separates it from the triage prompt.
+  func appendedSystemPrompt(for session: Session) -> String? {
+    let role = session.kind == .operator ? Manager.operatorPrompt : ""
+    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    return text.isEmpty ? nil : text
   }
 
   /// Starts claude in the session's Claude pane. A launch resumes the
@@ -1219,8 +1329,8 @@ public final class Service {
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
     if let mode { args += ["--permission-mode", mode] }
-    if !config.triage.systemPrompt.isEmpty {
-      args += ["--append-system-prompt", config.triage.systemPrompt]
+    if let system = appendedSystemPrompt(for: session) {
+      args += ["--append-system-prompt", system]
     }
     // `--` keeps a prompt that starts with a dash from reading as an option.
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
@@ -1239,15 +1349,14 @@ public final class Service {
     if paneRow(id, .claude) != nil {
       try terminals.respawn(name, cwd: session.cwd, env: env, command: command)
     } else {
-      try terminals.create(name, cwd: session.cwd, env: env, command: command)
-      try terminals.setDeadMessage(
-        name, "Claude stopped. Switchboard resumes it when you open the session or send it a message.")
+      try terminals.create(name, cwd: session.cwd, env: env, command: command, deadMessage: Service.stoppedPaneMessage)
     }
     markStarting(name)
     if !session.started { try update(id) { $0.started = true } }
     forgetClaudePid(id)
     // This launch reads the current MCP servers, so no relaunch for a change to them is still due.
     entries[id]?.mcpRelaunch = nil
+    entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
     entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
     record(
@@ -1297,25 +1406,33 @@ public final class Service {
   /// Whether claude sits at its prompt, ready for a paste: this launch's
   /// claude reported SessionStart at least 1.5 s ago, no turn runs, and no
   /// message is on its way. A claude that shows a dialog at startup, such as
-  /// the workspace trust dialog, has not reported SessionStart.
+  /// the workspace trust dialog, has not reported SessionStart. A paused session takes no paste.
   private func readyForPaste(_ id: String, now: Int64) -> Bool {
-    guard let e = entries[id], e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart else { return false }
+    guard let e = entries[id], Pause.blocker(e.session) == nil, e.facts.live, !e.facts.turnRunning,
+      let start = e.facts.lastStart
+    else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
     if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
     return now - start >= 1500
   }
 
-  /// `byUser` is false for a message that sbd sends on its own, which can't
-  /// answer a deferred question. With `launchesWithPrompt` false, a stopped
+  /// `by` is who wrote the message, which the `sent` event records. With `launchesWithPrompt` false, a stopped
   /// claude starts without a prompt and gets the message as a paste, which
   /// checks that the log still holds the `sent` event. It throws, and pastes
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
+  /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   func send(
-    _ id: String, _ text: String, byUser: Bool = true, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
     from: String? = nil
   ) throws -> Delivery {
-    guard entries[id] != nil else { throw APIError("no session \(id)") }
+    guard let e = entries[id] else { throw APIError("no session \(id)") }
+    if let refusal = removalRefusal(id) { throw refusal }
+    if Pause.blocker(e.session) != nil {
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
+      entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
+      return .queued
+    }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
     // a message with images waits for a paste.
@@ -1325,11 +1442,11 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, byUser: byUser, from: from)
+      try recordSent(id, text, .resumed, by: by, from: from)
       try startClaude(id, prompt: text, trigger: trigger)
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
-      let sent = try recordSent(id, text, .pasted, byUser: byUser, from: from)
+      let sent = try recordSent(id, text, .pasted, by: by, from: from)
       paste(id, QueuedMessage(text: text, sent: sent))
       return .pasted
     } else {
@@ -1337,26 +1454,27 @@ public final class Service {
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, byUser: byUser, from: from)
+      try queueMessage(id, text, by: by, from: from)
       return .queued
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, byUser: Bool, from: String? = nil) throws {
-    let sent = try recordSent(id, text, .queued, byUser: byUser, from: from)
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil) throws {
+    let sent = try recordSent(id, text, .queued, by: by, from: from)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
   }
 
+  /// `extra` adds fields to the event, such as `held`.
   @discardableResult
-  private func recordSent(_ id: String, _ text: String, _ delivery: Delivery, byUser: Bool, from: String?) throws
-    -> Event
-  {
-    var data: [String: JSON] = ["text": .string(text), "delivery": .string(delivery.rawValue)]
+  func recordSent(
+    _ id: String, _ text: String, _ delivery: Delivery, by: MessageAuthor, from: String?, extra: [String: JSON] = [:]
+  ) throws -> Event {
+    var data = extra.merging(["text": .string(text), "delivery": .string(delivery.rawValue)]) { $1 }
     if delivery == .pasted { data[Delivery.awaitsDeliveredKey] = true }
-    if !byUser { data["by"] = "sbd" }
+    data["by"] = .string(by.rawValue)
     if let from { data["from"] = .string(from) }
     return try recordStored(id, "sent", .object(data))
   }
@@ -1370,7 +1488,9 @@ public final class Service {
     entries[id]!.deliveryGeneration += 1
     let generation = entries[id]!.deliveryGeneration
     queue.asyncAfter(deadline: .now() + delay) { [self] in
-      guard let e = entries[id], !e.pending.isEmpty, e.deliveryGeneration == generation else { return }
+      // A session that the removal job holds keeps its messages. `failRemoval` delivers them.
+      guard let e = entries[id], !e.pending.isEmpty, e.deliveryGeneration == generation, removalRefusal(id) == nil
+      else { return }
       // The facts of a session whose host sbd can't read may be old. The reconcile delivers after it.
       guard claudeState(id) != .unknown else { return }
       let now = nowMs()
@@ -1490,6 +1610,12 @@ public final class Service {
   /// did not answer the read of the transcript's size.
   func startPaste(_ id: String, _ message: QueuedMessage) -> Bool {
     entries[id]?.heldText = nil
+    // The removal job can take the session after `deliverPending` let the paste start.
+    // A pause that came after the paste was queued keeps the message for the resume.
+    if removalRefusal(id) != nil || entries[id].flatMap({ Pause.blocker($0.session) }) != nil {
+      requeue(id, message)
+      return false
+    }
     var data: [String: JSON] = ["text": .string(message.text)]
     do {
       if let session = entries[id]?.session {
@@ -1525,8 +1651,9 @@ public final class Service {
   }
 
   /// Waits while the gate file exists in the home. Only a test instance has
-  /// gates, and they run on the paste queue, never on the state queue.
-  private func waitAtGate(_ gate: String) {
+  /// gates, and they run on the paste queue or the removal queue, never on
+  /// the state queue.
+  func waitAtGate(_ gate: String) {
     guard config.testClock else { return }
     while FileManager.default.fileExists(atPath: "\(home.path)/\(gate)") { usleep(50_000) }
   }
@@ -1573,7 +1700,8 @@ public final class Service {
   /// before it forgets the session. A session whose host config.json no longer
   /// lists is forgotten only when its claude stopped on record.
   /// A removal of the worktree refuses a caller inside a session on this Mac before anything stops, as
-  /// `beginPaneStop` describes.
+  /// `beginPaneStop` describes. It refuses a session that the removal job holds, or that another `rm` or
+  /// `cleanup` is removing.
   func remove(_ args: JSON, caller: Caller) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
@@ -1588,155 +1716,309 @@ public final class Service {
     let flags =
       (removesWorktree ? ["--worktree"] : []) + (removesBranch ? ["--delete-branch"] : [])
       + (removesRemoteBranch ? ["--delete-remote-branch"] : [])
-    let command = "sb rm --worktree"
-    let ancestry = removesWorktree ? try caller.ancestry(command: command) : nil
+    let ancestry = removesWorktree ? try caller.ancestry(command: Self.removalCommand) : nil
     do {
-      let (session, pr, sharedWith, mayRun): (Session, PullRequest?, String?, Bool) = try queue.sync {
+      let id: String = try queue.sync {
         let id = try lookup(args)
-        // The start would otherwise leave its new worktree behind.
-        guard !starting.contains(id) else { throw APIError("\(mention(id)) is starting") }
-        guard !merging.contains(id) else { throw APIError("\(mention(id)) is merging its PR") }
-        try checkTodos(id, resolving: resolving)
-        let entry = entries[id]!
-        return (entry.session, entry.facts.pr, sharedSession(entry.session), mayRunClaude(entry))
+        if let refusal = removalRefusal(id) ?? trashRefusal(id) { throw refusal }
+        guard removing.insert(id).inserted else { throw APIError("\(id) is being deleted") }
+        return id
       }
-      let site = self.site(for: session)
-      if site is UnlistedSite {
-        return try removeFromUnlistedHost(
-          session, resolving: resolving, worktree: removesWorktree, mayRunClaude: mayRun, site: site)
+      defer { queue.sync { _ = removing.remove(id) } }
+      let released = try removeAtSite(
+        id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
+        resolving: resolving, ancestry: ancestry, by: .rm
+      ) { check, stopped, site in
+        try releaseFiles(
+          check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
+          folderGone: check.folderGone, remoteBranch: check.remoteTarget, at: site)
       }
-      try awaitSite(site)
-      defer { queue.sync { _ = removing.remove(session.id) } }
-      var repo: String?
-      var branch: (name: String, tip: String)?
-      var worktreeRemoved = false
-      var branchRemoved = false
-      var branchError: Error?
-      var remoteRemoved = false
-      var remoteError: Error?
-      do {
-        // On a host, every check and every git command runs on one connection, and the scope's machine refuses
-        // each command once one got no answer.
-        try site.scoped("the removal of \(session.mention)") { scope in
-          let at = scope.site
-          // Only a removal of the worktree reads the answer, so a plain rm asks a host nothing about the folder.
-          let folderGone = removesWorktree ? try folderIsGone(session.cwd, at: at) : false
-          var supacode: Bool
-          var proven: PullRequest?
-          (repo, branch, supacode, proven) = try checkRemoval(
-            session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
-            branch: removesBranch, at: at)
-          // The branch's git config is deleted with the branch, so the remote is read first.
-          // A local branch that is already gone still has its remote branch checked.
-          let remoteTarget: (repo: String, remote: String, branch: String)? = {
-            guard removesRemoteBranch, let repo, let name = branch?.name ?? session.branch else { return nil }
-            return (repo, trackedRemote(repo, name, at: at), name)
-          }()
-          let fresh = try freshSnapshot(of: session)
-          let stop: PaneStop? = try queue.sync {
-            guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
-              !merging.contains(session.id)
-            else {
-              throw APIError("\(session.mention) changed while it was being removed")
-            }
-            // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
-            try store.checkDeletable(
-              session: session.id, name: session.name, resolving: checkTodos(session.id, resolving: resolving),
-              onHost: session.host)
-            install(fresh, of: session)
-            try scope.require()
-            if session.host != nil { removing.insert(session.id) }
-            if removesWorktree { return try beginPaneStop(session.id, ancestry: ancestry, command: command) }
-            try stopForRemoval(session, at: site)
-            return nil
-          }
-          if let stop {
-            try finishPaneStop(session, stop, command: command)
-            (repo, branch, supacode, proven) = try checkRemoval(
-              session, pr: pr, sharedWith: sharedWith, folderGone: folderGone, worktree: removesWorktree,
-              branch: removesBranch, at: at)
-          }
-          // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
-          // folder's path through a symlink, so it gets the path that it lists for the worktree.
-          if let repo {
-            let listed = folderGone ? try worktreeEntry(repo, holding: session.cwd, at: at)?.path : session.cwd
-            if let listed { try removeWorktree(repo, listed, at: at) }
-            worktreeRemoved = true
-          }
-          if let repo, let branch {
-            do {
-              branchRemoved = try deleteBranch(repo, branch, pr: proven, inMain: supacode, at: at)
-            } catch {
-              branchError = error
-            }
-          }
-          if let target = remoteTarget, branchError == nil, let merged = mergedPR(proven, of: target.branch) {
-            do {
-              if try branchIsGone(target.repo, target.branch, at: at) {
-                remoteRemoved = try deleteRemoteBranch(target.repo, target.remote, target.branch, pr: merged, at: at)
-              }
-            } catch {
-              remoteError = error
-            }
-          }
-        }
-      } catch  where worktreeRemoved {
-        // Each step after the worktree's removal keeps its own error. This one came after the last answer.
-        logLine("rm \(session.id): \(error)")
-      }
-      try queue.sync {
-        // A follow-up can start between the two steps.
-        guard !starting.contains(session.id), !merging.contains(session.id),
-          entries[session.id]?.session.cwd == session.cwd
-        else {
-          throw APIError("\(session.mention) changed while it was being removed")
-        }
-        // A to-do can arrive while the panes stop. The record stays. The refusal names what rm already removed.
-        let removed = [
-          repo != nil ? "the worktree" : nil, branchRemoved ? "the local branch" : nil,
-          remoteRemoved ? "the remote branch" : nil,
-        ].compactMap { $0 }
-        let kept =
-          removed.isEmpty
-          ? "Kept \(session.mention)" : "Removed \(englishList(removed)) of \(session.mention) and kept the session"
-        var stayed = ""
-        if let branchError, let branch {
-          stayed = " It kept \(branch.name): \(branchError)"
-        } else if let remoteError {
-          stayed = " It kept the remote branch: \(remoteError)"
-        }
-        // The removal closed a host's panes before this, from answers of the host.
-        let terminals = session.host == nil ? try site.terminals() : nil
-        do {
-          try forgetSession(session.id, resolving: resolving)
-        } catch var error as OpenTodoError {
-          error.kept = kept
-          error.stayed = stayed
-          throw error
-        } catch let error where !removed.isEmpty {
-          throw APIError("\(kept): \(error)\(stayed)")
-        }
-        terminals?.kill(paneName(session.id, .claude))
-        terminals?.kill(paneName(session.id, .shell))
-        try detachPlans { $0.session == session.id }
-      }
-      removeSessionFolder(session.id, at: site)
-      if let branchError, let branch {
-        let remote = removesRemoteBranch ? " It also kept the remote branch." : ""
-        throw APIError("Removed \(session.mention) and its worktree, and kept \(branch.name): \(branchError)\(remote)")
-      }
-      if let remoteError {
-        throw APIError(
-          "Removed \(session.mention), its worktree, and its local branch, and kept the remote branch: \(remoteError)")
+      if let kept = released.keptMessage(queue.sync { mention(id) }, remoteBranch: removesRemoteBranch) {
+        throw APIError(kept)
       }
       return [
-        "removed": .string(session.id), "worktree_removed": .bool(repo != nil), "branch_removed": .bool(branchRemoved),
-        "remote_branch_removed": .bool(remoteRemoved),
+        "removed": .string(id), "worktree_removed": .bool(released.worktree),
+        "branch_removed": .bool(released.branch), "remote_branch_removed": .bool(released.remoteBranch),
       ]
     } catch var error as OpenTodoError {
       error.flags = flags
       throw error
     }
+  }
+
+  /// What `checkRemoval` returns: the repo, the branch to delete with its tip, whether Supacode locked the
+  /// worktree, and the PR as `provenPR` finds it.
+  typealias ReleaseTargets = (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?)
+
+  /// The command whose run inside a session `rm` refuses when the session's worktree would go.
+  static let removalCommand = "sb rm --worktree"
+
+  /// Runs `rm`'s phases on the session and returns what `release` removed and kept. A session whose host
+  /// config.json no longer lists goes through `removeFromUnlistedHost`, which removes no file. For any other
+  /// session, sbd waits for the session's site, then runs `checkBeforeRemoval`, `stopAndCheckAgain`, and
+  /// `release` in one scope of the site, so on a host every check and git command runs on one connection, and the
+  /// scope's machine refuses each command once one got no answer. `release` gets the scope's site. Then
+  /// `forgetRemoved` forgets the session. For the job, `forgetRemoved` also stores a removal notice for a branch or
+  /// remote branch that stayed. It runs off the state queue.
+  func removeAtSite(
+    _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
+    by runner: RemovalRunner, release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
+  ) throws -> ReleasedFiles {
+    let entry = try removalEntry(id, resolving: resolving, for: runner)
+    let site = self.site(for: entry.session)
+    if site is UnlistedSite {
+      _ = try removeFromUnlistedHost(
+        entry.session, resolving: resolving, for: runner, worktree: worktree, mayRunClaude: entry.mayRunClaude,
+        site: site)
+      return ReleasedFiles(worktree: false)
+    }
+    try awaitSite(site)
+    let released = try releaseInScope("the removal of \(entry.session.mention)", at: site) { scope in
+      let check = try checkBeforeRemoval(
+        entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
+      let stopped = try stopAndCheckAgain(
+        check, worktree: worktree, branch: branch, resolving: resolving, for: runner, ancestry: ancestry,
+        scope: scope)
+      return try release(check, stopped, scope.site)
+    }
+    let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
+    try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
+    return released
+  }
+
+  /// Runs `body` in one scope of the site, as `SessionSite.scoped` says, and returns what `body` released. When
+  /// the scope's final check fails after `body` removed the worktree, it logs the error and returns the release,
+  /// because the worktree is gone. Each step after the worktree's removal keeps its own error in the release.
+  func releaseInScope(
+    _ what: String, at site: any SessionSite, _ body: (SiteScope) throws -> ReleasedFiles
+  ) throws -> ReleasedFiles {
+    var released: ReleasedFiles?
+    do {
+      return try site.scoped(what) { scope in
+        let result = try body(scope)
+        released = result
+        return result
+      }
+    } catch {
+      guard let released, released.worktree else { throw error }
+      logLine("\(what): \(error)")
+      return released
+    }
+  }
+
+  /// What `removalEntry` and `checkBeforeRemoval` read, for the phases that follow them.
+  struct RemovalSubject {
+    var session: Session
+    var pr: PullRequest?
+    var sharedWith: String?
+    /// Whether the session's claude may still run, as `mayRunClaude` says.
+    var mayRunClaude: Bool
+    var folderGone = false
+    /// The remote branch that `releaseFiles` deletes, or nil when it stays.
+    var remoteTarget: (repo: String, remote: String, branch: String)?
+  }
+
+  /// `rm`'s first phase. It refuses a session that is starting or merging,
+  /// or that has an open to-do that `resolving` doesn't name. It runs off the
+  /// state queue.
+  func removalEntry(_ id: String, resolving: Set<String>, for runner: RemovalRunner) throws -> RemovalSubject {
+    try queue.sync {
+      guard let entry = entries[id] else { throw APIError("no session \(id)") }
+      // The start would otherwise leave its new worktree behind.
+      if let refusal = busyRefusal(id) { throw refusal }
+      // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
+      try refuseOperatorRemoval(id)
+      try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
+      return RemovalSubject(
+        session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
+        mayRunClaude: mayRunClaude(entry))
+    }
+  }
+
+  /// `rm`'s checks at the session's site: it runs `checkRemoval`. It reads the
+  /// remote of the branch that `remoteBranch` deletes before anything stops,
+  /// because the branch's git config goes with the branch. Only a removal of
+  /// the worktree reads whether the folder is gone, so a plain rm asks a host
+  /// nothing about the folder. It runs off the state queue.
+  func checkBeforeRemoval(
+    _ entry: RemovalSubject, worktree: Bool, branch: Bool, remoteBranch: Bool, at site: any SessionSite
+  ) throws -> RemovalSubject {
+    var check = entry
+    let session = entry.session
+    check.folderGone = worktree ? try folderIsGone(session.cwd, at: site) : false
+    let checked = try checkRemoval(
+      session, pr: entry.pr, sharedWith: entry.sharedWith, folderGone: check.folderGone, worktree: worktree,
+      branch: branch, at: site)
+    // A local branch that is already gone still has its remote branch checked.
+    if remoteBranch, let repo = checked.repo, let name = checked.branch?.name ?? session.branch {
+      check.remoteTarget = (repo, trackedRemote(repo, name, at: site), name)
+    }
+    return check
+  }
+
+  /// `rm`'s second phase, after `checkRemoval`. It closes the panes and waits
+  /// for their processes as `beginPaneStop` and `finishPaneStop` describe
+  /// when `worktree` is set, and otherwise stops claude as
+  /// `stopForRemoval(_:at:)` says. It first refuses a session that changed
+  /// since the checks, whose record the store can't delete, or whose scope's
+  /// check fails. It returns what `checkRemoval` returns when it runs again
+  /// after the stop. It runs off the state queue.
+  func stopAndCheckAgain(
+    _ check: RemovalSubject, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
+    ancestry: Set<Int>?, scope: SiteScope
+  ) throws -> ReleaseTargets {
+    let session = check.session
+    let fresh = try freshSnapshot(of: session)
+    let stop: PaneStop? = try queue.sync {
+      guard entries[session.id]?.session.cwd == session.cwd, !starting.contains(session.id),
+        !merging.contains(session.id)
+      else {
+        throw APIError("\(session.mention) changed while it was being removed")
+      }
+      // A record that can't be deleted after the worktree is gone would list the session with its folder missing.
+      try store.checkDeletable(
+        session: removal(session.id, resolving: removalResolving(session.id, resolving, for: runner)))
+      install(fresh, of: session)
+      try scope.require()
+      if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
+      try stopForRemoval(session, at: site(for: session))
+      return nil
+    }
+    if let stop { try finishPaneStop(session, stop, again: runner.again) }
+    return try checkRemoval(
+      session, pr: check.pr, sharedWith: check.sharedWith, folderGone: check.folderGone, worktree: worktree,
+      branch: branch, at: scope.site)
+  }
+
+  /// What `releaseFiles` removed, and the error that kept each branch that stayed.
+  struct ReleasedFiles {
+    var worktree: Bool
+    var branch = false
+    var remoteBranch = false
+    var keptBranch: (name: String, error: any Error)?
+    var keptRemoteBranch: (any Error)?
+
+    /// The sentence that names the branch or remote branch that stayed after
+    /// the session's removal, or nil when none stayed. `mention` names the
+    /// session. `remoteBranch` says whether the removal asked for the remote
+    /// branch.
+    func keptMessage(_ mention: String, remoteBranch: Bool) -> String? {
+      if let kept = keptBranch {
+        let remote = remoteBranch ? " It also kept the remote branch." : ""
+        return "Removed \(mention) and its worktree, and kept \(kept.name): \(kept.error)\(remote)"
+      }
+      return keptRemoteBranch.map {
+        "Removed \(mention), its worktree, and its local branch, and kept the remote branch: \($0)"
+      }
+    }
+  }
+
+  /// `rm`'s third phase: removes the worktree's folder and record when
+  /// `repo` is set, then the branch, then the remote branch of
+  /// `remoteBranch`. A failed worktree removal throws. A failed branch check
+  /// or delete keeps the branch, keeps the remote branch, and is returned.
+  /// The remote branch goes only once the local branch is gone and only with
+  /// a merged PR for it. git runs at `site`. It runs off the state queue.
+  func releaseFiles(
+    _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
+    folderGone: Bool, remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?,
+    at site: any SessionSite
+  ) throws -> ReleasedFiles {
+    if let repo { try releaseWorktree(session, repo: repo, folderGone: folderGone, at: site) }
+    return releaseBranches(
+      session, repo: repo, branch: branch, supacode: supacode, pr: pr, remoteBranch: remoteTarget, at: site)
+  }
+
+  /// Removes the worktree's folder and record. With `folderGone`, it removes
+  /// only the record, and nothing when git no longer lists the worktree.
+  func releaseWorktree(_ session: Session, repo: String, folderGone: Bool, at site: any SessionSite) throws {
+    // Prune would also drop the records of other worktrees whose folders are missing. Git can't resolve a missing
+    // folder's path through a symlink, so it gets the path that it lists for the worktree.
+    let listed = folderGone ? try worktreeEntry(repo, holding: session.cwd, at: site)?.path : session.cwd
+    if let listed { try removeWorktree(repo, listed, at: site) }
+  }
+
+  /// The branch and remote-branch half of `releaseFiles`, after the worktree is gone.
+  func releaseBranches(
+    _ session: Session, repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?,
+    remoteBranch remoteTarget: (repo: String, remote: String, branch: String)?, at site: any SessionSite
+  ) -> ReleasedFiles {
+    var released = ReleasedFiles(worktree: repo != nil)
+    if let repo, let branch {
+      do {
+        released.branch = try deleteBranch(repo, branch, pr: pr, inMain: supacode, at: site)
+      } catch {
+        released.keptBranch = (branch.name, error)
+      }
+    }
+    if let target = remoteTarget, released.keptBranch == nil, let merged = mergedPR(pr, of: target.branch) {
+      do {
+        if try branchIsGone(target.repo, target.branch, at: site) {
+          released.remoteBranch = try deleteRemoteBranch(
+            target.repo, target.remote, target.branch, pr: merged, at: site)
+        }
+      } catch {
+        released.keptRemoteBranch = error
+      }
+    }
+    return released
+  }
+
+  /// `rm`'s last phase: forgets the session, closes its panes, detaches its
+  /// plans, and deletes its launcher folder at `site`. It refuses a session
+  /// that changed since the checks. A to-do that arrived since the checks
+  /// keeps the session, and its error names what `releaseFiles` removed and
+  /// kept. A host's panes closed in `stopAndCheckAgain`, from answers of the host.
+  /// It stores `notice` as a removal notice in the same state-queue step that
+  /// forgets the session, so a client that sees the session gone can read it.
+  func forgetRemoved(
+    _ session: Session, _ released: ReleasedFiles, resolving: Set<String>, for runner: RemovalRunner,
+    notice: String?, at site: any SessionSite
+  ) throws {
+    try queue.sync {
+      // A follow-up can start between the two steps.
+      guard !starting.contains(session.id), !merging.contains(session.id),
+        entries[session.id]?.session.cwd == session.cwd
+      else {
+        throw APIError("\(session.mention) changed while it was being removed")
+      }
+      // A to-do can arrive while the panes stop. The record stays. The refusal names what rm already removed.
+      let removed = [
+        released.worktree ? "the worktree" : nil, released.branch ? "the local branch" : nil,
+        released.remoteBranch ? "the remote branch" : nil,
+      ].compactMap { $0 }
+      let kept =
+        removed.isEmpty
+        ? "Kept \(session.mention)" : "Removed \(englishList(removed)) of \(session.mention) and kept the session"
+      var stayed = ""
+      if let keptBranch = released.keptBranch {
+        stayed = " It kept \(keptBranch.name): \(keptBranch.error)"
+      } else if let remoteError = released.keptRemoteBranch {
+        stayed = " It kept the remote branch: \(remoteError)"
+      }
+      let terminals = session.host == nil ? try site.terminals() : nil
+      do {
+        try forgetSession(session.id, resolving: removalResolving(session.id, resolving, for: runner))
+      } catch var error as OpenTodoError {
+        error.kept = kept
+        error.stayed = stayed
+        throw error
+      } catch let error where !removed.isEmpty {
+        throw APIError("\(kept): \(error)\(stayed)")
+      }
+      if let notice {
+        logLine(notice)
+        do {
+          try store.addRemovalNotice(session: session.id, name: session.name, message: notice)
+        } catch {
+          logLine("can't record the removal notice for \(session.id): \(error)")
+        }
+      }
+      terminals?.kill(paneName(session.id, .claude))
+      terminals?.kill(paneName(session.id, .shell))
+      try detachPlans { $0.session == session.id }
+    }
+    removeSessionFolder(session.id, at: site)
   }
 
   /// The checks that `rm` makes before it stops anything. Returns the repo
@@ -1749,7 +2031,7 @@ public final class Service {
   func checkRemoval(
     _ session: Session, pr: PullRequest?, sharedWith: String?, folderGone: Bool, worktree: Bool, branch: Bool,
     at site: any SessionSite
-  ) throws -> (repo: String?, branch: (name: String, tip: String)?, supacode: Bool, pr: PullRequest?) {
+  ) throws -> ReleaseTargets {
     guard worktree else { return (nil, nil, false, pr) }
     let pr = try provenPR(pr, of: session, in: folderGone ? session.repo ?? session.cwd : session.cwd, at: site)
     let merged = pr?.state == .merged
@@ -1769,7 +2051,7 @@ public final class Service {
   /// The session's repo, or throws when sbd made no worktree for the session. When the repo folder is
   /// gone, because the session started from a linked worktree that was later removed, this returns the
   /// one known main checkout that still lists the session's worktree.
-  private func worktreeRepo(_ session: Session, at site: any SessionSite) throws -> String {
+  func worktreeRepo(_ session: Session, at site: any SessionSite) throws -> String {
     guard let repo = session.repo else {
       throw APIError(
         "\(session.mention) runs in \(session.cwd), and sbd didn't make a worktree for it. Remove the session without the worktree instead."
@@ -1968,9 +2250,12 @@ public final class Service {
   /// remote branch and `worktree remove` keeps the branch. `worktree remove`
   /// deletes ignored files. With `onlyBuildOutputIgnored`, an ignored file that
   /// is not build output or in `cleanupDeletes` also refuses. Any git failure
-  /// refuses the removal. git runs at `site`.
+  /// refuses the removal. `folder` is where the worktree's files are, when
+  /// they moved away from the path that git lists. The errors name `session.cwd`.
+  /// git runs at `site`.
   func checkWorktreeIsLossless(
-    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool, at site: any SessionSite
+    _ session: Session, mergedPR: Bool, sharedWith: String?, onlyBuildOutputIgnored: Bool, in folder: String? = nil,
+    at site: any SessionSite
   ) throws -> (repo: String, supacode: Bool) {
     let repo = try worktreeRepo(session, at: site)
     if let sharedWith {
@@ -1986,22 +2271,24 @@ public final class Service {
       throw APIError("\(session.cwd) is not a worktree of \(repo)")
     }
     if entry.locked && !entry.lockedBySupacode { throw lockedError(session.cwd) }
-    let status = try readStatus(session.cwd, listingIgnored: onlyBuildOutputIgnored, at: site)
+    let folder = folder ?? session.cwd
+    let status = try readStatus(folder, listingIgnored: onlyBuildOutputIgnored, at: site)
     guard status.changed == 0 else {
       throw APIError("\(session.cwd) has uncommitted files (\(status.changed)). Commit or discard them first.")
     }
-    try requireNoHiddenChanges(session.cwd, at: site)
+    try requireNoHiddenChanges(folder, naming: session.cwd, at: site)
     if onlyBuildOutputIgnored { try requireOnlyBuildOutputIgnored(session.cwd, ignored: status.ignored) }
     try requireNoUnpushedCommits(
-      in: session.cwd, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, at: site)
+      in: folder, at: "HEAD", mergedPR: mergedPR, subject: session.cwd, at: site)
     if entry.lockedBySupacode { try requireSupacode(for: session.cwd, at: site) }
     return (repo, entry.lockedBySupacode)
   }
 
-  /// Throws when a tracked file has git's assume-unchanged or skip-worktree
-  /// flag, because `git status` doesn't list a change to such a file.
-  private func requireNoHiddenChanges(_ cwd: String, at site: any SessionSite) throws {
-    let listed = try gitOutput(cwd, ["ls-files", "-v", "-z"], at: site)
+  /// Throws when a tracked file in `folder` has git's assume-unchanged or
+  /// skip-worktree flag, because `git status` doesn't list a change to such a
+  /// file. The error names `cwd`.
+  private func requireNoHiddenChanges(_ folder: String, naming cwd: String, at site: any SessionSite) throws {
+    let listed = try gitOutput(folder, ["ls-files", "-v", "-z"], at: site)
     let hidden = listed.split(separator: "\0").filter { $0.first.map { $0.isLowercase || $0 == "S" } ?? false }
       .map { String($0.dropFirst(2)) }
     guard hidden.isEmpty else {
@@ -2166,8 +2453,12 @@ public final class Service {
           if jobs > 0 { entries[id]?.lastJobSeen = now }
           // A running turn outranks the job rule. The tick records the count after the turn ends.
           if live, entries[id]?.facts.turnRunning == false { recordJobs(id, jobs) }
-          if let e = entries[id], stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
-            try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+          if let e = entries[id] {
+            if Pause.blocker(e.session) != nil {
+              enforcePause(id, now: now)
+            } else if stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
+              try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+            }
           }
         case .stopped:
           entries[id]?.unreportedSince = nil
@@ -2176,11 +2467,13 @@ public final class Service {
           if live { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
-          // and these launches come at most every 5 s.
-          if let e = entries[id], !e.pending.isEmpty, e.facts.startedSinceLaunch,
-            now - (e.facts.lastLaunch ?? 0) >= 5_000, !mcpStarting(now: now)
+          // unless a resume came while it ran. These launches come at most
+          // every 5 s. A paused session's messages wait for the resume.
+          if let e = entries[id], !e.pending.isEmpty, Pause.blocker(e.session) == nil,
+            e.facts.startedSinceLaunch || e.resumeLaunch != nil, now - (e.facts.lastLaunch ?? 0) >= 5_000,
+            !mcpStarting(now: now)
           {
-            try? launch(id, prompt: nil, trigger: .pending)
+            try? launch(id, prompt: nil, trigger: e.resumeLaunch ?? .pending)
           }
         case .starting:
           entries[id]?.unreportedSince = nil
@@ -2197,8 +2490,11 @@ public final class Service {
       }
       noteViewed(now: now)
       runQueuedStarts(now: now)
-      // A resolved `resume` wait can launch claude.
-      if !mcpStarting(now: now) { resolveDueWaits(now: now) }
+      // A resolved `resume` wait and a schedule's run can launch claude.
+      if !mcpStarting(now: now) {
+        resolveDueWaits(now: now)
+        fireDueSchedules(now: now)
+      }
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
@@ -2244,8 +2540,9 @@ public final class Service {
     -> SessionSummary
   {
     let e = entries[id]!
+    let now = nowMs()
     let facts = shownFacts(id, for: origin)
-    let verdict = shown(id, Attention.evaluate(e.session, facts, now: nowMs(), stateOf: lastState), facts: facts)
+    let verdict = shown(id, Attention.evaluate(e.session, facts, now: now, stateOf: lastState), now: now, facts: facts)
     let s = e.session
     var out = SessionSummary(
       id: id, name: s.name, cwd: s.cwd, repo: s.repo, branch: e.branch,
@@ -2256,6 +2553,7 @@ public final class Service {
       waits: s.waits ?? [], notes: s.notes ?? [], cards: facts.cards,
       openPrompt: facts.openPermission != nil || facts.openQuestion != nil, pr: facts.pr.map(PRSummary.init),
       markedDone: s.done)
+    if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)
       out.repository = out.checkout.flatMap { repository($0, of: s) }
@@ -2288,10 +2586,13 @@ public final class Service {
     }
     if !facts.dependencies.isEmpty { out.dependencies = facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
+    if !facts.artifacts.isEmpty { out.artifacts = facts.artifacts }
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
     if verdict.requested { out.requested = true }
+    out.snoozedUntil = facts.snooze.flatMap { $0.isActive(at: now) ? $0.until : nil }
+    out.snoozeNote = verdict.snoozeNote
     out.permissionMode = facts.permissionMode
     out.pr?.mergeMethod = facts.mergeMethod
     if verdict.state == .readyToMerge, let since = facts.readyToMergeSince { out.since = since }
@@ -2305,14 +2606,21 @@ public final class Service {
       if let error = remoteSites[host]?.setupError { out.reason = error }
     }
     out.shellClosed = s.shellClosed
+    out.removal = s.removal
     // A follow-up has been Not started since it was added, which for an
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }
     if verdict.state == .readyForReview, let ready = facts.readySince { out.since = ready }
+    if let pause = s.pause {
+      out.pause = pause
+      out.heldMessages = e.pending.count
+      // A replay tracks each event under the current session, so the tracked state can start before the pause.
+      if !s.done { out.since = pause.since }
+    }
     if s.kind == .work && s.docket == nil {
       out.board = BoardColumn.place(
-        state: verdict.state, acknowledged: verdict.acknowledged, stateSince: out.since, waits: s.waits ?? [],
-        facts: facts, created: s.created)
+        state: verdict.state, setAside: verdict.setAside, stateSince: out.since, waits: s.waits ?? [],
+        facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
     if s.kind == .manager {
