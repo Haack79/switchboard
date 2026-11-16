@@ -132,7 +132,7 @@ public struct ProcessTable: Sendable {
 
   /// The process's argv as it reads now, which a process can overwrite to rename itself. It is empty when the kernel
   /// refuses the read, as it does for another user's process.
-  static func argv(of pid: pid_t) -> [String] {
+  public static func argv(of pid: pid_t) -> [String] {
     var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
     var size = 0
     guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return [] }
@@ -161,7 +161,7 @@ public struct ProcessTable: Sendable {
   }
 
   /// The path of the process's program, or nil when the kernel can't read it.
-  static func programPath(of pid: pid_t) -> String? {
+  public static func programPath(of pid: pid_t) -> String? {
     var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
     return proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : nil
   }

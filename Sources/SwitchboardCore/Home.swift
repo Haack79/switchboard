@@ -281,3 +281,10 @@ public func isDirectory(_ path: String) -> Bool {
   var isDir: ObjCBool = false
   return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
 }
+
+/// The path with every symlink resolved, or nil when the path doesn't exist.
+public func realPath(_ path: String) -> String? {
+  guard let resolved = realpath(path, nil) else { return nil }
+  defer { free(resolved) }
+  return String(cString: resolved)
+}

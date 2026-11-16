@@ -127,6 +127,12 @@ public func ownExecutable() -> URL {
 }
 
 public enum Processes {
+  /// The text of a C string that the kernel stores in a fixed-size char tuple, such as `vip_path` or `p_comm`. The
+  /// tuple must hold a NUL byte, because the read stops only at the first NUL.
+  public static func pathString<T>(_ tuple: inout T) -> String {
+    withUnsafeBytes(of: &tuple) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+  }
+
   /// Whether the number can name one process. A pid below 1 names a process
   /// group, and a pid above `Int32.max` names no process.
   public static func isValidPid(_ pid: Int) -> Bool { pid >= 1 && pid <= Int(Int32.max) }

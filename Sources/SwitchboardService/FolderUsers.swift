@@ -1,31 +1,19 @@
 import Darwin
 import Foundation
+import SwitchboardCore
 
 /// How a process uses a folder.
-public enum FolderUse: String, Sendable {
+enum FolderUse: String, Sendable {
   case workingFolder = "cwd"
   case program
   case openFile = "open file"
 }
 
 /// A process that uses a folder, how it uses it, and the path inside the folder that it uses.
-public struct FolderUser: Sendable, Equatable {
-  public var pid: Int
-  public var use: FolderUse
-  public var path: String
-
-  public init(pid: Int, use: FolderUse, path: String) {
-    self.pid = pid
-    self.use = use
-    self.path = path
-  }
-}
-
-/// The path with every symlink resolved, or nil when the path doesn't exist.
-public func realPath(_ path: String) -> String? {
-  guard let resolved = realpath(path, nil) else { return nil }
-  defer { free(resolved) }
-  return String(cString: resolved)
+struct FolderUser: Sendable, Equatable {
+  var pid: Int
+  var use: FolderUse
+  var path: String
 }
 
 extension Processes {
@@ -38,7 +26,7 @@ extension Processes {
   /// process read only its own user's processes, so the processes of root and
   /// of other users are left out. An empty list comes back when the folder
   /// doesn't exist, because its path can't be resolved.
-  public static func using(_ folder: String) -> [FolderUser] {
+  static func using(_ folder: String) -> [FolderUser] {
     guard let root = realPath(folder) else { return [] }
     let me = getpid()
     return allPids().filter { $0 != me }.compactMap { pid in
@@ -91,9 +79,5 @@ extension Processes {
       let name = ProcessTable.argv(of: pid).first
     else { return false }
     return name.hasPrefix("ssh: ") && name.hasSuffix(" [mux]")
-  }
-
-  static func pathString<T>(_ tuple: inout T) -> String {
-    withUnsafeBytes(of: &tuple) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
   }
 }
