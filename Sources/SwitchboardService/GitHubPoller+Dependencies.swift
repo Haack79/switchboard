@@ -6,9 +6,17 @@ import SwitchboardCore
 /// lines name. `plans/session-dependencies.md` in the notes repo describes them.
 extension GitHubPoller {
   /// The session's PR as this poller last read it, or as the session's facts
-  /// recorded it before the first read.
+  /// recorded it before the first read. It is nil when `mayRead` refuses the
+  /// PR's repo for the session's host.
   private func currentPR(_ s: Watched) -> PullRequest? {
-    tracked[s.id]?.prId.flatMap { prs[$0]?.pr } ?? s.facts.pr
+    (tracked[s.id]?.prId.flatMap { prs[$0]?.pr } ?? s.facts.pr).flatMap {
+      mayRead($0.repo, for: s.site.hostName) ? $0 : nil
+    }
+  }
+
+  /// The session's recorded edges whose repo `mayRead` allows for the session's host.
+  private func readableEdges(_ s: Watched) -> [Dependency] {
+    s.facts.dependencies.filter { mayRead($0.repo, for: s.site.hostName) }
   }
 
   /// The lookup keys of the PRs that open PRs name in their bodies, and of
@@ -18,9 +26,11 @@ extension GitHubPoller {
     var keys: Set<PRKey> = []
     for s in sessions {
       if let pr = currentPR(s), pr.state == .open {
-        for ref in pr.dependsOn ?? [] { keys.insert(.number(repo: ref.repo, number: ref.number)) }
+        for ref in pr.dependsOn ?? [] where mayRead(ref.repo, for: s.site.hostName) {
+          keys.insert(.number(repo: ref.repo, number: ref.number))
+        }
       }
-      for d in s.facts.dependencies where d.holds { keys.insert(.number(repo: d.repo, number: d.number)) }
+      for d in readableEdges(s) where d.holds { keys.insert(.number(repo: d.repo, number: d.number)) }
     }
     return keys
   }
@@ -41,11 +51,16 @@ extension GitHubPoller {
     for s in sessions {
       let pr = currentPR(s)
       let old = s.facts.dependencies
-      var edges = pr.map { dependencies(of: s.id, $0, owned: owned, recorded: old) } ?? []
+      // `withState` reads the PRs that the poller read for any session. An edge in a repo that the session's host
+      // may not read therefore never reaches `withState`.
+      let kept = readableEdges(s)
+      var edges = pr.map { dependencies(of: s, $0, owned: owned, recorded: kept) } ?? []
       if pr?.state == .open {
-        for before in old
+        for before in kept
         where before.holds && !edges.contains(where: { $0.same(repo: before.repo, number: before.number) }) {
-          guard let read = lastRead(before), read.polled < now, withState(before, before: before).holds else {
+          guard let read = lastRead(before), read.polled < now,
+            withState(before, before: before, host: s.site.hostName).holds
+          else {
             continue
           }
           edges.append(before)
@@ -54,9 +69,10 @@ extension GitHubPoller {
       }
       guard edges != old else { continue }
       var data: [String: JSON] = ["dependencies": (try? JSON(encoding: edges)) ?? []]
-      let resolved = old.filter { $0.holds && $0.state != nil }.compactMap { before -> Dependency? in
+      let resolved = kept.filter { $0.holds && $0.state != nil }.compactMap { before -> Dependency? in
         let current =
-          edges.first { $0.same(repo: before.repo, number: before.number) } ?? withState(before, before: before)
+          edges.first { $0.same(repo: before.repo, number: before.number) }
+          ?? withState(before, before: before, host: s.site.hostName)
         return current.resolved ? current : nil
       }
       guard let pr, pr.state == .open, !resolved.isEmpty else {
@@ -75,20 +91,21 @@ extension GitHubPoller {
     }
   }
 
-  /// The open PR's edges, each with the state of its PR.
+  /// The open PR's edges, each with the state of its PR. A `Depends on` line
+  /// that names a repo that `mayRead` refuses for the session's host adds no edge.
   private func dependencies(
-    of id: String, _ pr: PullRequest, owned: [(id: String, pr: PullRequest)], recorded: [Dependency]
+    of s: Watched, _ pr: PullRequest, owned: [(id: String, pr: PullRequest)], recorded: [Dependency]
   ) -> [Dependency] {
     guard pr.state == .open else { return [] }
     var edges: [Dependency] = []
     if pr.base != pr.defaultBranch {
-      let bases = owned.filter { $0.id != id && Dependencies.sameRepo($0.pr.repo, pr.repo) && $0.pr.head == pr.base }
+      let bases = owned.filter { $0.id != s.id && Dependencies.sameRepo($0.pr.repo, pr.repo) && $0.pr.head == pr.base }
       if let base = bases.first(where: { $0.pr.state == .open }) ?? bases.first {
         edges.append(
           Dependency(via: .stack, repo: base.pr.repo, number: base.pr.number, base: pr.base, session: base.id))
       }
     }
-    for ref in pr.dependsOn ?? [] {
+    for ref in pr.dependsOn ?? [] where mayRead(ref.repo, for: s.site.hostName) {
       if let i = edges.firstIndex(where: { ref.same(repo: $0.repo, number: $0.number) }) {
         if ref.deploy {
           edges[i].deploy = true
@@ -100,12 +117,14 @@ extension GitHubPoller {
       let session = owned.first { ref.same(repo: $0.pr.repo, number: $0.pr.number) }?.id
       edges.append(Dependency(ref: ref, session: session))
     }
-    return edges.map { e in withState(e, before: recorded.first { $0.same(repo: e.repo, number: e.number) }) }
+    return edges.map { e in
+      withState(e, before: recorded.first { $0.same(repo: e.repo, number: e.number) }, host: s.site.hostName)
+    }
   }
 
   /// The edge with its PR's state as this poller last read it. A deploy edge
   /// whose PR merged is deployed once it reached each of its environments,
-  /// as `deployState` decides. `before` is the edge as the session recorded it.
+  /// as `deployState` decides. `before` is the edge as the session recorded it, and `host` is the session's host.
   ///
   /// The poller's reads and comment bodies are in memory, so they are empty
   /// after sbd restarts. An edge whose PR this poller has not read keeps the
@@ -113,7 +132,7 @@ extension GitHubPoller {
   /// its comment body may not have loaded yet. Otherwise a read after a
   /// restart would overwrite the recorded state, and a later read would tell
   /// the session again, or never, that the edge resolved.
-  private func withState(_ edge: Dependency, before: Dependency?) -> Dependency {
+  private func withState(_ edge: Dependency, before: Dependency?, host: String?) -> Dependency {
     var d = edge
     guard let read = lastRead(edge) else {
       d.state = before?.state
@@ -127,7 +146,7 @@ extension GitHubPoller {
       d.problem = nil
       return d
     }
-    (d.deployed, d.problem) = deployState(d, read.pr, read.comments, before: before)
+    (d.deployed, d.problem) = deployState(d, read.pr, read.comments, before: before, host: host)
     return d
   }
 
@@ -135,10 +154,11 @@ extension GitHubPoller {
   /// can't when it can't. An edge that the session recorded as deployed stays
   /// deployed. A named service's state file decides it. Without a service,
   /// the deploy comment decides a PostHog/posthog PR, and nothing that sbd
-  /// reads shows a PR in another repository deploy.
-  private func deployState(_ d: Dependency, _ pr: PullRequest, _ comments: [PRComment], before: Dependency?) -> (
-    deployed: Bool, problem: String?
-  ) {
+  /// reads shows a PR in another repository deploy. A service's state file is in the charts repo, so it decides
+  /// nothing for a session on a host whose `repos` don't list that repo.
+  private func deployState(
+    _ d: Dependency, _ pr: PullRequest, _ comments: [PRComment], before: Dependency?, host: String?
+  ) -> (deployed: Bool, problem: String?) {
     if before?.state == .merged && before?.deployed == true { return (true, nil) }
     guard let service = d.service else {
       if Dependencies.sameRepo(pr.repo, Wait.posthogRepository) {
@@ -150,7 +170,9 @@ extension GitHubPoller {
       )
     }
     let id = GitHubPoller.edgeTargetId(d)
-    guard let since = deploys.firstSeen[id], let read = serviceRead(service, id: id, since: since) else {
+    guard mayRead(Wait.chartsRepository, for: host), let since = deploys.firstSeen[id],
+      let read = serviceRead(service, id: id, since: since)
+    else {
       return (false, before?.problem)
     }
     switch ServiceDeployVerdict.of(
@@ -164,10 +186,11 @@ extension GitHubPoller {
 
   /// The merged PRs that deploy edges with a service wait on, from the open
   /// PRs' `Depends on` lines and from the recorded edges that still hold. A
-  /// line whose recorded edge resolved needs no more checks.
+  /// line whose recorded edge resolved needs no more checks. A session on a host whose `repos` don't list the
+  /// charts repo adds none.
   func edgeDeployTargets(_ sessions: [Watched], now: Int64) -> [DeployTarget] {
     var edges: [Dependency] = []
-    for s in sessions {
+    for s in sessions where mayRead(Wait.chartsRepository, for: s.site.hostName) {
       let recorded = s.facts.dependencies
       if let pr = currentPR(s), pr.state == .open {
         edges += (pr.dependsOn ?? []).filter { ref in

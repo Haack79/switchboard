@@ -449,7 +449,7 @@ private let notLoggedIn = "\u{1B}[1m\u{1B}[31m✖ User not logged in: please run
     try resumed(sbd, s, with: "the merge queue for the session's PR: Trunk removed it from the queue.")
   }
 
-  @Test func aCheckoutThatTrunkIsNotSetUpForKeepsTheCommentsStateQuietly() throws {
+  @Test func aCheckoutThatTrunkIsNotSetUpForKeepsTheCommentsStateWithoutATrunkError() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withTrunk(github)
     let s = try posthogSession(sbd)
@@ -463,7 +463,7 @@ private let notLoggedIn = "\u{1B}[1m\u{1B}[31m✖ User not logged in: please run
     #expect(result["trunkError"] == nil)
     #expect(try sbd.client.call("ping")["trunk"] == nil)
     #expect(try sbd.get(s.id).pr?.queue == .queued)
-    #expect(try !String(contentsOfFile: sbd.home.log, encoding: .utf8).contains("trunk init"))
+    #expect(sbd.trunkCalls() == [TrunkCall(dir: real(s.cwd), args: "merge status 122953")])
   }
 
   @Test func withoutALoginPollAndPingReportItAndThePRKeepsTheCommentsState() throws {

@@ -56,7 +56,7 @@ extension Service {
   /// A hook that waits for an answer is applied at once, after the session's waiting events with lower ids,
   /// and holds its request when it opened a card. Any other hook waits `hostEventWindowMs` for events with
   /// lower ids and is answered at once.
-  func handleHostHook(_ args: JSON, from host: String, hookGone: @escaping () -> Bool) throws -> Response {
+  func handleHostHook(_ args: JSON, from host: String, hookGone: @escaping @Sendable () -> Bool) throws -> Response {
     // The forward is up from the end of setup, before the reconcile has read the spool. A hook that arrives
     // then would be applied ahead of the earlier events that wait in the spool. So the reconcile runs first.
     // When it fails, the hook is refused, and its event stays in the spool for the next reconcile. A reconcile

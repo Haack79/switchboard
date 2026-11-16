@@ -117,7 +117,7 @@ extension ReferenceDetails.State {
 extension GitHub {
   /// One issue or pull request by owner, name, and number. GitHub numbers both together, so one field reads either.
   public static let referenceQuery = """
-    query($o: String!, $n: String!, $num: Int!) {
+    query Reference($o: String!, $n: String!, $num: Int!) {
       rateLimit { cost }
       repository(owner: $o, name: $n) {
         issueOrPullRequest(number: $num) {

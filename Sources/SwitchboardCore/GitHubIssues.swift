@@ -88,7 +88,7 @@ extension GitHub {
         )
       }
     }
-    let header = params.isEmpty ? "query" : "query(\(params.joined(separator: ", ")))"
+    let header = params.isEmpty ? "query Issues" : "query Issues(\(params.joined(separator: ", ")))"
     let query = """
       \(header) {
         rateLimit { cost }

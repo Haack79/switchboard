@@ -241,7 +241,7 @@ extension Service {
   /// Resumes the session or each paused session of the group that the request names, with the request's
   /// message, else each pause's own. A session that isn't paused launches as `sb resume` always did, with the
   /// message as its prompt. A group skips a session that isn't paused.
-  func resumeRequest(_ args: JSON) throws -> JSON {
+  func resumeRequest(_ args: JSON, origin: RequestOrigin = .mac) throws -> JSON {
     let target = try pauseTarget(args)
     let message = args["message"]?.string
     let prompt = args["prompt"]?.string
@@ -255,11 +255,15 @@ extension Service {
     switch target {
     case .session(let id):
       if entries[id]!.session.pause != nil {
+        // The user or the Manager set the pause on this Mac, so a host can't end it.
+        if case .remote(let host) = origin {
+          throw APIError("\(entries[id]!.session.name) is paused, and \(host) can't resume it")
+        }
         try resumeOne(id)
       } else {
         try launch(id, prompt: text, by: MessageAuthor(by), trigger: .resume)
       }
-      return try JSON(encoding: summary(id))
+      return try JSON(encoding: summary(id, for: origin))
     case .group(let group):
       return try JSON(encoding: groupReport(group, done: .resumed, skip: \.groupResumeSkip, resumeOne))
     }

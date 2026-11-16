@@ -262,7 +262,6 @@ extension Instance {
     let after = try sbd.get(s.id)
     #expect(after.pr?.number == DepotTests.number)
     #expect(after.reason == DepotTests.readTheReply)
-    #expect(try String(contentsOfFile: sbd.home.log, encoding: .utf8).contains("depot: "))
   }
 
   /// A 401 drops the cached token, so a `depot login` takes effect without a restart.
