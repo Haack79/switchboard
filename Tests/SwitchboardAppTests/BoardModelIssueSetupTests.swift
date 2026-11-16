@@ -40,7 +40,7 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
   @Test func offersEachValidKnownRepo() {
     let model = model(known: [known("robin-k/dotkit"), known("acme/ledger")])
 
-    #expect(model.offeredIssueRepos.sorted() == ["acme/ledger", "robin-k/dotkit"])
+    #expect(model.offeredIssueRepos == ["robin-k/dotkit", "acme/ledger"])
   }
 
   @Test(arguments: invalidRepoNames)

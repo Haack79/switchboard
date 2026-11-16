@@ -4,6 +4,9 @@ import SwitchboardCore
 /// The open GitHub issues from the configured sources, in buckets, with the selected issue on the right.
 struct IssuesView: View {
   @EnvironmentObject var model: BoardModel
+  /// The offered repositories the user unchecked, shared by the empty state's offer and the setup sheet's.
+  @State private var uncheckedRepos: Set<String> = []
+  @FocusState private var offerLabelFocused: Bool
 
   var body: some View {
     VStack(spacing: 0) {
@@ -15,7 +18,9 @@ struct IssuesView: View {
       model.refreshIssues()
       if model.knownRepos == nil { model.loadRepos() }
     }
-    .sheet(isPresented: $model.showingIssueSetup) { IssueSetupView().environmentObject(model) }
+    .sheet(isPresented: $model.showingIssueSetup) {
+      IssueSetupView(uncheckedRepos: $uncheckedRepos).environmentObject(model)
+    }
   }
 
   @ViewBuilder private var content: some View {
@@ -28,7 +33,9 @@ struct IssuesView: View {
         } actions: {
           let offered = !model.offeredIssueRepos.isEmpty
           VStack(spacing: 12) {
-            if offered { IssueRepoOffer().frame(width: 360) }
+            if offered {
+              IssueRepoOffer(unchecked: $uncheckedRepos, labelFocused: $offerLabelFocused).frame(width: 360)
+            }
             Button(offered ? "Other Sources…" : "Add Sources…") { model.showingIssueSetup = true }
           }
         }

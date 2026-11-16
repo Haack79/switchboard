@@ -6,6 +6,8 @@ import SwitchboardCore
 struct IssueSetupView: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.dismiss) private var dismiss
+  @Binding var uncheckedRepos: Set<String>
+  @FocusState private var offerLabelFocused: Bool
   @State private var name = ""
   @State private var label = ""
   @State private var person = ""
@@ -23,7 +25,7 @@ struct IssueSetupView: View {
       Text("Issue Sources").font(.title2.bold())
       if !model.offeredIssueRepos.isEmpty {
         GroupBox("Your Repositories") {
-          IssueRepoOffer().padding(4)
+          IssueRepoOffer(unchecked: $uncheckedRepos, labelFocused: $offerLabelFocused).padding(4)
         }
       }
       GroupBox("Sources") {
@@ -107,7 +109,7 @@ struct IssueSetupView: View {
           model.saveIssueSettings(labels: split(labels), people: split(people), defaultPreset: defaultPreset)
           dismiss()
         }
-        .keyboardShortcut(trimmedName.isEmpty ? .defaultAction : nil)
+        .keyboardShortcut(trimmedName.isEmpty && !offerLabelFocused ? .defaultAction : nil)
       }
     }
     .padding(20)
@@ -124,7 +126,8 @@ struct IssueSetupView: View {
 
   private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
 
-  /// Whether the typed name is an org, the only kind of source that uses Label and Person.
+  /// Whether the typed name is an org, which needs a label or a person. The sheet offers Label and Person only for
+  /// an org, though a repository source accepts both.
   private var isOrg: Bool { IssueSource(name: trimmedName).isOrg }
 
   private var canAdd: Bool { !trimmedName.isEmpty && addProblem == nil }
