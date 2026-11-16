@@ -63,10 +63,8 @@ struct IssueSetupView: View {
             .disabled(model.suggestedIssueSources.isEmpty)
             .help("The orgs and repositories of your sessions and checkouts")
             .accessibilityLabel("Suggested sources")
-            if isOrg {
-              TextField("Label", text: $label)
-              TextField("Person", text: $person)
-            }
+            TextField("Label", text: $label, prompt: Text(isOrg ? "Label" : "Label (optional)"))
+            TextField("Person", text: $person, prompt: Text(isOrg ? "Person" : "Person (optional)"))
             Button("Add") { add() }
               .disabled(!canAdd || adding)
               .keyboardShortcut(returnOwner == .add ? .defaultAction : nil)
@@ -125,8 +123,8 @@ struct IssueSetupView: View {
 
   private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
 
-  /// Whether the typed name is an org, which needs a label or a person. The sheet offers Label and Person only for
-  /// an org, though a repository source accepts both.
+  /// Whether the typed name is an org, which needs a label or a person. A repository takes either one as an optional
+  /// filter.
   private var isOrg: Bool { IssueSource(name: trimmedName).isOrg }
 
   private enum ReturnOwner { case offer, add, save }
@@ -147,8 +145,7 @@ struct IssueSetupView: View {
   private func add() {
     adding = true
     addError = nil
-    // A repository's hidden fields may still hold what was typed for an org.
-    model.addIssueSources([trimmedName], label: isOrg ? label : "", person: isOrg ? person : "") { error in
+    model.addIssueSources([trimmedName], label: label, person: person) { error in
       adding = false
       addError = error
       if error == nil {
