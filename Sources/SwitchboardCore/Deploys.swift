@@ -6,9 +6,18 @@ public enum DeployEnvironment: String, CaseIterable, Codable, Sendable {
   case prodUS = "prod-us"
   case prodEU = "prod-eu"
 
+  /// Both prod regions, which `prod` names.
+  public static let prod: [DeployEnvironment] = [.prodUS, .prodEU]
+
   /// The environments that a deploy wait names. `prod` names both prod regions.
   public static func named(_ name: String) -> [DeployEnvironment]? {
-    name == "prod" ? [.prodUS, .prodEU] : DeployEnvironment(rawValue: name).map { [$0] }
+    name == "prod" ? prod : DeployEnvironment(rawValue: name).map { [$0] }
+  }
+
+  /// The environments, without repeats, in declaration order.
+  public static func ordered(_ environments: some Sequence<DeployEnvironment>) -> [DeployEnvironment] {
+    let set = Set(environments)
+    return allCases.filter(set.contains)
   }
 }
 

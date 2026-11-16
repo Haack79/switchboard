@@ -43,9 +43,9 @@ final class GitHubPoller {
   /// The comments of a read, with the bodies that `bodies` holds.
   func keptComments(_ comments: [PRComment]) -> [PRComment] { comments.map { bodies[$0.id] ?? $0 } }
 
-  /// Whether the PR's last deploy comment shows both prod regions deployed.
-  func deployedToProd(_ comments: [PRComment]) -> Bool {
-    keptComments(comments).compactMap { $0.body.flatMap(DeployComment.parse) }.last?.deployedToProd == true
+  /// Whether the PR's last deploy comment shows it deployed to each environment.
+  func deployed(_ comments: [PRComment], to environments: [DeployEnvironment] = DeployEnvironment.prod) -> Bool {
+    keptComments(comments).compactMap { $0.body.flatMap(DeployComment.parse) }.last?.deployed(to: environments) == true
   }
   /// The PRs that waits and merge triggers name, by the key they were looked up with.
   var targets: [PRKey: Target] = [:]
@@ -250,7 +250,8 @@ final class GitHubPoller {
         waited.created[id] = max(waited.created[id] ?? 0, ended)
       }
       try readPRs(all: all, now: now, waited: waited, queued: queuedPRs(), stats: &stats)
-      try checkDeploys(interest, all: all, now: now, stats: &stats)
+      try checkDeploys(
+        deployTargets(interest) + edgeDeployTargets(sessions, now: now), all: all, now: now, stats: &stats)
     } catch {
       failure = "\(error)"
       logLine("github: \(error)")

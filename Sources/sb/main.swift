@@ -599,7 +599,13 @@ func printSession(_ s: SessionSummary) {
   if let owners = s.pr?.codeOwners { print("  owners:  \(owners.text(separator: "; "))".printable) }
   if let run = s.pr?.depot { print("  depot:   \(run.line)".printable) }
   for d in s.dependencies ?? [] {
-    let deploy = d.deploy ? (d.deployed == true ? ", deployed" : ", deploy") : ""
+    var deploy = ""
+    if d.deploy {
+      deploy = d.deployed == true ? ", deployed" : ", deploy"
+      if let service = d.service { deploy += " of \(service)" }
+      deploy += d.environmentsSuffix
+      if let problem = d.problem { deploy += "; \(problem)" }
+    }
     let session = d.session.map { " (session \($0))" } ?? ""
     print(
       "  depends: \(d.label(from: s.pr?.repo ?? d.repo)) \(d.state?.rawValue.lowercased() ?? "unknown")\(deploy)\(session)"

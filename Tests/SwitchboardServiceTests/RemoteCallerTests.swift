@@ -372,17 +372,22 @@ private final class FakeGraphQL: @unchecked Sendable {
     var number: Int
     var state = "OPEN"
     var body = ""
+    var merge: String?
   }
 
   private let lock = NSLock()
   private var looked: [String] = []
   private var named: [String] = []
+  private var paths: [String] = []
   let prs: [PR]
 
   init(_ prs: [PR]) { self.prs = prs }
 
   /// Each lookup, as `owner/name#number` or `owner/name:branch`, lowercased.
   var lookups: [String] { lock.withLock { looked } }
+
+  /// The path of each request.
+  var requested: [String] { lock.withLock { paths } }
 
   /// Whether a lookup named `repo`, or a read by node id named one of its PRs.
   func asked(_ repo: String) -> Bool {
@@ -393,6 +398,7 @@ private final class FakeGraphQL: @unchecked Sendable {
   }
 
   func answer(_ request: URLRequest) -> (Int, [String: String], Data) {
+    lock.withLock { paths.append(request.url?.path ?? "") }
     let variables = JSON.parse(String(decoding: request.httpBody ?? Data(), as: UTF8.self))?["variables"]
     var data: [String: JSON] = ["rateLimit": ["cost": 1]]
     if let ids = variables?["ids"]?.array?.compactMap(\.string) {
@@ -425,7 +431,7 @@ private final class FakeGraphQL: @unchecked Sendable {
   private func node(_ pr: PR) -> JSON {
     [
       "id": .string(pr.id), "number": .number(Double(pr.number)), "state": .string(pr.state), "headRefName": "feature",
-      "baseRefName": "main", "body": .string(pr.body),
+      "baseRefName": "main", "body": .string(pr.body), "mergeCommit": pr.merge.map { ["oid": .string($0)] } ?? .null,
       "repository": ["nameWithOwner": .string(pr.repo), "defaultBranchRef": ["name": "main"]],
     ]
   }
@@ -643,6 +649,38 @@ private let listedPR = FakeGraphQL.PR(id: "PR_77", repo: "secret/listed", number
         $0.session == "m1" && $0.kind == "wait-resolved"
       }
       #expect(resolved.isEmpty, "the Mac's read of the vault PR never resolves m1's waits")
+    }
+  }
+
+  /// A deploy edge that names a service reads that service's state file in the charts repo, which mini's `repos`
+  /// don't list. A session on this Mac with the same edge reads it.
+  @Test(.timeLimit(.minutes(1)))
+  func aServiceDeployEdgeOfAHostsSessionDoesNotReadTheChartsRepo() throws {
+    var listed = listedPR
+    listed.body = "Depends on secret/listed#76 (deployed, service: feature-flags)"
+    let merged = FakeGraphQL.PR(id: "PR_76", repo: "secret/listed", number: 76, state: "MERGED", merge: "abc123")
+    let github = FakeGraphQL([listed, merged])
+    let readsCharts = { github.requested.contains { $0.contains("state/feature-flags.yaml") } }
+    try withPoller(github) { service, p, facts in
+      try makeCheckout("\(facts.home)/listed", origin: "https://github.com/secret/listed.git")
+      add(service, "m1", host: "mini", cwd: "\(facts.home)/listed")
+
+      // The first poll reads the PR's body, the second reads the PR it names, and the third checks its deploy.
+      poll(p)
+      poll(p)
+      poll(p)
+
+      #expect(github.lookups.contains("secret/listed#76"), "the edge's PR is in a listed repo")
+      #expect(!readsCharts(), "\(github.requested)")
+
+      let mac = try makeShortTempFolder()
+      defer { try? FileManager.default.removeItem(atPath: mac) }
+      try makeCheckout(mac, origin: "https://github.com/secret/listed.git")
+      add(service, "l1", host: nil, cwd: mac)
+      poll(p)
+      poll(p)
+
+      #expect(readsCharts(), "a session on this Mac reads the state file: \(github.requested)")
     }
   }
 

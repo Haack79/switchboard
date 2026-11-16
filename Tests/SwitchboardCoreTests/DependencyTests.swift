@@ -92,6 +92,151 @@ private func refs(_ body: String) -> [String] {
   }
 }
 
+/// The one ref that `body` names.
+private func ref(_ body: String) throws -> PRRef {
+  let found = Dependencies.refs(inBody: body, repo: own)
+  try #require(found.count == 1)
+  return found[0]
+}
+
+@Suite struct DependencyDeployTargetParsing {
+  @Test func serviceNamesTheChartsStateFile() throws {
+    let r = try ref("Depends on PostHog/statuspage#54 (deployed, service: statuspage-metrics-api)")
+
+    #expect(r == PRRef(repo: "PostHog/statuspage", number: 54, deploy: true, service: "statuspage-metrics-api"))
+  }
+
+  @Test(arguments: [
+    ("Depends on #5 (deployed, service: feature-flags)", "feature-flags"),
+    ("Depends on #5 (deployed, service: temporal_worker.v2)", "temporal_worker.v2"),
+    ("Depends on #5 (deployed, service:ai-gateway)", "ai-gateway"),
+    ("Depends on #5 (deployed; service: duckgres)", "duckgres"),
+    ("Depends on #5 deployed, service: Hoghooks2", "Hoghooks2"),
+    ("Depends on #5 deployed to prod, service: statuspage-metrics-api.", "statuspage-metrics-api"),
+  ])
+  func serviceNameStopsAtTheFirstCharacterOutsideThePattern(_ body: String, _ service: String) throws {
+    #expect(try ref(body).service == service)
+  }
+
+  /// The name becomes the path `state/<name>.yaml`, so a name that the
+  /// pattern refuses gives no service.
+  @Test(arguments: [
+    "Depends on #5 (deployed, service: ../secrets)", "Depends on #5 (deployed, service: -x)",
+    "Depends on #5 (deployed, service: .hidden)", "Depends on #5 (deployed, service: )",
+    "Depends on #5 (deployed, service: /etc/passwd)",
+  ])
+  func serviceNameThatThePatternRefusesGivesNoService(_ body: String) throws {
+    #expect(try ref(body).service == nil)
+  }
+
+  @Test(arguments: [
+    (
+      "Depends on PostHog/statuspage#54 (deployed to dev and prod, service: statuspage-metrics-api)",
+      [
+        DeployEnvironment.dev, .prodUS, .prodEU,
+      ]
+    ),
+    ("Depends on #5 (deployed to prod-eu)", [.prodEU]),
+    ("Depends on #5 (deployed to prod-us)", [.prodUS]),
+    ("Depends on #5 (deployed to dev)", [.dev]),
+    ("Depends on #5 (deployed to prod)", [.prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev, prod-eu)", [.dev, .prodEU]),
+    ("Depends on #5 (deployed to dev, prod-us and prod-eu)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev & prod-us)", [.dev, .prodUS]),
+    ("Depends on #5 (Deployed to dev, service: feature-flags)", [.dev]),
+    ("Depends on #5 (deployed to dev, prod-us, and prod-eu)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev/prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev + prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to dev, then prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to both dev and prod)", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 deployed to `dev` and **prod**", [.dev, .prodUS, .prodEU]),
+    ("Depends on #5 (deployed to prod), see the dev runbook", [.prodUS, .prodEU]),
+  ])
+  func deployToNamesTheEnvironments(_ body: String, _ environments: [DeployEnvironment]) throws {
+    #expect(try ref(body).environments == environments)
+  }
+
+  @Test(arguments: [
+    "Depends on #5 (deployed)", "Depends on #5 (deployed, service: feature-flags)", "Depends on the deploy of #5",
+  ])
+  func deployLineWithoutToLeavesTheEnvironmentsUnset(_ body: String) throws {
+    #expect(try ref(body).environments == nil)
+  }
+
+  @Test func deployLineWithoutAServiceLeavesTheServiceUnset() throws {
+    #expect(try ref("Depends on PostHog/posthog#456 (deployed to dev)").service == nil)
+  }
+
+  @Test(arguments: [
+    "Depends on PostHog/statuspage#54 (service: statuspage-metrics-api)",
+    "Depends on PostHog/statuspage#54 (service: statuspage-metrics-api, to dev)",
+    "Depends on PostHog/statuspage#54 to dev and prod",
+    "Depends on PostHog/statuspage#54, service: statuspage-metrics-api, merged to dev",
+  ])
+  func lineWithoutDeployIgnoresServiceAndTo(_ body: String) throws {
+    #expect(try ref(body) == PRRef(repo: "PostHog/statuspage", number: 54))
+  }
+
+  @Test func everyRefOnTheLineGetsItsServiceAndEnvironments() {
+    let found = Dependencies.refs(
+      inBody: "Depends on #5 and PostHog/statuspage#54 (deployed to dev, service: statuspage-metrics-api)", repo: own)
+
+    #expect(
+      found == [
+        PRRef(repo: own, number: 5, deploy: true, service: "statuspage-metrics-api", environments: [.dev]),
+        PRRef(
+          repo: "PostHog/statuspage", number: 54, deploy: true, service: "statuspage-metrics-api", environments: [.dev]),
+      ])
+  }
+
+  @Test func serviceAndEnvironmentsApplyOnlyToTheirOwnLine() {
+    let found = Dependencies.refs(
+      inBody: "Depends on #5 (deployed to dev, service: feature-flags)\nDepends on #6 (deployed)", repo: own)
+
+    #expect(
+      found == [
+        PRRef(repo: own, number: 5, deploy: true, service: "feature-flags", environments: [.dev]),
+        PRRef(repo: own, number: 6, deploy: true),
+      ])
+  }
+
+  @Test func repeatKeepsTheFirstServiceAndUnionsTheEnvironments() throws {
+    let r = try ref("Depends on #5 (deployed to dev, service: a)\nDepends on #5 (deployed to prod-eu, service: b)")
+
+    #expect(r.service == "a")
+    #expect(Set(r.environments ?? []) == [.dev, .prodEU])
+  }
+
+  @Test func repeatTakesTheServiceOfTheFirstLineThatNamesOne() throws {
+    let r = try ref("Depends on #5 (deployed)\nDepends on #5 (deployed, service: feature-flags)")
+
+    #expect(r.service == "feature-flags")
+  }
+
+  @Test func repeatOfANonDeployLineTakesOnlyTheDeployLinesEnvironments() throws {
+    let r = try ref("Depends on #5\nDepends on #5 (deployed to dev, service: feature-flags)")
+
+    #expect(r == PRRef(repo: own, number: 5, deploy: true, service: "feature-flags", environments: [.dev]))
+  }
+
+  /// A bare deploy line waits on both prod regions, so its union with dev names all three.
+  @Test func repeatOfABareDeployLineAndADevLineNamesDevAndBothProdRegions() throws {
+    let r = try ref("Depends on #5 (deployed)\nDepends on #5 (deployed to dev)")
+
+    #expect(Set(r.environments ?? []) == [.dev, .prodUS, .prodEU])
+  }
+
+  @Test func repeatOfTwoBareDeployLinesLeavesTheEnvironmentsUnset() throws {
+    #expect(try ref("Depends on #5 (deployed)\nDepends on #5 (deployed)").environments == nil)
+  }
+
+  @Test func repeatStaysADeployRefWhenALaterLineIsNot() throws {
+    let r = try ref("Depends on #5 (deployed to dev, service: feature-flags)\nDepends on #5")
+
+    #expect(r == PRRef(repo: own, number: 5, deploy: true, service: "feature-flags", environments: [.dev]))
+  }
+}
+
 @Suite struct DependencyResolution {
   @Test(arguments: [
     (PRState.merged, false, Bool?.none, true),
@@ -173,6 +318,58 @@ private func refs(_ body: String) -> [String] {
     let decoded = try JSONCoding.decode(PullRequest.self, from: JSON.object(object).text)
 
     #expect(decoded.dependsOn == nil)
+  }
+
+  @Test func prRefWithAServiceAndEnvironmentsRoundTrips() throws {
+    let r = PRRef(repo: "PostHog/statuspage", number: 54, deploy: true, service: "x", environments: [.dev, .prodEU])
+
+    #expect(try JSONCoding.decode(PRRef.self, from: try JSON(encoding: r).text) == r)
+  }
+
+  @Test func prRefThatAnOlderSbdRecordedHasNoServiceOrEnvironments() throws {
+    let r = try JSONCoding.decode(PRRef.self, from: #"{"repo":"PostHog/posthog","number":456,"deploy":true}"#)
+
+    #expect(r == PRRef(repo: "PostHog/posthog", number: 456, deploy: true, service: nil, environments: nil))
+  }
+
+  @Test func dependencyWithAServiceEnvironmentsAndProblemRoundTrips() throws {
+    let d = Dependency(
+      via: .body, repo: "PostHog/statuspage", number: 54, deploy: true, state: .merged, deployed: false,
+      service: "statuspage-metrics-api", environments: [.dev, .prodUS], problem: "PostHog/charts has no state/x.yaml")
+
+    #expect(try JSONCoding.decode(Dependency.self, from: try JSON(encoding: d).text) == d)
+  }
+
+  @Test func dependencyThatAnOlderSbdRecordedHasNoServiceEnvironmentsOrProblem() throws {
+    let text = #"{"via":"body","repo":"acme/widgets","number":41,"deploy":true,"state":"MERGED","deployed":false}"#
+
+    let d = try JSONCoding.decode(Dependency.self, from: text)
+
+    #expect(d == Dependency(via: .body, repo: own, number: 41, deploy: true, state: .merged, deployed: false))
+  }
+
+  @Test func dependenciesEventThatAnOlderSbdWroteStillSetsTheEdges() throws {
+    let old = try #require(
+      JSON.parse(#"[{"via":"body","repo":"acme/widgets","number":41,"deploy":true,"state":"MERGED","deployed":true}]"#))
+
+    let f = facts([event("dependencies", 1, ["dependencies": old])])
+
+    #expect(
+      f.dependencies == [Dependency(via: .body, repo: own, number: 41, deploy: true, state: .merged, deployed: true)])
+  }
+
+  @Test(arguments: [
+    ([DeployEnvironment]?.none, [DeployEnvironment.prodUS, .prodEU]),
+    (.some([.dev]), [.dev]),
+    (.some([.dev, .prodUS, .prodEU]), [.dev, .prodUS, .prodEU]),
+    (.some([.prodEU]), [.prodEU]),
+  ])
+  func deployEnvironmentsDefaultToBothProdRegions(
+    _ environments: [DeployEnvironment]?, _ expected: [DeployEnvironment]
+  ) {
+    let d = Dependency(via: .body, repo: own, number: 41, deploy: true, environments: environments)
+
+    #expect(d.deployEnvironments == expected)
   }
 
   @Test func pullRequestInitTakesDependsOnLast() {
@@ -298,6 +495,111 @@ private let approvedByAlice = samplePR(reviewDecision: .approved, verdicts: [sam
       samplePR(), [bodyEdge(41, state: .closed)], then: [event("UserPromptSubmit", 5, ["prompt": "keep going"])])
 
     #expect(Attention.evaluate(session(), f, now: Self.now).state == .working)
+  }
+}
+
+private let missingStateFile = "PostHog/charts has no state/statuspage-metrics-api.yaml"
+
+/// A merged deploy edge whose deploy can't resolve as its line names it.
+private func stuckEdge(_ number: Int, repo: String = own, problem: String = missingStateFile) -> Dependency {
+  Dependency(
+    via: .body, repo: repo, number: number, deploy: true, state: .merged, deployed: false,
+    service: "statuspage-metrics-api", problem: problem)
+}
+
+private let stuck41 = Verdict(state: .needsYou, reason: oneLine("#41 can't resolve: \(missingStateFile)"))
+
+@Suite struct DeployProblemAttention {
+  static let now: Int64 = 10
+
+  @Test func holdingEdgeWithAProblemNeedsYou() throws {
+    let f = try edgeFacts(reviewRequired, [stuckEdge(41)])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now) == stuck41)
+  }
+
+  @Test func problemEdgeInAnotherRepoNamesItsRepo() throws {
+    let f = try edgeFacts(reviewRequired, [stuckEdge(54, repo: "PostHog/statuspage")])
+
+    #expect(
+      Attention.evaluate(session(), f, now: Self.now)
+        == Verdict(state: .needsYou, reason: oneLine("PostHog/statuspage#54 can't resolve: \(missingStateFile)")))
+  }
+
+  @Test func problemEdgeWinsOverAnEarlierEdgeThatOnlyWaits() throws {
+    let f = try edgeFacts(reviewRequired, [bodyEdge(40), stuckEdge(41)])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now) == stuck41)
+  }
+
+  @Test(arguments: [false, true])
+  func closedDependencyWinsOverAProblemEdge(_ closedFirst: Bool) throws {
+    let closed = bodyEdge(40, state: .closed)
+    let f = try edgeFacts(reviewRequired, closedFirst ? [closed, stuckEdge(41)] : [stuckEdge(41), closed])
+
+    #expect(
+      Attention.evaluate(session(), f, now: Self.now)
+        == Verdict(state: .needsYou, reason: "decide what replaces #40, which closed unmerged"))
+  }
+
+  @Test(arguments: [
+    samplePR(mergeable: .conflicting),
+    samplePR(verdicts: [sampleVerdict("alice", "CHANGES_REQUESTED", on: samplePRHead)]),
+    approvedByAlice,
+  ])
+  func problemEdgeWinsOverThePRRules(_ pr: PullRequest) throws {
+    let f = try edgeFacts(pr, [stuckEdge(41)])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now) == stuck41)
+  }
+
+  @Test func problemEdgeStillHolds() {
+    #expect(stuckEdge(41).holds)
+  }
+
+  @Test func approvedPRWithGreenChecksAndAProblemEdgeIsNotMerged() throws {
+    var pr = approvedByAlice
+    pr.checks = "SUCCESS"
+    let f = try edgeFacts(pr, [stuckEdge(41)])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now).state != .readyToMerge)
+  }
+
+  @Test func resolvedEdgeThatStillCarriesAProblemDoesNotNeedYou() throws {
+    var edge = stuckEdge(41)
+    edge.deployed = true
+    let f = try edgeFacts(reviewRequired, [edge])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now) == readsTheReply)
+  }
+
+  @Test func runningTurnWinsOverAProblemEdge() throws {
+    let f = try edgeFacts(
+      samplePR(), [stuckEdge(41)], then: [event("UserPromptSubmit", 5, ["prompt": "keep going"])])
+
+    #expect(Attention.evaluate(session(), f, now: Self.now).state == .working)
+  }
+
+  @Test func sessionWhoseOwnPRMergedGetsNoProblemRule() throws {
+    let f = try edgeFacts(samplePR(state: .merged), [stuckEdge(41)], dirty: 0)
+
+    #expect(Attention.evaluate(session(), f, now: Self.now).state == .done)
+  }
+}
+
+/// The environments that the resume message names after "deployed to".
+@Suite struct DependencyEnvironmentsText {
+  @Test(arguments: [
+    ([DeployEnvironment]?.none, "prod"),
+    (.some([.dev, .prodUS, .prodEU]), "dev, prod-us, and prod-eu"),
+    (.some([.dev]), "dev"),
+    (.some([.prodEU]), "prod-eu"),
+    (.some([.dev, .prodEU]), "dev and prod-eu"),
+  ])
+  func resumeLineNamesTheEnvironments(_ environments: [DeployEnvironment]?, _ text: String) {
+    let d = Dependency(via: .body, repo: own, number: 41, deploy: true, environments: environments)
+
+    #expect(d.environmentsText == text)
   }
 }
 
