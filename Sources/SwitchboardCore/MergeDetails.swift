@@ -289,7 +289,7 @@ extension GitHub {
   /// before the review details, 4 points with `$threads` false, and 45
   /// points with `$threads` true.
   public static let mergeDetailsQuery = """
-    query($ids: [ID!]!, $threads: Boolean!) {
+    query MergeDetails($ids: [ID!]!, $threads: Boolean!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {

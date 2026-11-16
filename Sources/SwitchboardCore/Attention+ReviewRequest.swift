@@ -119,7 +119,7 @@ public enum ReviewRequests {
   /// people who committed to or reviewed the changed files. The PR's author
   /// is left out, and Copilot comes last.
   public static let suggestionsQuery = """
-    query($id: ID!) {
+    query SuggestedReviewers($id: ID!) {
       node(id: $id) {
         ... on PullRequest {
           author { login }

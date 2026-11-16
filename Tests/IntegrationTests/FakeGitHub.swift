@@ -68,6 +68,11 @@ final class FakeGitHub {
   /// The queries that ask for PR nodes.
   enum PRQuery: String {
     case status, base, files, approvals, actions, mergeDetails
+
+    /// The queries whose answer projects each PR node through the query's selection, by operation name.
+    static let selecting: [String: PRQuery] = [
+      "Status": .status, "Base": .base, "Actions": .actions, "ApprovalTeams": .approvals, "MergeDetails": .mergeDetails,
+    ]
   }
 
   /// A base branch's code owner settings, as the codeowners query reads them.
@@ -105,9 +110,9 @@ final class FakeGitHub {
   private var afterGET: [String: () -> Void] = [:]
   /// The status that the next GET of each path gets instead of its answer.
   private var failingGETs: [String: Int] = [:]
-  /// By owner/name:branch.
+  /// By lowercase owner/name, a colon, and the branch.
   private var codeOwnerConfigs: [String: CodeOwnerConfig] = [:]
-  /// The repos whose codeowners query answers a null repository and an error.
+  /// The lowercase owner/name of each repo whose codeowners query answers a null repository and an error.
   private var failingCodeOwners: Set<String> = []
   /// By lowercase owner/name#number.
   private var listedIssues: [String: FakeIssue] = [:]
@@ -476,18 +481,18 @@ final class FakeGitHub {
     repo: String, base: String, rules: [JSON], protection: JSON?, files: [String: String], errors: [JSON]?
   ) {
     lock.withLock {
-      codeOwnerConfigs["\(repo):\(base)"] = CodeOwnerConfig(
+      codeOwnerConfigs["\(repo.lowercased()):\(base)"] = CodeOwnerConfig(
         rules: rules, protection: protection, files: files, errors: errors)
     }
   }
 
   /// Makes each codeowners query for `repo` answer a null repository with an error.
   func failCodeOwners(repo: String) {
-    lock.withLock { _ = failingCodeOwners.insert(repo) }
+    lock.withLock { _ = failingCodeOwners.insert(repo.lowercased()) }
   }
 
   func recoverCodeOwners(repo: String) {
-    lock.withLock { _ = failingCodeOwners.remove(repo) }
+    lock.withLock { _ = failingCodeOwners.remove(repo.lowercased()) }
   }
 
   /// Sets the PR's changed files. A files query reads them in pages of its
@@ -847,6 +852,7 @@ final class FakeGitHub {
 
   private func answer(_ request: JSON, authorization: String?) -> Reply {
     let query = request["query"]?.string ?? ""
+    let operation = query.firstMatch(of: #/^\s*query\s+(\w+)/#).map { String($0.1) }
     let variables = request["variables"]?.object ?? [:]
     let (reply, after): (Reply, (() -> Void)?) = lock.withLock {
       var data: [String: JSON] = ["rateLimit": ["cost": 1]]
@@ -867,19 +873,21 @@ final class FakeGitHub {
             return found
           })
       }
-      if query.contains("codeowners(") {
+      switch operation {
+      case "CodeOwnersConfig":
         kind = "codeowners"
         let owner = variables["owner"]?.string ?? ""
         let repo = "\(owner)/\(variables["name"]?.string ?? "")"
         let base = variables["ref"]?.string ?? ""
         ids = ["\(repo):\(base)"]
-        if failingCodeOwners.contains(repo) {
+        let lowercased = repo.lowercased()
+        if failingCodeOwners.contains(lowercased) {
           data["repository"] = .null
           errors.append(["type": "INTERNAL", "path": ["repository"], "message": "Failed"])
         } else {
-          data["repository"] = codeOwnersRepository(base, codeOwnerConfigs["\(repo):\(base)"], variables)
+          data["repository"] = codeOwnersRepository(base, codeOwnerConfigs["\(lowercased):\(base)"], variables)
         }
-      } else if query.contains("files(") {
+      case "Files", "FilesPage":
         kind = PRQuery.files.rawValue
         let first = query.firstMatch(of: #/files\(first: (\d+)/#).flatMap { Int($0.1) } ?? 100
         let failing = failingPRs[.files, default: []]
@@ -899,7 +907,7 @@ final class FakeGitHub {
           ids = variables["ids"]?.array?.compactMap(\.string) ?? []
           data["nodes"] = nodes(page, failing: { failing.contains(self.prs[$0]?["number"]?.int ?? 0) })
         }
-      } else if query.contains("fragment issue on Issue") {
+      case "Issues":
         kind = "issues"
         data["viewer"] = ["login": .string(viewer)]
         for match in query.matches(of: #/([ro])(\d+): \w+\([^\n]*?first: (\d+)/#) {
@@ -922,8 +930,7 @@ final class FakeGitHub {
           ]
           data[alias] = match.1 == "r" ? ["issues": connection] : connection
         }
-      } else if query.contains("issueOrPullRequest(") {
-        // Before the PullRequest selection, which the query's `... on PullRequest` would match.
+      case "Reference":
         kind = "reference"
         let repo = "\(variables["o"]?.string ?? "")/\(variables["n"]?.string ?? "")".lowercased()
         let key = "\(repo)#\(variables["num"]?.int ?? 0)"
@@ -938,30 +945,21 @@ final class FakeGitHub {
           errors.append(
             ["type": "NOT_FOUND", "path": ["repository", "issueOrPullRequest"], "message": "Could not resolve"])
         }
-      } else if let selection = Selection(query: query, on: "PullRequest", variables: variables) {
-        let prQuery: PRQuery
-        if query.contains("onBehalfOf(") {
-          prQuery = .approvals
-        } else if query.contains("reviewThreads(") {
-          prQuery = .mergeDetails
-        } else if query.contains("reviews(") {
-          prQuery = .status
-        } else if query.contains("checkSuites(") {
-          prQuery = .actions
-        } else {
-          prQuery = .base
-        }
+      case let name? where PRQuery.selecting[name] != nil:
+        let prQuery = PRQuery.selecting[name]!
+        let selection = Selection(query: query, on: "PullRequest", variables: variables)!
         kind = prQuery.rawValue
         ids = variables["ids"]?.array?.compactMap(\.string) ?? []
         let failing = failingPRs[prQuery, default: []]
         data["nodes"] = nodes(
           { prs[$0].map { selection.project(.object($0)) } },
           failing: { failing.contains(prs[$0]?["number"]?.int ?? 0) })
-      } else if let selection = Selection(query: query, on: "IssueComment") {
+      case "Bodies":
+        let selection = Selection(query: query, on: "IssueComment")!
         kind = "bodies"
         ids = variables["ids"]?.array?.compactMap(\.string) ?? []
         data["nodes"] = nodes({ bodies[$0].map(selection.project) }, failing: failingComments.contains)
-      } else {
+      case "Lookup":
         kind = "lookup"
         var i = 0
         while let owner = variables["o\(i)"]?.string, let name = variables["n\(i)"]?.string {
@@ -982,11 +980,15 @@ final class FakeGitHub {
           }
           i += 1
         }
+      default:
+        kind = "unknown"
+        errors.append(["message": .string("FakeGitHub has no answer for operation \(operation ?? "(unnamed)")")])
       }
       log.append(Request(kind: kind, ids: ids, authorization: authorization, variables: variables))
       let after = kind == PRQuery.files.rawValue ? afterFiles.take() : nil
       if !queued.isEmpty { return (queued.removeFirst(), after) }
-      var response: [String: JSON] = ["data": .object(data)]
+      // GitHub answers a validation error without data. sbd's request throws when data is missing or null.
+      var response: [String: JSON] = ["data": kind == "unknown" ? .null : .object(data)]
       if !errors.isEmpty { response["errors"] = .array(errors) }
       return (Reply(status: 200, headers: [:], body: JSON.object(response).text), after)
     }

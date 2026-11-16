@@ -4,7 +4,7 @@ extension GitHub {
   static let notFound = "NOT_FOUND"
 
   public static let statusQuery = """
-    query($ids: [ID!]!) {
+    query Status($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
@@ -31,7 +31,7 @@ extension GitHub {
     """
 
   public static let bodyQuery = """
-    query($ids: [ID!]!) {
+    query Bodies($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on IssueComment { id author { __typename login } createdAt lastEditedAt includesCreatedEdit body }
@@ -43,7 +43,7 @@ extension GitHub {
   /// default branch. Phase 0 test 6 measured `associatedPullRequests` at
   /// about 1 s per 50 PRs, so the status query leaves it out.
   public static let baseQuery = """
-    query($ids: [ID!]!) {
+    query Base($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
@@ -67,7 +67,7 @@ extension GitHub {
   /// leaves them out. A PostHog/posthog PR has about 30 to 60 of them, and
   /// they made a status read of 20 such PRs take about twice as long.
   public static let actionsQuery = """
-    query($ids: [ID!]!) {
+    query Actions($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
@@ -91,7 +91,7 @@ extension GitHub {
   /// `$github`, `$root`, and `$docs` are `<branch>:.github/CODEOWNERS`,
   /// `<branch>:CODEOWNERS`, and `<branch>:docs/CODEOWNERS`.
   public static let codeOwnersConfigQuery = """
-    query($owner: String!, $name: String!, $ref: String!, $github: String!, $root: String!, $docs: String!) {
+    query CodeOwnersConfig($owner: String!, $name: String!, $ref: String!, $github: String!, $root: String!, $docs: String!) {
       rateLimit { cost }
       repository(owner: $owner, name: $name) {
         ref(qualifiedName: $ref) {
@@ -116,7 +116,7 @@ extension GitHub {
   /// The first page of each PR's changed files, with the head and base that
   /// the files belong to.
   public static let filesQuery = """
-    query($ids: [ID!]!) {
+    query Files($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
@@ -129,7 +129,7 @@ extension GitHub {
 
   /// A later page of one PR's changed files.
   public static let filesPageQuery = """
-    query($id: ID!, $after: String!) {
+    query FilesPage($id: ID!, $after: String!) {
       rateLimit { cost }
       node(id: $id) {
         ... on PullRequest {
@@ -144,7 +144,7 @@ extension GitHub {
   /// status query leaves this out. It would raise a chunk's cost from 1
   /// point to about 5.
   public static let approvalTeamsQuery = """
-    query($ids: [ID!]!) {
+    query ApprovalTeams($ids: [ID!]!) {
       rateLimit { cost }
       nodes(ids: $ids) {
         ... on PullRequest {
@@ -402,7 +402,7 @@ extension GitHub {
       fields.append("  q\(i): repository(owner: $o\(i), name: $n\(i)) { \(field) }")
     }
     let query =
-      "query(\(declarations.joined(separator: ", "))) {\n  rateLimit { cost }\n"
+      "query Lookup(\(declarations.joined(separator: ", "))) {\n  rateLimit { cost }\n"
       + fields.joined(separator: "\n") + "\n}"
     return (query, .object(variables))
   }
