@@ -115,6 +115,16 @@ import Testing
     return try sbd.waitFor(s.id, "the stop") { $0.claudePid == nil }
   }
 
+  /// A running session under A whose stub claude waits `seconds` after SIGTERM before it exits.
+  func lingeringSession(_ sbd: Instance, seconds: Int, name: String) throws -> SessionSummary {
+    try sbd.sb("account", "use", "A")
+    let s = try sbd.new(prompt: "linger \(seconds)", name: name)
+    try sbd.waitFor(s.id, "the first reply") {
+      $0.lastReply == "I'll linger \(seconds) s when I stop." && $0.claudePid != nil
+    }
+    return s
+  }
+
   /// A move that names a session that stays, which makes `sb` exit nonzero.
   func refusedMove(_ sbd: Instance, _ extra: String...) throws -> AccountMove {
     let r = try sbd.run(["account", "move", "--json", "B"] + extra)
@@ -392,9 +402,7 @@ import Testing
   /// The stub's claude exits 3 s after SIGTERM, so the move waits for the exit.
   @Test func theStopFlagStopsANamedSessionsClaudeAndMovesIt() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
-    try sbd.sb("account", "use", "A")
-    let s = try sbd.new(prompt: "linger 3", name: "live")
-    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 3 s when I stop." && $0.claudePid != nil }
+    let s = try lingeringSession(sbd, seconds: 3, name: "live")
     let stopped = try stoppedSession(sbd, prompt: "second", name: "stopped")
     let other = try sbd.idleSession(name: "other")
 
@@ -417,9 +425,7 @@ import Testing
   /// The stub's claude exits 7 s after SIGTERM, which outlasts the 5 s wait.
   @Test func theStopFlagRefusesAClaudeThatOutlivesTheWait() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
-    try sbd.sb("account", "use", "A")
-    let s = try sbd.new(prompt: "linger 7", name: "slow")
-    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 7 s when I stop." && $0.claudePid != nil }
+    let s = try lingeringSession(sbd, seconds: 7, name: "slow")
 
     let result = try refusedMove(sbd, "--stop", "--session", "slow")
     #expect(result.moved.isEmpty)
@@ -459,9 +465,7 @@ import Testing
   /// The stub's claude exits 3 s after SIGTERM. `stop` answers only after the exit.
   @Test func aMoveRightAfterTheStopTakesTheSession() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
-    try sbd.sb("account", "use", "A")
-    let s = try sbd.new(prompt: "linger 3", name: "first")
-    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 3 s when I stop." && $0.claudePid != nil }
+    let s = try lingeringSession(sbd, seconds: 3, name: "first")
 
     let stopped = try decode(sbd.sb("stop", "--json", "first"))
     #expect(stopped.claudePid == nil)
