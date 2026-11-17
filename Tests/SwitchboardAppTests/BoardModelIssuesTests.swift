@@ -6,18 +6,20 @@ import Testing
 
 private func row(
   _ repo: String, _ number: Int, _ bucket: IssueBucket, updated: String = "2026-11-10T10:00:00Z",
-  labels: [String] = [], session: String? = nil
+  created: String = "2026-11-01T10:00:00Z", labels: [String] = [], session: String? = nil, backlog: Bool = false
 ) -> ListedIssue {
   ListedIssue(
     issue: InboxIssue(
       repo: repo, number: number, title: "Issue \(number)", url: "https://github.com/\(repo)/issues/\(number)",
-      labels: labels, createdAt: "2026-11-01T10:00:00Z", updatedAt: updated),
-    bucket: bucket, session: session)
+      labels: labels, createdAt: created, updatedAt: updated),
+    bucket: bucket, session: session, backlog: backlog)
 }
 
-private func list(_ rows: [ListedIssue], presets: [IssuePreset] = IssuePreset.defaults) -> IssueList {
+private func list(
+  _ rows: [ListedIssue], team: IssueTeam = IssueTeam(), presets: [IssuePreset] = IssuePreset.defaults
+) -> IssueList {
   IssueList(
-    viewer: "robin-k", issues: rows, sources: [IssueSource(name: "acme/ledger")], team: IssueTeam(),
+    viewer: "robin-k", issues: rows, sources: [IssueSource(name: "acme/ledger")], team: team,
     presets: presets, branchPrefix: "robin/")
 }
 
@@ -30,6 +32,24 @@ private let rows = [
   row("acme/ledger", 6, .workedOn, session: "s1"),
   row("robin-k/dotkit", 7, .teamUnassigned, updated: "2026-11-08T10:00:00Z"),
 ]
+
+private let backlogTeam = IssueTeam(labels: ["team/billing"], backlog: ["backlog"])
+
+/// 8 is in Team unassigned with the team's label, and 9 is in Mine. 8 has the newer update.
+private let backlogRows = [
+  row(
+    "acme/ledger", 8, .teamUnassigned, updated: "2026-11-12T10:00:00Z", labels: ["team/billing", "backlog"],
+    backlog: true),
+  row("acme/ledger-web", 9, .mine, updated: "2026-11-07T10:00:00Z", labels: ["backlog"], backlog: true),
+]
+
+/// `rows` with the backlog rows at both ends, so the model can't rely on sbd's backlog-last order.
+private let withBacklog = [backlogRows[0]] + rows + [backlogRows[1]]
+
+/// The issue numbers of the move order.
+@MainActor private func orderNumbers(_ model: BoardModel) -> [Int] {
+  model.issueOrder.compactMap { id in model.issues.first { $0.id == id }?.issue.number }
+}
 
 @MainActor
 @Suite struct BoardModelIssuesTests {
@@ -89,6 +109,230 @@ private let rows = [
     #expect(model.currentIssue?.issue.number == 7)
     model.moveIssue(by: 1, wrap: false)
     #expect(model.currentIssue?.issue.number == 7)
+  }
+
+  // MARK: Backlog
+
+  private func model(_ rows: [ListedIssue], team: IssueTeam = backlogTeam) -> BoardModel {
+    let model = orgFilterModel()
+    model.issueList = list(rows, team: team)
+    return model
+  }
+
+  @Test func backlogRowsGoInOneSectionAfterBeingWorkedOn() {
+    let sections = model(withBacklog).issueSections
+
+    #expect(sections.map(\.id) == ["mine", "teamUnassigned", "teamAssigned", "workedOn", "backlog"])
+    #expect(sections.last?.title == "Backlog")
+    #expect(sections.last?.issues.map(\.issue.number) == [8, 9])
+    #expect(sections.last?.hiddenCount == nil)
+  }
+
+  @Test func backlogSectionComesLastWhenGroupedByRepo() {
+    let model = model(withBacklog)
+
+    model.issuesByRepo = true
+
+    let sections = model.issueSections
+    #expect(
+      sections.map(\.id) == [
+        "repo:acme/ledger", "repo:acme/ledger-web", "repo:robin-k/dotkit", "workedOn", "backlog",
+      ])
+    #expect(sections.last?.issues.map(\.issue.number) == [8, 9])
+    #expect(!sections.dropLast().contains { $0.issues.contains(where: \.backlog) })
+  }
+
+  /// 20 is in Team unassigned and 21 is in Mine. 20 has the newer update and the later creation, so Updated and
+  /// Oldest give opposite orders. An order by bucket puts 21 first and fails the Updated case.
+  @Test(arguments: zip([IssueSort.updated, .oldest], [[20, 21], [21, 20]]))
+  func backlogSectionFollowsTheSort(_ sort: IssueSort, _ expected: [Int]) {
+    let model = model(
+      rows + [
+        row(
+          "acme/ledger", 20, .teamUnassigned, updated: "2026-11-12T10:00:00Z", created: "2026-10-09T10:00:00Z",
+          labels: ["backlog"], backlog: true),
+        row(
+          "acme/ledger", 21, .mine, updated: "2026-11-05T10:00:00Z", created: "2026-10-01T10:00:00Z",
+          labels: ["backlog"], backlog: true),
+      ])
+
+    model.issueSort = sort
+
+    #expect(model.issueSections.last?.issues.map(\.issue.number) == expected)
+  }
+
+  @Test func backlogSectionHoldsOnlyTheScopesBuckets() {
+    let other = model(rows + [row("robin-k/dotkit", 10, .other, labels: ["backlog"], backlog: true)])
+    let mine = model(withBacklog)
+    #expect(!other.issueSections.contains { $0.id == "backlog" })
+
+    other.issueScope = .all
+    mine.issueScope = .mine
+
+    #expect(other.issueSections.last?.id == "backlog")
+    #expect(other.issueSections.last?.issues.map(\.issue.number) == [10])
+    #expect(mine.issueSections.map(\.id) == ["mine", "backlog"])
+    #expect(mine.issueSections.last?.issues.map(\.issue.number) == [9])
+  }
+
+  @Test func aBacklogIssueWithATeamLabelLeavesTheTeamSection() {
+    let sections = model(withBacklog).issueSections
+
+    #expect(sections.first { $0.id == "teamUnassigned" }?.issues.map(\.issue.number) == [3, 7])
+    #expect(sections.first { $0.id == "backlog" }?.issues.contains { $0.issue.number == 8 } == true)
+  }
+
+  /// Every row carries the label `backlog` and none has the flag, as for an issue that a session works on. The
+  /// model reads only the flag, so the sections and the move order match a list whose rows have no labels.
+  @Test(arguments: [IssueTeam(), backlogTeam])
+  func withNoBacklogRowsTheSectionsAndMoveOrderAreUnchanged(_ team: IssueTeam) {
+    let labeled = rows.map { plainRow in
+      var labeledRow = plainRow
+      labeledRow.issue.labels.append("backlog")
+      return labeledRow
+    }
+    let plain = model(rows, team: IssueTeam())
+    let model = model(labeled, team: team)
+
+    for scope in IssueScope.allCases {
+      for byRepo in [false, true] {
+        plain.issueScope = scope
+        plain.issuesByRepo = byRepo
+        model.issueScope = scope
+        model.issuesByRepo = byRepo
+
+        #expect(model.issueSections.map(\.id) == plain.issueSections.map(\.id), "\(scope) byRepo: \(byRepo)")
+        #expect(
+          model.issueSections.map { $0.issues.map(\.id) } == plain.issueSections.map { $0.issues.map(\.id) },
+          "\(scope) byRepo: \(byRepo)")
+        #expect(model.issueOrder == plain.issueOrder, "\(scope) byRepo: \(byRepo)")
+        #expect(!model.issueSections.contains { $0.id == "backlog" }, "\(scope) byRepo: \(byRepo)")
+      }
+    }
+  }
+
+  /// No issue list yet, a team with no backlog label, or a team with only blank ones matches no issue, so the sort
+  /// menu offers no Hide Backlog. A nil team stands for no issue list.
+  @Test(
+    arguments: zip(
+      [
+        nil, IssueTeam(), IssueTeam(labels: ["team/billing"]), IssueTeam(backlog: [""]), IssueTeam(backlog: ["  "]),
+        backlogTeam,
+      ] as [IssueTeam?],
+      [false, false, false, false, false, true]))
+  func withNoBacklogLabelThereIsNoToggle(_ team: IssueTeam?, _ shows: Bool) {
+    let model = orgFilterModel()
+
+    model.issueList = team.map { list(rows, team: $0) }
+
+    #expect(model.showsBacklogToggle == shows)
+  }
+
+  @Test func hidingTheBacklogKeepsTheDividerWithItsCount() {
+    let model = model(withBacklog)
+
+    model.hidesBacklog = true
+
+    let sections = model.issueSections
+    #expect(sections.map(\.id) == ["mine", "teamUnassigned", "teamAssigned", "workedOn", "backlog"])
+    #expect(sections.last?.issues == [])
+    #expect(sections.last?.hiddenCount == 2)
+  }
+
+  @Test func hiddenBacklogRowsLeaveTheMoveOrder() {
+    let model = model(withBacklog)
+    #expect(orderNumbers(model) == [2, 1, 3, 7, 8, 9])
+
+    model.hidesBacklog = true
+
+    #expect(orderNumbers(model) == [2, 1, 3, 7])
+    model.moveIssue(by: -1)
+    #expect(model.currentIssue?.issue.number == 7)
+    model.moveIssue(by: 1)
+    #expect(model.currentIssue?.issue.number == 2)
+  }
+
+  @Test func focusOnAHiddenIssueFallsBackToTheFirstRow() {
+    let model = model(withBacklog)
+    model.issueFocus = backlogRows[0].id
+    #expect(model.currentIssue?.issue.number == 8)
+
+    model.hidesBacklog = true
+
+    #expect(model.currentIssue?.issue.number == 2)
+  }
+
+  @Test func hidingWhenOnlyBacklogIsInScopeLeavesTheDividerAlone() {
+    let model = model(rows.filter { $0.bucket != .mine } + backlogRows)
+    model.issueScope = .mine
+
+    model.hidesBacklog = true
+
+    #expect(model.issueSections.map(\.id) == ["backlog"])
+    #expect(model.issueSections.first?.issues == [])
+    #expect(model.issueSections.first?.hiddenCount == 1)
+    #expect(model.issueOrder == [])
+    #expect(model.currentIssue == nil)
+  }
+
+  /// Group by Repo drops the empty sections. The hidden divider has no rows and must stay.
+  @Test func hidingTheBacklogWithGroupByRepoKeepsTheDivider() {
+    let onlyBacklog = model(backlogRows)
+    let model = model(withBacklog)
+    model.issuesByRepo = true
+    onlyBacklog.issuesByRepo = true
+
+    model.hidesBacklog = true
+    onlyBacklog.hidesBacklog = true
+
+    #expect(
+      model.issueSections.map(\.id) == [
+        "repo:acme/ledger", "repo:acme/ledger-web", "repo:robin-k/dotkit", "workedOn", "backlog",
+      ])
+    #expect(model.issueSections.last?.hiddenCount == 2)
+    #expect(onlyBacklog.issueSections.map(\.id) == ["backlog"])
+    #expect(onlyBacklog.issueSections.first?.hiddenCount == 2)
+  }
+
+  @Test func hidingACollapsedBacklogKeepsTheDividerAndItsCount() {
+    let model = model(withBacklog)
+    model.toggleIssueSection("backlog")
+    #expect(orderNumbers(model) == [2, 1, 3, 7])
+
+    model.hidesBacklog = true
+
+    #expect(model.issueSections.last?.id == "backlog")
+    #expect(model.issueSections.last?.hiddenCount == 2)
+    #expect(orderNumbers(model) == [2, 1, 3, 7])
+  }
+
+  @Test func hidingTheBacklogIsSavedAndReadByTheNextModel() throws {
+    let name = "issues-backlog-tests-" + UUID().uuidString
+    let store = try #require(UserDefaults(suiteName: name))
+    defer { store.removePersistentDomain(forName: name) }
+    let first = orgFilterModel(store: store)
+    #expect(!first.hidesBacklog)
+
+    first.hidesBacklog = true
+
+    #expect(store.bool(forKey: "issuesHideBacklog"))
+    #expect(orgFilterModel(store: store).hidesBacklog)
+    first.hidesBacklog = false
+    #expect(!orgFilterModel(store: store).hidesBacklog)
+  }
+
+  @Test func withoutAStoreHidingTheBacklogSavesNothing() {
+    let before = UserDefaults.standard.object(forKey: "issuesHideBacklog") as? Bool
+    let model = orgFilterModel(store: nil)
+
+    model.hidesBacklog = true
+
+    #expect(UserDefaults.standard.object(forKey: "issuesHideBacklog") as? Bool == before)
+    #expect(!orgFilterModel(store: nil).hidesBacklog)
+  }
+
+  @Test func countLeavesOutBacklogIssues() {
+    #expect(model(withBacklog).issueCount == model().issueCount)
   }
 
   @Test func issuesIsTheThirdMainViewForNextSession() {

@@ -226,6 +226,10 @@ final class BoardModel: ObservableObject {
   @Published var issueSort = IssueSort.updated
   /// Whether the Issues list has a section per repository instead of a section per bucket.
   @Published var issuesByRepo = false
+  /// Whether the Issues list leaves out the backlog issues and shows only their count. The installed app saves it.
+  @Published var hidesBacklog: Bool {
+    didSet { if hidesBacklog != oldValue { viewSettingsStore?.set(hidesBacklog, forKey: Self.hidesBacklogKey) } }
+  }
   /// The Issues sections that the user collapsed, by section id.
   @Published var collapsedIssueSections: Set<String> = IssueSection.collapsedAtFirst
   /// The issues whose Start is on its way to sbd.
@@ -315,6 +319,7 @@ final class BoardModel: ObservableObject {
   private var usageRead = Date.distantPast
 
   static let orgFilterKey = "orgFilter"
+  static let hidesBacklogKey = "issuesHideBacklog"
   /// Where the org filter and the other saved view settings are saved. It is nil outside the installed app, so a
   /// debug or test run never saves a setting that changes a later run.
   private let viewSettingsStore: UserDefaults?
@@ -331,6 +336,7 @@ final class BoardModel: ObservableObject {
     messageDrafts = MessageDrafts(folder: draftsFolder)
     self.viewSettingsStore = viewSettingsStore
     self.orgFilter = viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
+    hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
     makeHoverCards()
   }
 

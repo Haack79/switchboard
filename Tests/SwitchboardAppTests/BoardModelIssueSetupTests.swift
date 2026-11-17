@@ -156,4 +156,18 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
     #expect(refusal == .some("acme/ledger is already a source"))
     #expect(sent.ops == ["issues-source-add"])
   }
+
+  // MARK: - Team settings
+
+  /// An empty list goes as `[]`, which clears the labels. sbd keeps the old labels when the key is missing.
+  @Test(arguments: [["backlog", "icebox"], []] as [[String]])
+  func saveSendsTheBacklogLabels(_ backlog: [String]) async {
+    let sent = await firstRequest { model in
+      model.saveIssueSettings(labels: ["team/billing"], people: ["ana-m"], backlog: backlog, defaultPreset: nil)
+    }
+
+    #expect(sent.op == "issues-settings")
+    #expect(sent.args["backlog"] == .array(backlog.map(JSON.string)))
+    #expect(sent.args["labels"] == .array(["team/billing"]))
+  }
 }

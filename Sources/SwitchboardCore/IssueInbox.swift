@@ -38,23 +38,42 @@ public struct IssueSource: Codable, Equatable, Hashable, Sendable {
   }
 }
 
-/// The labels and logins that make an issue the team's.
+/// The labels and logins that make an issue the team's, and the labels that put an issue in the team's backlog.
 public struct IssueTeam: Codable, Equatable, Sendable {
   public var labels: [String]
   public var people: [String]
+  /// An issue with one of these labels goes after every other issue in the Issues list and `sb issues`.
+  public var backlog: [String]
 
-  public init(labels: [String] = [], people: [String] = []) {
+  public init(labels: [String] = [], people: [String] = [], backlog: [String] = []) {
     self.labels = labels
     self.people = people
+    self.backlog = Self.backlogLabels(backlog)
   }
 
-  enum CodingKeys: String, CodingKey { case labels, people }
+  /// The labels trimmed, without the blank ones. A blank label matches no issue. config.json written by hand can hold
+  /// one.
+  public static func backlogLabels(_ labels: [String]) -> [String] {
+    labels.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+  }
+
+  enum CodingKeys: String, CodingKey { case labels, people, backlog }
 
   /// A list that config.json leaves out reads as empty.
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
     people = try c.decodeIfPresent([String].self, forKey: .people) ?? []
+    backlog = Self.backlogLabels(try c.decodeIfPresent([String].self, forKey: .backlog) ?? [])
+  }
+
+  /// Writes `backlog` only when it has a label, so a team without one saves the same config.json as before the
+  /// setting existed.
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(labels, forKey: .labels)
+    try c.encode(people, forKey: .people)
+    if !backlog.isEmpty { try c.encode(backlog, forKey: .backlog) }
   }
 }
 
@@ -275,11 +294,26 @@ public struct ListedIssue: Codable, Equatable, Identifiable, Sendable {
   public var bucket: IssueBucket
   /// The session that lists the issue, for an issue in `workedOn`.
   public var session: String?
+  /// Whether the issue has one of the team's backlog labels and no session lists it. The Issues list and
+  /// `sb issues` put these issues after the rest.
+  public var backlog: Bool
 
-  public init(issue: InboxIssue, bucket: IssueBucket, session: String? = nil) {
+  public init(issue: InboxIssue, bucket: IssueBucket, session: String? = nil, backlog: Bool = false) {
     self.issue = issue
     self.bucket = bucket
     self.session = session
+    self.backlog = backlog
+  }
+
+  enum CodingKeys: String, CodingKey { case issue, bucket, session, backlog }
+
+  /// A list from an sbd that predates `backlog` reads every issue as not backlog.
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    issue = try c.decode(InboxIssue.self, forKey: .issue)
+    bucket = try c.decode(IssueBucket.self, forKey: .bucket)
+    session = try c.decodeIfPresent(String.self, forKey: .session)
+    backlog = try c.decodeIfPresent(Bool.self, forKey: .backlog) ?? false
   }
 
   public var id: String { issue.id }
@@ -322,9 +356,10 @@ public struct IssueList: Codable, Equatable, Sendable {
     self.pausedUntil = pausedUntil
   }
 
-  /// The picker's count: issues assigned to me plus the team's unassigned ones, in the repos that `shows` keeps.
+  /// The picker's count: issues assigned to me plus the team's unassigned ones, in the repos that `shows` keeps. The
+  /// count leaves out the backlog.
   public func count(shows: (String) -> Bool) -> Int {
-    issues.filter { ($0.bucket == .mine || $0.bucket == .teamUnassigned) && shows($0.issue.repo) }.count
+    issues.filter { ($0.bucket == .mine || $0.bucket == .teamUnassigned) && !$0.backlog && shows($0.issue.repo) }.count
   }
 }
 
@@ -336,12 +371,19 @@ public struct IssueInbox: Sendable {
 
   private let labels: Set<String>
   private let people: Set<String>
+  private let backlogLabels: Set<String>
 
   public init(viewer: String?, team: IssueTeam) {
     self.viewer = viewer
     self.team = team
     labels = Set(team.labels.map { $0.lowercased() })
     people = Set(team.people.map { $0.lowercased() })
+    backlogLabels = Set(team.backlog.map { $0.lowercased() })
+  }
+
+  /// Whether one of the issue's labels is a backlog label, ignoring case.
+  public func isBacklog(_ issue: InboxIssue) -> Bool {
+    issue.labels.contains { backlogLabels.contains($0.lowercased()) }
   }
 
   /// Whether Start may run the issue's session in auto mode: the viewer or one of the team's people wrote the issue.
@@ -361,7 +403,8 @@ public struct IssueInbox: Sendable {
   }
 
   /// Each issue that `marks` and `dismissed` leave shown, with its bucket. An issue that a session lists is in
-  /// `workedOn`.
+  /// `workedOn` and is never backlog. The backlog issues come after the rest. Each part keeps the order of
+  /// `issues`.
   public func list(
     _ issues: [InboxIssue], sessions: [SessionSummary], marks: [IssueMark] = [], dismissed: [String: String] = [:]
   ) -> [ListedIssue] {
@@ -370,11 +413,12 @@ public struct IssueInbox: Sendable {
     for s in sessions {
       for id in Self.ids(of: s) where workers[id] == nil { workers[id] = s.id }
     }
-    return issues.compactMap { issue in
+    let rows = issues.compactMap { issue -> ListedIssue? in
       guard !hidden.contains(issue.id), dismissed[issue.id] != issue.updatedAt else { return nil }
       if let session = workers[issue.id] { return ListedIssue(issue: issue, bucket: .workedOn, session: session) }
-      return ListedIssue(issue: issue, bucket: bucket(of: issue))
+      return ListedIssue(issue: issue, bucket: bucket(of: issue), backlog: isBacklog(issue))
     }
+    return rows.filter { !$0.backlog } + rows.filter(\.backlog)
   }
 
   /// The ids of the issues that a session lists. An issue with no repo, which a branch name gives, is in the

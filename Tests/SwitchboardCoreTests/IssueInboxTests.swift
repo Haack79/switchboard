@@ -6,6 +6,8 @@ import Testing
 private let viewer = "robin-k"
 private let team = IssueTeam(labels: ["team/billing"], people: ["ana-m", "dev-p", "kofi-a"])
 private let inbox = IssueInbox(viewer: viewer, team: team)
+private let backlogTeam = IssueTeam(labels: team.labels, people: team.people, backlog: ["backlog"])
+private let backlogInbox = IssueInbox(viewer: viewer, team: backlogTeam)
 
 private func issue(
   _ number: Int, title: String = "Invoice PDF currency", labels: [String] = [], assignees: [String] = [],
@@ -558,12 +560,13 @@ private func merged(
     issue("acme/ledger", 5, assignees: ["zed-q"]),
   ]
 
-  /// The count that the picker shows under `filter` for the issues that `sb issues` lists.
+  /// The count that the picker shows under `filter` for the issues that `sb issues` lists, sorted by `sorter`.
   private func count(
-    _ issues: [InboxIssue], sessions: [SessionSummary] = [], marks: [IssueMark] = [], filter: OrgFilter = OrgFilter()
+    _ issues: [InboxIssue], using sorter: IssueInbox = inbox, sessions: [SessionSummary] = [],
+    marks: [IssueMark] = [], filter: OrgFilter = OrgFilter()
   ) -> Int {
     IssueList(
-      viewer: viewer, issues: inbox.list(issues, sessions: sessions, marks: marks), sources: [], team: team,
+      viewer: viewer, issues: sorter.list(issues, sessions: sessions, marks: marks), sources: [], team: sorter.team,
       presets: []
     )
     .count(shows: filter.shows(repo:))
@@ -599,6 +602,217 @@ private func merged(
 
     #expect(
       count(countIssues, filter: filter) == listed.filter { $0.bucket == .mine || $0.bucket == .teamUnassigned }.count)
+  }
+
+  // MARK: Backlog
+
+  @Test func issueWithABacklogLabelIsBacklog() {
+    let i = issue(4312, labels: ["backlog"])
+
+    let listed = backlogInbox.list([i], sessions: [])
+
+    #expect(backlogInbox.isBacklog(i))
+    #expect(listed.map(\.backlog) == [true])
+  }
+
+  @Test(arguments: zip(["backlog", "backlog", "Backlog"], ["Backlog", "BACKLOG", "backlog"]))
+  func backlogLabelMatchesWithoutCase(_ teamLabel: String, _ issueLabel: String) {
+    let sorter = IssueInbox(viewer: viewer, team: IssueTeam(labels: team.labels, backlog: [teamLabel]))
+    let i = issue(4312, labels: [issueLabel])
+
+    #expect(sorter.isBacklog(i))
+    #expect(sorter.list([i], sessions: []).map(\.backlog) == [true])
+  }
+
+  @Test(arguments: [[], ["team/billing"], ["bug", "P1"], ["backlog-ops"], ["icebox"]] as [[String]])
+  func issueWithoutABacklogLabelIsNotBacklog(_ labels: [String]) {
+    let i = issue(4312, labels: labels)
+
+    #expect(!backlogInbox.isBacklog(i))
+    #expect(backlogInbox.list([i], sessions: []).map(\.backlog) == [false])
+  }
+
+  @Test(arguments: [
+    BucketCase(name: "unassigned", labels: ["team/billing", "backlog"], assignees: [], bucket: .teamUnassigned),
+    BucketCase(
+      name: "assigned to a teammate", labels: ["team/billing", "backlog"], assignees: ["ana-m"], bucket: .teamAssigned),
+    BucketCase(name: "assigned to me", labels: ["team/billing", "backlog"], assignees: ["robin-k"], bucket: .mine),
+  ])
+  func backlogIssueWithATeamLabelStaysInItsTeamBucket(_ c: BucketCase) {
+    let i = issue(4312, labels: c.labels, assignees: c.assignees)
+
+    let listed = backlogInbox.list([i], sessions: [])
+
+    #expect(listed.map(\.bucket) == [c.bucket])
+    #expect(listed.map(\.bucket) == inbox.list([i], sessions: []).map(\.bucket))
+    #expect(listed.map(\.backlog) == [true])
+  }
+
+  @Test func issueWhoseOnlyLabelIsBacklogIsOtherAndBacklog() {
+    let i = issue(4312, labels: ["backlog"])
+
+    let listed = backlogInbox.list([i], sessions: [])
+
+    #expect(listed.map(\.bucket) == [.other])
+    #expect(listed.map(\.backlog) == [true])
+  }
+
+  /// B1 and B2 are backlog. A1 is in Other and A2 is in Mine. A sort by bucket or by update would order each part
+  /// differently from the input.
+  @Test func backlogIssuesComeAfterEveryOtherIssueInTheirOrder() {
+    let issues = [
+      issue(1, labels: ["team/billing", "backlog"], updated: "2026-11-14T10:00:00Z"),
+      issue(2, labels: ["bug"], updated: "2026-11-02T10:00:00Z"),
+      issue(3, labels: ["backlog"], assignees: ["robin-k"], updated: "2026-11-01T10:00:00Z"),
+      issue(4, assignees: ["robin-k"], updated: "2026-11-12T10:00:00Z"),
+    ]
+
+    let listed = backlogInbox.list(issues, sessions: [])
+
+    #expect(listed.map(\.issue.number) == [2, 4, 1, 3])
+    #expect(listed.map(\.backlog) == [false, false, true, true])
+  }
+
+  /// A session lists issue 4312 of acme/ledger the way `via` finds it.
+  private func workedIssue(_ via: SessionIssue.Via) -> SessionIssue {
+    switch via {
+    case .branch: SessionIssue(repo: nil, number: 4312, via: .branch, url: nil)
+    case .set, .body:
+      SessionIssue(repo: "acme/ledger", number: 4312, via: via, url: "https://github.com/acme/ledger/issues/4312")
+    }
+  }
+
+  @Test(arguments: [SessionIssue.Via.set, .branch, .body])
+  func anIssueBeingWorkedOnIsNotBacklog(_ via: SessionIssue.Via) {
+    let worked = issue(4312, labels: ["team/billing", "backlog"])
+    let backlog = issue(1, labels: ["backlog"])
+    let mine = issue(2, assignees: ["robin-k"])
+    let s = session("s1", issues: [workedIssue(via)])
+
+    let listed = backlogInbox.list([backlog, worked, mine], sessions: [s])
+
+    #expect(
+      listed == [
+        ListedIssue(issue: worked, bucket: .workedOn, session: "s1", backlog: false),
+        ListedIssue(issue: mine, bucket: .mine, backlog: false),
+        ListedIssue(issue: backlog, bucket: .other, backlog: true),
+      ])
+  }
+
+  @Test func removingTheSessionMakesTheBacklogIssueBacklogAgain() {
+    let i = issue(4312, labels: ["team/billing", "backlog"])
+    let s = session("s1", issues: [setIssue("acme/ledger", 4312)])
+    #expect(backlogInbox.list([i], sessions: [s]).map(\.backlog) == [false])
+
+    let listed = backlogInbox.list([i], sessions: [])
+
+    #expect(listed == [ListedIssue(issue: i, bucket: .teamUnassigned, backlog: true)])
+  }
+
+  @Test func countLeavesOutBacklogIssues() {
+    let issues =
+      countIssues + [
+        issue("acme/ledger", 10, labels: ["backlog"], assignees: ["robin-k"]),
+        issue("acme/ledger-web", 11, labels: ["team/billing", "backlog"]),
+      ]
+    let listed = backlogInbox.list(issues, sessions: [])
+
+    let picked = count(issues, using: backlogInbox)
+
+    #expect(picked == count(countIssues))
+    #expect(picked == listed.filter { ($0.bucket == .mine || $0.bucket == .teamUnassigned) && !$0.backlog }.count)
+  }
+
+  @Test(arguments: [false, true])
+  func listedIssueWithoutBacklogDecodesAsNotBacklog(asNull: Bool) throws {
+    var object = try #require(
+      JSON(encoding: ListedIssue(issue: issue(4312), bucket: .mine, backlog: true)).object)
+    object["backlog"] = asNull ? JSON.null : nil
+
+    let decoded = try JSONCoding.convert(JSON.object(object), to: ListedIssue.self)
+
+    #expect(decoded == ListedIssue(issue: issue(4312), bucket: .mine))
+    #expect(!decoded.backlog)
+  }
+
+  @Test func listedIssueEncodesBacklogFalse() throws {
+    let json = try JSON(encoding: ListedIssue(issue: issue(4312), bucket: .mine))
+
+    #expect(json["backlog"] == .bool(false))
+  }
+
+  @Test func configReadsTheBacklogLabels() throws {
+    let config = try JSONCoding.decode(
+      Config.self,
+      from: #"""
+        {"issues": {"team": {"labels": ["team/billing"], "people": ["ana-m"], "backlog": ["backlog", "icebox"]}}}
+        """#)
+
+    #expect(
+      config.issues.team == IssueTeam(labels: ["team/billing"], people: ["ana-m"], backlog: ["backlog", "icebox"]))
+  }
+
+  /// One issue in each bucket, in an order that no sort gives. #2, #4, and #6 carry a backlog label, #3 has no
+  /// labels, and a session works on #6.
+  private let mixedIssues = [
+    issue(1, labels: ["bug"], assignees: ["zed-q"], updated: "2026-11-03T10:00:00Z"),
+    issue(2, labels: ["team/billing", "backlog"], updated: "2026-11-14T10:00:00Z"),
+    issue(3, assignees: ["robin-k"], updated: "2026-11-01T10:00:00Z"),
+    issue(4, labels: ["Backlog"], updated: "2026-11-12T10:00:00Z"),
+    issue(5, labels: ["team/billing"], assignees: ["ana-m"], updated: "2026-11-05T10:00:00Z"),
+    issue(6, labels: ["backlog"], assignees: ["robin-k"], updated: "2026-11-09T10:00:00Z"),
+  ]
+
+  private var mixedSessions: [SessionSummary] { [session("s1", issues: [setIssue("acme/ledger", 6)])] }
+
+  /// The rows that `list` built before teams had backlog labels: each issue in input order, in its bucket.
+  private var mixedRowsWithoutBacklog: [ListedIssue] {
+    mixedIssues.map {
+      $0.number == 6
+        ? ListedIssue(issue: $0, bucket: .workedOn, session: "s1")
+        : ListedIssue(issue: $0, bucket: inbox.bucket(of: $0))
+    }
+  }
+
+  @Test(arguments: [
+    #"{"labels": ["team/billing"], "people": ["ana-m", "dev-p", "kofi-a"]}"#,
+    #"{"labels": ["team/billing"], "people": ["ana-m", "dev-p", "kofi-a"], "backlog": []}"#,
+  ])
+  func withNoBacklogLabelsTheListKeepsItsOrderAndNoRowIsBacklog(_ teamText: String) throws {
+    let sorter = IssueInbox(viewer: viewer, team: try JSONCoding.decode(IssueTeam.self, from: teamText))
+
+    let listed = sorter.list(mixedIssues, sessions: mixedSessions)
+
+    #expect(listed == mixedRowsWithoutBacklog)
+    #expect(listed == inbox.list(mixedIssues, sessions: mixedSessions))
+    #expect(!listed.contains { $0.backlog })
+  }
+
+  @Test(arguments: [[""], ["  "]] as [[String]])
+  func blankBacklogLabelMatchesNothing(_ backlog: [String]) {
+    let sorter = IssueInbox(viewer: viewer, team: IssueTeam(labels: team.labels, people: team.people, backlog: backlog))
+
+    let listed = sorter.list(mixedIssues, sessions: mixedSessions)
+
+    #expect(listed == mixedRowsWithoutBacklog)
+    #expect(!mixedIssues.contains { sorter.isBacklog($0) })
+  }
+
+  /// config.json gets no `backlog` key while the list is empty. `labels` and `people` are always written.
+  @Test(arguments: [IssueTeam(), IssueTeam(labels: ["team/billing"], people: ["ana-m"])])
+  func teamWithNoBacklogEncodesNoBacklogKey(_ team: IssueTeam) throws {
+    let object = try #require(JSON(encoding: team).object)
+
+    #expect(Set(object.keys) == ["labels", "people"])
+  }
+
+  @Test func teamWithBacklogEncodesIt() throws {
+    let team = IssueTeam(labels: ["team/billing"], people: ["ana-m"], backlog: ["backlog", "icebox"])
+
+    let json = try JSON(encoding: team)
+
+    #expect(json["backlog"] == .array(["backlog", "icebox"]))
+    #expect(try JSONCoding.convert(json, to: IssueTeam.self) == team)
   }
 
   // MARK: Branch for Start
@@ -790,8 +1004,14 @@ private func merged(
   /// sbd ignore the whole file.
   @Test(
     arguments: zip(
-      [#"{"labels": ["team/billing"]}"#, #"{"people": ["ana-m"]}"#, "{}"],
-      [IssueTeam(labels: ["team/billing"]), IssueTeam(people: ["ana-m"]), IssueTeam()]))
+      [
+        #"{"labels": ["team/billing"]}"#, #"{"people": ["ana-m"]}"#, #"{"backlog": ["backlog"]}"#,
+        #"{"labels": ["team/billing"], "people": ["ana-m"]}"#, #"{"labels": ["team/billing"], "backlog": null}"#, "{}",
+      ],
+      [
+        IssueTeam(labels: ["team/billing"]), IssueTeam(people: ["ana-m"]), IssueTeam(backlog: ["backlog"]),
+        IssueTeam(labels: ["team/billing"], people: ["ana-m"]), IssueTeam(labels: ["team/billing"]), IssueTeam(),
+      ]))
   func teamWithAListLeftOutReadsTheOtherAsEmpty(_ text: String, _ team: IssueTeam) throws {
     let config = try JSONCoding.decode(Config.self, from: #"{"issues": {"team": \#(text)}}"#)
 

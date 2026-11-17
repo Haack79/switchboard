@@ -38,6 +38,32 @@ private let fourBuckets = [
 /// The four issues and one more assigned to me in another org.
 private let withDotkit = fourBuckets + [fakeIssue(dotkit, 7, title: "Zsh prompt lags", assignees: ["robin-k"])]
 
+/// An issue with the team's label and a backlog label, updated after the four buckets' issues.
+private let cardFees = fakeIssue(
+  4700, title: "Card fees", labels: ["team/billing", "backlog"], updatedAt: "2026-11-12T10:00:00Z")
+
+/// The four issues, `cardFees`, and 4800, which is assigned to me and whose only label is a backlog label.
+private let withBacklog =
+  fourBuckets + [
+    cardFees,
+    fakeIssue(
+      4800, title: "Old export bug", labels: ["backlog"], assignees: ["robin-k"], updatedAt: "2026-11-11T10:00:00Z"),
+  ]
+
+/// The text that `sb issues` prints for the four buckets of `withBacklog`, without its backlog issues.
+private let withBacklogBuckets = [
+  "Assigned to me (1)",
+  "  acme/ledger#4312  Invoice PDF currency  @robin-k",
+  "Team unassigned (1)",
+  "  acme/ledger-web#4400  Ledger totals round twice",
+  "Team assigned to others (1)",
+  "  acme/ledger#4500  Refund webhook retries  @ana-m",
+  "Other (1)",
+  "  acme/ledger#4600  Typo on the pricing page  @zed-q",
+]
+
+private func lines(_ text: String) -> [String] { text.split(separator: "\n").map(String.init) }
+
 private let goPreset: JSON = ["name": "go", "prompt": "/go --yolo {url}"]
 
 /// A private sbd for one test whose GitHub poller asks a fake, with the team Billing, and a checkout of acme/ledger
@@ -50,12 +76,17 @@ private final class Inbox {
 
   /// The config sets `issues.presets` to `presets`, or leaves it out when `presets` is nil, which gives the
   /// default presets. `autoMode` is config.json's setting, which starts every session in auto mode when true, and
-  /// `claudeArgs` go to every claude.
-  init(presets: [JSON]? = [goPreset], autoMode: Bool = false, claudeArgs: [String] = []) throws {
+  /// `claudeArgs` go to every claude. `backlog` is the team's backlog labels. The config leaves the key out when the
+  /// list is empty, as config.json does before anyone sets one.
+  init(presets: [JSON]? = [goPreset], autoMode: Bool = false, claudeArgs: [String] = [], backlog: [String] = [])
+    throws
+  {
     github = try FakeGitHub()
     repos = try Repos()
     try repos.make(ledger)
-    var issues: [String: JSON] = ["team": ["labels": ["team/billing"], "people": ["ana-m", "dev-p", "kofi-a"]]]
+    var team: [String: JSON] = ["labels": ["team/billing"], "people": ["ana-m", "dev-p", "kofi-a"]]
+    if !backlog.isEmpty { team["backlog"] = .array(backlog.map(JSON.string)) }
+    var issues: [String: JSON] = ["team": .object(team)]
     if let presets { issues["presets"] = .array(presets) }
     sbd = try Instance(
       config: Instance.gitHubConfig(github).merging([
@@ -75,9 +106,32 @@ private final class Inbox {
     try #require(result["issuesError"] == nil, "\(result)")
   }
 
-  /// What `sb issues --json` prints, with `--mine` when `mine` is set.
-  func list(mine: Bool = false) throws -> IssueList {
-    try JSONCoding.decode(IssueList.self, from: try sbd.sb(["issues", "--json"] + (mine ? ["--mine"] : [])))
+  /// What `sb issues --json` prints, with `--mine` when `mine` is set and then `extra`.
+  func list(mine: Bool = false, extra: [String] = []) throws -> IssueList {
+    try JSONCoding.decode(IssueList.self, from: try sbd.sb(["issues", "--json"] + (mine ? ["--mine"] : []) + extra))
+  }
+
+  /// The rows of `sb issues --json` as sb prints them. A decoded `ListedIssue` reads a missing `backlog` as false, so
+  /// only these show whether sb wrote the key.
+  func printedRows() throws -> [[String: JSON]] {
+    let rows = try #require(JSON.parse(try sbd.sb("issues", "--json"))?["issues"]?.array)
+    return try rows.map { try #require($0.object) }
+  }
+
+  /// The lines that `sb issues` prints with `args`.
+  func text(_ args: String...) throws -> [String] { lines(try sbd.sb(["issues"] + args)) }
+
+  /// sbd's cached issues in the order issues.json holds them. `sb issues` lists them in this order before it moves
+  /// the backlog issues last.
+  func cached() throws -> [InboxIssue] {
+    try JSONCoding.decode(
+      IssueCache.self, from: try String(contentsOfFile: "\(sbd.home.path)/issues.json", encoding: .utf8)
+    ).issues
+  }
+
+  /// The keys of config.json's `issues.team`.
+  func teamKeys() throws -> Set<String> {
+    Set(try #require(try sbd.config()["issues"]?["team"]?.object).keys)
   }
 
   /// The bucket of each issue that `sb issues --json` lists, by `owner/name#N`.
@@ -259,6 +313,44 @@ private final class Inbox {
     #expect(try JSONCoding.decode(IssueTeam.self, from: printed) == team)
     #expect(try JSONCoding.decode(IssueTeam.self, from: try inbox.sbd.sb("issues", "team", "--json")) == team)
     #expect(try inbox.list().presets.map(\.name) == ["go"])
+  }
+
+  @Test func teamSetsTheBacklogLabelsAndKeepsTheTeam() throws {
+    let inbox = try Inbox()
+
+    let printed = try inbox.sbd.sb("issues", "team", "--backlog", "backlog", "--backlog", " icebox ", "--json")
+
+    let team = IssueTeam(
+      labels: ["team/billing"], people: ["ana-m", "dev-p", "kofi-a"], backlog: ["backlog", "icebox"])
+    #expect(try JSONCoding.decode(IssueTeam.self, from: printed) == team)
+    #expect(try JSONCoding.decode(IssueTeam.self, from: inbox.sbd.sb("issues", "team", "--json")) == team)
+    #expect(try inbox.sbd.config()["issues"]?["team"]?["backlog"] == .array(["backlog", "icebox"]))
+    #expect(
+      try lines(inbox.sbd.sb("issues", "team"))
+        == ["labels: team/billing", "people: ana-m, dev-p, kofi-a", "backlog: backlog, icebox"])
+  }
+
+  @Test(arguments: ["", "  "])
+  func teamWithABlankBacklogClearsIt(_ blank: String) throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+
+    let printed = try inbox.sbd.sb("issues", "team", "--backlog", blank, "--json")
+
+    #expect(try JSONCoding.decode(IssueTeam.self, from: printed).backlog == [])
+    #expect(try inbox.teamKeys() == ["labels", "people"])
+  }
+
+  /// sbd writes config.json again on every team change, so the change is what shows that the encoder leaves out an
+  /// empty `backlog`.
+  @Test func teamWithNoBacklogPrintsTodaysTwoLinesAndConfigHasNoBacklogKey() throws {
+    let inbox = try Inbox()
+
+    let printed = try inbox.sbd.sb("issues", "team", "--label", "team/payments")
+
+    #expect(lines(printed) == ["labels: team/payments", "people: ana-m, dev-p, kofi-a"])
+    #expect(try inbox.teamKeys() == ["labels", "people"])
+    let json = try #require(JSON.parse(try inbox.sbd.sb("issues", "team", "--json"))?.object)
+    #expect(Set(json.keys) == ["labels", "people"])
   }
 
   // MARK: Polling
@@ -504,6 +596,91 @@ private final class Inbox {
     let cache = try JSONCoding.decode(
       IssueCache.self, from: try String(contentsOfFile: "\(sbd.home.path)/issues.json", encoding: .utf8))
     #expect(cache.marks.map(\.pr) == [122953])
+  }
+
+  // MARK: Backlog
+
+  @Test func issuesListsBacklogIssuesLastWithTheBacklogField() throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+    try inbox.seed(fourBuckets + [cardFees])
+
+    let listed = try inbox.list().issues
+
+    let last = try #require(listed.last)
+    #expect(last.id == "acme/ledger#4700")
+    #expect(last.bucket == .teamUnassigned)
+    #expect(
+      try inbox.printedRows().map { $0["backlog"] ?? .null } == listed.map { JSON.bool($0.issue.number == 4700) })
+    let cached = try inbox.cached()
+    let isBacklog = { (issue: InboxIssue) in issue.labels.contains("backlog") }
+    #expect(listed.map(\.id) == cached.filter { !isBacklog($0) }.map(\.id) + cached.filter(isBacklog).map(\.id))
+  }
+
+  @Test func noBacklogLeavesOutTheBacklogIssues() throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+    try inbox.seed(withBacklog)
+    let all = try inbox.list().issues
+    try #require(Set(all.filter(\.backlog).map(\.id)) == ["acme/ledger#4700", "acme/ledger#4800"])
+
+    let shown = try inbox.list(extra: ["--no-backlog"]).issues
+
+    #expect(shown.map(\.id) == all.filter { !$0.backlog }.map(\.id))
+    #expect(try inbox.list(mine: true).issues.map(\.id).sorted() == ["acme/ledger#4312", "acme/ledger#4800"])
+    #expect(try inbox.list(mine: true, extra: ["--no-backlog"]).issues.map(\.id) == ["acme/ledger#4312"])
+  }
+
+  @Test func issuesPrintsTheBacklogUnderItsOwnHeadingAfterTheBuckets() throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+    try inbox.seed(withBacklog)
+
+    let printed = try inbox.text()
+
+    #expect(
+      printed
+        == withBacklogBuckets + [
+          "Backlog (2)",
+          "  acme/ledger#4700  Card fees",
+          "  acme/ledger#4800  Old export bug  @robin-k",
+        ])
+  }
+
+  @Test func noBacklogPrintsTheHiddenCount() throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+    try inbox.seed(withBacklog)
+    let onlyBacklog = try Inbox(backlog: ["backlog"])
+    try onlyBacklog.seed(Array(withBacklog.suffix(2)))
+
+    #expect(try inbox.text("--no-backlog") == withBacklogBuckets + ["Backlog (2) hidden"])
+    #expect(
+      try inbox.text("--mine", "--no-backlog")
+        == ["Assigned to me (1)", "  acme/ledger#4312  Invoice PDF currency  @robin-k", "Backlog (1) hidden"])
+    #expect(try onlyBacklog.text("--no-backlog") == ["Backlog (2) hidden"])
+  }
+
+  /// 4700 and 4800 carry the label `backlog`, which is not a backlog label while the team has none.
+  @Test func withNoBacklogLabelEveryIssueHasBacklogFalseAndTheTextIsUnchanged() throws {
+    let inbox = try Inbox()
+    try inbox.seed(withBacklog)
+
+    let rows = try inbox.printedRows()
+
+    #expect(rows.map { $0["backlog"] ?? .null } == Array(repeating: JSON.bool(false), count: withBacklog.count))
+    #expect(try inbox.list().issues.map(\.id) == inbox.cached().map(\.id))
+    #expect(
+      try inbox.text() == [
+        "Assigned to me (2)",
+        "  acme/ledger#4800  Old export bug  @robin-k",
+        "  acme/ledger#4312  Invoice PDF currency  @robin-k",
+        "Team unassigned (2)",
+        "  acme/ledger#4700  Card fees",
+        "  acme/ledger-web#4400  Ledger totals round twice",
+        "Team assigned to others (1)",
+        "  acme/ledger#4500  Refund webhook retries  @ana-m",
+        "Other (1)",
+        "  acme/ledger#4600  Typo on the pricing page  @zed-q",
+      ])
+    #expect(try inbox.text("--no-backlog") == inbox.text())
+    #expect(try inbox.list(extra: ["--no-backlog"]).issues == inbox.list().issues)
   }
 
   // MARK: Start
