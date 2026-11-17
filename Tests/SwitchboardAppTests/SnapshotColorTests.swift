@@ -87,6 +87,33 @@ import Testing
     #expect(dot.backgroundColor == Self.white)
   }
 
+  /// SwiftUI draws a rounded rectangle's stroke in a sidebar row, such as a highlight ring, as the layer's border.
+  @MainActor @Test func recolorsAFilteredBorderAndPutsItBack() {
+    let root = CALayer()
+    let ring = CALayer()
+    ring.borderColor = Self.white
+    ring.borderWidth = 2.5
+    ring.filters = [Self.filter("vibrantColorMatrix", Self.orange)]
+    root.addSublayer(ring)
+    let restore = Snapshot.applyVibrancy(root)
+    #expect(Self.matches(ring.borderColor!, [1, 0.5, 0, 1]))
+    restore()
+    #expect(ring.borderColor == Self.white)
+  }
+
+  /// A layer's border color defaults to black, which draws nothing while the border has no width.
+  @MainActor @Test func keepsTheBorderColorOfAFilteredLayerWithoutABorder() {
+    let root = CALayer()
+    let dot = CALayer()
+    dot.borderColor = Self.white
+    dot.filters = [Self.filter("vibrantColorMatrix", Self.orange)]
+    root.addSublayer(dot)
+    let restore = Snapshot.applyVibrancy(root)
+    #expect(dot.borderColor == Self.white)
+    restore()
+    #expect(dot.borderColor == Self.white)
+  }
+
   @MainActor @Test func leavesLayersWithoutTheFilterAlone() {
     let root = CALayer()
     let child = CALayer()

@@ -241,8 +241,10 @@ struct Sidebar: View {
               if CleanupOffer.canCleanUp(row.session) { CleanupButton(session: row.session) }
               if row.session.isRemovableDone { DeleteButton(session: row.session) }
             }
+            .highlightRing(row.session.highlighted == true, cornerRadius: 6, outset: 2)
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
+              HighlightMenuItem(session: row.session)
               SnoozeMenuItems(session: row.session)
               DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               PauseMenuItem(model: model, session: row.session)
@@ -544,6 +546,7 @@ struct SessionRow: View {
     }
     .padding(.vertical, 2)
     .hoverCard(session, activeAccount: activeAccount, card: hoverCard)
+    .highlightAccessibility(session.highlighted == true)
   }
 
   /// Text truncates at its end. The reason therefore truncates before the repo does.
@@ -667,6 +670,7 @@ struct BoardView: View {
                             }
                           }
                           .contextMenu {
+                            HighlightMenuItem(session: s)
                             SnoozeMenuItems(session: s)
                             PauseMenuItem(model: model, session: s)
                             if drops { moveMenu(s.id, from: lane.group?.id) }
@@ -1154,12 +1158,15 @@ struct BoardCard: View {
         .overlay {
           if keyboardFocused { RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 2) }
         }
+        // The ring stays clear of the 2 pt Needs-you edge, which a 3 pt outset would touch.
+        .highlightRing(s.highlighted == true, cornerRadius: 13, outset: 5)
       }
       .buttonStyle(.plain)
       .hoverCard(
         s, activeAccount: model.activeAccountFolder, card: model.hoverCard, pinned: Snapshot.hoverSession == s.id
       )
       .accessibilityValue(s.state.title)
+      .highlightAccessibility(s.highlighted == true)
       .accessibilityAddTraits(keyboardFocused ? .isSelected : [])
       .overlayPreferenceValue(PRLinkBounds.self) { bounds in
         if let bounds, let pr = s.pr, let url = pr.link {
@@ -1190,5 +1197,7 @@ struct BoardCard: View {
         .padding(6)
       }
     }
+    // The ring draws 5 pt outside the card. The column's 8 pt spacing alone would let two rings overlap.
+    .padding(.vertical, s.highlighted == true ? 2 : 0)
   }
 }

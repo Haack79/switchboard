@@ -144,11 +144,15 @@ struct TriageRow: View {
       IssueBadge(session: session)
       NotesButton(session: session)
     }
-    .listRowChrome(current: current)
+    .listRowChrome(current: current, highlighted: session.highlighted == true)
     .hoverCard(session, activeAccount: model.activeAccountFolder, card: model.hoverCard)
     .onTapGesture { model.inboxFocus = session.id }
-    .contextMenu { SnoozeMenuItems(session: session) }
+    .contextMenu {
+      HighlightMenuItem(session: session)
+      SnoozeMenuItems(session: session)
+    }
     .accessibilityElement(children: .combine)
+    .highlightAccessibility(session.highlighted == true)
     .accessibilityAddTraits(current ? .isSelected : [])
   }
 }

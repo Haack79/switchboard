@@ -4,6 +4,9 @@ import SwiftUI
 enum Design {
   /// The opacity of a tinted badge's background.
   static let badgeTint = 0.18
+  /// The ring of a highlighted session. Accent is the selection and focus color, so the ring uses the attention color.
+  static let highlight = Color.orange
+  static let highlightRingWidth: CGFloat = 2.5
 }
 
 /// How large a `pill` badge draws.
