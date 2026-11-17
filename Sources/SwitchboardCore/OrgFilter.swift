@@ -1,12 +1,73 @@
 import Foundation
 
+/// One row of a filter's menu.
+public struct FilterEntry: Equatable, Sendable, Identifiable {
+  public var key: String
+  public var title: String
+  public var count: Int
+  public var needsYou: Int
+  public var id: String { key }
+
+  public init(key: String, title: String, count: Int = 0, needsYou: Int = 0) {
+    self.key = key
+    self.title = title
+    self.count = count
+    self.needsYou = needsYou
+  }
+}
+
+/// A set of lowercased keys that selects which sessions the app shows along
+/// one dimension, such as org or group. An empty set shows every session.
+public protocol KeyFilter: Equatable, Sendable {
+  var keys: Set<String> { get }
+  init(keys: some Sequence<String>)
+  /// What the toolbar says when the set is empty, such as "All Orgs".
+  static var allTitle: String { get }
+}
+
+extension KeyFilter {
+  /// Reads a comma-separated list of keys, such as `posthog, haacked`.
+  public init(list: String) {
+    self.init(keys: list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+  }
+
+  public var isAll: Bool { keys.isEmpty }
+
+  public mutating func insert(_ key: String) {
+    self = Self(keys: keys.union([key]))
+  }
+
+  public mutating func toggle(_ key: String) {
+    let key = key.lowercased()
+    self = Self(keys: keys.contains(key) ? keys.subtracting([key]) : keys.union([key]))
+  }
+
+  /// The selected titles, in the order of `entries`.
+  public func selectedTitles(_ entries: [FilterEntry]) -> [String] {
+    entries.filter { keys.contains($0.key) }.map(\.title)
+  }
+
+  /// What the toolbar says: `allTitle`, "PostHog", "PostHog, Local", or
+  /// "PostHog +2". `entries` supplies the titles.
+  public func label(_ entries: [FilterEntry]) -> String {
+    let titles = selectedTitles(entries)
+    switch titles.count {
+    case 0: return Self.allTitle
+    case 1, 2: return titles.joined(separator: ", ")
+    default: return "\(titles[0]) +\(titles.count - 1)"
+    }
+  }
+}
+
 /// The GitHub orgs whose sessions the app shows. It only decides what the
 /// app shows. sbd runs every session whatever the filter says.
-public struct OrgFilter: Equatable, Sendable {
+public struct OrgFilter: KeyFilter {
+  public typealias Entry = FilterEntry
   /// The key of sessions with no GitHub remote. GitHub logins can't contain
   /// parentheses, so it never matches an org.
   public static let localKey = "(local)"
   public static let localTitle = "Local"
+  public static let allTitle = "All Orgs"
 
   /// Lowercased org keys. An empty set shows every org.
   public private(set) var keys: Set<String>
@@ -14,13 +75,6 @@ public struct OrgFilter: Equatable, Sendable {
   public init(keys: some Sequence<String> = [String]()) {
     self.keys = Set(keys.map { $0.lowercased() })
   }
-
-  /// Reads a comma-separated list of keys, such as `posthog, haacked`.
-  public init(list: String) {
-    self.init(keys: list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-  }
-
-  public var isAll: Bool { keys.isEmpty }
 
   /// The org that a session belongs to, or nil when the session belongs to
   /// none (the Manager, a group chat) or sbd hasn't read its folder yet.
@@ -57,23 +111,6 @@ public struct OrgFilter: Equatable, Sendable {
     isAll || keys.contains(GitHub.ownerAndName(repo).owner.lowercased())
   }
 
-  public mutating func insert(_ key: String) {
-    keys.insert(key.lowercased())
-  }
-
-  public mutating func toggle(_ key: String) {
-    if keys.remove(key.lowercased()) == nil { insert(key) }
-  }
-
-  /// One row of the filter's menu.
-  public struct Entry: Equatable, Sendable, Identifiable {
-    public var key: String
-    public var title: String
-    public var count: Int
-    public var needsYou: Int
-    public var id: String { key }
-  }
-
   /// The orgs of `sessions`, plus every selected key, by title with Local
   /// last. Sessions with no key aren't counted.
   public func entries(_ sessions: [SessionSummary]) -> [Entry] {
@@ -81,28 +118,17 @@ public struct OrgFilter: Equatable, Sendable {
     for s in sessions {
       guard let seen = Self.owner(of: s) else { continue }
       let key = seen.lowercased()
-      var entry = byKey[key] ?? Entry(key: key, title: Self.title(key, seen: seen), count: 0, needsYou: 0)
+      var entry = byKey[key] ?? Entry(key: key, title: Self.title(key, seen: seen))
       entry.count += 1
       if Triage.needsYou(s) { entry.needsYou += 1 }
       byKey[key] = entry
     }
     for key in keys where byKey[key] == nil {
-      byKey[key] = Entry(key: key, title: Self.title(key, seen: key), count: 0, needsYou: 0)
+      byKey[key] = Entry(key: key, title: Self.title(key, seen: key))
     }
     return byKey.values.sorted { a, b in
       if (a.key == Self.localKey) != (b.key == Self.localKey) { return b.key == Self.localKey }
       return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-    }
-  }
-
-  /// What the toolbar says: "All Orgs", "PostHog", "PostHog, Local", or
-  /// "PostHog +2". `entries` supplies the titles.
-  public func label(_ entries: [Entry]) -> String {
-    let titles = entries.filter { keys.contains($0.key) }.map(\.title)
-    switch titles.count {
-    case 0: return "All Orgs"
-    case 1, 2: return titles.joined(separator: ", ")
-    default: return "\(titles[0]) +\(titles.count - 1)"
     }
   }
 }

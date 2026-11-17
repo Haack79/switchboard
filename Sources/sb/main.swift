@@ -866,8 +866,8 @@ case "ls" where a.switches.contains("--removed"), "list" where a.switches.contai
   }
 case "ls", "list":
   let result = call("ls")
-  var filter = OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ","))
-  if a.switches.contains("--local") { filter.insert(OrgFilter.localKey) }
+  var filter = SessionFilter(org: OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ",")))
+  if a.switches.contains("--local") { filter.org.insert(OrgFilter.localKey) }
   if a.json && filter.isAll {
     printJSON(result)
   } else {

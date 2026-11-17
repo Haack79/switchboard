@@ -331,7 +331,7 @@ struct Sidebar: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
-        OrgFilterBar()
+        FilterBar()
         Button {
           model.startNewGroup()
         } label: {

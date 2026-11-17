@@ -81,11 +81,11 @@ private struct OrgFilterList: View {
 
 /// The bar under the sidebar while a filter is on. It says how many sessions
 /// the filter hides, and how many of those need the user.
-struct OrgFilterBar: View {
+struct FilterBar: View {
   @EnvironmentObject var model: BoardModel
 
   var body: some View {
-    if !model.orgFilter.isAll {
+    if !model.filter.isAll {
       let hidden = model.hiddenCount
       let needYou = model.hiddenNeedingYou
       HStack(spacing: 6) {

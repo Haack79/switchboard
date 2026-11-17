@@ -14,12 +14,15 @@ enum MainView {
 /// state in memory and answers in a few milliseconds.
 @MainActor
 final class BoardModel: ObservableObject {
-  /// The sessions that the org filter shows and sbd's removal job does not hold. Every list, count, badge,
+  /// The sessions that the filter shows and sbd's removal job does not hold. Every list, count, badge,
   /// and action target reads this. A lookup of a session that a shown session
   /// names, such as a card's asker or a parent, reads `allSessions` or
   /// `allBoard`, because that session may be hidden.
-  var sessions: [SessionSummary] { allSessions.filter { !$0.isBeingRemoved && orgFilter.shows($0) } }
-  /// Every session that sbd lists, whatever the org filter says, including the sessions that the removal job holds.
+  var sessions: [SessionSummary] {
+    let filter = filter
+    return allSessions.filter { !$0.isBeingRemoved && filter.shows($0) }
+  }
+  /// Every session that sbd lists, whatever the filter says, including the sessions that the removal job holds.
   @Published private(set) var allSessions: [SessionSummary] = []
   /// The GitHub orgs whose sessions the app shows. The installed app saves it.
   @Published var orgFilter: OrgFilter {
@@ -30,6 +33,8 @@ final class BoardModel: ObservableObject {
     }
   }
   @Published var showingOrgFilter = false
+  /// What every list, count, and action target filters by.
+  var filter: SessionFilter { SessionFilter(org: orgFilter) }
   /// Decides when a session tile's hover card shows. Tests replace it.
   var hoverCard: HoverCard<String>?
   /// Decides when a reference's hover card shows. Tests replace it.
@@ -39,12 +44,12 @@ final class BoardModel: ObservableObject {
   @Published var unreachable: String?
   /// The last failed action, shown until the next one succeeds.
   @Published var actionError: String?
-  /// Selecting a session that the org filter hides adds its org to the filter. The filter change runs inside
+  /// Selecting a session that the filter hides changes the filter to show it. The filter change runs inside
   /// the navigation, so it records nothing of its own. Every change ends a multi-selection.
   @Published var selection: String? {
     didSet {
       if !multiSelection.isEmpty { multiSelection = [] }
-      navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
+      navigate { if let selection, selection != oldValue { showHidden(selection) } }
     }
   }
   /// The sessions that the sidebar selects with ⌘-click or ⇧-click: two or more ids, or none. `selection` stays
@@ -188,7 +193,7 @@ final class BoardModel: ObservableObject {
   /// Follow-ups that wait to start, from `followup-ls`. `ls` also lists the
   /// ones whose trigger fired. They change only through actions and
   /// triggers, so the app reads them every 5 s.
-  var followups: [SessionSummary] { allFollowups.filter(orgFilter.shows) }
+  var followups: [SessionSummary] { allFollowups.filter(filter.shows) }
   /// Every follow-up that waits to start, whatever the org filter says.
   @Published private(set) var allFollowups: [SessionSummary] = []
   /// The names of every session that `ls`, `followup-ls`, or `removed-ls`
@@ -375,7 +380,8 @@ final class BoardModel: ObservableObject {
   /// sbd hasn't read yet shows but isn't removable, because its org may be one
   /// that the filter hides.
   var removableIDs: Set<String> {
-    orgFilter.isAll ? shownIDs : Set(board.filter { OrgFilter.key(of: $0) != nil }.map(\.id))
+    let filter = filter
+    return Set(board.filter(filter.surelyShows).map(\.id))
   }
 
   /// The org filter's menu rows, counted over every session that the removal job does not hold.
@@ -384,7 +390,7 @@ final class BoardModel: ObservableObject {
   /// The groups that the Board shows: all of them under All Orgs, else each
   /// group that is empty or has a member that the filter shows.
   var shownGroups: [GroupSummary] {
-    guard !orgFilter.isAll else { return groups }
+    guard !filter.isAll else { return groups }
     let shown = shownIDs
     return groups.filter { $0.sessions.isEmpty || $0.sessions.contains(where: shown.contains) }
   }
@@ -392,19 +398,19 @@ final class BoardModel: ObservableObject {
   /// The group suggestions whose sessions the filter all shows, so accepting
   /// one never moves a hidden session.
   var shownSuggestions: [GroupSuggestion] {
-    guard !orgFilter.isAll else { return suggestions }
+    guard !filter.isAll else { return suggestions }
     let shown = shownIDs
     return suggestions.filter { $0.sessions.allSatisfy(shown.contains) }
   }
 
-  /// How many sessions and follow-ups the org filter hides.
+  /// How many sessions and follow-ups the filter hides.
   var hiddenCount: Int { listedBoard.count - board.count }
   /// How many hidden sessions would be in the Inbox.
   var hiddenNeedingYou: Int { listedBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
 
-  /// Adds the session's org to the filter when the filter hides it, so a
-  /// session that the app opens never stays out of sight.
-  func showOrg(of id: String) {
+  /// Changes the filter to show the session when it hides it, so a session
+  /// that the app opens never stays out of sight.
+  func showHidden(_ id: String) {
     // An insert of a key that the filter already holds still publishes. `apply` calls this every second.
     guard !orgFilter.isAll, let s = listedBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
       let key = OrgFilter.key(of: s)
@@ -470,8 +476,8 @@ final class BoardModel: ObservableObject {
   /// labels. A session therefore shows the same repo in both lists.
   var repoLabels: [String: String] { RepoLabels.labels(board) }
 
-  /// The sessions and the follow-ups that wait to start, as the org filter shows them.
-  var board: [SessionSummary] { listedBoard.filter(orgFilter.shows) }
+  /// The sessions and the follow-ups that wait to start, as the filter shows them.
+  var board: [SessionSummary] { listedBoard.filter(filter.shows) }
 
   var selected: SessionSummary? { board.first { $0.id == selection } }
 
@@ -591,7 +597,7 @@ final class BoardModel: ObservableObject {
       if !sameShown(allSessions, list) { allSessions = list }
       // A filter change that hides the selection clears it in `orgFilter.didSet`.
       // A selected session that is hidden here therefore had no known org until this refresh.
-      if let id = selection { showOrg(of: id) }
+      if let id = selection { showHidden(id) }
       if let id = pendingSelection, allBoard.contains(where: { $0.id == id }) { pendingSelection = nil }
       resolvePendingFocus()
       clearHiddenSelectionAndUpdateBadge()
@@ -623,9 +629,10 @@ final class BoardModel: ObservableObject {
   /// before its item reaches the Inbox. This therefore compares each session
   /// with its place in the last refresh's Inbox, not with its last state.
   func sessionsToNotify(_ list: [SessionSummary]) -> [SessionSummary] {
-    list.filter { s in
+    let filter = filter
+    return list.filter { s in
       guard Triage.needsYou(s), !s.isBeingRemoved, let last = lastSeen[s.id], !Triage.needsYou(last),
-        orgFilter.shows(s)
+        filter.shows(s)
       else { return false }
       // A follow-up that starts passes through Needs you until its first
       // prompt. Only a follow-up that fired and is still unstarted notifies.
