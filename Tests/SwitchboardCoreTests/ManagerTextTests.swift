@@ -165,3 +165,20 @@ extension ManagerTextTests {
     #expect(MCPToolServer.allTools.contains { $0.name == tool }, "\(tool)")
   }
 }
+
+/// The Manager guide teaches `sb highlight` and the MCP `highlight` tool.
+extension ManagerTextTests {
+  @Test func theManagerGuideNamesSbHighlightAndTheHighlightTool() throws {
+    let line = try #require(
+      Manager.guide.split(separator: "\n").first { $0.contains("`sb highlight") }, "no `sb highlight` line")
+
+    #expect(line.contains("`highlight`"), "\(line)")
+    #expect(line.contains("--clear"), "\(line)")
+    #expect(line.contains("Done"), "\(line)")
+  }
+
+  /// The guide names only tools that the server has.
+  @Test func theServerHasTheHighlightToolThatTheManagerGuideNames() {
+    #expect(MCPToolServer.allTools.contains { $0.name == "highlight" })
+  }
+}

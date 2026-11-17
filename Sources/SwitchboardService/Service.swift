@@ -676,6 +676,8 @@ public final class Service {
       return try snoozeRequest(args)
     case "unsnooze":
       return try unsnoozeRequest(args)
+    case "highlight":
+      return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
@@ -917,6 +919,7 @@ public final class Service {
   func afterTrack(_ id: String, _ verdict: Verdict) {
     startSummaries(id, verdict)
     resolveDraftTargets(id, verdict)
+    clearHighlightOnDone(id, verdict)
   }
 
   // MARK: Sessions
@@ -2638,6 +2641,7 @@ public final class Service {
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
+    if s.highlighted == true { out.highlighted = true }
     if verdict.requested { out.requested = true }
     out.snoozedUntil = facts.snooze.flatMap { $0.isActive(at: now) ? $0.until : nil }
     out.snoozeNote = verdict.snoozeNote

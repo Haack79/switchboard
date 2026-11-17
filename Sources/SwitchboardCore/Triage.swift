@@ -789,13 +789,14 @@ public enum Triage {
   /// Whether the session needs the user and counts toward the Inbox and the badge.
   public static func needsYou(_ s: SessionSummary) -> Bool { s.state.needsUser && inInbox(s) }
 
-  /// The sessions that have an item, by group and then oldest first.
+  /// The sessions that have an item: the highlighted ones first, then by group, then oldest first.
   public static func order(_ sessions: [SessionSummary]) -> [SessionSummary] {
     var ranked: [(session: SessionSummary, rank: Int)] = []
     for s in sessions where inInbox(s) {
       if let r = rank(s) { ranked.append((s, r)) }
     }
     ranked.sort { a, b in
+      if (a.session.highlighted == true) != (b.session.highlighted == true) { return a.session.highlighted == true }
       if a.rank != b.rank { return a.rank < b.rank }
       if a.session.since != b.session.since { return a.session.since < b.session.since }
       return a.session.id < b.session.id
@@ -810,13 +811,18 @@ public enum Triage {
     public var sessions: [SessionSummary]
   }
 
-  /// The Inbox's sections: one per state of `AttentionState.inbox` that has
-  /// items, in that order. Each keeps the order of `ordered`, which it doesn't sort.
+  /// The Inbox's sections: a Highlighted section when any item is highlighted, then one per state of
+  /// `AttentionState.inbox` that has items that aren't highlighted, in that order. Each keeps the order of
+  /// `ordered`, which it doesn't sort.
   public static func sections(_ ordered: [SessionSummary]) -> [Section] {
-    AttentionState.inbox.compactMap { state in
-      let group = ordered.filter { $0.state == state }
-      return group.isEmpty ? nil : Section(id: state.rawValue, title: state.title, sessions: group)
-    }
+    let highlighted = ordered.filter { $0.highlighted == true }
+    let rest = ordered.filter { $0.highlighted != true }
+    let first = highlighted.isEmpty ? [] : [Section(id: "highlighted", title: "Highlighted", sessions: highlighted)]
+    return first
+      + AttentionState.inbox.compactMap { state in
+        let group = rest.filter { $0.state == state }
+        return group.isEmpty ? nil : Section(id: state.rawValue, title: state.title, sessions: group)
+      }
   }
 }
 
