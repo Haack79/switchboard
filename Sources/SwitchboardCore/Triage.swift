@@ -802,6 +802,22 @@ public enum Triage {
     }
     return ranked.map(\.session)
   }
+
+  /// A group of Inbox items under one header.
+  public struct Section: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var sessions: [SessionSummary]
+  }
+
+  /// The Inbox's sections: one per state of `AttentionState.inbox` that has
+  /// items, in that order. Each keeps the order of `ordered`, which it doesn't sort.
+  public static func sections(_ ordered: [SessionSummary]) -> [Section] {
+    AttentionState.inbox.compactMap { state in
+      let group = ordered.filter { $0.state == state }
+      return group.isEmpty ? nil : Section(id: state.rawValue, title: state.title, sessions: group)
+    }
+  }
 }
 
 /// The `triage` object of config.json.

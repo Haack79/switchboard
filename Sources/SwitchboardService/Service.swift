@@ -342,9 +342,7 @@ public final class Service {
     try? refreshChatGuides()
     // A summary that was running when sbd stopped never finished.
     for (id, e) in entries {
-      let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
-      startSummaries(id, verdict)
-      resolveDraftTargets(id, verdict)
+      afterTrack(id, Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState))
     }
     try startMCPServers()
     github = GitHubPoller(service: self, settings: config.github, depot: config.depot, trunk: config.trunk)
@@ -908,11 +906,17 @@ public final class Service {
       entries[id] = e
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
-      startSummaries(id, verdict)
-      resolveDraftTargets(id, verdict)
+      afterTrack(id, verdict)
     }
     releaseCards(id)
     return event
+  }
+
+  /// Runs after each verdict sbd computes for a session: after an event, on
+  /// each tick, and once at startup.
+  func afterTrack(_ id: String, _ verdict: Verdict) {
+    startSummaries(id, verdict)
+    resolveDraftTargets(id, verdict)
   }
 
   // MARK: Sessions
@@ -2528,8 +2532,7 @@ public final class Service {
         if var e = entries[id] {
           let verdict = Attention.track(e.session, &e.facts, now: now, stateOf: lastState)
           entries[id] = e
-          startSummaries(id, verdict)
-          resolveDraftTargets(id, verdict)
+          afterTrack(id, verdict)
           checkUnknownPosts(id)
         }
       }

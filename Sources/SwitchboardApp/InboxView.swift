@@ -91,14 +91,11 @@ struct TriageList: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 2) {
-          ForEach(AttentionState.inbox, id: \.self) { state in
-            let group = items.filter { $0.state == state }
-            if !group.isEmpty {
-              ListSectionHeader(title: state.title, count: group.count)
-              ForEach(group) { s in
-                TriageRow(session: s, repo: repos[s.id], current: s.id == current).id(s.id)
-                  .simultaneousGesture(TapGesture().onEnded { focused = true })
-              }
+          ForEach(Triage.sections(items)) { section in
+            ListSectionHeader(title: section.title, count: section.sessions.count)
+            ForEach(section.sessions) { s in
+              TriageRow(session: s, repo: repos[s.id], current: s.id == current).id(s.id)
+                .simultaneousGesture(TapGesture().onEnded { focused = true })
             }
           }
         }
