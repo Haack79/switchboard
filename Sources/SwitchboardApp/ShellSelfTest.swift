@@ -147,11 +147,13 @@ enum ShellSelfTest {
     }
   }
 
-  /// The frame of the session's Board card in window coordinates.
+  /// The frame of the session's Board card in window coordinates, after the Board scrolls the card and 24 pt
+  /// around it into view. The commands click and drag in the space just outside the card.
   private static func boardCard(_ id: String) -> NSRect? {
     guard let root = window?.contentView, let anchor = ClickAnchorView.find("board-card-\(id)", in: root) else {
       return nil
     }
+    anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))
     root.layoutSubtreeIfNeeded()
     return anchor.convert(anchor.bounds, to: nil)
   }
