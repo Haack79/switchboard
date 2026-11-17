@@ -5,64 +5,70 @@ import Foundation
 /// is ~/.claude. It runs with CLAUDE_CONFIG_DIR unset. With
 /// CLAUDE_CONFIG_DIR=~/.claude, claude reads ~/.claude/.claude.json instead of
 /// ~/.claude.json, so that is a different account.
-public enum ClaudeAccount {
+public struct ClaudeAccount: Hashable, Sendable {
+  /// The normalized config folder.
+  public let folder: String
+
+  public init(folder: String) { self.folder = Self.normalize(folder) }
+
   public static var defaultFolder: String { normalize("~/.claude") }
 
   public static func normalize(_ folder: String) -> String {
     (folder.expandingTilde as NSString).standardizingPath
   }
 
-  public static func isDefault(_ folder: String) -> Bool { normalize(folder) == defaultFolder }
+  public var isDefault: Bool { folder == Self.defaultFolder }
 
   /// Whether a Claude account lives in the folder. The default account keeps
   /// its .claude.json in the home folder. Every other account keeps it in its
   /// own folder.
-  public static func holdsAccount(_ folder: String) -> Bool {
-    isDefault(folder) || FileManager.default.fileExists(atPath: configFile(folder))
+  public var holdsAccount: Bool {
+    isDefault || FileManager.default.fileExists(atPath: configFile)
   }
 
   /// The account's .claude.json, which holds its login. The default account
   /// keeps it in the home folder.
-  public static func configFile(_ folder: String) -> String {
-    isDefault(folder) ? "~/.claude.json".expandingTilde : "\(normalize(folder))/.claude.json"
+  public var configFile: String {
+    isDefault ? "~/.claude.json".expandingTilde : "\(folder)/.claude.json"
   }
 
   /// Sets CLAUDE_CONFIG_DIR to the folder, or removes it for the default account.
-  public static func apply(_ folder: String, to env: inout [String: String]) {
-    env["CLAUDE_CONFIG_DIR"] = isDefault(folder) ? nil : normalize(folder)
+  public func apply(to env: inout [String: String]) {
+    env["CLAUDE_CONFIG_DIR"] = isDefault ? nil : folder
   }
 
   /// A command line that runs `command` under the account, for the user to copy.
-  public static func command(_ command: String, in folder: String) -> String {
-    isDefault(folder) ? command : "CLAUDE_CONFIG_DIR=\(shellQuote(normalize(folder))) \(command)"
+  public func command(_ command: String) -> String {
+    isDefault ? command : "CLAUDE_CONFIG_DIR=\(shellQuote(folder)) \(command)"
   }
 
   /// A short name for the account: "default" for ~/.claude, else the folder
   /// name without its ".claude-" prefix.
-  public static func name(_ folder: String) -> String {
-    let last = (normalize(folder) as NSString).lastPathComponent
-    if isDefault(folder) { return "default" }
+  public var name: String {
+    if isDefault { return "default" }
+    let last = (folder as NSString).lastPathComponent
     return last.hasPrefix(".claude-") ? String(last.dropFirst(".claude-".count)) : last
   }
 
-  /// The account folder that `ref` names: a short name from `name`, or a
-  /// folder. Throws when no known account matches, or when the folder holds no
+  /// The account that `ref` names: a short name from `name`, or a folder.
+  /// Throws when no known account matches, or when the folder holds no
   /// account.
-  public static func resolve(_ ref: String, among known: [String]) throws -> String {
-    if let match = known.first(where: { name($0) == ref }) { return normalize(match) }
-    let folder = normalize(ref)
-    guard holdsAccount(folder) else {
-      let names = known.map(name).joined(separator: ", ")
-      throw APIError("\(ref) is no Claude account (no .claude.json in \(folder)). Known accounts: \(names)")
+  public static func resolve(_ ref: String, among known: [ClaudeAccount]) throws -> ClaudeAccount {
+    if let match = known.first(where: { $0.name == ref }) { return match }
+    let account = ClaudeAccount(folder: ref)
+    guard account.holdsAccount else {
+      let names = known.map(\.name).joined(separator: ", ")
+      throw APIError(
+        "\(ref) is no Claude account (no .claude.json in \(account.folder)). Known accounts: \(names)")
     }
-    return folder
+    return account
   }
 
   /// The default account, then each ~/.claude-* folder that holds a .claude.json, by name.
-  public static func discover(home: String = NSHomeDirectory()) -> [String] {
+  public static func discover(home: String = NSHomeDirectory()) -> [ClaudeAccount] {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []
-    let others = names.filter { $0.hasPrefix(".claude-") }.sorted().map { "\(home)/\($0)" }.filter(holdsAccount)
-    return (["\(home)/.claude"] + others).map(normalize)
+    let others = names.filter { $0.hasPrefix(".claude-") }.sorted().map { ClaudeAccount(folder: "\(home)/\($0)") }
+    return [ClaudeAccount(folder: "\(home)/.claude")] + others.filter(\.holdsAccount)
   }
 }
 
@@ -171,7 +177,7 @@ public struct ClaudeSession: Codable, Equatable, Sendable, Identifiable {
       let stop = stoppable ? " Or import it with --stop to exit that claude." : ""
       return "\(label) runs in another terminal, in \(cwd) (pid \(pid)). Exit claude there, then import it.\(stop)"
     }
-    let stop = ClaudeAccount.command("claude stop \(job)", in: account)
+    let stop = ClaudeAccount(folder: account).command("claude stop \(job)")
     return "\(label) runs as background job \(job). Stop it with `\(stop)`, then import it."
   }
 

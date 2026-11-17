@@ -53,7 +53,7 @@ func printAccounts(_ result: JSON, json: Bool) {
 }
 
 func printMove(_ move: AccountMove, dryRun: Bool = false) {
-  let name = ClaudeAccount.name(move.account)
+  let name = ClaudeAccount(folder: move.account).name
   let n = move.moved.count
   print(
     "\(dryRun ? "\(n) session\(n == 1 ? "" : "s") would move" : "Moved \(n) session\(n == 1 ? "" : "s")") to \(name)")

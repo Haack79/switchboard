@@ -202,7 +202,7 @@ struct NewSessionView: View {
   static func defaultAccountLabel(parent: SessionSummary?, active: AccountInfo?) -> String {
     guard let parent else { return "Active (\(active?.name ?? "default"))" }
     guard let account = parent.account else { return "Same as \(parent.name)" }
-    return "Same as \(parent.name) (\(ClaudeAccount.name(account)))"
+    return "Same as \(parent.name) (\(ClaudeAccount(folder: account).name))"
   }
 }
 

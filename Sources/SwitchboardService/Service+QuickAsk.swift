@@ -18,7 +18,7 @@ extension Service {
     let input = QuickAsk.input(
       question: question, sessions: sessions, inbox: Triage.order(sessions), accounts: accounts, groups: groups)
     let env = headlessEnv(session: nil, account: account)
-    try requireSignedIn(["account": .string(account)])
+    try requireSignedIn(["account": .string(account.folder)])
     if clientGone() { throw APIError("cancelled") }
     let model = config.quickAsk.model
     do {

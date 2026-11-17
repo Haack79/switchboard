@@ -13,7 +13,7 @@ import Testing
   }
 
   @Test func aSignedOutReadingIsRefusedWithTheAccountAndItsLoginCommand() {
-    let login = SignedOut(login: ClaudeAccount.command("claude", in: "/accounts/B"))
+    let login = SignedOut(login: ClaudeAccount(folder: "/accounts/B").command("claude"))
 
     #expect(Service.signedOutRefusal(reading(login)) == "B is \(login)")
   }

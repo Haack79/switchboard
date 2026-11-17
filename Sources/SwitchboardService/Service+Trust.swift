@@ -8,15 +8,17 @@ extension Service {
   /// under, when sbd created the folder. Without it, claude stops at the
   /// trust dialog and reads no prompt.
   func trustOwnFolder(_ id: String) {
-    guard let session = entries[id]?.session, let folder = ClaudeTrust.ownFolder(session, home: home) else { return }
-    let account = claudeAccount(of: id)
+    guard let session = entries[id]?.session, let folder = ClaudeTrust.ownFolder(session, home: home),
+      case .local(let account) = claudeAccount(of: id)
+    else { return }
     switch ClaudeTrust.trust(folder, account: account) {
     case .alreadyTrusted:
       break
     case .trusted(let key):
-      record(id, "folder-trusted", ["folder": .string(folder), "key": .string(key), "account": .string(account)])
+      record(
+        id, "folder-trusted", ["folder": .string(folder), "key": .string(key), "account": .string(account.folder)])
     case .noConfig:
-      logLine("\(id): no trust written for \(folder), because \(account) has no .claude.json")
+      logLine("\(id): no trust written for \(folder), because \(account.folder) has no .claude.json")
     case .refused(let reason):
       logLine("\(id): no trust written for \(folder): \(reason)")
     }

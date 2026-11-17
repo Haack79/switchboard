@@ -172,11 +172,11 @@ extension Service {
     if let group = plan.group, let chat = chatID(group) {
       let folder = home.chatFolder(group)
       return (
-        claudeAccount(of: chat), headlessEnv(session: chat, account: nil),
+        claudeAccount(of: chat).key, headlessEnv(session: chat, account: nil),
         FileManager.default.fileExists(atPath: folder) ? folder : home.path
       )
     }
-    return (activeAccount, headlessEnv(session: nil, account: activeAccount), home.path)
+    return (activeAccount.folder, headlessEnv(session: nil, account: activeAccount), home.path)
   }
 
   /// Asks the model for the rows' new status cells, checks its answer, and

@@ -63,4 +63,14 @@ import Testing
       #expect(try String(contentsOfFile: "\(home.sessionFolder("s1"))/claude.sh", encoding: .utf8) == "claude\n")
     }
   }
+
+  /// A host session's folder comes from its host, not from this Mac's accounts, even when sbd no longer holds it.
+  @Test(.timeLimit(.minutes(1)))
+  func theClaudeFolderOfAHostSessionThatSbdDoesNotHoldAsksTheHost() throws {
+    try withService { service, _ in
+      var session = makeSession("gone", name: "gone")
+      session.host = "mini"
+      #expect(throws: HostUnread.self) { try service.queue.sync { try service.claudeFolder(of: session) } }
+    }
+  }
 }

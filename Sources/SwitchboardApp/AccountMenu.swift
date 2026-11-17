@@ -141,7 +141,7 @@ private struct AccountList: View {
     VStack(alignment: .leading, spacing: 6) {
       if let plan = model.movable, !plan.moved.isEmpty {
         let n = plan.moved.count
-        Button("Move \(n) Stopped Session\(n == 1 ? "" : "s") to \(ClaudeAccount.name(plan.account))…") {
+        Button("Move \(n) Stopped Session\(n == 1 ? "" : "s") to \(ClaudeAccount(folder: plan.account).name)…") {
           model.offerMove(plan)
         }
       }

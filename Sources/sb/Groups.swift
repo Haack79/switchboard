@@ -106,7 +106,7 @@ private func printGroup(_ result: JSON, json: Bool) {
 }
 
 /// Such as `account: personal (/Users/me/.claude-personal)`.
-private func accountLine(_ folder: String) -> String { "account: \(ClaudeAccount.name(folder)) (\(folder))" }
+private func accountLine(_ folder: String) -> String { "account: \(ClaudeAccount(folder: folder).name) (\(folder))" }
 
 private func printGroups(_ list: GroupList) {
   if list.groups.isEmpty && list.ungrouped.isEmpty {

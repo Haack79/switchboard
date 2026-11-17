@@ -188,16 +188,14 @@ extension ClaudeAccount {
   /// The keychain service under which claude keeps the account's credentials.
   /// With CLAUDE_CONFIG_DIR set, claude adds the first 8 hex digits of the
   /// SHA-256 of its value. This hashes the value that `apply` sets.
-  public static func keychainService(_ folder: String) -> String {
+  public var keychainService: String {
     let base = "Claude Code-credentials"
     var env: [String: String] = [:]
-    apply(folder, to: &env)
+    apply(to: &env)
     guard let dir = env["CLAUDE_CONFIG_DIR"] else { return base }
     return base + "-" + SHA256.hash(data: Data(dir.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
   }
 
   /// The .credentials.json that claude writes when it has no keychain.
-  public static func credentialsFile(_ folder: String) -> String {
-    "\(normalize(folder))/.credentials.json"
-  }
+  public var credentialsFile: String { "\(folder)/.credentials.json" }
 }
