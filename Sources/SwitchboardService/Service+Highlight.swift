@@ -31,7 +31,8 @@ extension Service {
     do {
       try update(id) { $0.highlighted = nil }
     } catch {
-      // `update` changes the entry before it saves.
+      // `fold` can run inside `store.transaction`. This can't use `updateOrRestore`, because that opens its own
+      // transaction. `update` changes the entry before it saves, so the flag goes back here.
       entries[id]?.session.highlighted = true
       logLine("can't clear the highlight of \(id): \(error)")
       return

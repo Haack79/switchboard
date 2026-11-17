@@ -137,6 +137,7 @@ import Testing
     let result = try mcp.call("highlight", ["session": .string(s.outside.id), "clear": true])
 
     #expect(result.isError, "\(result.text)")
+    #expect(result.text.contains("is not in group"), "\(result.text)")
     #expect(try sbd.highlightField(s.outside.id) == .bool(true))
   }
 }

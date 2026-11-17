@@ -226,6 +226,8 @@ extension Instance {
       session.done = true
       try store.save(session)
     }
+    // With no tick before the assertions, only the startup pass can clear the flag.
+    try sbd.set("tickSeconds", to: 3600)
 
     try sbd.startSbd()
 
@@ -566,7 +568,7 @@ extension Instance {
 
   // MARK: Delete
 
-  @Test func deletingAHighlightedSessionRemovesIt() throws {
+  @Test func highlightOfADeletedSessionIsRefused() throws {
     let sbd = try Instance()
     let s = try needsYouSession(sbd)
     try sbd.sb("highlight", s.id)

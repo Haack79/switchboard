@@ -129,6 +129,7 @@ struct TriageRow: View {
         .fill(session.state.color)
         .frame(width: 8, height: 8)
         .padding(.top, 5)
+        .help(session.state.title)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         InlineText(plain: session.inboxTitle, links: false).fontWeight(.medium).lineLimit(2)
@@ -152,6 +153,7 @@ struct TriageRow: View {
       SnoozeMenuItems(session: session)
     }
     .accessibilityElement(children: .combine)
+    .accessibilityValue(session.state.title)
     .highlightAccessibility(session.isHighlighted)
     .accessibilityAddTraits(current ? .isSelected : [])
   }
