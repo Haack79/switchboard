@@ -221,6 +221,7 @@ public struct MCPToolServer: Sendable {
         "by": MCPToolServer.byClaude,
       ]
       if let caller { request["caller"] = .string(caller) }
+      if let scoped { request["scope"] = .string(scoped.group.id) }
       return try client.call("highlight", request)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])

@@ -140,4 +140,42 @@ import Testing
     #expect(result.text.contains("is not in group"), "\(result.text)")
     #expect(try sbd.highlightField(s.outside.id) == .bool(true))
   }
+
+  // MARK: sbd's own check of the scope
+
+  /// A member that moved out of the group after the server checked it. Only sbd's check runs here.
+  @Test(arguments: [false, true])
+  func sbdRefusesAScopedHighlightOfAMemberThatMovedOut(_ clear: Bool) throws {
+    let sbd = try Instance()
+    let s = try scope(sbd)
+    let chat = try sbd.chatOf("Flags")
+    if clear { try sbd.sb("highlight", s.member.id) }
+    try sbd.sb("group", "move", s.member.id, "--ungrouped")
+
+    let error = failure(
+      sbd, "highlight",
+      [
+        "session": .string(s.member.id), "highlighted": .bool(!clear), "by": "claude",
+        "scope": .string(s.group.id), "caller": .string(chat),
+      ])
+
+    #expect(error.contains("is not in group"), "\(error)")
+    #expect(try sbd.highlightField(s.member.id) == (clear ? .bool(true) : nil))
+  }
+
+  /// The positive control: sbd highlights a member when the request carries the scope.
+  @Test func sbdHighlightsAMemberForARequestWithTheScope() throws {
+    let sbd = try Instance()
+    let s = try scope(sbd)
+    let chat = try sbd.chatOf("Flags")
+
+    _ = try sbd.client.call(
+      "highlight",
+      [
+        "session": .string(s.member.id), "highlighted": true, "by": "claude",
+        "scope": .string(s.group.id), "caller": .string(chat),
+      ])
+
+    #expect(try sbd.highlightField(s.member.id) == .bool(true))
+  }
 }

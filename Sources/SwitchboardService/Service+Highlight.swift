@@ -4,12 +4,13 @@ import SwitchboardCore
 extension Service {
   /// The `highlight` request, which highlights `session`, or with `highlighted` false clears its highlight. It
   /// records an event only when the value changes. It always returns the summary. It refuses a session that isn't a
-  /// work session, a session whose evaluated state is Done, and the asking session `caller`. A session that
-  /// highlighted itself could raise its own priority.
+  /// work session, a session whose evaluated state is Done, a session outside a scoped request's `scope`, and the
+  /// asking session `caller`. A session that highlighted itself could raise its own priority.
   func highlightRequest(_ args: JSON) throws -> JSON {
     let on = args["highlighted"]?.bool ?? true
     let by = try Author(parsing: args["by"]?.string)
     let id = try lookupOther(args, refusing: on ? "highlight itself" : "change its own highlight")
+    try requireInScope(.session(id), args)
     let e = entries[id]!
     if on {
       guard e.session.kind == .work else { throw APIError("only a work session can be highlighted") }
