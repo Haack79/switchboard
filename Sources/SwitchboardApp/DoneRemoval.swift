@@ -135,11 +135,12 @@ extension BoardModel {
           let shown = self.shownIDs
           let removable = self.removableIDs
           let refusal = self.removalRefusals()
-          let unreadIDs = shown.subtracting(removable)
-          let unread = plan.remove.filter { unreadIDs.contains($0.id) }
+          let unread = plan.remove.compactMap { item in
+            shown.contains(item.id) ? refusal(item.id).map { (item, $0) } : nil
+          }
           plan.remove.removeAll { !removable.contains($0.id) }
           plan.skip.removeAll { !shown.contains($0.id) }
-          plan.skip += unread.map { .init(id: $0.id, name: $0.name, reason: refusal($0.id) ?? Self.unreadOrgReason) }
+          plan.skip += unread.map { item, reason in .init(id: item.id, name: item.name, reason: reason) }
           self.doneRemoval = .confirming(plan, scope: scope)
         } catch {
           self.actionError = "rm-plan: \(error)"

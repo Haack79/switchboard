@@ -689,7 +689,6 @@ final class BoardModel: ObservableObject {
       loaded = true
       markSelectedChatRead()
     case .failure(let error):
-      if let groups { applyGroups(groups) }
       let problem = "\(error)"
       if unreachable != problem { unreachable = problem }
     }
