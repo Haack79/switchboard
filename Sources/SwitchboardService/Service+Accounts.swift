@@ -144,7 +144,7 @@ extension Service {
     let target = try moveTarget(args)
     let dryRun = args["dryRun"]?.bool ?? false
     let named = try namedForMove(args)
-    let stopsClaude = dryRun && args["stop"]?.bool == true
+    let listsRunningAsMovable = dryRun && args["stop"]?.bool == true
     var result = AccountMove(account: target.folder)
     for id in named ?? entries.keys.sorted() {
       guard let session = entries[id]?.session else { continue }
@@ -153,7 +153,7 @@ extension Service {
         if named != nil { block(reason) }
         continue
       }
-      if let reason = moveRefusal(id, to: target, stopsClaude: stopsClaude) {
+      if let reason = moveRefusal(id, to: target, listsRunningAsMovable: listsRunningAsMovable) {
         block(reason)
         continue
       }
@@ -206,9 +206,10 @@ extension Service {
   }
 
   /// Why the session cannot move now, so that `dryRun` lists the same
-  /// sessions as a move. `stopsClaude` passes a claude that runs, because the
-  /// move stops it first.
-  private func moveRefusal(_ id: String, to target: ClaudeAccount, stopsClaude: Bool) -> String? {
+  /// sessions as a move. `listsRunningAsMovable` passes a claude that runs.
+  /// Only a dry run of a move with `stop` sets it, because the real move
+  /// stops that claude before it runs and then refuses a claude that still runs.
+  private func moveRefusal(_ id: String, to target: ClaudeAccount, listsRunningAsMovable: Bool) -> String? {
     guard let e = entries[id] else { return "no session \(id)" }
     if let host = e.session.host { return "it runs under the Claude login of \(host)" }
     if let group = accountGroup(of: e.session), let bound = group.account, bound != target.folder {
@@ -219,7 +220,7 @@ extension Service {
     if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
     switch claudeState(id) {
     case .stopped: break
-    case .running where stopsClaude: break
+    case .running where listsRunningAsMovable: break
     default: return "its claude is running. Stop it first"
     }
     if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }

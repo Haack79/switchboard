@@ -389,12 +389,13 @@ import Testing
     #expect(transcript(sbd, "B", live) == nil)
   }
 
-  /// The stub's claude exits 1 s after SIGTERM, so the move waits for the exit.
+  /// The stub's claude exits 3 s after SIGTERM, so the move waits for the exit.
   @Test func theStopFlagStopsANamedSessionsClaudeAndMovesIt() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
     try sbd.sb("account", "use", "A")
-    let s = try sbd.new(prompt: "linger 1", name: "live")
-    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 1 s when I stop." && $0.claudePid != nil }
+    let s = try sbd.new(prompt: "linger 3", name: "live")
+    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 3 s when I stop." && $0.claudePid != nil }
+    let stopped = try stoppedSession(sbd, prompt: "second", name: "stopped")
     let other = try sbd.idleSession(name: "other")
 
     let plan = try move(sbd, "--dry-run", "--stop", "--session", "live")
@@ -403,10 +404,11 @@ import Testing
     #expect(try sbd.get(s.id).claudePid != nil)
     #expect(try sbd.get(s.id).account == sbd.account("A"))
 
-    let result = try move(sbd, "--stop", "--session", "live")
-    #expect(result.moved == [s.id])
+    let result = try move(sbd, "--stop", "--session", "live", "--session", "stopped")
+    #expect(result.moved == [s.id, stopped.id].sorted())
     #expect(result.blocked.isEmpty)
     #expect(try sbd.get(s.id).account == sbd.account("B"))
+    #expect(try sbd.get(stopped.id).account == sbd.account("B"))
     #expect(transcript(sbd, "B", s) != nil)
     #expect(try sbd.get(other.id).claudePid != nil)
     #expect(try sbd.get(other.id).account == sbd.account("A"))
@@ -434,14 +436,15 @@ import Testing
     #expect(transcript(sbd, "B", s) == nil)
   }
 
-  /// The stub's claude exits 1 s after SIGTERM. `stop` answers only after the exit.
+  /// The stub's claude exits 3 s after SIGTERM. `stop` answers only after the exit.
   @Test func aMoveRightAfterTheStopTakesTheSession() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
     try sbd.sb("account", "use", "A")
-    let s = try sbd.new(prompt: "linger 1", name: "first")
-    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 1 s when I stop." && $0.claudePid != nil }
+    let s = try sbd.new(prompt: "linger 3", name: "first")
+    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 3 s when I stop." && $0.claudePid != nil }
 
-    try sbd.sb("stop", "first")
+    let stopped = try decode(sbd.sb("stop", "--json", "first"))
+    #expect(stopped.claudePid == nil)
     let result = try move(sbd, "--session", "first")
 
     #expect(result.moved == [s.id])

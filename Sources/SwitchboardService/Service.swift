@@ -511,10 +511,12 @@ public final class Service {
     case "account-use", "account-move", "group-account":
       try requireSignedIn(request.args)
       if request.op == "account-move", request.args["stop"]?.bool == true, request.args["dryRun"]?.bool != true {
-        try stopAndWait(request, origin: origin) { try sessionsToStopForMove(request.args) }
+        try stopAndWait(request, origin: origin, reason: "a move to another account") {
+          try sessionsToStopForMove(request.args)
+        }
       }
     case "stop":
-      let id = try stopAndWait(request, origin: origin) { [try lookup(request.args)] }[0]
+      let id = try stopAndWait(request, origin: origin, reason: "asked") { [try lookup(request.args)] }[0]
       let fresh = buildSnapshot()
       return .success(
         try queue.sync {
@@ -1684,20 +1686,25 @@ public final class Service {
   }
 
   /// Stops the claude of each session that `pick` returns on the state queue.
-  /// Then it waits off the queue up to 5 s for the claudes on this Mac to
-  /// exit. A snapshot taken after it then shows each such claude stopped,
-  /// unless the claude outlived the wait. A claude on a host gets no wait,
+  /// Then it waits off the queue up to 5 s for each claude on this Mac and
+  /// its Claude pane's shell to exit. The pane counts as running until its
+  /// shell exits. A snapshot taken after it then shows each such claude
+  /// stopped, unless the claude or the shell outlived the wait. A claude on a host gets no wait,
   /// because each check of it runs a command over ssh. Returns the picked
   /// sessions.
   @discardableResult
-  func stopAndWait(_ request: Request, origin: RequestOrigin, _ pick: () throws -> [String]) throws -> [String] {
+  func stopAndWait(
+    _ request: Request, origin: RequestOrigin, reason: String, _ pick: () throws -> [String]
+  ) throws -> [String] {
     var picked: [String] = []
     var pids: Set<Int> = []
     _ = try prepared(request, origin: origin) {
       picked = try pick()
       for id in picked {
-        let pid = try stop(id, reason: "asked")
-        if entries[id]?.session.host == nil { pids.insert(pid) }
+        let pid = try stop(id, reason: reason)
+        guard entries[id]?.session.host == nil else { continue }
+        pids.insert(pid)
+        if let shell = paneRow(id, .claude)?.pid, shell > 1 { pids.insert(shell) }
       }
       return .null
     }
