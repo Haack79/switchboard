@@ -413,6 +413,47 @@ let everyGroupShape = [
     #expect(published == 0)
   }
 
+  /// sbd merges g1 into g2 by moving g1's sessions to g2 and then deleting g1. One refresh reads both changes.
+  @Test func aMergeOfTheSelectedSessionsGroupKeepsItSelected() {
+    let model = model(GroupFilter(keys: ["g1", "g2"]))
+    model.selection = "i1"
+    let merged = Self.list.map { $0.group == "g1" ? Self.inGroup($0, "g2") : $0 }
+
+    model.apply(
+      .success(merged), followups: Self.followups,
+      groups: [Self.group("g2", "Web", ["i1", "i2", "w1", "w2"]), Self.groups[2]])
+
+    #expect(model.selection == "i1")
+    #expect(model.groupFilter == GroupFilter(keys: ["g2"]))
+  }
+
+  @Test func aDeleteOfTheSelectedSessionsGroupAddsUngrouped() {
+    let model = model(GroupFilter(keys: ["g1", "g2"]))
+    model.selection = "i1"
+    let ungrouped = Self.list.map { s -> SessionSummary in
+      var s = s
+      if s.group == "g1" { s.group = nil }
+      return s
+    }
+
+    model.apply(.success(ungrouped), followups: Self.followups, groups: [Self.groups[1], Self.groups[2]])
+
+    #expect(model.selection == "i1")
+    #expect(model.groupFilter == GroupFilter(keys: ["g2", Self.ungrouped]))
+  }
+
+  // MARK: Show All
+
+  @Test func showAllClearsBothFiltersAndKeepsTheKnownGroups() {
+    let model = model(GroupFilter(keys: ["g1"]), org: posthogOnly)
+
+    model.showAll()
+
+    #expect(model.filter.isAll)
+    #expect(model.filter.knownGroups == Set(["g1", "g2", "g3"]))
+    #expect(model.hiddenCount == 0)
+  }
+
   // MARK: Reveal
 
   @Test func revealOfASessionInAHiddenGroupAddsItsGroup() {
@@ -759,5 +800,13 @@ let everyGroupShape = [
     let list = Self.list.filter { $0.kind != .work }
 
     #expect(!model(GroupFilter(keys: ["g3"]), list, followups: nil).filterHidesAllWork)
+  }
+
+  @Test func aFilterThatHidesEveryWorkSessionWithoutAManagerIsNotAnEmptySidebar() {
+    let list = Self.list.filter { $0.kind == .work }
+    let model = model(GroupFilter(keys: ["g3"]), list, followups: nil)
+
+    #expect(model.filterHidesAllWork)
+    #expect(!model.sidebarIsEmpty)
   }
 }

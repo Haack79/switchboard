@@ -80,19 +80,35 @@ extension BoardModel {
   }
 
   nonisolated static let unreadOrgReason = "sbd hasn't read its org yet"
-  nonisolated static let hiddenOrgReason = "hidden by the org filter"
+  nonisolated static let unlistedGroupsReason = "sbd hasn't listed the groups yet"
   nonisolated static let unlistedReason = "no longer listed"
+
+  /// "hidden by the org filter", "hidden by the group filter", or "hidden by the filters".
+  nonisolated static func hiddenReason(_ scope: SessionFilter.Scope) -> String { "hidden by \(scope.filterName)" }
+
+  /// Why `filter` shows `s` but Delete All may not remove it: sbd hasn't read its org, or hasn't listed the groups.
+  nonisolated static func unreadReason(_ s: SessionSummary, _ filter: SessionFilter) -> String {
+    !filter.org.isAll && OrgFilter.key(of: s) == nil ? unreadOrgReason : unlistedGroupsReason
+  }
+
+  /// Why `filter` hides `s`, naming the filter that hides it.
+  nonisolated static func hiddenReason(_ s: SessionSummary, _ filter: SessionFilter) -> String {
+    let org = !filter.org.shows(s)
+    let group = !filter.group.shows(s, known: filter.knownGroups)
+    return hiddenReason(org && group ? .both : group ? .groups : .orgs)
+  }
 
   /// Why the removal sheet may not remove a session now, or nil when it may, as of this call. It reads the
   /// lists once, so a check of many sessions does not rebuild them for each one.
   func removalRefusals() -> (String) -> String? {
     let removable = removableIDs
     let shown = shownIDs
-    let listed = Set(listedBoard.map(\.id))
+    let listed = Dictionary(listedBoard.map { ($0.id, $0) }) { first, _ in first }
+    let filter = filter
     return { id in
       if removable.contains(id) { return nil }
-      if shown.contains(id) { return Self.unreadOrgReason }
-      return listed.contains(id) ? Self.hiddenOrgReason : Self.unlistedReason
+      guard let s = listed[id] else { return Self.unlistedReason }
+      return shown.contains(id) ? Self.unreadReason(s, filter) : Self.hiddenReason(s, filter)
     }
   }
 
@@ -103,8 +119,9 @@ extension BoardModel {
   func checkSelectionRemoval() { checkRemoval(multiSelected.map(\.id), scope: .work) }
 
   /// Asks sbd for an `rm-plan` of `ids`, or of every Done session when `ids` is nil, then shows it in the removal
-  /// sheet. The plan leaves out the sessions that the org filter hides. Under a filter, a shown session whose org
-  /// sbd hasn't read yet moves from the remove list to the skip list.
+  /// sheet. The plan leaves out the sessions that the filter hides. Under a filter, a shown session whose org sbd
+  /// hasn't read yet, or any shown session under a group filter before sbd lists the groups, moves from the remove
+  /// list to the skip list.
   private func checkRemoval(_ ids: [String]?, scope: RemovalScope) {
     guard !showingDoneRemoval else { return }
     let checking = DoneRemoval.checking(scope, request: UUID())
@@ -117,11 +134,12 @@ extension BoardModel {
           var plan = try JSONCoding.convert(value, to: RemovalPlan.self)
           let shown = self.shownIDs
           let removable = self.removableIDs
+          let refusal = self.removalRefusals()
           let unreadIDs = shown.subtracting(removable)
           let unread = plan.remove.filter { unreadIDs.contains($0.id) }
           plan.remove.removeAll { !removable.contains($0.id) }
           plan.skip.removeAll { !shown.contains($0.id) }
-          plan.skip += unread.map { .init(id: $0.id, name: $0.name, reason: Self.unreadOrgReason) }
+          plan.skip += unread.map { .init(id: $0.id, name: $0.name, reason: refusal($0.id) ?? Self.unreadOrgReason) }
           self.doneRemoval = .confirming(plan, scope: scope)
         } catch {
           self.actionError = "rm-plan: \(error)"

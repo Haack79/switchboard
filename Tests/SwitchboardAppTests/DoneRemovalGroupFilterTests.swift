@@ -128,6 +128,21 @@ import Testing
     #expect(model.removableIDs == Set(Self.ids))
   }
 
+  @Test func aGroupFilterBeforeTheFirstGroupListRefusesForTheGroupList() {
+    let model = model(GroupFilter(keys: ["g1"]), loaded: false)
+
+    #expect(model.removalRefusals()("d1") == BoardModel.unlistedGroupsReason)
+  }
+
+  @Test func aHiddenSessionsRefusalNamesTheFilterThatHidesIt() {
+    let model = model(GroupFilter(keys: ["g1"]), org: posthogOnly)
+    let refusal = model.removalRefusals()
+
+    #expect(refusal("d2") == BoardModel.hiddenReason(.groups))
+    #expect(refusal("dh") == BoardModel.hiddenReason(.orgs))
+    #expect(refusal("d1") == nil)
+  }
+
   // MARK: The plan
 
   @Test func aPlanShowsOnlyTheSessionsThatBothFiltersShow() async throws {

@@ -638,9 +638,11 @@ struct BoardView: View {
     let ring = focused ? model.currentBoardCard : nil
     // A repo lane has no group, like the Ungrouped lane, so a drop there would ungroup the card.
     let drops = laneKind == .group
-    if layout.lanes.isEmpty && layout.done.isEmpty && model.filterHidesAllWork {
+    // The new group's name field is in the lanes header, so naming a group keeps the header up.
+    let empty = layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group)
+    if empty && model.filterHidesAllWork {
       FilterHidesAll().frame(maxWidth: .infinity, maxHeight: .infinity)
-    } else if layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group) {
+    } else if empty {
       VStack(spacing: 12) {
         Image(systemName: "square.grid.3x3").font(.system(size: 40)).foregroundStyle(.secondary)
         Text("Start a session to see it here").foregroundStyle(.secondary)
