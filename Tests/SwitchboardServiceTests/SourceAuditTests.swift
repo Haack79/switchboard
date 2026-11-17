@@ -1,9 +1,10 @@
 import Foundation
 import Testing
 
-/// Finds the names in `Sources` that reach this Mac without naming a session's site. Only `MacSite` may build a
+/// Finds the names in `Sources` that a file outside a rule's allowed files must not use. Only `MacSite` may build a
 /// `LocalMachine` or call the local process and path functions. A session path that used one of them would run a
-/// remote session's work on this Mac.
+/// remote session's work on this Mac. Only `MarkdownView` may read Markdown in the app, so a fix to the renderer
+/// reaches every view that draws Markdown.
 enum SourceAudit {
   struct Finding: Equatable, CustomStringConvertible {
     /// The file's path below `Sources`.
@@ -51,6 +52,10 @@ enum SourceAudit {
     "sb/Drafts.swift",
   ]
 
+  static let app = "SwitchboardApp/"
+  /// The one file of the app that parses Markdown.
+  static let markdownReaders: Set<String> = ["\(app)MarkdownView.swift"]
+
   /// A name counts as bare when no identifier and no `.` comes before it. `site.realPath(` and
   /// `mac.snapshot.panes` name their site, so they are not bare. `self.` names no site.
   private static let bare = #"(?<![A-Za-z0-9_.])(?:self\.)?"#
@@ -75,6 +80,10 @@ enum SourceAudit {
       "stdin read in sb",
       #"FileHandle\.standardInput|(?<![A-Za-z0-9_])readLine\(|readDataToEndOfFile\(|(?<![A-Za-z0-9_])read\((?:STDIN_FILENO|0)\b"#,
       under: "sb/", allowed: sbStdinReaders),
+    Rule("Markdown renderer", #"AttributedString\(markdown|cmark_|import Markdown\b|MarkdownUI"#, under: app),
+    Rule("MarkdownBlock.parse in the app", #"MarkdownBlock\.parse\("#, under: app, allowed: markdownReaders),
+    // `Text` reads Markdown in a `LocalizedStringKey`. `InlineText` builds one only from segments that it styled.
+    Rule("LocalizedStringKey(", #"LocalizedStringKey\("#, under: app, allowed: ["\(app)InlineText.swift"]),
   ]
 
   /// The findings in one file's text. It reads comments too, as `grep` does.
@@ -132,6 +141,21 @@ enum SourceAudit {
     let missing = allowed.filter { !FileManager.default.fileExists(atPath: "\(SourceAudit.sources)/\($0)") }
 
     #expect(missing.isEmpty, "\(missing.sorted())")
+  }
+
+  /// Every view that draws Markdown draws it with `MarkdownView`. A new view that draws Markdown joins this list.
+  @Test func theViewsThatDrawMarkdownUseMarkdownView() throws {
+    let drawers = try SourceAudit.sourceFiles().filter {
+      $0.file.hasPrefix(SourceAudit.app) && $0.text.contains("MarkdownView(text:")
+    }
+    .map(\.file)
+
+    #expect(
+      drawers
+        == [
+          "ChatView.swift", "DecisionCard.swift", "DraftView.swift", "IssuesView.swift", "Notes.swift",
+          "QuickAskView.swift", "TriageView.swift",
+        ].map { SourceAudit.app + $0 })
   }
 
   @Test func theScanReadsTheSwiftFilesOfEveryTarget() throws {

@@ -19,6 +19,15 @@ import Testing
     #expect(rows.map(\.gap) == [8, 8, 3, 3, 8])
   }
 
+  @Test func eachAlertKindHasItsOwnIconAndColor() {
+    let kinds = MarkdownBlock.AlertKind.allCases
+    #expect(Set(kinds.map(\.icon)).count == kinds.count)
+    #expect(Set(kinds.map(\.color)).count == kinds.count)
+    for kind in kinds {
+      #expect(NSImage(systemSymbolName: kind.icon, accessibilityDescription: nil) != nil, "\(kind.icon)")
+    }
+  }
+
   @Test func noImageLoadsWithoutAClick() {
     let sources = [
       "https://x.example/a.png", "file:///tmp/a.png", "file:///net/attacker.example/export/x.png",

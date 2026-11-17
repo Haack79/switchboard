@@ -336,6 +336,16 @@ extension MergeDetailsTests {
       #expect(description.contains("no write"))
     }
 
+    @Test func keepsAnAlertsTextAndItsTestGaps() {
+      let body =
+        "## Problem\n\n> [!WARNING]\n> The cache drops writes.\n\n## Testing\n\n> [!NOTE]\n> Not run: the e2e suite."
+
+      let read = MergeDetails.read(body: body, title: "")
+
+      #expect(read.description.contains("The cache drops writes."))
+      #expect(read.testGaps == ["Not run: the e2e suite."])
+    }
+
     @Test func hasAtMost4000Characters() {
       let body = "## Problem\n\n" + String(repeating: "The cache drops writes under load. ", count: 400)
 

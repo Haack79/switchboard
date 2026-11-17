@@ -471,7 +471,7 @@ private func blockHasLinkOrImage(_ block: MarkdownBlock) -> Bool {
   case .images: true
   case .list(_, let items): items.contains { $0.blocks.contains(where: blockHasLinkOrImage) }
   case .code, .rule: false
-  case .quote(let blocks): blocks.contains(where: blockHasLinkOrImage)
+  case .quote(let blocks, _): blocks.contains(where: blockHasLinkOrImage)
   case .table(let header, _, let rows): (header + rows.flatMap { $0 }).contains(where: textHasLinkOrImage)
   case .details(let summary, _, let blocks):
     textHasLinkOrImage(summary) || blocks.contains(where: blockHasLinkOrImage)

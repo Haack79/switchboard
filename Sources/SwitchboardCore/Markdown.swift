@@ -114,6 +114,15 @@ public enum MarkdownBlock: Equatable, Sendable {
     }
   }
 
+  /// The kinds of GitHub alert. An alert is a quote whose first line is `[!NOTE]`,
+  /// `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`.
+  public enum AlertKind: String, CaseIterable, Sendable {
+    case note, tip, important, warning, caution
+
+    /// The title GitHub shows above the alert's text.
+    public var title: String { rawValue.capitalized }
+  }
+
   case heading(level: Int, text: MarkdownText)
   case paragraph(MarkdownText)
   /// A paragraph that holds only images.
@@ -121,7 +130,8 @@ public enum MarkdownBlock: Equatable, Sendable {
   /// `number` is the first item's number for a numbered list, or nil for bullets.
   case list(number: Int?, items: [Item])
   case code(language: String?, text: String)
-  case quote([MarkdownBlock])
+  /// `alert` is set for a GitHub alert. An alert's blocks leave out the `[!KIND]` line.
+  case quote([MarkdownBlock], alert: AlertKind? = nil)
   /// Every row has one cell for each header cell.
   case table(header: [MarkdownText], alignments: [Alignment], rows: [[MarkdownText]])
   case rule
@@ -207,7 +217,10 @@ public enum MarkdownBlock: Equatable, Sendable {
       let info = string(cmark_node_get_fence_info(node)).split(whereSeparator: \.isWhitespace).first.map(String.init)
       return .code(language: info, text: codeText(node))
     case "block_quote":
-      return .quote(blocks(of: node, depth: depth + 1))
+      let blocks = blocks(of: node, depth: depth + 1)
+      // GitHub reads an alert only at the top level of the document.
+      return cmark_node_get_type(cmark_node_parent(node)) == CMARK_NODE_DOCUMENT
+        ? quote(alerting: blocks) : .quote(blocks)
     case "thematic_break":
       return .rule
     case "table":
@@ -215,6 +228,23 @@ public enum MarkdownBlock: Equatable, Sendable {
     default:
       return nil
     }
+  }
+
+  /// A quote is an alert when its first line is a marker such as `[!WARNING]`. As on GitHub, the
+  /// marker is plain text on a line of its own, and some text follows it.
+  private static func quote(alerting blocks: [MarkdownBlock]) -> MarkdownBlock {
+    guard case .paragraph(let text)? = blocks.first, let first = text.runs.first,
+      first.style.isEmpty, first.link == nil, first.image == nil
+    else { return .quote(blocks) }
+    let line = first.text.prefix { $0 != "\n" }
+    let marker = line.trimmingCharacters(in: .whitespaces)
+    guard marker.hasPrefix("[!"), marker.hasSuffix("]"),
+      let kind = AlertKind(rawValue: marker.dropFirst(2).dropLast().lowercased())
+    else { return .quote(blocks) }
+    var rest = text
+    rest.runs[0].text.removeFirst(line.count)
+    let body = [textBlock(rest)].compactMap { $0 } + blocks.dropFirst()
+    return body.isEmpty ? .quote(blocks) : .quote(body, alert: kind)
   }
 
   /// A paragraph of only images and whitespace becomes `.images`.
@@ -599,7 +629,7 @@ extension MarkdownBlock {
     switch self {
     case .paragraph(let text), .heading(_, let text): text.plain
     case .list(_, let items): items.flatMap(\.blocks).map(\.plainText).joined(separator: " ")
-    case .quote(let blocks): blocks.map(\.plainText).joined(separator: " ")
+    case .quote(let blocks, _): blocks.map(\.plainText).joined(separator: " ")
     default: ""
     }
   }
