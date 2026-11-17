@@ -47,9 +47,14 @@ final class BoardModel: ObservableObject {
       navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
     }
   }
-  /// The sessions that the sidebar selects with ⌘-click or ⇧-click: two or more ids, or none. `selection` stays
-  /// the one session that history records. `sidebarSelection` sets it.
-  @Published var multiSelection: Set<String> = []
+  /// The sessions that the sidebar selects with ⌘-click or ⇧-click, or the Board with a click or a rectangle:
+  /// two or more ids, or none. While the Board shows, it can also hold one id. `selection` stays the one
+  /// session that history records, and stays nil while the Board shows a selection. `sidebarSelection` sets it.
+  @Published var multiSelection: Set<String> = [] {
+    didSet { if multiSelection.isEmpty { boardSelectionAnchor = nil } }
+  }
+  /// The card that a Board ⇧-click extends the selection from: the last card clicked or ⌘-clicked.
+  var boardSelectionAnchor: String?
   /// The New Session sheet's opening, or nil while it is closed.
   @Published var newSession: NewSessionRequest?
   @Published var showingImport = false
@@ -93,8 +98,12 @@ final class BoardModel: ObservableObject {
   /// Counts ⌘J presses in the Inbox. Each one scrolls to the current item,
   /// even when ⌘J lands on the item it reached last time.
   @Published var inboxJumps = 0
-  /// The Board card that the arrow keys or Next and Previous Session last moved to.
+  /// The Board card that a click, the arrow keys, or Next and Previous Session last moved to.
   @Published var boardFocus: String?
+  /// Counts the focus moves that scroll the Board to the focused card: the arrow keys and Next and Previous
+  /// Session. A click moves the focus without a scroll, which would put another card under a double click's
+  /// second click.
+  @Published var boardJumps = 0
   /// Counts ⌘L presses and session steps. The list that `listFocusTarget` names takes keyboard focus on each one.
   @Published var listFocusRequests = 0
   /// The session whose Claude terminal takes keyboard focus when it shows. The terminal clears it.
@@ -341,10 +350,11 @@ final class BoardModel: ObservableObject {
   private func clearHiddenSelectionAndUpdateBadge() {
     let listed = shownIDs
     navigate(.replace) {
-      // Clearing `selection` ends the multi-selection, so the listed rest is read first.
+      // Clearing `selection` ends the multi-selection and can show the Board, so both are read first.
       let multi = multiSelection.intersection(listed)
+      let onBoard = visibleView == .board
       if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil }
-      keepMultiSelection(multi)
+      keepMultiSelection(multi, onBoard: onBoard)
     }
     hoverCard?.sessionsChanged(shown: listed)
     if NSApp != nil { NSApp.dockTile.badgeLabel = needsUser.isEmpty ? nil : "\(needsUser.count)" }

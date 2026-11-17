@@ -20,7 +20,12 @@ import SwiftUI
 /// session's row to the sidebar table's selection, as a ⌘-click does. `detail` reports
 /// "N sessions selected" while the detail pane shows the multi-selection, else the place that the window shows.
 /// `click-delete-selected` clicks Delete N Sessions… in the detail pane the same way. `sheet` reports the removal
-/// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`.
+/// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`. `board-click <session>
+/// [count] [cmd|shift]` clicks the session's Board card `count` times, as a double click does for 2, with ⌘ or ⇧
+/// held. `board-click-empty <session>` clicks the empty space just below the card. `board-drag <session>
+/// <session> [cmd]` drags from the empty space just above the first card to the middle of the second. The
+/// three report `posted on` the hit view's type and send their events over the next half second. `board-selection` reports the
+/// selected ids, sorted and joined by commas, or `none`.
 @MainActor
 enum ShellSelfTest {
   static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
@@ -106,7 +111,8 @@ enum ShellSelfTest {
     case "extend-row":
       return extendSelection(to: rest)
     case "detail":
-      return model.showsMultiSelection ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
+      return model.showsMultiSelectionPane
+        ? DoneRemovalText.selected(model.multiSelected.count) : "\(model.location.place)"
     case "click-delete-selected":
       return click(anchor: "delete-selected", throughWindow: false)
     case "sheet":
@@ -118,9 +124,91 @@ enum ShellSelfTest {
     case "snapshot":
       Snapshot.write(to: rest)
       return "wrote"
+    case "board-click":
+      let args = rest.split(separator: " ").map(String.init)
+      guard let id = args.first, let card = boardCard(id) else { return "no card" }
+      let flags: NSEvent.ModifierFlags = args.contains("cmd") ? .command : args.contains("shift") ? .shift : []
+      let point = NSPoint(x: card.minX + clickInset, y: card.maxY - clickInset)
+      let count = args.dropFirst().compactMap { Int($0) }.first ?? 1
+      return press(at: point, count: count, flags: flags)
+    case "board-click-empty":
+      guard let card = boardCard(rest) else { return "no card" }
+      return press(at: NSPoint(x: card.midX, y: card.minY - 4))
+    case "board-drag":
+      let args = rest.split(separator: " ").map(String.init)
+      guard args.count >= 2, let from = boardCard(args[0]), let to = boardCard(args[1]) else { return "no card" }
+      let start = NSPoint(x: from.minX + clickInset, y: from.maxY + 4)
+      return drag(from: start, to: NSPoint(x: to.midX, y: to.midY), flags: args.contains("cmd") ? .command : [])
+    case "board-selection":
+      let ids = model.multiSelection.sorted()
+      return ids.isEmpty ? "none" : ids.joined(separator: ",")
     default:
       return "unknown command"
     }
+  }
+
+  /// The frame of the session's Board card in window coordinates.
+  private static func boardCard(_ id: String) -> NSRect? {
+    guard let root = window?.contentView, let anchor = ClickAnchorView.find("board-card-\(id)", in: root) else {
+      return nil
+    }
+    root.layoutSubtreeIfNeeded()
+    return anchor.convert(anchor.bounds, to: nil)
+  }
+
+  private static func mouse(_ type: NSEvent.EventType, at point: NSPoint, flags: NSEvent.ModifierFlags) -> NSEvent? {
+    guard let window else { return nil }
+    return NSEvent.mouseEvent(
+      with: type, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+  }
+
+  /// The view that the window hits at `point`.
+  private static func hitView(at point: NSPoint) -> NSView? {
+    guard let root = window?.contentView else { return nil }
+    return (root.superview ?? root).hitTest(point)
+  }
+
+  /// Makes the views of `view`'s class take a first click, for the rest of the process. A hidden launch never
+  /// makes its window key, and a window that is not key drops a first click on a view that does not take one.
+  /// SwiftUI takes a first click on a Button but not on a gesture, such as the one on empty Board space.
+  private static func acceptFirstMouse(_ view: NSView) {
+    let block: @convention(block) (NSView, NSEvent?) -> Bool = { _, _ in true }
+    class_replaceMethod(
+      type(of: view), #selector(NSView.acceptsFirstMouse(for:)), imp_implementationWithBlock(block), "c@:@")
+  }
+
+  /// Clicks `count` times at `point` through the window. The clicks are 0.1 s apart, so each one's mouse-up is
+  /// handled before the next mouse-down.
+  private static func press(at point: NSPoint, count: Int = 1, flags: NSEvent.ModifierFlags = []) -> String {
+    guard let window, let view = hitView(at: point) else { return "nothing at \(Int(point.x)),\(Int(point.y))" }
+    acceptFirstMouse(view)
+    Task { @MainActor in
+      for n in 1...max(count, 1) {
+        TerminalSelfTest.click(at: point, in: window, count: n, flags: flags)
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+    }
+    return "posted on \(type(of: view))"
+  }
+
+  /// Presses at `start`, drags to `end` in ten steps, and lets go, through the window.
+  private static func drag(from start: NSPoint, to end: NSPoint, flags: NSEvent.ModifierFlags) -> String {
+    guard let view = hitView(at: start) else { return "nothing at \(Int(start.x)),\(Int(start.y))" }
+    acceptFirstMouse(view)
+    Task { @MainActor in
+      guard let down = mouse(.leftMouseDown, at: start, flags: flags) else { return }
+      window?.sendEvent(down)
+      for step in 1...10 {
+        try? await Task.sleep(for: .milliseconds(30))
+        let t = CGFloat(step) / 10
+        let point = NSPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+        if let moved = mouse(.leftMouseDragged, at: point, flags: flags) { window?.sendEvent(moved) }
+      }
+      try? await Task.sleep(for: .milliseconds(30))
+      if let up = mouse(.leftMouseUp, at: end, flags: flags) { window?.sendEvent(up) }
+    }
+    return "posted"
   }
 
   /// How far into its leading edge `click(anchor:)` clicks a view: past a row's padding, onto a button's icon.

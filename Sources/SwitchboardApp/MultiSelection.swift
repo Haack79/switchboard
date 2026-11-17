@@ -2,15 +2,16 @@ import SwiftUI
 import SwitchboardCore
 
 extension BoardModel {
-  /// The sidebar's `List(selection:)`. It shows `multiSelection` while that holds two or more ids, and the set
-  /// of `selection` otherwise. A set with two or more ids replaces `multiSelection` and leaves `selection`
-  /// alone, so it records no history. A set with one id or none ends the multi-selection and sets `selection`.
+  /// The sidebar's `List(selection:)`. It shows `multiSelection` while that holds any id, which a Board
+  /// selection of one card can, and the set of `selection` otherwise. A set with two or more ids replaces
+  /// `multiSelection` and leaves `selection` alone, so it records no history. A set with one id or none ends
+  /// the multi-selection and sets `selection`.
   var sidebarSelection: Binding<Set<String>> {
     Binding(
-      get: { self.showsMultiSelection ? self.multiSelection : Set(self.selection.map { [$0] } ?? []) },
+      get: { self.multiSelection.isEmpty ? Set(self.selection.map { [$0] } ?? []) : self.multiSelection },
       set: { ids in
         if ids.count > 1 {
-          if self.multiSelection != ids { self.multiSelection = ids }
+          self.setMultiSelection(ids)
           return
         }
         if !self.multiSelection.isEmpty { self.multiSelection = [] }
@@ -19,6 +20,9 @@ extension BoardModel {
   }
 
   var showsMultiSelection: Bool { multiSelection.count > 1 }
+
+  /// Whether the detail pane shows `MultiSelectionView`. The Board shows its own selection in place.
+  var showsMultiSelectionPane: Bool { showsMultiSelection && visibleView != .board }
 
   /// The multi-selected sessions in the order the sidebar lists them, collapsed sections included.
   var multiSelected: [SessionSummary] { sidebarRows.filter { multiSelection.contains($0.id) } }
@@ -34,18 +38,25 @@ extension BoardModel {
     return rows
   }
 
-  /// Sets `multiSelection` to `ids`, the ids that are still listed after a refresh or a filter change. One id
-  /// left becomes `selection`, as the sidebar's set with one id makes it. With two or more left and no
-  /// `selection`, the first of them in the sidebar becomes `selection` first, because setting `selection`
-  /// empties `multiSelection`. History and the Session menu then still have a session.
-  func keepMultiSelection(_ ids: Set<String>) {
-    if ids.count == 1 {
+  /// Sets `multiSelection` to `ids`, the ids that are still listed after a refresh or a filter change. With
+  /// `onBoard`, the Board showed before the refresh, so `ids` stay its selection and `selection` stays nil,
+  /// which keeps the Board showing. Otherwise one id left becomes `selection`, as the sidebar's set with one id
+  /// makes it. With two or more left and no `selection`, the first of them in the sidebar becomes `selection`
+  /// first, because setting `selection` empties `multiSelection`. History and the Session menu then still have
+  /// a session.
+  func keepMultiSelection(_ ids: Set<String>, onBoard: Bool) {
+    if !onBoard, ids.count == 1 {
       selection = ids.first
       return
     }
-    if ids.count > 1, selection == nil {
+    if !onBoard, ids.count > 1, selection == nil {
       selection = sidebarRows.first { ids.contains($0.id) }?.id ?? ids.min()
     }
+    setMultiSelection(ids)
+  }
+
+  /// Sets `multiSelection` only when `ids` differ, so an equal set publishes no change.
+  func setMultiSelection(_ ids: Set<String>) {
     if multiSelection != ids { multiSelection = ids }
   }
 }
