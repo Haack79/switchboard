@@ -1399,12 +1399,15 @@ public final class Service {
     if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
       return machine.exists(path) ? path : nil
     }
-    let account: String
-    switch claudeAccount(of: session.id) {
-    case .local(let local): account = local.folder
-    case .host: account = try hostClaudeFolder(session)
-    }
-    return Transcript.find(session.claudeSessionId, account: account, cwd: session.cwd, on: machine)
+    return Transcript.find(
+      session.claudeSessionId, account: try claudeFolder(of: session), cwd: session.cwd, on: machine)
+  }
+
+  /// The folder where the session's claude keeps its files: its account's folder on this Mac, or `~/.claude` on
+  /// its host. For a host session it does not read `entries`, so a host's queue may call it. It throws
+  /// `HostUnread` while the host's site is not ready.
+  func claudeFolder(of session: Session) throws -> String {
+    session.host == nil ? claudeAccount(of: session.id).key : try hostClaudeFolder(session)
   }
 
   /// Whether claude sits at its prompt, ready for a paste: this launch's

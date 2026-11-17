@@ -64,8 +64,8 @@ final class UsageReader: @unchecked Sendable {
   }
 
   private func readAll() -> [AccountUsage] {
-    let accounts = service.queue.sync { service.accountList() }
-    return keep(concurrentMap(accounts) { reading(ClaudeAccount(folder: $0.folder)) })
+    let accounts = service.queue.sync { service.listedAccounts().compactMap(\.claude) }
+    return keep(concurrentMap(accounts) { reading($0) })
   }
 
   private func keep(_ fresh: [AccountUsage]) -> [AccountUsage] {

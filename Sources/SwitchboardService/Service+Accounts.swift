@@ -31,7 +31,8 @@ extension Service {
     .claude(try ClaudeAccount.resolve(ref, among: accounts.compactMap(\.claude)))
   }
 
-  /// The account that `ref` names, for a path that only Claude accounts support.
+  /// The account that `ref` names, for a request that only a Claude account can serve, such as `account use` or
+  /// `account move`.
   func resolveClaudeAccount(_ ref: String) throws -> ClaudeAccount {
     switch try resolveAccount(ref) {
     case .claude(let account): account
@@ -72,14 +73,20 @@ extension Service {
     (session.chat ?? session.group).flatMap { groups[$0] }.flatMap { $0.account == nil ? nil : $0 }
   }
 
-  func accountList() -> [AccountInfo] {
+  /// The accounts that `sb account` lists: the known accounts, with the active one first when no list names it.
+  func listedAccounts() -> [Account] {
     let active = Account.claude(activeAccount)
     var all = accounts
     if !all.contains(active) { all.insert(active, at: 0) }
+    return all
+  }
+
+  func accountList() -> [AccountInfo] {
+    let active = Account.claude(activeAccount)
     let counts = Dictionary(grouping: entries.keys.filter { entries[$0]!.session.runsClaude }) {
       claudeAccount(of: $0).key
     }
-    return all.map {
+    return listedAccounts().map {
       AccountInfo(name: $0.name, folder: $0.folder, active: $0 == active, sessions: counts[$0.folder]?.count ?? 0)
     }
   }
