@@ -23,11 +23,12 @@ public struct SessionFilter: Equatable, Sendable {
 
   /// Whether the filter shows `s` and the app can tell that it does. A
   /// session whose org sbd hasn't read shows under an org filter, but its org
-  /// may be one that the filter hides. Before sbd lists the groups, a
-  /// session's group id may name a deleted group. A destructive action
-  /// therefore skips both.
+  /// may be one that the filter hides. A session whose group sbd's last
+  /// `group-ls` answer doesn't list may be in a group that the filter hides.
+  /// A destructive action therefore skips both.
   public func surelyShows(_ s: SessionSummary) -> Bool {
-    shows(s) && (org.isAll || OrgFilter.key(of: s) != nil) && (group.isAll || knownGroups != nil)
+    shows(s) && (org.isAll || OrgFilter.key(of: s) != nil)
+      && (group.isAll || GroupFilter.isListed(s, known: knownGroups))
   }
 
   /// Which filters are on, or nil when neither is.

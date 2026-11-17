@@ -444,13 +444,19 @@ final class BoardModel: ObservableObject {
   /// the answer moves it out of the selected groups, as a merge or a delete does.
   func applyGroups(_ listed: [GroupSummary]) {
     if groups != listed { groups = listed }
+    unlistedNewGroups.subtract(listed.map(\.id))
+    var next = filter(after: listed)
+    if let id = selection { next = widened(next, toShow: id) }
+    if next != filter { filter = next }
+  }
+
+  /// The filter once it takes sbd's `group-ls` answer `listed`.
+  func filter(after listed: [GroupSummary]) -> SessionFilter {
     let ids = Set(listed.map(\.id))
-    unlistedNewGroups.subtract(ids)
     var next = filter
     next.knownGroups = ids
     next.group = filter.group.pruned(known: ids.union(unlistedNewGroups))
-    if let id = selection { next = widened(next, toShow: id) }
-    if next != filter { filter = next }
+    return next
   }
 
   /// Adds the group that sbd's answer names to a group filter that is on, so the group that the user just made
@@ -667,7 +673,7 @@ final class BoardModel: ObservableObject {
       updateSessionNames(list + allFollowups, removed: removed)
       // Only shown sessions notify. The last seen sessions cover every session.
       // Widening the filter later therefore sends nothing for a change that happened while the session was hidden.
-      if loaded { sessionsToNotify(list).forEach(notify) }
+      if loaded { sessionsToNotify(list, filter: groups.map(filter(after:)) ?? filter).forEach(notify) }
       // A hidden session keeps its drafts.
       let open = Set(list.flatMap { $0.cards.map(\.id) })
       drafts = drafts.filter { open.contains($0.key) }
@@ -710,8 +716,9 @@ final class BoardModel: ObservableObject {
   /// The shown sessions that just entered the Inbox. A chat can need the user
   /// before its item reaches the Inbox. This therefore compares each session
   /// with its place in the last refresh's Inbox, not with its last state.
-  func sessionsToNotify(_ list: [SessionSummary]) -> [SessionSummary] {
-    let filter = filter
+  /// `filter` is the filter as it will be after this refresh, and defaults to the current one.
+  func sessionsToNotify(_ list: [SessionSummary], filter: SessionFilter? = nil) -> [SessionSummary] {
+    let filter = filter ?? self.filter
     return list.filter { s in
       guard Triage.needsYou(s), !s.isBeingRemoved, let last = lastSeen[s.id], !Triage.needsYou(last),
         filter.shows(s)

@@ -760,6 +760,15 @@ let everyGroupShape = [
     #expect(model.sessionsToNotify(next).isEmpty)
   }
 
+  /// The refresh that lists a session in a new group also lists the group. The notification reads that list.
+  @Test func aSessionThatMovesIntoAGroupThatThePollListsDoesNotNotifyUnderUngrouped() {
+    let model = model(GroupFilter(keys: [Self.ungrouped]), [groupedSession("u1", group: nil)], followups: nil)
+    let next = [groupedSession("u1", group: "g9", state: .needsYou)]
+    let listed = Self.groups + [Self.group("g9", "New", ["u1"])]
+
+    #expect(model.sessionsToNotify(next, filter: model.filter(after: listed)).isEmpty)
+  }
+
   @Test func aSessionInAShownGroupThatStartsNeedingYouNotifies() {
     let before = [groupedSession("i1", group: "g1"), groupedSession("w1", group: "g2")]
     let model = model(GroupFilter(keys: ["g1"]), before, followups: nil)

@@ -22,14 +22,25 @@ public struct GroupFilter: KeyFilter {
   /// answers. Once it answers, an id that it no longer lists counts as
   /// ungrouped, as the Board's Ungrouped lane counts it.
   public static func key(of s: SessionSummary, known: Set<String>?) -> String? {
-    let group: String?
-    switch s.kind {
-    case .manager, .operator: return nil
-    case .chat: group = s.chat
-    case .work: group = s.group
-    }
-    guard let group, known?.contains(group) ?? true else { return ungroupedKey }
+    guard s.kind != .manager && s.kind != .operator else { return nil }
+    guard let group = group(of: s), known?.contains(group) ?? true else { return ungroupedKey }
     return group
+  }
+
+  /// Whether sbd's last `group-ls` answer lists the group that `s` names, or `s` names none. A group that the
+  /// answer lacks may be one that sbd created after the answer, so the filter can't tell whether it selects it.
+  public static func isListed(_ s: SessionSummary, known: Set<String>?) -> Bool {
+    guard let known else { return false }
+    return group(of: s).map(known.contains) ?? true
+  }
+
+  /// The group id that a work session or a group chat names.
+  private static func group(of s: SessionSummary) -> String? {
+    switch s.kind {
+    case .manager, .operator: nil
+    case .chat: s.chat
+    case .work: s.group
+    }
   }
 
   public func shows(_ s: SessionSummary, known: Set<String>?) -> Bool {

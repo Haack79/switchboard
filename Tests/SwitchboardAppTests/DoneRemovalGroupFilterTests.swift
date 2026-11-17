@@ -68,8 +68,9 @@ import Testing
     GuardCase(org: [], group: [], removable: ids),
     GuardCase(org: [], group: ["g1"], removable: ["d1", "dh"]),
     GuardCase(org: [], group: ["g2"], removable: ["d2", "dc", "df"]),
-    GuardCase(org: [], group: [GroupFilter.ungroupedKey], removable: ["du", "ds"]),
-    GuardCase(org: [], group: ["g1", GroupFilter.ungroupedKey], removable: ["d1", "du", "dh", "ds"]),
+    // "ds" names a group that `group-ls` doesn't list, so the guard can't tell whether Ungrouped selects it.
+    GuardCase(org: [], group: [GroupFilter.ungroupedKey], removable: ["du"]),
+    GuardCase(org: [], group: ["g1", GroupFilter.ungroupedKey], removable: ["d1", "du", "dh"]),
     GuardCase(org: ["posthog"], group: [], removable: ["d1", "d2", "du", "ds", "df"]),
     GuardCase(org: ["posthog"], group: ["g1"], removable: ["d1"]),
     // The chat has no org, so the org filter can't show that it is in the selection.
@@ -226,6 +227,6 @@ import Testing
 
     let targets = await confirm(model, plan(["d1", "du", "dh", "ds"]), sent, expectSend: true)
 
-    #expect(targets == ["du", "ds"])
+    #expect(targets == ["du"])
   }
 }

@@ -150,6 +150,19 @@ private let everySession = [phG1, hkG1, phG2, phNone, loG2, unG1, chatG1, chatG2
 
   // MARK: surelyShows
 
+  /// A refresh can read a session in a group that the last `group-ls` answer lacks. The filter shows it as
+  /// Ungrouped, but the group may be one that the filter leaves out.
+  @Test func aSessionInAGroupThatSbdHasNotListedIsNotSurelyShown() {
+    let f = filter([], [ungrouped], known: ["g1"])
+    let newGroup = session("ph-g9", repository: "PostHog/a", group: "g9")
+    let staleChat = session("c9", kind: .chat, chat: "g9")
+
+    #expect(f.shows(newGroup))
+    #expect(!f.surelyShows(newGroup))
+    #expect(!f.surelyShows(staleChat))
+    #expect(f.surelyShows(phNone))
+  }
+
   @Test func aGroupFilterBeforeGroupsLoadSurelyShowsNothing() {
     let f = filter([], ["g1"], known: nil)
 
