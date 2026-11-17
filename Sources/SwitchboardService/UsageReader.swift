@@ -38,7 +38,7 @@ final class UsageReader: @unchecked Sendable {
   /// The last reading of each account, in the order of `sb account`. An
   /// account that was never read has no limits.
   func latest() -> [AccountUsage] {
-    let accounts = service.queue.sync { service.accountList() }
+    let accounts = service.queue.sync { service.listedAccounts().compactMap(\.claude) }
     return lock.withLock {
       accounts.map { readings[$0.folder] ?? AccountUsage(name: $0.name, folder: $0.folder) }
     }

@@ -73,7 +73,8 @@ extension Service {
     (session.chat ?? session.group).flatMap { groups[$0] }.flatMap { $0.account == nil ? nil : $0 }
   }
 
-  /// The accounts that `sb account` lists: the known accounts, with the active one first when no list names it.
+  /// The accounts that `sb account` lists: `accounts`, with the active account inserted first when `accounts`
+  /// doesn't include it.
   func listedAccounts() -> [Account] {
     let active = Account.claude(activeAccount)
     var all = accounts
