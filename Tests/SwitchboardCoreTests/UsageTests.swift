@@ -170,12 +170,12 @@ let legacyWithoutASession = Data(
 
   @Test(arguments: ["~/.claude", "~/.claude/", ClaudeAccount.defaultFolder, "\(NSHomeDirectory())/./.claude"])
   func theDefaultAccountUsesTheServiceWithoutASuffix(_ folder: String) {
-    #expect(ClaudeAccount.keychainService(folder) == "Claude Code-credentials")
+    #expect(ClaudeAccount(folder: folder).keychainService == "Claude Code-credentials")
   }
 
   /// sha256("/Users/someone/.claude-work") starts with 18cc900a.
   @Test func anotherAccountAddsTheFirstEightHexDigitsOfTheFoldersSHA256() {
-    #expect(ClaudeAccount.keychainService("/Users/someone/.claude-work") == "Claude Code-credentials-18cc900a")
+    #expect(ClaudeAccount(folder: "/Users/someone/.claude-work").keychainService == "Claude Code-credentials-18cc900a")
   }
 
   /// Switchboard sets CLAUDE_CONFIG_DIR to the normalized folder, so claude
@@ -184,19 +184,19 @@ let legacyWithoutASession = Data(
     "/Users/someone/.claude-work/", "/Users/someone/./.claude-work", "/Users/someone/x/../.claude-work",
   ])
   func theHashUsesTheNormalizedFolder(_ folder: String) {
-    #expect(ClaudeAccount.keychainService(folder) == "Claude Code-credentials-18cc900a")
+    #expect(ClaudeAccount(folder: folder).keychainService == "Claude Code-credentials-18cc900a")
   }
 
   @Test func aTildeFolderHashesTheExpandedPath() {
     #expect(
-      ClaudeAccount.keychainService("~/.claude-work") == service(hashing: "\(NSHomeDirectory())/.claude-work"))
+      ClaudeAccount(folder: "~/.claude-work").keychainService == service(hashing: "\(NSHomeDirectory())/.claude-work"))
   }
 
   /// Only Claude's default account runs with CLAUDE_CONFIG_DIR unset. A
   /// folder named .claude in another place is another account.
   @Test(arguments: ["/tmp/.claude", "\(NSHomeDirectory())/.claude-default", "\(NSHomeDirectory())/other/.claude"])
   func aFolderThatOnlyLooksLikeTheDefaultGetsASuffix(_ folder: String) {
-    #expect(ClaudeAccount.keychainService(folder) == service(hashing: ClaudeAccount.normalize(folder)))
+    #expect(ClaudeAccount(folder: folder).keychainService == service(hashing: ClaudeAccount.normalize(folder)))
   }
 }
 

@@ -304,7 +304,7 @@ extension QuickAskTests {
       let line = try sessionLine(input(sessions: [s]), s)
 
       #expect(line.contains("Feature flags"))
-      #expect(line.contains(ClaudeAccount.name("/Users/u/.claude-prompts")))
+      #expect(line.contains(ClaudeAccount(folder: "/Users/u/.claude-prompts").name))
     }
 
     @Test func aSessionLineShowsItsReason() throws {

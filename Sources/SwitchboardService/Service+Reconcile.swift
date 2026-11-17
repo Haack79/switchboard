@@ -226,7 +226,7 @@ extension Service {
     let idle = Service.idleTurns(rows)
     queue.sync {
       for check in checks where idle.contains(check.claudeSessionId) {
-        endTurn(check, account: claudeAccount(of: check.id))
+        endTurn(check, account: claudeAccount(of: check.id).key)
       }
     }
   }

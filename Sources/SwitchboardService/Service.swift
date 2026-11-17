@@ -228,7 +228,7 @@ public final class Service {
   /// Why the Trunk poller couldn't read trunk, such as a missing login.
   var trunkProblem: String?
   /// The account that `sb account use` chose, or nil before the first use.
-  var chosenAccount: String?
+  var chosenAccount: ClaudeAccount?
   var parentNotices = ParentNotices()
   /// Whether `sb autocontinue on` is in force.
   var autoContinueOn = false
@@ -1216,7 +1216,7 @@ public final class Service {
     } else {
       // After `configure`, which sets a chat's group.
       session.claudeConfigDir =
-        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount
+        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount.folder
     }
     entries[id] = Entry(session: session)
     try store.save(session)
@@ -1260,7 +1260,7 @@ public final class Service {
     // uses sbd's account unless config.env sets another.
     if let dir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] { env["CLAUDE_CONFIG_DIR"] = dir }
     for (key, value) in config.env { env[key] = value.expandingTilde }
-    if let account = entries[id]?.session.claudeConfigDir { ClaudeAccount.apply(account, to: &env) }
+    if let account = entries[id]?.session.claudeConfigDir { ClaudeAccount(folder: account).apply(to: &env) }
     return env
   }
 
@@ -1399,7 +1399,11 @@ public final class Service {
     if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
       return machine.exists(path) ? path : nil
     }
-    let account = session.host == nil ? claudeAccount(of: session.id) : try hostClaudeFolder(session)
+    let account: String
+    switch claudeAccount(of: session.id) {
+    case .local(let local): account = local.folder
+    case .host: account = try hostClaudeFolder(session)
+    }
     return Transcript.find(session.claudeSessionId, account: account, cwd: session.cwd, on: machine)
   }
 

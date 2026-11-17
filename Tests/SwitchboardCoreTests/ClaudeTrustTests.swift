@@ -297,11 +297,11 @@ private let otherKeys = """
   /// The account overload writes the `.claude.json` in the account's folder.
   @Test func theAccountOverloadWritesTheAccountsConfigFile() throws {
     let dir = try TrustFolder()
-    try #require(!ClaudeAccount.isDefault(dir.path))
-    try #require(ClaudeAccount.configFile(dir.path).hasPrefix(ClaudeAccount.normalize(dir.path)))
+    try #require(!ClaudeAccount(folder: dir.path).isDefault)
+    try #require(ClaudeAccount(folder: dir.path).configFile.hasPrefix(ClaudeAccount.normalize(dir.path)))
     try dir.write("{}")
 
-    let outcome = ClaudeTrust.trust(dir.work, account: dir.path)
+    let outcome = ClaudeTrust.trust(dir.work, account: ClaudeAccount(folder: dir.path))
 
     #expect(outcome == .trusted(key: dir.key))
     #expect(isJSONTrue((try dir.projects()[dir.key] as? [String: Any])?["hasTrustDialogAccepted"]))

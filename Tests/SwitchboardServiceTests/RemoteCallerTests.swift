@@ -924,7 +924,7 @@ func withReadyService(
     try withReadyService(
       host: ["account": .string(account)], config: ["claudeConfigDirs": [.string(account)]]
     ) { _, service, facts in
-      let resolved = try service.queue.sync { try service.resolveAccount(account) }
+      let resolved = try service.queue.sync { try service.resolveAccount(account).folder }
       service.quota = SpentFor(account: resolved)
 
       #expect(blocker(service, facts) == "no quota left for \(resolved)")

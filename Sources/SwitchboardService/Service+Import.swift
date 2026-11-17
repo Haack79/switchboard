@@ -10,7 +10,9 @@ extension Service {
   static let rememberMs: Int64 = 24 * 3600 * 1000
 
   /// The accounts whose sessions sbd lists.
-  var accounts: [String] { (config.claudeConfigDirs ?? ClaudeAccount.discover()).map(ClaudeAccount.normalize) }
+  var accounts: [Account] {
+    (config.claudeConfigDirs?.map(ClaudeAccount.init(folder:)) ?? ClaudeAccount.discover()).map(Account.claude)
+  }
 
   /// The sessions that Switchboard doesn't have and that run in a linked
   /// worktree, or with `all`, every one. With `repo`, only the sessions of the
@@ -96,13 +98,13 @@ extension Service {
   /// queue.
   func importCandidates() throws -> [ClaudeSession] {
     let now = nowMs()
-    let accounts = self.accounts
+    let accounts = self.accounts.compactMap(\.claude)
     let listed = try listAgents(accounts, now: now)
     return queue.sync {
       let owned = Set(macConversations.map(\.claudeSessionId))
       let ids = Set(listed.map(\.id))
       remember(listed, owned: owned, ids: ids, now: now)
-      return listed + exitedSessions(owned: owned, ids: ids, accounts: Set(accounts))
+      return listed + exitedSessions(owned: owned, ids: ids, accounts: Set(accounts.map(\.folder)))
     }
   }
 
@@ -112,16 +114,16 @@ extension Service {
   /// pids of both rows' claudes. A row whose claude can't be stopped wins over
   /// one whose claude can. A session that rows list with different pids has
   /// several claudes, so import refuses it.
-  private func listAgents(_ accounts: [String], now: Int64) throws -> [ClaudeSession] {
+  private func listAgents(_ accounts: [ClaudeAccount], now: Int64) throws -> [ClaudeSession] {
     guard let claude = findExecutable(config.claude) else {
       throw APIError("can't find \(config.claude). Set \"claude\" in \(home.config)")
     }
     let lists = concurrentMap(accounts) { account in
       Result { () throws -> [ClaudeSession] in
         // claude creates a missing config folder and lists nothing.
-        if !ClaudeAccount.holdsAccount(account) {
+        if !account.holdsAccount {
           throw APIError(
-            "\(account) holds no Claude account (no .claude.json). Check claudeConfigDirs in \(home.config)")
+            "\(account.folder) holds no Claude account (no .claude.json). Check claudeConfigDirs in \(home.config)")
         }
         return try agentRows(claude, account: account, seen: now, on: mac.machine)
       }
@@ -145,15 +147,15 @@ extension Service {
   /// a claude that hangs fails the call.
   /// claude and the account's folder are on `machine`.
   func agentRows(
-    _ claude: String, account: String, seen: Int64, timeout: Double? = nil, on machine: any Machine
+    _ claude: String, account: ClaudeAccount, seen: Int64, timeout: Double? = nil, on machine: any Machine
   ) throws -> [ClaudeSession] {
     var env = ProcessInfo.processInfo.environment
-    ClaudeAccount.apply(account, to: &env)
+    account.apply(to: &env)
     let r = try machine.run(claude, ["agents", "--json"], env: env, input: nil, timeout: timeout)
     guard r.status == 0 else {
-      throw APIError("claude agents failed for \(account): \(oneLine(r.stderr, max: 200))")
+      throw APIError("claude agents failed for \(account.folder): \(oneLine(r.stderr, max: 200))")
     }
-    return try ClaudeSession.list(fromAgents: r.stdout, account: account, seen: seen)
+    return try ClaudeSession.list(fromAgents: r.stdout, account: account.folder, seen: seen)
   }
 
   /// An interactive login shell gives claude the user's PATH and shell functions. The Claude pane and
@@ -182,7 +184,7 @@ extension Service {
       throw APIError("claude agents failed on \(host): \(oneLine(r.stderr, max: 200))")
     }
     return try ClaudeSession.list(
-      fromAgents: String(r.stdout[mark.upperBound...]), account: Service.hostAccount(host), seen: seen)
+      fromAgents: String(r.stdout[mark.upperBound...]), account: SessionAccount.host(host).key, seen: seen)
   }
 
   /// Remembers the listed sessions that Switchboard doesn't own, and forgets

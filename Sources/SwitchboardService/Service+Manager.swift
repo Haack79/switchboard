@@ -245,8 +245,9 @@ extension Service {
   /// both hold. The name `switchboard` is never available.
   func availableMCPServers(_ id: String) -> [String: JSON] {
     var out: [String: JSON] = [:]
-    let file = ClaudeAccount.configFile(claudeAccount(of: id))
-    if let data = FileManager.default.contents(atPath: file), let text = String(data: data, encoding: .utf8),
+    if case .local(let account) = claudeAccount(of: id),
+      let data = FileManager.default.contents(atPath: account.configFile),
+      let text = String(data: data, encoding: .utf8),
       let user = JSON.parse(text)?["mcpServers"]?.object
     {
       out = user

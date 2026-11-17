@@ -417,19 +417,19 @@ private let otherAccountForms = ["~/.claude-personal", "~/.claudex", "~/.claude/
 
   @Test(arguments: defaultAccountForms)
   func everyFormOfTheDefaultFolderIsTheDefaultAccount(_ folder: String) {
-    #expect(ClaudeAccount.isDefault(folder))
+    #expect(ClaudeAccount(folder: folder).isDefault)
   }
 
   @Test(arguments: otherAccountForms)
   func anotherFolderIsNotTheDefaultAccount(_ folder: String) {
-    #expect(!ClaudeAccount.isDefault(folder))
+    #expect(!ClaudeAccount(folder: folder).isDefault)
   }
 
   @Test(arguments: defaultAccountForms)
   func applyRemovesClaudeConfigDirForTheDefaultAccountAndKeepsOtherKeys(_ folder: String) {
     var env = ["CLAUDE_CONFIG_DIR": "\(userHome)/.claude-personal", "PATH": "/usr/bin", "SB_HOME": "/tmp/sb"]
 
-    ClaudeAccount.apply(folder, to: &env)
+    ClaudeAccount(folder: folder).apply(to: &env)
 
     #expect(env == ["PATH": "/usr/bin", "SB_HOME": "/tmp/sb"])
   }
@@ -438,7 +438,7 @@ private let otherAccountForms = ["~/.claude-personal", "~/.claudex", "~/.claude/
   func applySetsTheExpandedFolderForAnotherAccount(_ folder: String) {
     var env = ["CLAUDE_CONFIG_DIR": "/elsewhere", "PATH": "/usr/bin"]
 
-    ClaudeAccount.apply(folder, to: &env)
+    ClaudeAccount(folder: folder).apply(to: &env)
 
     #expect(env == ["CLAUDE_CONFIG_DIR": "\(userHome)/.claude-personal", "PATH": "/usr/bin"])
   }
@@ -446,48 +446,49 @@ private let otherAccountForms = ["~/.claude-personal", "~/.claudex", "~/.claude/
   @Test(arguments: defaultAccountForms + otherAccountForms)
   func applyAndCommandAgreeWithIsDefault(_ folder: String) {
     var env = ["CLAUDE_CONFIG_DIR": "/elsewhere"]
-    ClaudeAccount.apply(folder, to: &env)
-    let isDefault = ClaudeAccount.isDefault(folder)
+    ClaudeAccount(folder: folder).apply(to: &env)
+    let isDefault = ClaudeAccount(folder: folder).isDefault
 
     #expect(env["CLAUDE_CONFIG_DIR"] == (isDefault ? nil : ClaudeAccount.normalize(folder)))
-    #expect((ClaudeAccount.command("claude stop x", in: folder) == "claude stop x") == isDefault)
+    #expect((ClaudeAccount(folder: folder).command("claude stop x") == "claude stop x") == isDefault)
   }
 
   @Test func commandRunsAsGivenForTheDefaultAccount() {
-    #expect(ClaudeAccount.command("claude stop deadbeef", in: "~/.claude") == "claude stop deadbeef")
+    #expect(ClaudeAccount(folder: "~/.claude").command("claude stop deadbeef") == "claude stop deadbeef")
   }
 
   @Test func commandSetsClaudeConfigDirForAnotherAccount() {
     #expect(
-      ClaudeAccount.command("claude stop deadbeef", in: "~/.claude-personal/")
+      ClaudeAccount(folder: "~/.claude-personal/").command("claude stop deadbeef")
         == "CLAUDE_CONFIG_DIR='\(userHome)/.claude-personal' claude stop deadbeef")
   }
 
   @Test func commandQuotesAFolderThatTheShellWouldSplit() {
     #expect(
-      ClaudeAccount.command("claude stop x", in: "/Volumes/My Disk/Bob's claude")
+      ClaudeAccount(folder: "/Volumes/My Disk/Bob's claude").command("claude stop x")
         == #"CLAUDE_CONFIG_DIR='/Volumes/My Disk/Bob'\''s claude' claude stop x"#)
   }
 
   @Test func namesAreShortForTheDefaultAndTheDashedFolders() {
-    #expect(ClaudeAccount.name("~/.claude") == "default")
-    #expect(ClaudeAccount.name("~/.claude-personal") == "personal")
-    #expect(ClaudeAccount.name("/work/accounts/acme") == "acme")
+    #expect(ClaudeAccount(folder: "~/.claude").name == "default")
+    #expect(ClaudeAccount(folder: "~/.claude-personal").name == "personal")
+    #expect(ClaudeAccount(folder: "/work/accounts/acme").name == "acme")
   }
 
   @Test func resolveTakesANameOrAFolderThatHoldsAnAccountAndRefusesTheRest() throws {
     let home = try tempFolder()
     defer { try? FileManager.default.removeItem(atPath: home) }
-    let known = [".claude-personal", ".claude-work"].map { "\(home)/\($0)" }
-    for folder in known + ["\(home)/other", "\(home)/empty"] {
+    let folders = [".claude-personal", ".claude-work"].map { "\(home)/\($0)" }
+    for folder in folders + ["\(home)/other", "\(home)/empty"] {
       try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
     }
-    for folder in known + ["\(home)/other"] {
+    for folder in folders + ["\(home)/other"] {
       FileManager.default.createFile(atPath: "\(folder)/.claude.json", contents: Data("{}".utf8))
     }
+    let known = folders.map(ClaudeAccount.init(folder:))
 
     #expect(try ClaudeAccount.resolve("work", among: known) == known[1])
-    #expect(try ClaudeAccount.resolve("\(home)/other/", among: known) == "\(home)/other")
+    #expect(try ClaudeAccount.resolve("\(home)/other/", among: known).folder == "\(home)/other")
     #expect(throws: APIError.self) { try ClaudeAccount.resolve("nobody", among: known) }
     #expect(throws: APIError.self) { try ClaudeAccount.resolve("\(home)/empty", among: known) }
   }
@@ -502,7 +503,7 @@ private let otherAccountForms = ["~/.claude-personal", "~/.claudex", "~/.claude/
       FileManager.default.createFile(atPath: "\(home)/\(folder)/.claude.json", contents: Data("{}".utf8))
     }
 
-    let accounts = ClaudeAccount.discover(home: home)
+    let accounts = ClaudeAccount.discover(home: home).map(\.folder)
 
     #expect(
       accounts
@@ -513,7 +514,7 @@ private let otherAccountForms = ["~/.claude-personal", "~/.claudex", "~/.claude/
     let home = try tempFolder()
     defer { try? FileManager.default.removeItem(atPath: home) }
 
-    #expect(ClaudeAccount.discover(home: home) == [ClaudeAccount.normalize("\(home)/.claude")])
+    #expect(ClaudeAccount.discover(home: home).map(\.folder) == [ClaudeAccount.normalize("\(home)/.claude")])
   }
 }
 

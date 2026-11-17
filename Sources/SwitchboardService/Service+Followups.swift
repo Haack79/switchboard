@@ -169,7 +169,7 @@ extension Service {
         s.branch = folder.branch
         s.repo = folder.repo
         s.model = s.model ?? config.model
-        s.claudeConfigDir = accountGroupForNew(s)?.account ?? s.claudeConfigDir ?? activeAccount
+        s.claudeConfigDir = accountGroupForNew(s)?.account ?? s.claudeConfigDir ?? activeAccount.folder
         s.done = false
         s.followup?.started = nowMs()
       }

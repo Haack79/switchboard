@@ -8,7 +8,7 @@ extension Service {
   /// turn takes the session's pane environment and account. Without one, it
   /// takes `config.env`. `account` overrides either. The turn is not a
   /// session, so it gets no session id.
-  func headlessEnv(session: String?, account: String?) -> [String: String] {
+  func headlessEnv(session: String?, account: ClaudeAccount?) -> [String: String] {
     var env = ProcessInfo.processInfo.environment
     if let session {
       env.merge(paneEnv(session)) { $1 }
@@ -17,7 +17,7 @@ extension Service {
       env["SB_HOME"] = home.path
     }
     env["SB_SESSION_ID"] = nil
-    if let account { ClaudeAccount.apply(account, to: &env) }
+    account?.apply(to: &env)
     return env
   }
 

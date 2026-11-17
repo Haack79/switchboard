@@ -52,7 +52,7 @@ extension Instance {
     let sbd = try Instance.withUsage(fake)
     try sbd.signIn("A", token: "token-a")
     try #"{"oauthAccount":{"emailAddress":"a@example.com"}}"#.write(
-      toFile: ClaudeAccount.configFile(sbd.account("A")), atomically: true, encoding: .utf8)
+      toFile: ClaudeAccount(folder: sbd.account("A")).configFile, atomically: true, encoding: .utf8)
 
     let a = try sbd.usage(of: "A")
 
@@ -74,7 +74,7 @@ extension Instance {
     for (account, plan) in plans {
       try sbd.signIn(account, token: "token-\(account)")
       try #"{"oauthAccount":{"emailAddress":"\#(account)@example.com"\#(plan)}}"#.write(
-        toFile: ClaudeAccount.configFile(sbd.account(account)), atomically: true, encoding: .utf8)
+        toFile: ClaudeAccount(folder: sbd.account(account)).configFile, atomically: true, encoding: .utf8)
     }
     fake.reply(try FakeUsage.recorded("no-session"))
     fake.reply(to: "token-C", try FakeUsage.recorded("with-session"))

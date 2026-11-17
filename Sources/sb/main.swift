@@ -584,7 +584,7 @@ func printSession(_ s: SessionSummary) {
     print("  group:   \(s.groupName ?? group) (\(group))\(description)".printable)
   }
   print("  folder:  \(s.cwd)")
-  if let account = s.account { print("  account: \(ClaudeAccount.name(account))") }
+  if let account = s.account { print("  account: \(ClaudeAccount(folder: account).name)") }
   if let mode = s.permissionMode { print("  mode:    \(PermissionMode.title(mode))".printable) }
   if let b = s.branch { print("  branch:  \(b)") }
   if let pr = s.pr { print("  pr:      \(pr.line)  \(pr.url)") }

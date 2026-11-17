@@ -59,13 +59,13 @@ final class UsageReader: @unchecked Sendable {
 
   /// Reads one account now and returns the reading. The caller must not be on
   /// the service's queue.
-  func read(_ folder: String) -> AccountUsage {
-    queue.sync { keep([read(folder, name: ClaudeAccount.name(folder))])[0] }
+  func read(_ account: ClaudeAccount) -> AccountUsage {
+    queue.sync { keep([reading(account)])[0] }
   }
 
   private func readAll() -> [AccountUsage] {
     let accounts = service.queue.sync { service.accountList() }
-    return keep(concurrentMap(accounts) { read($0.folder, name: $0.name) })
+    return keep(concurrentMap(accounts) { reading(ClaudeAccount(folder: $0.folder)) })
   }
 
   private func keep(_ fresh: [AccountUsage]) -> [AccountUsage] {
@@ -83,12 +83,12 @@ final class UsageReader: @unchecked Sendable {
     }
   }
 
-  private func read(_ folder: String, name: String) -> AccountUsage {
-    let account = oauthAccount(folder)
-    var usage = AccountUsage(name: name, folder: folder, email: account?["emailAddress"]?.string)
+  private func reading(_ account: ClaudeAccount) -> AccountUsage {
+    let oauth = oauthAccount(account)
+    var usage = AccountUsage(name: account.name, folder: account.folder, email: oauth?["emailAddress"]?.string)
     do {
-      let token = try accessToken(folder)
-      usage.limits = try Usage.parse(try fetch(token), plan: account?["planDisplayName"]?.string)
+      let token = try accessToken(account)
+      usage.limits = try Usage.parse(try fetch(token), plan: oauth?["planDisplayName"]?.string)
       usage.checked = nowMs()
     } catch {
       usage.fail(with: error)
@@ -98,12 +98,12 @@ final class UsageReader: @unchecked Sendable {
 
   /// The account's access token. A token that expires within a minute is
   /// refreshed first, through claude.
-  private func accessToken(_ folder: String) throws -> String {
-    let login = ClaudeAccount.command(service.config.claude, in: folder)
-    guard var creds = try credentials(folder) else { throw SignedOut(login: login) }
+  private func accessToken(_ account: ClaudeAccount) throws -> String {
+    let login = account.command(service.config.claude)
+    guard var creds = try credentials(account) else { throw SignedOut(login: login) }
     if expiresSoon(creds.expiresAt) {
-      refresh(folder)
-      guard let fresh = try credentials(folder), !expiresSoon(fresh.expiresAt) else {
+      refresh(account)
+      guard let fresh = try credentials(account), !expiresSoon(fresh.expiresAt) else {
         throw APIError("the access token expired and claude could not refresh it; run `\(login)` and /login")
       }
       creds = fresh
@@ -123,12 +123,12 @@ final class UsageReader: @unchecked Sendable {
   /// or nil when neither holds a login. It throws when the keychain read
   /// fails for a reason other than a missing item and the file holds no
   /// login, because a locked keychain does not mean the account signed out.
-  private func credentials(_ folder: String) throws -> (token: String, expiresAt: Int64?)? {
+  private func credentials(_ account: ClaudeAccount) throws -> (token: String, expiresAt: Int64?)? {
     var keychainFailure: String?
     if settings.keychain {
       do {
         let r = try runCommand(
-          "/usr/bin/security", ["find-generic-password", "-s", ClaudeAccount.keychainService(folder), "-w"],
+          "/usr/bin/security", ["find-generic-password", "-s", account.keychainService, "-w"],
           timeout: 10)
         if r.status == 0, let creds = Usage.credentials(from: Data(r.stdout.utf8)) { return creds }
         keychainFailure = Self.keychainFailure(status: r.status, stderr: r.stderr)
@@ -136,7 +136,7 @@ final class UsageReader: @unchecked Sendable {
         keychainFailure = "\(error)"
       }
     }
-    if let creds = FileManager.default.contents(atPath: ClaudeAccount.credentialsFile(folder)).flatMap(
+    if let creds = FileManager.default.contents(atPath: account.credentialsFile).flatMap(
       Usage.credentials)
     {
       return creds
@@ -157,10 +157,10 @@ final class UsageReader: @unchecked Sendable {
 
   /// claude refreshes an expired token when `claude mcp get` looks up the
   /// claude.ai connectors. The server name does not need to exist.
-  private func refresh(_ folder: String) {
+  private func refresh(_ account: ClaudeAccount) {
     guard let claude = findExecutable(service.config.claude) else { return }
     var env = ProcessInfo.processInfo.environment
-    ClaudeAccount.apply(folder, to: &env)
+    account.apply(to: &env)
     _ = try? runCommand(claude, ["mcp", "get", "switchboard-usage-refresh"], env: env, timeout: 30)
   }
 
@@ -181,8 +181,8 @@ final class UsageReader: @unchecked Sendable {
   }
 
   /// The account that claude records in the folder's .claude.json.
-  private func oauthAccount(_ folder: String) -> JSON? {
-    let json = FileManager.default.contents(atPath: ClaudeAccount.configFile(folder)).flatMap {
+  private func oauthAccount(_ account: ClaudeAccount) -> JSON? {
+    let json = FileManager.default.contents(atPath: account.configFile).flatMap {
       try? JSONCoding.decoder.decode(JSON.self, from: $0)
     }
     return json?["oauthAccount"]

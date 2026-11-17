@@ -14,7 +14,7 @@ import Testing
 
   /// The wording of UsageReader's `SignedOut` error for the account.
   func login(_ sbd: Instance, _ account: String) -> String {
-    "run `\(ClaudeAccount.command(Instance.stub, in: sbd.account(account)))` and /login"
+    "run `\(ClaudeAccount(folder: sbd.account(account)).command(Instance.stub))` and /login"
   }
 
   /// Checks that the refusal gives the login command and names the account

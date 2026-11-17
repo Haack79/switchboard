@@ -183,7 +183,8 @@ extension Service {
     // A skip records an event, which calls this again. Setting `summaryAttempt` first makes that call return at the
     // guard above.
     entries[id]?.summaryAttempt = stop
-    let account = config.triage.account.map(ClaudeAccount.normalize) ?? claudeAccount(of: id)
+    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
+    let account = triageAccount?.folder ?? claudeAccount(of: id).key
     if let skip = summarySkip(e.facts, account: account) {
       record(id, "triage", ["stop": .number(Double(stop)), "skipped": .string(skip)])
       return
@@ -194,7 +195,7 @@ extension Service {
     guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)
-    let env = headlessEnv(session: id, account: config.triage.account)
+    let env = headlessEnv(session: id, account: triageAccount)
     triageJobs.addOperation { [self] in
       let result = Result {
         try TriageSummarizer.parse(
@@ -217,7 +218,8 @@ extension Service {
     else { return }
     let attempt = "#\(pr.number)@\(pr.headSha)"
     guard e.mergeBriefAttempt != attempt || e.mergeBriefSkipped else { return }
-    let account = config.triage.account.map(ClaudeAccount.normalize) ?? claudeAccount(of: id)
+    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
+    let account = triageAccount?.folder ?? claudeAccount(of: id).key
     let skip = budgetSkip(e.facts, account: account)
     // A head records one skip, and then waits for the budget.
     if e.mergeBriefAttempt == attempt, skip != nil { return }
@@ -230,7 +232,7 @@ extension Service {
       return
     }
     let input = MergeBrief.input(pr, description: details.description)
-    let env = headlessEnv(session: id, account: config.triage.account)
+    let env = headlessEnv(session: id, account: triageAccount)
     let (number, title) = (pr.number, pr.title)
     triageJobs.addOperation { [self] in
       let result = Result {

@@ -37,8 +37,8 @@ public enum ClaudeTrust {
     return (session.cwd as NSString).standardizingPath == (own as NSString).standardizingPath ? session.cwd : nil
   }
 
-  public static func trust(_ folder: String, account: String) -> Outcome {
-    trust(folder, configFile: ClaudeAccount.configFile(account))
+  public static func trust(_ folder: String, account: ClaudeAccount) -> Outcome {
+    trust(folder, configFile: account.configFile)
   }
 
   /// A file that is missing or does not parse as Claude's config gets no

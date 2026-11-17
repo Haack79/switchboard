@@ -79,10 +79,10 @@ extension Service {
     input.onScreen = attached(id)
     input.lastViewed = e.lastViewed
     input.live = e.session.host.map { liveCount(onHost: $0) } ?? live
-    input.account = claudeAccount(of: id)
+    input.account = claudeAccount(of: id).key
     if let host = e.session.host {
       // A session on a host uses the quota of the account that the host names.
-      guard let account = config.hosts[host]?.account.flatMap({ try? resolveAccount($0) }) else {
+      guard let account = config.hosts[host]?.account.flatMap({ try? resolveAccount($0).folder }) else {
         return "\(host) names no account in config.json, so its quota can't be checked"
       }
       input.account = account

@@ -22,7 +22,7 @@ extension Service {
   /// The checks that one `claude agents` run answers: those of one account at one site.
   private struct TurnChecks {
     var site: any SessionSite
-    var account: String
+    var account: SessionAccount
     var checks: [TurnCheck]
   }
 
@@ -43,8 +43,11 @@ extension Service {
             return try agentRows(at: host, seen: nowMs(), timeout: Service.turnCheckTimeout)
           }
           guard let claude else { throw APIError("can't find \(config.claude)") }
+          guard case .local(let account) = group.account else {
+            throw APIError("\(group.account.key) is no account of this Mac")
+          }
           return try agentRows(
-            claude, account: group.account, seen: nowMs(), timeout: Service.turnCheckTimeout, on: group.site.machine)
+            claude, account: account, seen: nowMs(), timeout: Service.turnCheckTimeout, on: group.site.machine)
         }
       )
     }
@@ -52,11 +55,11 @@ extension Service {
       for (account, checks, list) in answers {
         switch list {
         case .failure(let error):
-          logLine("can't check the turns in \(account): \(error)")
+          logLine("can't check the turns in \(account.key): \(error)")
         case .success(let rows):
           let idle = Service.idleTurns(rows)
           for check in checks where idle.contains(check.claudeSessionId) {
-            endTurn(check, account: account)
+            endTurn(check, account: account.key)
           }
         }
       }
@@ -82,24 +85,23 @@ extension Service {
     return due
   }
 
-  /// The account of a session on the host. It names the host and is no folder.
-  static func hostAccount(_ host: String) -> String { "\(host):~/.claude" }
-
   /// The Claude account that the session's claude runs under. SessionStart
   /// names the transcript, <account>/projects/<folder>/<id>.jsonl, in the
   /// account that claude uses, which a shell profile or a wrapper can pick.
   /// Before a SessionStart, the account is the one that the pane sets.
   /// A session on a host runs under that host's login, which is no account of this Mac. Its answer names the
   /// host and is no folder.
-  func claudeAccount(of id: String) -> String {
-    if let host = entries[id]?.session.host { return Service.hostAccount(host) }
+  func claudeAccount(of id: String) -> SessionAccount {
+    if let host = entries[id]?.session.host { return .host(host) }
     if let e = entries[id], let path = e.facts.transcriptPath,
       (path as NSString).lastPathComponent == "\(e.session.claudeSessionId).jsonl"
     {
       let projects = ((path as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent as NSString
-      if projects.lastPathComponent == "projects" { return ClaudeAccount.normalize(projects.deletingLastPathComponent) }
+      if projects.lastPathComponent == "projects" {
+        return .local(ClaudeAccount(folder: projects.deletingLastPathComponent))
+      }
     }
-    return ClaudeAccount.normalize(paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? ClaudeAccount.defaultFolder)
+    return .local(ClaudeAccount(folder: paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? ClaudeAccount.defaultFolder))
   }
 
   /// The conversations that `claude agents` lists with a running claude that sits idle.
@@ -114,5 +116,22 @@ extension Service {
     else { return }
     record(check.id, "idle", ["account": .string(account)])
     deliverPending(check.id, after: 0.5)
+  }
+}
+
+/// The account that a session's claude runs under. A session on a host runs
+/// under that host's login, which is no account of this Mac.
+enum SessionAccount: Hashable {
+  case local(ClaudeAccount)
+  case host(String)
+
+  /// The local account's folder, or "<host>:~/.claude" for a host. The host
+  /// form names the host and is no folder. Events, logs, and quota lookups use
+  /// the key.
+  var key: String {
+    switch self {
+    case .local(let account): account.folder
+    case .host(let host): "\(host):~/.claude"
+    }
   }
 }

@@ -11,9 +11,12 @@ extension Service {
       () -> (String, () -> String?, String?, String, any Machine, (path: String, state: SkillListing.State)?) in
       let id = try lookup(args)
       let session = entries[id]!.session
-      // For a host session, claudeAccount returns "<host>:~/.claude", which is no folder on the host.
+      let account: String?
+      switch claudeAccount(of: id) {
+      case .local(let local): account = local.folder
       // Until the host answers, its folder is unknown. The scan then reads only the cwd.
-      let account = session.host == nil ? claudeAccount(of: id) : (try? hostClaudeFolder(session))
+      case .host: account = try? hostClaudeFolder(session)
+      }
       return (id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id])
     }
     var state = SkillListing.State()

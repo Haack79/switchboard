@@ -227,7 +227,7 @@ private func canonicalJSON(_ value: Any) throws -> String {
   @Test func anAccountWithoutAConfigFileGetsNoFile() throws {
     let sbd = try Instance()
     let account = try #require(sbd.inheritedAccount)
-    try #require(!ClaudeAccount.isDefault(account))
+    try #require(!ClaudeAccount(folder: account).isDefault)
     FileManager.default.createFile(atPath: "\(sbd.home.path)/ask-trust", contents: nil)
     let flags = try addGroup(sbd)
 
@@ -248,7 +248,7 @@ private func canonicalJSON(_ value: Any) throws -> String {
   @Test func aChatAtTheTrustDialogIsInTriage() throws {
     let sbd = try Instance()
     let account = try #require(sbd.inheritedAccount)
-    try #require(!ClaudeAccount.isDefault(account))
+    try #require(!ClaudeAccount(folder: account).isDefault)
     FileManager.default.createFile(atPath: "\(sbd.home.path)/ask-trust", contents: nil)
     let flags = try addGroup(sbd)
     let c = try decode(SessionSummary.self, sbd.sb("chat", flags.id, "--json"))

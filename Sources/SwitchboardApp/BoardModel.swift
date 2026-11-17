@@ -1679,5 +1679,5 @@ struct AccountSwitch: Identifiable {
   /// False when the change only moves sessions to the active account.
   var switches: Bool
   var id: String { folder }
-  var name: String { ClaudeAccount.name(folder) }
+  var name: String { ClaudeAccount(folder: folder).name }
 }

@@ -8,9 +8,9 @@ extension Service {
   /// The account that a new session without a parent uses: the one that
   /// `sb account use` chose, else CLAUDE_CONFIG_DIR from config.env or from
   /// sbd's environment, else Claude's default account.
-  var activeAccount: String {
+  var activeAccount: ClaudeAccount {
     let configured = config.env["CLAUDE_CONFIG_DIR"] ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
-    return ClaudeAccount.normalize(chosenAccount ?? configured ?? ClaudeAccount.defaultFolder)
+    return chosenAccount ?? ClaudeAccount(folder: configured ?? ClaudeAccount.defaultFolder)
   }
 
   /// Reads the account that `sb account use` chose. A folder that no longer
@@ -19,15 +19,23 @@ extension Service {
   func loadChosenAccount() {
     guard let text = try? String(contentsOfFile: home.activeAccount, encoding: .utf8) else { return }
     let folder = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    if ClaudeAccount.holdsAccount(folder) {
-      chosenAccount = ClaudeAccount.normalize(folder)
+    let account = ClaudeAccount(folder: folder)
+    if account.holdsAccount {
+      chosenAccount = account
     } else {
       logLine("ignoring the chosen account \(folder): it holds no Claude account")
     }
   }
 
-  func resolveAccount(_ ref: String) throws -> String {
-    try ClaudeAccount.resolve(ref, among: accounts)
+  func resolveAccount(_ ref: String) throws -> Account {
+    .claude(try ClaudeAccount.resolve(ref, among: accounts.compactMap(\.claude)))
+  }
+
+  /// The account that `ref` names, for a path that only Claude accounts support.
+  func resolveClaudeAccount(_ ref: String) throws -> ClaudeAccount {
+    switch try resolveAccount(ref) {
+    case .claude(let account): account
+    }
   }
 
   /// The account of a new session: its group's account, else the one named,
@@ -37,17 +45,17 @@ extension Service {
   /// account that differs from the group's, because the session's next launch
   /// would move it to the group's account.
   func accountForNew(named ref: String?, parent: String?, for session: Session) throws -> String? {
-    let named = try ref.flatMap { $0.isEmpty ? nil : try resolveAccount($0) }
+    let named = try ref.flatMap { $0.isEmpty ? nil : try resolveAccount($0).folder }
     if let group = accountGroupForNew(session), let bound = group.account {
       if let named, named != bound {
         throw APIError(
-          "the group \(group.name) runs its sessions under the account \(ClaudeAccount.name(bound)). Leave out the account, or pick another group"
+          "the group \(group.name) runs its sessions under the account \(ClaudeAccount(folder: bound).name). Leave out the account, or pick another group"
         )
       }
       return bound
     }
     if let named { return named }
-    if let parent, let entry = entries[parent], entry.session.host == nil { return claudeAccount(of: parent) }
+    if let parent, let entry = entries[parent], entry.session.host == nil { return claudeAccount(of: parent).key }
     return nil
   }
 
@@ -55,7 +63,7 @@ extension Service {
   /// Claude account. A new session in a group whose account folder went away
   /// uses the account it would use without the group.
   func accountGroupForNew(_ session: Session) -> SessionGroup? {
-    accountGroup(of: session).flatMap { ClaudeAccount.holdsAccount($0.account!) ? $0 : nil }
+    accountGroup(of: session).flatMap { ClaudeAccount(folder: $0.account!).holdsAccount ? $0 : nil }
   }
 
   /// The group whose account the session runs under, or nil when that group
@@ -65,14 +73,14 @@ extension Service {
   }
 
   func accountList() -> [AccountInfo] {
-    let active = activeAccount
-    var folders = accounts
-    if !folders.contains(active) { folders.insert(active, at: 0) }
+    let active = Account.claude(activeAccount)
+    var all = accounts
+    if !all.contains(active) { all.insert(active, at: 0) }
     let counts = Dictionary(grouping: entries.keys.filter { entries[$0]!.session.runsClaude }) {
-      claudeAccount(of: $0)
+      claudeAccount(of: $0).key
     }
-    return folders.map {
-      AccountInfo(name: ClaudeAccount.name($0), folder: $0, active: $0 == active, sessions: counts[$0]?.count ?? 0)
+    return all.map {
+      AccountInfo(name: $0.name, folder: $0.folder, active: $0 == active, sessions: counts[$0.folder]?.count ?? 0)
     }
   }
 
@@ -80,10 +88,10 @@ extension Service {
     if op == "account-move" { return try JSON(encoding: moveSessions(args)) }
     if op == "account-use" {
       guard let ref = args["account"]?.string, !ref.isEmpty else { throw APIError("name an account") }
-      let folder = try resolveAccount(ref)
-      try folder.write(toFile: home.activeAccount, atomically: true, encoding: .utf8)
-      chosenAccount = folder
-      logLine("new sessions use the account \(folder)")
+      let account = try resolveClaudeAccount(ref)
+      try account.folder.write(toFile: home.activeAccount, atomically: true, encoding: .utf8)
+      chosenAccount = account
+      logLine("new sessions use the account \(account.folder)")
     }
     return try JSON(encoding: accountList())
   }
@@ -97,10 +105,10 @@ extension Service {
   /// on the keychain and the network.
   func requireSignedIn(_ args: JSON) throws {
     guard let reader = usageReader, let ref = args["account"]?.string,
-      let folder = try? queue.sync(execute: { try resolveAccount(ref) }),
-      Self.signedOutRefusal(reader.latest(folder)) != nil
+      let account = try? queue.sync(execute: { try resolveClaudeAccount(ref) }),
+      Self.signedOutRefusal(reader.latest(account.folder)) != nil
     else { return }
-    if let refusal = Self.signedOutRefusal(reader.read(folder)) { throw APIError(refusal) }
+    if let refusal = Self.signedOutRefusal(reader.read(account)) { throw APIError(refusal) }
   }
 
   /// The account's name followed by the reading's `SignedOut` error. That
@@ -121,11 +129,13 @@ extension Service {
   /// conversation forks it.
   func moveSessions(_ args: JSON) throws -> AccountMove {
     guard let ref = args["account"]?.string, !ref.isEmpty else { throw APIError("name an account") }
-    let target = try resolveAccount(ref)
+    let target = try resolveClaudeAccount(ref)
     let dryRun = args["dryRun"]?.bool ?? false
-    var result = AccountMove(account: target)
+    var result = AccountMove(account: target.folder)
     for id in entries.keys.sorted() {
-      guard let session = entries[id]?.session, !session.cwd.isEmpty, claudeAccount(of: id) != target else { continue }
+      guard let session = entries[id]?.session, !session.cwd.isEmpty, claudeAccount(of: id) != .local(target) else {
+        continue
+      }
       if let reason = moveRefusal(id, to: target) {
         result.blocked.append(.init(session: id, name: session.name, reason: reason))
         continue
@@ -137,17 +147,19 @@ extension Service {
         result.blocked.append(.init(session: id, name: session.name, reason: "\(error)"))
       }
     }
-    if !dryRun && !result.moved.isEmpty { logLine("moved \(result.moved.count) sessions to the account \(target)") }
+    if !dryRun && !result.moved.isEmpty {
+      logLine("moved \(result.moved.count) sessions to the account \(target.folder)")
+    }
     return result
   }
 
   /// Why the session cannot move now, so that `dryRun` lists the same
   /// sessions as a move.
-  private func moveRefusal(_ id: String, to target: String) -> String? {
+  private func moveRefusal(_ id: String, to target: ClaudeAccount) -> String? {
     guard let e = entries[id] else { return "no session \(id)" }
     if let host = e.session.host { return "it runs under the Claude login of \(host)" }
-    if let group = accountGroup(of: e.session), let bound = group.account, bound != target {
-      return "its group \(group.name) uses the account \(ClaudeAccount.name(bound))"
+    if let group = accountGroup(of: e.session), let bound = group.account, bound != target.folder {
+      return "its group \(group.name) uses the account \(ClaudeAccount(folder: bound).name)"
     }
     if starting.contains(id) { return "it is starting" }
     if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
@@ -160,9 +172,9 @@ extension Service {
     return nil
   }
 
-  private func transcriptDestination(_ source: String, id: String, to target: String) -> String {
+  private func transcriptDestination(_ source: String, id: String, to target: ClaudeAccount) -> String {
     let folder = ((source as NSString).deletingLastPathComponent as NSString).lastPathComponent
-    return "\(target)/projects/\(folder)/\(id).jsonl"
+    return "\(target.folder)/projects/\(folder)/\(id).jsonl"
   }
 
   /// Why the account's file at `dest` rules out a copy of `source`: it holds
@@ -178,14 +190,16 @@ extension Service {
   /// Copies the conversation's transcript to the account, then switches the
   /// session to it. The old copy stays. A session whose claude never wrote a
   /// transcript has none to copy, and starts its conversation in the account.
-  private func move(_ id: String, to target: String) throws {
+  private func move(_ id: String, to target: ClaudeAccount) throws {
     let session = entries[id]!.session
-    let from = claudeAccount(of: id)
+    guard case .local(let from) = claudeAccount(of: id) else {
+      throw APIError("it runs under the Claude login of \(session.host ?? "its host")")
+    }
     if let source = transcriptFile(session) {
       try copyConversation(source, id: session.claudeSessionId, from: from, to: target)
     }
-    try update(id) { $0.claudeConfigDir = target }
-    record(id, "account-moved", ["from": .string(from), "to": .string(target)])
+    try update(id) { $0.claudeConfigDir = target.folder }
+    record(id, "account-moved", ["from": .string(from.folder), "to": .string(target.folder)])
   }
 
   /// Moves a stopped session to its group's account before claude launches.
@@ -198,16 +212,17 @@ extension Service {
   /// launch tries again.
   func moveToGroupAccount(_ id: String) {
     guard let session = entries[id]?.session, let target = accountGroup(of: session)?.account else { return }
-    let from = claudeAccount(of: id)
+    let from = claudeAccount(of: id).key
     guard from != target else { return }
+    let account = ClaudeAccount(folder: target)
     let reason: String?
-    if !ClaudeAccount.holdsAccount(target) {
+    if !account.holdsAccount {
       reason = "\(target) holds no Claude account"
     } else if let refusal = Self.signedOutRefusal(usageReader?.latest(target)) {
       reason = refusal
     } else {
       do {
-        try move(id, to: target)
+        try move(id, to: account)
         reason = nil
       } catch {
         reason = "\(error)"
@@ -225,7 +240,7 @@ extension Service {
   /// copy of the transcript that is a prefix of the source, left by an earlier
   /// move, is replaced. Another transcript makes this throw, because claude
   /// resumes the one it finds.
-  private func copyConversation(_ source: String, id: String, from: String, to target: String) throws {
+  private func copyConversation(_ source: String, id: String, from: ClaudeAccount, to target: ClaudeAccount) throws {
     let fm = FileManager.default
     let dest = transcriptDestination(source, id: id, to: target)
     let dir = (dest as NSString).deletingLastPathComponent
@@ -236,7 +251,7 @@ extension Service {
     }
     let sourceDir = (source as NSString).deletingPathExtension
     try copyMissing(sourceDir, to: (dest as NSString).deletingPathExtension)
-    try copyMissing("\(from)/file-history/\(id)", to: "\(target)/file-history/\(id)")
+    try copyMissing("\(from.folder)/file-history/\(id)", to: "\(target.folder)/file-history/\(id)")
   }
 
   /// Copies each file under `source` that `dest` lacks. A file at `dest` that
