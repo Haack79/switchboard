@@ -510,6 +510,17 @@ public final class Service {
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
       try requireSignedIn(request.args)
+      if request.op == "account-move", request.args["stop"]?.bool == true, request.args["dryRun"]?.bool != true {
+        try stopAndWait(request, origin: origin) { try sessionsToStopForMove(request.args) }
+      }
+    case "stop":
+      let id = try stopAndWait(request, origin: origin) { [try lookup(request.args)] }[0]
+      let fresh = buildSnapshot()
+      return .success(
+        try queue.sync {
+          install(fresh)
+          return try JSON(encoding: summary(id, for: origin))
+        })
     default:
       break
     }
@@ -643,10 +654,6 @@ public final class Service {
       return .object(reply)
     case "dependency-resolved":
       return try dependencyResolved(args)
-    case "stop":
-      let id = try lookup(args)
-      try stop(id, reason: "asked")
-      return try JSON(encoding: summary(id, for: origin))
     case "pause":
       return try pauseRequest(args)
     case "resume":
@@ -1666,12 +1673,36 @@ public final class Service {
   }
 
   /// Defers the session's held questions first, so that their cards stay.
-  func stop(_ id: String, reason: String) throws {
+  /// Returns the pid that it signalled.
+  @discardableResult func stop(_ id: String, reason: String) throws -> Int {
     try requireRead(id)
     guard case .running(let pid) = claudeState(id) else { throw APIError("\(id) is not running") }
     deferQuestions(id)
     try stopClaude(id, pid)
     record(id, "stopped", ["reason": .string(reason), "pid": .number(Double(pid))])
+    return pid
+  }
+
+  /// Stops the claude of each session that `pick` returns on the state queue.
+  /// Then it waits off the queue up to 5 s for the claudes on this Mac to
+  /// exit. A snapshot taken after it then shows each such claude stopped,
+  /// unless the claude outlived the wait. A claude on a host gets no wait,
+  /// because each check of it runs a command over ssh. Returns the picked
+  /// sessions.
+  @discardableResult
+  func stopAndWait(_ request: Request, origin: RequestOrigin, _ pick: () throws -> [String]) throws -> [String] {
+    var picked: [String] = []
+    var pids: Set<Int> = []
+    _ = try prepared(request, origin: origin) {
+      picked = try pick()
+      for id in picked {
+        let pid = try stop(id, reason: "asked")
+        if entries[id]?.session.host == nil { pids.insert(pid) }
+      }
+      return .null
+    }
+    if !pids.isEmpty { _ = try? waitForExit(pids, seconds: 5, at: mac) }
+    return picked
   }
 
   /// Stops claude, removes the worktree when asked, then closes the panes and
@@ -2464,7 +2495,7 @@ public final class Service {
             if Pause.blocker(e.session) != nil {
               enforcePause(id, now: now)
             } else if stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
-              try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+              _ = try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
             }
           }
         case .stopped:

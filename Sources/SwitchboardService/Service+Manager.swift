@@ -329,7 +329,7 @@ extension Service {
           backgroundJobs(pid, in: processes(of: id)) == 0, e.facts.trustCard == nil
         else { continue }
         entries[id]?.mcpRelaunch = .stopping
-        try? stop(id, reason: "its MCP servers changed")
+        _ = try? stop(id, reason: "its MCP servers changed")
       case (.stopped, .stopping):
         entries[id]?.mcpRelaunch = nil
         do { try launch(id, prompt: nil, trigger: .mcp) } catch {

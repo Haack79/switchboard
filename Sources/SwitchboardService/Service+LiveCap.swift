@@ -82,7 +82,7 @@ extension Service {
     for host in hosts.sorted(by: { ($0 ?? "") < ($1 ?? "") }) {
       let plan = livePlan(onHost: host, now: now)
       let reason = "the live cap of \(liveCap(onHost: host))\(host.map { " on \($0)" } ?? "") needs the slot"
-      for id in plan.stops { try? stop(id, reason: reason) }
+      for id in plan.stops { _ = try? stop(id, reason: reason) }
       for id in plan.starts {
         let since = entries[id]?.queuedSince
         let trigger = entries[id]?.queuedTrigger ?? .pending

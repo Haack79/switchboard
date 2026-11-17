@@ -134,25 +134,34 @@ extension Service {
   /// lists the ones that would move. Only a session whose claude is stopped
   /// moves: a claude that runs, or a message on its way, keeps writing the
   /// old account's transcript, and a second claude that resumes the
-  /// conversation forks it.
+  /// conversation forks it. `sessions`, a list of session refs, limits the
+  /// move to those sessions. The result then lists each named session that
+  /// stays in `blocked`, including one already on the account. `stop` needs
+  /// `sessions`. Before a move with `stop` runs, sbd stops the claudes that
+  /// `sessionsToStopForMove` picks. Only a dry run lists a running named
+  /// session as one that would move.
   func moveSessions(_ args: JSON) throws -> AccountMove {
-    guard let ref = args["account"]?.string, !ref.isEmpty else { throw APIError("name an account") }
-    let target = try resolveClaudeAccount(ref)
+    let target = try moveTarget(args)
     let dryRun = args["dryRun"]?.bool ?? false
+    let named = try namedForMove(args)
+    let stopsClaude = dryRun && args["stop"]?.bool == true
     var result = AccountMove(account: target.folder)
-    for id in entries.keys.sorted() {
-      guard let session = entries[id]?.session, !session.cwd.isEmpty, claudeAccount(of: id) != .local(target) else {
+    for id in named ?? entries.keys.sorted() {
+      guard let session = entries[id]?.session else { continue }
+      let block = { (reason: String) in result.blocked.append(.init(session: id, name: session.name, reason: reason)) }
+      if let reason = notMovable(session, to: target) {
+        if named != nil { block(reason) }
         continue
       }
-      if let reason = moveRefusal(id, to: target) {
-        result.blocked.append(.init(session: id, name: session.name, reason: reason))
+      if let reason = moveRefusal(id, to: target, stopsClaude: stopsClaude) {
+        block(reason)
         continue
       }
       do {
         if !dryRun { try move(id, to: target) }
         result.moved.append(id)
       } catch {
-        result.blocked.append(.init(session: id, name: session.name, reason: "\(error)"))
+        block("\(error)")
       }
     }
     if !dryRun && !result.moved.isEmpty {
@@ -161,17 +170,58 @@ extension Service {
     return result
   }
 
+  /// The sessions whose claude an `account-move` with `stop` stops: the named
+  /// sessions that a dry run of the move lists and whose claude runs. A
+  /// session that the move refuses for another reason keeps its claude. It
+  /// runs on the state queue.
+  func sessionsToStopForMove(_ args: JSON) throws -> [String] {
+    var dryRun = args.object ?? [:]
+    dryRun["dryRun"] = .bool(true)
+    return try moveSessions(.object(dryRun)).moved.filter {
+      if case .running = claudeState($0) { true } else { false }
+    }
+  }
+
+  private func moveTarget(_ args: JSON) throws -> ClaudeAccount {
+    guard let ref = args["account"]?.string, !ref.isEmpty else { throw APIError("name an account") }
+    return try resolveClaudeAccount(ref)
+  }
+
+  /// The sessions that the request's `sessions` names, or nil when it names
+  /// none. `stop` without `sessions` throws, so that it never stops every claude.
+  private func namedForMove(_ args: JSON) throws -> [String]? {
+    guard let value = args["sessions"] else {
+      if args["stop"]?.bool == true { throw APIError("stop moves only named sessions. Name one with --session") }
+      return nil
+    }
+    guard let refs = value.array, !refs.isEmpty else { throw APIError("sessions is a list of one or more sessions") }
+    return try Set(refs.map { try lookup(["session": $0]) }).sorted()
+  }
+
+  /// Why a move of every session skips the session without listing it.
+  private func notMovable(_ session: Session, to target: ClaudeAccount) -> String? {
+    if session.cwd.isEmpty { return "it has not started" }
+    if claudeAccount(of: session.id) == .local(target) { return "it already runs under \(target.name)" }
+    return nil
+  }
+
   /// Why the session cannot move now, so that `dryRun` lists the same
-  /// sessions as a move.
-  private func moveRefusal(_ id: String, to target: ClaudeAccount) -> String? {
+  /// sessions as a move. `stopsClaude` passes a claude that runs, because the
+  /// move stops it first.
+  private func moveRefusal(_ id: String, to target: ClaudeAccount, stopsClaude: Bool) -> String? {
     guard let e = entries[id] else { return "no session \(id)" }
     if let host = e.session.host { return "it runs under the Claude login of \(host)" }
     if let group = accountGroup(of: e.session), let bound = group.account, bound != target.folder {
-      return "its group \(group.name) uses the account \(ClaudeAccount(folder: bound).name)"
+      return
+        "its group \(group.name) runs its sessions under the account \(ClaudeAccount(folder: bound).name). Move it out of the group, or change the group's account with sb group account"
     }
     if starting.contains(id) { return "it is starting" }
     if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
-    if claudeState(id) != .stopped { return "its claude is running. Stop it first" }
+    switch claudeState(id) {
+    case .stopped: break
+    case .running where stopsClaude: break
+    default: return "its claude is running. Stop it first"
+    }
     if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
     if let source = transcriptFile(e.session) {
       let dest = transcriptDestination(source, id: e.session.claudeSessionId, to: target)
