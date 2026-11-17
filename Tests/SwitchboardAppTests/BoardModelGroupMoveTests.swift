@@ -67,7 +67,7 @@ import Testing
     var shown: String??
     var othersKept = false
     let request = await firstSent(model) {
-      let moved = model.moveToGroup(session, target)
+      let moved = model.moveToGroup([session], target)
       shown = group(model, session)
       othersKept = others() == before
       return moved
@@ -139,9 +139,9 @@ import Testing
     var after: String??
 
     let first = await firstSent(model) {
-      moved = model.moveToGroup(session, target)
+      moved = model.moveToGroup([session], target)
       after = group(model, session)
-      return model.moveToGroup("zulu", "grp-flags")
+      return model.moveToGroup(["zulu"], "grp-flags")
     }
 
     #expect(!moved)

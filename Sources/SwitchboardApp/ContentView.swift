@@ -617,10 +617,10 @@ struct BoardView: View {
   private func moveMenu(_ id: String, from current: String?) -> some View {
     Menu("Move to Group") {
       ForEach(model.groups, id: \.id) { g in
-        Button(g.name) { model.moveToGroup(id, g.id) }.disabled(g.id == current)
+        Button(g.name) { model.moveToGroup([id], g.id) }.disabled(g.id == current)
       }
       Divider()
-      Button(BoardRows.ungroupedTitle) { model.moveToGroup(id, nil) }.disabled(current == nil)
+      Button(BoardRows.ungroupedTitle) { model.moveToGroup([id], nil) }.disabled(current == nil)
     }
   }
 
@@ -767,7 +767,7 @@ private struct LaneDrop: ViewModifier {
           }
         }
         .dropDestination(for: String.self) { ids, _ in
-          ids.map { model.moveToGroup($0, group) }.contains(true)
+          model.moveToGroup(ids, group)
         } isTargeted: {
           targeted = $0
         }

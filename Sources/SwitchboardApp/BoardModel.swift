@@ -832,19 +832,28 @@ final class BoardModel: ObservableObject {
     }
     return true
   }
-  /// Moves a work session to a group, or to no group when `group` is nil.
-  /// The Board shows the card in its new lane before sbd answers. It sends
-  /// nothing for an id that names no work session on the Board, for a group
-  /// that sbd didn't list, or when the session is already in that lane. It
-  /// returns whether it sent the move.
-  @discardableResult
-  func moveToGroup(_ id: String, _ group: String?) -> Bool {
+  /// The ids, in the given order, that `moveToGroup` would move to `group`: each names a work session on the
+  /// Board that is not already in that lane. None qualify when sbd didn't list `group`.
+  func movableIDs(_ ids: [String], to group: String?) -> [String] {
     let known = Set(groups.map(\.id))
-    guard let session = workBoard.first(where: { $0.id == id }), group.map(known.contains) ?? true,
-      BoardRows.group(of: session, known: known) != group
-    else { return false }
-    update(id) { $0.group = group }
-    var args: [String: JSON] = ["sessions": [.string(id)]]
+    guard group.map(known.contains) ?? true else { return [] }
+    let work = Dictionary(workBoard.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    var seen = Set<String>()
+    return ids.filter { id in
+      guard let session = work[id], seen.insert(id).inserted else { return false }
+      return BoardRows.group(of: session, known: known) != group
+    }
+  }
+
+  /// Moves work sessions to a group, or to no group when `group` is nil, in one request. The Board shows the
+  /// cards in their new lane before sbd answers. Only the ids that `movableIDs` returns move. It returns whether
+  /// it sent the move.
+  @discardableResult
+  func moveToGroup(_ ids: [String], _ group: String?) -> Bool {
+    let moving = movableIDs(ids, to: group)
+    guard !moving.isEmpty else { return false }
+    for id in moving { update(id) { $0.group = group } }
+    var args: [String: JSON] = ["sessions": .array(moving.map { .string($0) })]
     if let group { args["group"] = .string(group) } else { args["ungrouped"] = true }
     perform("group-move", args)
     return true
