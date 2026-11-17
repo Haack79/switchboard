@@ -18,8 +18,8 @@ private func boardSessions() -> BoardModel {
   return model
 }
 
-/// The sidebar's `List(selection:)` binding. It shows `multiSelection` while that holds two or more ids, and the
-/// set of `selection` otherwise.
+/// The sidebar's `List(selection:)` binding. It shows `multiSelection` while that holds any id, and the set of
+/// `selection` otherwise.
 @MainActor
 @Suite struct MultiSelectionBinding {
   @Test func oneIDSetsTheSelection() {
@@ -208,14 +208,19 @@ private func boardSessions() -> BoardModel {
 
   /// Next and Previous Session move the Board's focus ring and stay on the Board.
   @Test(arguments: [1, -1], [["a"], ["a", "b"]] as [Set<String>])
-  func aKeyboardStepOnTheBoardLeavesNoBoardSelectionOffTheBoard(_ step: Int, _ ids: Set<String>) {
+  func aKeyboardStepOnTheBoardMovesTheFocusRingAndKeepsTheSelection(_ step: Int, _ ids: Set<String>) {
     let model = boardSessions()
     model.show(.board)
     model.multiSelection = ids
+    let jumps = model.boardJumps
 
     model.selectAdjacentSession(by: step)
 
-    #expect(model.visibleView == .board || model.multiSelection.isEmpty)
+    #expect(model.visibleView == .board)
+    #expect(model.multiSelection == ids)
+    // The reading order is a, b, c, d, w, and the ring starts on a.
+    #expect(model.boardFocus == (step == 1 ? "b" : "w"))
+    #expect(model.boardJumps == jumps + 1)
   }
 }
 
@@ -232,11 +237,17 @@ private func boardSessions() -> BoardModel {
     return model
   }
 
-  @Test(arguments: [["a"], ["a", "b"]] as [Set<String>])
-  func theBindingShowsTheBoardSelection(_ ids: Set<String>) {
-    let model = model(.board, selection: nil, multi: ids)
+  @Test func theBindingShowsABoardSelectionOfTwoCards() {
+    let model = model(.board, selection: nil, multi: ["a", "b"])
 
-    #expect(model.sidebarSelection.wrappedValue == ids)
+    #expect(model.sidebarSelection.wrappedValue == ["a", "b"])
+  }
+
+  /// A sidebar row that already showed as the only selected one would not open on a click.
+  @Test func theBindingLeavesABoardSelectionOfOneCardOut() {
+    let model = model(.board, selection: nil, multi: ["a"])
+
+    #expect(model.sidebarSelection.wrappedValue.isEmpty)
   }
 
   // MARK: The detail pane

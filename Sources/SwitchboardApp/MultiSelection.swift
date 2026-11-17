@@ -2,13 +2,14 @@ import SwiftUI
 import SwitchboardCore
 
 extension BoardModel {
-  /// The sidebar's `List(selection:)`. It shows `multiSelection` while that holds any id, which a Board
-  /// selection of one card can, and the set of `selection` otherwise. A set with two or more ids replaces
-  /// `multiSelection` and leaves `selection` alone, so it records no history. A set with one id or none ends
-  /// the multi-selection and sets `selection`.
+  /// The sidebar's `List(selection:)`. It shows `multiSelection` while that holds two or more ids, and the set
+  /// of `selection` otherwise. A Board selection of one card does not show. A click on a row that already shows
+  /// as the only selected one changes nothing, so the setter would not run and the row would not open. A set
+  /// with two or more ids replaces `multiSelection` and leaves `selection` alone, so it records no history. A
+  /// set with one id or none ends the multi-selection and sets `selection`.
   var sidebarSelection: Binding<Set<String>> {
     Binding(
-      get: { self.multiSelection.isEmpty ? Set(self.selection.map { [$0] } ?? []) : self.multiSelection },
+      get: { self.showsMultiSelection ? self.multiSelection : Set(self.selection.map { [$0] } ?? []) },
       set: { ids in
         if ids.count > 1 {
           self.setMultiSelection(ids)

@@ -225,7 +225,7 @@ import Testing
     #expect(after == expected)
   }
 
-  /// The Move menu disables a group whose `movableIDs` is empty, so it must list what the move sends.
+  /// `moveToGroup` sends these ids. The Move menu's `laneGroups` check must agree with them.
   @Test(arguments: moves)
   func movableIDsListsTheIDsThatTheMoveSends(_ move: Move) {
     #expect(model().movableIDs(move.ids, to: move.group) == move.moves)

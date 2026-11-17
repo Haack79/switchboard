@@ -6,14 +6,24 @@ import SwitchboardCore
 /// here do not redraw the Board.
 @MainActor
 final class BoardGeometry {
-  /// The frame of every card the Board has laid out. A lazy lane that scrolled away keeps its cards' last
-  /// frames, so a rectangle still reaches them.
+  /// The frame of every card the Board draws. A card that a lazy lane removes while a rectangle is drawn keeps
+  /// its last frame, so the rectangle still reaches it after an autoscroll.
   var frames: [String: CGRect] = [:]
   var header: CGRect = .zero
   /// A view inside the Board's scroll view, which finds the scroll view.
   weak var anchor: NSView?
+  /// True while a selection rectangle is drawn.
+  var marqueeActive = false
 
   func keepFrames(_ ids: Set<String>) { frames = frames.filter { ids.contains($0.key) } }
+
+  /// Removes the frame of a card view that went away, unless a rectangle is drawn. A second view can draw the
+  /// same card, and SwiftUI may report its frame before the first view disappears. The frame is removed only
+  /// when it is still the one that the departing view wrote.
+  func dropFrame(_ id: String, ifStill frame: CGRect?) {
+    guard !marqueeActive, frame != nil, frames[id] == frame else { return }
+    frames[id] = nil
+  }
 
   /// Scrolls toward the edge of the visible area that the pointer is near or past. It returns how far the
   /// content moved under the pointer, in content coordinates, or nil when it did not move.
@@ -80,6 +90,7 @@ struct BoardMarqueeSelection: ViewModifier {
           try? await Task.sleep(for: .milliseconds(16))
         }
       }
+      .onChange(of: marquee != nil) { _, active in geometry.marqueeActive = active }
   }
 
   /// Draws a selection rectangle from a drag that starts on empty space. ⌘ held at the start adds the cards

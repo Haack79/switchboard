@@ -76,6 +76,26 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
     #expect(model.boardFocus == "c")
   }
 
+  /// A scroll would move another card under a double click's second click.
+  @Test(arguments: staying)
+  func aClickThatDoesNotOpenDoesNotScrollTheBoard(_ click: BoardClick) {
+    let model = board(clicking: [("a", .select)])
+    let jumps = model.boardJumps
+
+    model.clickBoardCard("c", click)
+
+    #expect(model.boardJumps == jumps)
+  }
+
+  @Test func anArrowKeyScrollsTheBoardToTheFocusedCard() {
+    let model = board(clicking: [("a", .select)])
+    let jumps = model.boardJumps
+
+    model.moveBoardFocus(.down)
+
+    #expect(model.boardJumps == jumps + 1)
+  }
+
   // MARK: Select
 
   @Test func aClickReplacesTheSelection() {
@@ -609,5 +629,51 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
     model.extendBoardSelection(.down)
 
     #expect(model.multiSelection == ["b", "c"])
+  }
+}
+
+/// The frames that `BoardGeometry` keeps when card views go away.
+@MainActor
+@Suite struct BoardGeometryFrames {
+  static let old = CGRect(x: 0, y: 0, width: 100, height: 50)
+  static let new = CGRect(x: 0, y: 300, width: 100, height: 50)
+
+  @Test func aCardThatGoesAwayLosesItsFrame() {
+    let geometry = BoardGeometry()
+    geometry.frames["a"] = Self.old
+
+    geometry.dropFrame("a", ifStill: Self.old)
+
+    #expect(geometry.frames["a"] == nil)
+  }
+
+  /// A card that a lazy lane removes during an autoscroll stays reachable by the rectangle.
+  @Test func aCardThatGoesAwayWhileARectangleIsDrawnKeepsItsFrame() {
+    let geometry = BoardGeometry()
+    geometry.frames["a"] = Self.old
+    geometry.marqueeActive = true
+
+    geometry.dropFrame("a", ifStill: Self.old)
+
+    #expect(geometry.frames["a"] == Self.old)
+  }
+
+  /// A second view that draws the same card can report its frame before the first view goes away.
+  @Test func aCardThatAnotherViewRedrewKeepsTheNewFrame() {
+    let geometry = BoardGeometry()
+    geometry.frames["a"] = Self.new
+
+    geometry.dropFrame("a", ifStill: Self.old)
+
+    #expect(geometry.frames["a"] == Self.new)
+  }
+
+  @Test func aViewThatNeverReportedAFrameRemovesNothing() {
+    let geometry = BoardGeometry()
+    geometry.frames["a"] = Self.old
+
+    geometry.dropFrame("a", ifStill: nil)
+
+    #expect(geometry.frames["a"] == Self.old)
   }
 }

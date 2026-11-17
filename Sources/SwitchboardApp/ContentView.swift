@@ -382,8 +382,8 @@ struct Sidebar: View {
   }
 }
 
-/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
-/// `removableSelectionCount`, which the sidebar reads once for every row.
+/// Delete N Sessions… in the context menu of a multi-selected sidebar row or Board card. Other rows and cards
+/// show nothing. `count` is `removableSelectionCount`, which the list reads once for every row or card.
 struct DeleteSelectedMenuItem: View {
   @EnvironmentObject var model: BoardModel
   let id: String
@@ -1120,6 +1120,8 @@ struct HolderBadge: View {
 struct BoardCard: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.boardGeometry) private var boardGeometry
+  /// The last frame this view wrote to `boardGeometry`.
+  @State private var recordedFrame: CGRect?
   let session: SessionSummary
   /// The Board has keyboard focus on this card, so it draws a ring.
   var keyboardFocused = false
@@ -1252,7 +1254,9 @@ struct BoardCard: View {
     .onGeometryChange(for: CGRect.self) {
       $0.frame(in: .named(BoardView.contentSpace))
     } action: {
+      recordedFrame = $0
       boardGeometry?.frames[s.id] = $0
     }
+    .onDisappear { boardGeometry?.dropFrame(s.id, ifStill: recordedFrame) }
   }
 }

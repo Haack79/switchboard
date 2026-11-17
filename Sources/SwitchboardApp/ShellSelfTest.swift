@@ -208,7 +208,7 @@ enum ShellSelfTest {
       try? await Task.sleep(for: .milliseconds(30))
       if let up = mouse(.leftMouseUp, at: end, flags: flags) { window?.sendEvent(up) }
     }
-    return "posted"
+    return "posted on \(type(of: view))"
   }
 
   /// How far into its leading edge `click(anchor:)` clicks a view: past a row's padding, onto a button's icon.
