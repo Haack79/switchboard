@@ -18,14 +18,15 @@ struct InboxView: View {
   private var sessions: some View {
     if model.triage.isEmpty && model.currentInboxItem == nil {
       let hidden = model.hiddenNeedingYou
+      let scope = model.filter.scope
       ContentUnavailableView {
         Label(
-          Self.emptyTitle(hiddenNeedingYou: hidden, hasPlanProposals: !model.planProposals.isEmpty),
+          Self.emptyTitle(hiddenNeedingYou: hidden, scope: scope, hasPlanProposals: !model.planProposals.isEmpty),
           systemImage: "checkmark.circle")
       } description: {
-        Text(Self.emptyMessage(hiddenNeedingYou: hidden))
+        Text(Self.emptyMessage(hiddenNeedingYou: hidden, scope: scope))
       } actions: {
-        if hidden > 0 { Button("Show All Orgs") { model.orgFilter = OrgFilter() } }
+        if hidden > 0 { Button("Show All") { model.showAll() } }
         Button("Show Board") { model.show(.board) }
       }
     } else {
@@ -37,7 +38,8 @@ struct InboxView: View {
             if model.triage.isEmpty {
               ContentUnavailableView(
                 Self.emptyTitle(
-                  hiddenNeedingYou: model.hiddenNeedingYou, hasPlanProposals: !model.planProposals.isEmpty),
+                  hiddenNeedingYou: model.hiddenNeedingYou, scope: model.filter.scope,
+                  hasPlanProposals: !model.planProposals.isEmpty),
                 systemImage: "checkmark.circle")
             }
           }
@@ -58,19 +60,24 @@ struct InboxView: View {
     }
   }
 
-  /// The empty Inbox's title. It adds "in these orgs" when the org filter hides sessions that need the user.
-  static func emptyTitle(hiddenNeedingYou: Int, hasPlanProposals: Bool) -> String {
+  /// The empty Inbox's title. It adds "in these orgs", "in these groups", or "in these orgs and groups" when the
+  /// filter hides sessions that need the user.
+  static func emptyTitle(hiddenNeedingYou: Int, scope: SessionFilter.Scope?, hasPlanProposals: Bool) -> String {
     let subject = hasPlanProposals ? "No session" : "Nothing"
-    return hiddenNeedingYou > 0 ? "\(subject) in these orgs needs you" : "\(subject) needs you"
+    guard hiddenNeedingYou > 0, let scope else { return "\(subject) needs you" }
+    return "\(subject) in these \(scope.selection) needs you"
   }
 
   /// The line under the empty Inbox's title. With no hidden sessions that need the user, it says what the Inbox lists.
-  /// Otherwise it gives how many of those sessions the org filter hides.
-  static func emptyMessage(hiddenNeedingYou: Int) -> String {
-    switch hiddenNeedingYou {
-    case 0: "Sessions show here when they need an answer, an approval, or a decision."
-    case 1: "1 session in an org the filter hides needs you."
-    default: "\(hiddenNeedingYou) sessions in orgs the filter hides need you."
+  /// Otherwise it gives how many of those sessions the filter hides.
+  static func emptyMessage(hiddenNeedingYou n: Int, scope: SessionFilter.Scope?) -> String {
+    guard n > 0, let scope else { return "Sessions show here when they need an answer, an approval, or a decision." }
+    let sessions = n == 1 ? "1 session" : "\(n) sessions"
+    let need = n == 1 ? "needs" : "need"
+    return switch scope {
+    case .orgs: "\(sessions) in \(n == 1 ? "an org" : "orgs") the filter hides \(need) you."
+    case .groups: "\(sessions) in \(n == 1 ? "a group" : "groups") the filter hides \(need) you."
+    case .both: "\(sessions) that the filters hide \(need) you."
     }
   }
 }

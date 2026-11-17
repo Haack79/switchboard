@@ -45,11 +45,13 @@ func offlineModel() -> BoardModel {
   return BoardModel(client: offlineClient())
 }
 
-/// A model like `offlineModel`, built with an org filter and an optional store for it.
+/// A model like `offlineModel`, built with an org filter, a group filter, and an optional store for both.
 @MainActor
-func orgFilterModel(_ filter: OrgFilter = OrgFilter(), store: UserDefaults? = nil) -> BoardModel {
+func orgFilterModel(
+  _ filter: OrgFilter = OrgFilter(), groupFilter: GroupFilter = GroupFilter(), store: UserDefaults? = nil
+) -> BoardModel {
   _ = NSApplication.shared
-  return BoardModel(client: offlineClient(), orgFilterStore: store, orgFilter: filter)
+  return BoardModel(client: offlineClient(), orgFilterStore: store, orgFilter: filter, groupFilter: groupFilter)
 }
 
 let posthogOnly = OrgFilter(keys: ["posthog"])
@@ -200,6 +202,14 @@ func orgSession(
   s.repositoryRead = read
   s.group = group
   return s
+}
+
+/// A work session in group `group`, or in no group when it is nil. Its repository is `<org>/<id>`, or none
+/// (Local) when `org` is nil.
+func groupedSession(
+  _ id: String, group: String?, org: String? = "PostHog", state: AttentionState = .working
+) -> SessionSummary {
+  orgSession(id, org.map { "\($0)/\(id)" }, state: state, group: group)
 }
 
 /// A follow-up that has not started. It shows in the sidebar's Not started section, which starts collapsed.

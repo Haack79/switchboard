@@ -5,8 +5,11 @@ let usage = """
   Usage: sb <command> [arguments] [--json]
 
   Sessions:
-    ls [--org O1,O2] [--local]    list sessions by state, or only those in the
-                                  GitHub orgs O1 and O2, or with no GitHub remote
+    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped]
+                                  list sessions by state, or only those in the
+                                  GitHub orgs O1 and O2, or with no GitHub
+                                  remote, and in the groups G1 and G2, or in no
+                                  group
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -868,6 +871,18 @@ case "ls", "list":
   let result = call("ls")
   var filter = SessionFilter(org: OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ",")))
   if a.switches.contains("--local") { filter.org.insert(OrgFilter.localKey) }
+  let groupRefs = (a.allValues["--group"] ?? []).flatMap(splitList)
+  if !groupRefs.isEmpty || a.switches.contains("--ungrouped") {
+    let groups = decode(call("group-ls"), as: GroupList.self).groups
+    let items = groups.map { (id: $0.id, name: $0.name) }
+    do {
+      filter.group = GroupFilter(keys: try groupRefs.map { try resolveRef($0, "group", items) })
+    } catch {
+      die("\(error)")
+    }
+    if a.switches.contains("--ungrouped") { filter.group.insert(GroupFilter.ungroupedKey) }
+    filter.knownGroups = Set(groups.map(\.id))
+  }
   if a.json && filter.isAll {
     printJSON(result)
   } else {

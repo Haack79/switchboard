@@ -14,6 +14,17 @@ public struct FilterEntry: Equatable, Sendable, Identifiable {
     self.count = count
     self.needsYou = needsYou
   }
+
+  /// Counts `s` in the row.
+  mutating func add(_ s: SessionSummary) {
+    count += 1
+    if Triage.needsYou(s) { needsYou += 1 }
+  }
+}
+
+/// The items of a comma-separated list, such as `posthog, haacked`, without spaces or empty items.
+public func splitList(_ list: String) -> [String] {
+  list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
 }
 
 /// A set of lowercased keys that selects which sessions the app shows along
@@ -28,7 +39,7 @@ public protocol KeyFilter: Equatable, Sendable {
 extension KeyFilter {
   /// Reads a comma-separated list of keys, such as `posthog, haacked`.
   public init(list: String) {
-    self.init(keys: list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    self.init(keys: splitList(list))
   }
 
   public var isAll: Bool { keys.isEmpty }
@@ -62,7 +73,6 @@ extension KeyFilter {
 /// The GitHub orgs whose sessions the app shows. It only decides what the
 /// app shows. sbd runs every session whatever the filter says.
 public struct OrgFilter: KeyFilter {
-  public typealias Entry = FilterEntry
   /// The key of sessions with no GitHub remote. GitHub logins can't contain
   /// parentheses, so it never matches an org.
   public static let localKey = "(local)"
@@ -113,18 +123,15 @@ public struct OrgFilter: KeyFilter {
 
   /// The orgs of `sessions`, plus every selected key, by title with Local
   /// last. Sessions with no key aren't counted.
-  public func entries(_ sessions: [SessionSummary]) -> [Entry] {
-    var byKey: [String: Entry] = [:]
+  public func entries(_ sessions: [SessionSummary]) -> [FilterEntry] {
+    var byKey: [String: FilterEntry] = [:]
     for s in sessions {
       guard let seen = Self.owner(of: s) else { continue }
       let key = seen.lowercased()
-      var entry = byKey[key] ?? Entry(key: key, title: Self.title(key, seen: seen))
-      entry.count += 1
-      if Triage.needsYou(s) { entry.needsYou += 1 }
-      byKey[key] = entry
+      byKey[key, default: FilterEntry(key: key, title: Self.title(key, seen: seen))].add(s)
     }
     for key in keys where byKey[key] == nil {
-      byKey[key] = Entry(key: key, title: Self.title(key, seen: key))
+      byKey[key] = FilterEntry(key: key, title: Self.title(key, seen: key))
     }
     return byKey.values.sorted { a, b in
       if (a.key == Self.localKey) != (b.key == Self.localKey) { return b.key == Self.localKey }

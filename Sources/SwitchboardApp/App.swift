@@ -13,7 +13,8 @@ struct SwitchboardApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var model = BoardModel(
     client: Client(), draftsFolder: Home().drafts,
-    orgFilterStore: Bundle.main.bundleIdentifier != nil ? .standard : nil, orgFilter: Snapshot.orgFilter)
+    orgFilterStore: Bundle.main.bundleIdentifier != nil ? .standard : nil, orgFilter: Snapshot.orgFilter,
+    groupFilter: Snapshot.groupFilter)
 
   var body: some Scene {
     Window("Switchboard", id: "main") {
@@ -63,7 +64,7 @@ struct SwitchboardApp: App {
           .keyboardShortcut("2")
         Button("Show Issues") { model.show(.issues) }
           .keyboardShortcut("3")
-        Button("Filter by Org…") { model.showingOrgFilter.toggle() }
+        Button("Filter Sessions…") { model.showingFilter.toggle() }
           .keyboardShortcut("o", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)
         Divider()

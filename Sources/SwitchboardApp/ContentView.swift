@@ -136,7 +136,7 @@ struct ContentView: View {
         .labelsHidden()
         .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
-      ToolbarItem(placement: .navigation) { OrgFilterMenu() }
+      ToolbarItem(placement: .navigation) { SessionFilterMenu() }
       ToolbarItem { ManagerButton() }
       ToolbarItem { AccountMenu() }
       ToolbarItem {
@@ -225,10 +225,12 @@ struct Sidebar: View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
     let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
+    let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       OperatorRow(activeAccount: activeAccount)
-      ForEach(model.sidebarGroups) { group in
+      if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
+      ForEach(groups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
           ForEach(group.rows) { row in
@@ -636,7 +638,9 @@ struct BoardView: View {
     let ring = focused ? model.currentBoardCard : nil
     // A repo lane has no group, like the Ungrouped lane, so a drop there would ungroup the card.
     let drops = laneKind == .group
-    if layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group) {
+    if layout.lanes.isEmpty && layout.done.isEmpty && model.filterHidesAllWork {
+      FilterHidesAll().frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group) {
       VStack(spacing: 12) {
         Image(systemName: "square.grid.3x3").font(.system(size: 40)).foregroundStyle(.secondary)
         Text("Start a session to see it here").foregroundStyle(.secondary)
