@@ -1255,7 +1255,7 @@ struct BoardCard: View {
       $0.frame(in: .named(BoardView.contentSpace))
     } action: {
       recordedFrame = $0
-      boardGeometry?.frames[s.id] = $0
+      boardGeometry?.record(s.id, $0)
     }
     .onDisappear { boardGeometry?.dropFrame(s.id, ifStill: recordedFrame) }
   }

@@ -18,8 +18,8 @@ private func boardSessions() -> BoardModel {
   return model
 }
 
-/// The sidebar's `List(selection:)` binding. It shows `multiSelection` while that holds any id, and the set of
-/// `selection` otherwise.
+/// The sidebar's `List(selection:)` binding. It shows `multiSelection` while that holds two or more ids, and the
+/// set of `selection` otherwise.
 @MainActor
 @Suite struct MultiSelectionBinding {
   @Test func oneIDSetsTheSelection() {

@@ -7,22 +7,38 @@ import SwitchboardCore
 @MainActor
 final class BoardGeometry {
   /// The frame of every card the Board draws. A card that a lazy lane removes while a rectangle is drawn keeps
-  /// its last frame, so the rectangle still reaches it after an autoscroll.
-  var frames: [String: CGRect] = [:]
+  /// its last frame, so the rectangle still reaches it after an autoscroll. That frame is removed when the
+  /// rectangle ends, unless the card draws again first.
+  private(set) var frames: [String: CGRect] = [:]
   var header: CGRect = .zero
   /// A view inside the Board's scroll view, which finds the scroll view.
   weak var anchor: NSView?
-  /// True while a selection rectangle is drawn.
-  var marqueeActive = false
+  /// Frames whose card views went away while a rectangle was drawn.
+  private var pendingDrops: [String: CGRect] = [:]
+  /// True while a selection rectangle is drawn. When it turns false, the frames in `pendingDrops` that no view
+  /// has written since are removed.
+  var marqueeActive = false {
+    didSet {
+      guard !marqueeActive else { return }
+      for (id, frame) in pendingDrops where frames[id] == frame { frames[id] = nil }
+      pendingDrops = [:]
+    }
+  }
 
   func keepFrames(_ ids: Set<String>) { frames = frames.filter { ids.contains($0.key) } }
 
-  /// Removes the frame of a card view that went away, unless a rectangle is drawn. A second view can draw the
-  /// same card, and SwiftUI may report its frame before the first view disappears. The frame is removed only
-  /// when it is still the one that the departing view wrote.
+  /// Stores the frame that a card view reports. It cancels a pending removal of that card's frame.
+  func record(_ id: String, _ frame: CGRect) {
+    frames[id] = frame
+    pendingDrops[id] = nil
+  }
+
+  /// Removes the frame of a card view that went away. While a rectangle is drawn, the removal waits until the
+  /// rectangle ends. A second view can draw the same card, and SwiftUI may report its frame before the first
+  /// view disappears. The frame is removed only when it is still the one that the departing view wrote.
   func dropFrame(_ id: String, ifStill frame: CGRect?) {
-    guard !marqueeActive, frame != nil, frames[id] == frame else { return }
-    frames[id] = nil
+    guard let frame, frames[id] == frame else { return }
+    if marqueeActive { pendingDrops[id] = frame } else { frames[id] = nil }
   }
 
   /// Scrolls toward the edge of the visible area that the pointer is near or past. It returns how far the

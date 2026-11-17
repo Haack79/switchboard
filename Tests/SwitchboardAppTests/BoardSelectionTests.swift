@@ -640,7 +640,7 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
 
   @Test func aCardThatGoesAwayLosesItsFrame() {
     let geometry = BoardGeometry()
-    geometry.frames["a"] = Self.old
+    geometry.record("a", Self.old)
 
     geometry.dropFrame("a", ifStill: Self.old)
 
@@ -650,7 +650,7 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
   /// A card that a lazy lane removes during an autoscroll stays reachable by the rectangle.
   @Test func aCardThatGoesAwayWhileARectangleIsDrawnKeepsItsFrame() {
     let geometry = BoardGeometry()
-    geometry.frames["a"] = Self.old
+    geometry.record("a", Self.old)
     geometry.marqueeActive = true
 
     geometry.dropFrame("a", ifStill: Self.old)
@@ -658,10 +658,36 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
     #expect(geometry.frames["a"] == Self.old)
   }
 
+  /// A card that a lazy lane removed during a rectangle and that never drew again loses its frame when the
+  /// rectangle ends. Otherwise a later rectangle could select a session that the Board no longer draws.
+  @Test func aCardThatWentAwayDuringARectangleLosesItsFrameWhenTheRectangleEnds() {
+    let geometry = BoardGeometry()
+    geometry.record("a", Self.old)
+    geometry.marqueeActive = true
+    geometry.dropFrame("a", ifStill: Self.old)
+
+    geometry.marqueeActive = false
+
+    #expect(geometry.frames["a"] == nil)
+  }
+
+  /// A card that scrolls away and back during one rectangle reports the same content-space frame again.
+  @Test func aCardThatDrewAgainDuringARectangleKeepsItsFrameWhenTheRectangleEnds() {
+    let geometry = BoardGeometry()
+    geometry.record("a", Self.old)
+    geometry.marqueeActive = true
+    geometry.dropFrame("a", ifStill: Self.old)
+    geometry.record("a", Self.old)
+
+    geometry.marqueeActive = false
+
+    #expect(geometry.frames["a"] == Self.old)
+  }
+
   /// A second view that draws the same card can report its frame before the first view goes away.
   @Test func aCardThatAnotherViewRedrewKeepsTheNewFrame() {
     let geometry = BoardGeometry()
-    geometry.frames["a"] = Self.new
+    geometry.record("a", Self.new)
 
     geometry.dropFrame("a", ifStill: Self.old)
 
@@ -670,7 +696,7 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
 
   @Test func aViewThatNeverReportedAFrameRemovesNothing() {
     let geometry = BoardGeometry()
-    geometry.frames["a"] = Self.old
+    geometry.record("a", Self.old)
 
     geometry.dropFrame("a", ifStill: nil)
 
