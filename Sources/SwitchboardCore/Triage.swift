@@ -796,7 +796,7 @@ public enum Triage {
       if let r = rank(s) { ranked.append((s, r)) }
     }
     ranked.sort { a, b in
-      if (a.session.highlighted == true) != (b.session.highlighted == true) { return a.session.highlighted == true }
+      if a.session.isHighlighted != b.session.isHighlighted { return a.session.isHighlighted }
       if a.rank != b.rank { return a.rank < b.rank }
       if a.session.since != b.session.since { return a.session.since < b.session.since }
       return a.session.id < b.session.id
@@ -815,8 +815,8 @@ public enum Triage {
   /// `AttentionState.inbox` that has items that aren't highlighted, in that order. Each keeps the order of
   /// `ordered`, which it doesn't sort.
   public static func sections(_ ordered: [SessionSummary]) -> [Section] {
-    let highlighted = ordered.filter { $0.highlighted == true }
-    let rest = ordered.filter { $0.highlighted != true }
+    let highlighted = ordered.filter(\.isHighlighted)
+    let rest = ordered.filter { !$0.isHighlighted }
     let first = highlighted.isEmpty ? [] : [Section(id: "highlighted", title: "Highlighted", sessions: highlighted)]
     return first
       + AttentionState.inbox.compactMap { state in

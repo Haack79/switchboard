@@ -3,7 +3,7 @@ import SwitchboardCore
 
 extension Service {
   /// The `highlight` request, which highlights `session`, or with `highlighted` false clears its highlight. It
-  /// records an event only when the value changes, and always returns the summary. It refuses a session that isn't a
+  /// records an event only when the value changes. It always returns the summary. It refuses a session that isn't a
   /// work session, a session whose evaluated state is Done, and the asking session `caller`. A session that
   /// highlighted itself could raise its own priority.
   func highlightRequest(_ args: JSON) throws -> JSON {
@@ -18,14 +18,14 @@ extension Service {
       }
     }
     if (e.session.highlighted == true) != on {
-      try update(id) { $0.highlighted = on ? true : nil }
+      try updateOrRestore([id]) { _, s in s.highlighted = on ? true : nil }
       record(id, on ? "highlighted" : "unhighlighted", ["by": .string(by.rawValue)])
     }
     return try JSON(encoding: summary(id))
   }
 
   /// Clears the highlight of a session whose evaluated state is Done. When the store can't save the change, the
-  /// flag stays set, and the next verdict tries again.
+  /// flag stays set. The next verdict tries again.
   func clearHighlightOnDone(_ id: String, _ verdict: Verdict) {
     guard verdict.state == .done, entries[id]?.session.highlighted == true else { return }
     do {

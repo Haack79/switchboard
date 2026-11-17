@@ -205,7 +205,7 @@ extension MCPToolServer {
       ], required: ["text"]),
     Tool(
       "highlight",
-      "Highlights a session as high priority, or with `clear` true removes the highlight. A highlighted session gets a ring in the app, and its Inbox item comes first. The highlight clears when the session reaches Done. A session can't highlight itself.",
+      "Highlights a session as high priority, or with `clear` true removes the highlight. A highlighted session gets an orange ring in the app, and its Inbox item comes first. Use it for the few sessions that matter most, because a highlight on every session ranks none. The highlight clears when the session reaches Done. A session can't highlight itself.",
       ["session": session, "clear": boolean("Set true to remove the highlight.")], required: ["session"]),
   ]
 }

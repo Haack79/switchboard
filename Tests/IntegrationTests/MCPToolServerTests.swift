@@ -28,6 +28,18 @@ enum MCPToolServerTests {
   /// How a command can name a session or a group: its id, a prefix of its id, or its name.
   enum Naming: CaseIterable { case id, idPrefix, name }
 
+  /// A session outside the scope's group Flags.
+  enum Outsider: String, CaseIterable, Sendable {
+    case outside, loose
+
+    func session(_ s: Scope) -> SessionSummary {
+      switch self {
+      case .outside: s.outside
+      case .loose: s.loose
+      }
+    }
+  }
+
   /// The JSON object after `--mcp-config ` that names the switchboard server.
   /// The stub joins its arguments with spaces. The config is compact JSON
   /// with no braces in its strings.
@@ -50,6 +62,7 @@ protocol MCPToolServerSuite {}
 extension MCPToolServerSuite {
   typealias Scope = MCPToolServerTests.Scope
   typealias Naming = MCPToolServerTests.Naming
+  typealias Outsider = MCPToolServerTests.Outsider
 
   func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try JSONCoding.decode(type, from: text) }
 
@@ -97,6 +110,15 @@ extension MCPToolServerSuite {
     return Scope(
       group: try addGroup(sbd, "Flags", member.id), other: try addGroup(sbd, "Billing", outside.id), member: member,
       outside: outside, loose: loose)
+  }
+
+  /// A server scoped to the group of `s`, run by the claude of `chat`.
+  func scopedClient(_ sbd: Instance, _ s: Scope, chat: String) throws -> MCPClient {
+    try MCPClient(sbd, group: s.group.id, env: inside(chat))
+  }
+
+  func managerID(_ sbd: Instance) throws -> String {
+    try sbd.id(of: try #require(JSON.parse(try sbd.sb("manager", "--json"))))
   }
 
   func name(_ id: String, _ name: String, _ how: Naming) -> String {

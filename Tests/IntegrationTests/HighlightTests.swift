@@ -3,9 +3,9 @@ import SwitchboardCore
 import Testing
 
 extension Instance {
-  /// The rows of `sb ls --json`.
-  fileprivate func lsRows() throws -> [JSON] {
-    try #require(JSON.parse(try sb("ls", "--json"))?.array)
+  /// The `highlighted` key of the session's row in `sb ls --json`, or nil when the row has no such key.
+  func highlightField(_ id: String) throws -> JSON? {
+    try listed(id)["highlighted"]
   }
 
   /// The session's `unhighlighted` events that sbd recorded because the session reached Done.
@@ -17,18 +17,13 @@ extension Instance {
 /// `sb highlight` sets a flag that rings the session in the app and puts its Inbox item first. `--clear` removes
 /// it, and sbd removes it when the session reaches Done.
 @Suite(.blocking(timeLimit: .seconds(120))) struct HighlightTests {
-  static let charts = "PostHog/charts"
-  static let branch = "haacked/cdp-dlq-runbook-lookup-step"
-  static let number = 18303
-
   func needsYouSession(_ sbd: Instance, name: String = "t") throws -> SessionSummary {
     try AcknowledgeTests().needsYouSession(sbd, name: name)
   }
 
   /// A session whose PR #18303 is open and ready to merge, so it is not Done.
   func prSession(_ sbd: Instance) throws -> SessionSummary {
-    let s = try sbd.session(in: Self.charts, branch: Self.branch)
-    try sbd.poll()
+    let s = try MergeTests().readySession(sbd)
     try #require(try sbd.get(s.id).state == .readyToMerge)
     return s
   }
@@ -41,7 +36,7 @@ extension Instance {
 
     try sbd.sb("highlight", s.id)
 
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
     #expect(try sbd.getJSON(s.id)["highlighted"] == .bool(true))
   }
 
@@ -65,8 +60,8 @@ extension Instance {
 
     let rows = try sbd.lsRows()
     #expect(rows.contains { $0["id"]?.string == other.id })
-    #expect(rows.filter { $0["id"]?.string != s.id }.allSatisfy { $0.object?.keys.contains("highlighted") == false })
-    #expect(try sbd.getJSON(other.id).object?.keys.contains("highlighted") == false)
+    #expect(rows.filter { $0["id"]?.string != s.id }.allSatisfy { $0["highlighted"] == nil })
+    #expect(try sbd.getJSON(other.id)["highlighted"] == nil)
   }
 
   @Test func clearRemovesTheField() throws {
@@ -76,8 +71,8 @@ extension Instance {
 
     try sbd.sb("highlight", s.id, "--clear")
 
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
-    #expect(try sbd.getJSON(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
+    #expect(try sbd.getJSON(s.id)["highlighted"] == nil)
   }
 
   @Test func clearRecordsOneUnhighlightedEventByYou() throws {
@@ -100,7 +95,7 @@ extension Instance {
     try sbd.sb("highlight", s.id)
 
     #expect(try sbd.count("highlighted", of: s.id) == 1)
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
   }
 
   @Test func clearOfASessionWithoutAHighlightRecordsNothing() throws {
@@ -110,7 +105,7 @@ extension Instance {
     try sbd.sb("highlight", s.id, "--clear")
 
     #expect(try sbd.count("unhighlighted", of: s.id) == 0)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
   }
 
   @Test func highlightJSONPrintsTheSummary() throws {
@@ -141,7 +136,7 @@ extension Instance {
     sbd.stopSbd()
     try sbd.startSbd()
 
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
     #expect(try sbd.count("unhighlighted", of: s.id) == 0)
   }
 
@@ -169,29 +164,22 @@ extension Instance {
 
     try sbd.sb(["highlight", s.id], env: ["CLAUDECODE": "1", "SB_SESSION_ID": conversation])
 
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
     #expect(try sbd.events(s.id, kind: "highlighted").first?.data["by"] == "claude")
   }
 
   // MARK: Done clears it (Risk 1)
 
-  @Test func markingDoneClearsTheHighlight() throws {
-    let sbd = try Instance()
-    let s = try needsYouSession(sbd)
-    try sbd.sb("highlight", s.id)
-
-    try sbd.sb("done", s.id)
-
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
-    #expect(try sbd.clearsOnDone(s.id).count == 1)
-  }
-
   /// The clear's own event folds again through the guard, which finds nothing left to clear.
-  @Test func theClearOnDoneRecordsOneEventAcrossLaterTicks() throws {
+  @Test func markingDoneClearsTheHighlightOnceAcrossLaterTicks() throws {
     let sbd = try Instance()
     let s = try needsYouSession(sbd)
     try sbd.sb("highlight", s.id)
+
     try sbd.sb("done", s.id)
+
+    #expect(try sbd.highlightField(s.id) == nil)
+    #expect(try sbd.clearsOnDone(s.id).count == 1)
 
     try sbd.advanceClock(5_000)
     try sbd.advanceClock(5_000)
@@ -208,7 +196,7 @@ extension Instance {
     try sbd.sb("undone", s.id)
 
     #expect(try sbd.get(s.id).state != .done)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.count("highlighted", of: s.id) == 1)
   }
 
@@ -221,7 +209,7 @@ extension Instance {
     sbd.stopSbd()
     try sbd.startSbd()
 
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.count("unhighlighted", of: s.id) == 1)
   }
 
@@ -242,32 +230,23 @@ extension Instance {
     try sbd.startSbd()
 
     #expect(try sbd.get(s.id).state == .done)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
-  @Test func aMergedPRWithACleanFolderClearsTheHighlight() throws {
+  @Test func aMergedPRWithACleanFolderClearsTheHighlightOnceAcrossLaterPolls() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withGitHub(github)
     let s = try prSession(sbd)
     try sbd.sb("highlight", s.id)
 
-    github.change(Self.number) { $0["state"] = "MERGED" }
+    github.change(MergeTests.number) { $0["state"] = "MERGED" }
     try sbd.poll(all: true)
 
     #expect(try sbd.get(s.id).state == .done)
     #expect(try sbd.get(s.id).markedDone == false)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
-  }
-
-  @Test func aMergedPRClearsTheHighlightOnceAcrossLaterPolls() throws {
-    let github = try FakeGitHub()
-    let sbd = try Instance.withGitHub(github)
-    let s = try prSession(sbd)
-    try sbd.sb("highlight", s.id)
-    github.change(Self.number) { $0["state"] = "MERGED" }
-    try sbd.poll(all: true)
 
     try sbd.poll(all: true)
     try sbd.advanceClock(5_000)
@@ -282,17 +261,17 @@ extension Instance {
     let sbd = try Instance.withGitHub(github)
     let s = try prSession(sbd)
     try sbd.sb("highlight", s.id)
-    github.change(Self.number) { $0["state"] = "MERGED" }
+    github.change(MergeTests.number) { $0["state"] = "MERGED" }
 
     let locked = try sbd.whileTheLogIsLocked {
       try sbd.poll(all: true)
-      return (state: try sbd.get(s.id).state, highlighted: try sbd.listed(s.id)["highlighted"])
+      return (state: try sbd.get(s.id).state, highlighted: try sbd.highlightField(s.id))
     }
     try sbd.advanceClock(5_000)
 
     #expect(locked.state == .done)
     #expect(locked.highlighted == .bool(true))
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
@@ -302,11 +281,11 @@ extension Instance {
     let s = try prSession(sbd)
     try sbd.sb("highlight", s.id)
 
-    github.change(Self.number) { $0["state"] = "CLOSED" }
+    github.change(MergeTests.number) { $0["state"] = "CLOSED" }
     try sbd.poll(all: true)
 
     #expect(try sbd.get(s.id).state == .done)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
@@ -319,20 +298,20 @@ extension Instance {
     let file = "\(s.cwd)/notes.txt"
     try "x".write(toFile: file, atomically: true, encoding: .utf8)
 
-    github.change(Self.number) { $0["state"] = "MERGED" }
+    github.change(MergeTests.number) { $0["state"] = "MERGED" }
     try sbd.poll(all: true)
 
     let dirty = try sbd.get(s.id)
     #expect(dirty.state == .needsYou)
     #expect(dirty.reason == "#18303 merged; commit or discard the uncommitted changes")
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
     #expect(try sbd.count("unhighlighted", of: s.id) == 0)
 
     try FileManager.default.removeItem(atPath: file)
     try sbd.poll(all: true)
 
     #expect(try sbd.get(s.id).state == .done)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
@@ -345,7 +324,7 @@ extension Instance {
 
     try sbd.sb("done", s.id)
 
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
@@ -357,7 +336,7 @@ extension Instance {
 
     try sbd.sb("done", s.id)
 
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
     #expect(try sbd.clearsOnDone(s.id).count == 1)
   }
 
@@ -369,7 +348,7 @@ extension Instance {
     try sbd.sb("snooze", s.id)
     try sbd.advanceClock(5_000)
 
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
     #expect(try sbd.count("unhighlighted", of: s.id) == 0)
   }
 
@@ -386,7 +365,7 @@ extension Instance {
     switch how {
     case .marked: try sbd.sb("done", s.id)
     case .mergedPR:
-      github.change(Self.number) { $0["state"] = "MERGED" }
+      github.change(MergeTests.number) { $0["state"] = "MERGED" }
       try sbd.poll(all: true)
     }
     let done = try sbd.get(s.id)
@@ -397,7 +376,7 @@ extension Instance {
     #expect(r.status != 0)
     #expect(r.stderr.contains("\(done.name) is done"), "\(r.stderr)")
     #expect(try sbd.count("highlighted", of: s.id) == 0)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
   }
 
   @Test func clearOfADoneSessionIsAllowed() throws {
@@ -410,54 +389,27 @@ extension Instance {
     #expect(r.status == 0, "\(r.stderr)")
   }
 
-  @Test func highlightRefusesTheManager() throws {
-    let sbd = try Instance()
-    let manager = try sbd.id(of: try #require(JSON.parse(try sbd.sb("manager", "--json"))))
-
-    let r = try sbd.run(["highlight", manager])
-
-    #expect(r.status != 0)
-    #expect(r.stderr.contains("only a work session can be highlighted"), "\(r.stderr)")
-    #expect(try sbd.count("highlighted", of: manager) == 0)
-  }
-
-  @Test func highlightRefusesAManagerConversation() throws {
-    let sbd = try Instance()
-    let conversation = try #require(JSON.parse(try sbd.sb("manager", "new", "--json"))?["id"]?.string)
-
-    let r = try sbd.run(["highlight", conversation])
-
-    #expect(r.status != 0)
-    #expect(r.stderr.contains("only a work session can be highlighted"), "\(r.stderr)")
-    #expect(try sbd.count("highlighted", of: conversation) == 0)
-  }
-
-  @Test func highlightRefusesAGroupChat() throws {
+  @Test func highlightRefusesEverySessionThatIsNotWork() throws {
     let sbd = try Instance()
     try sbd.sb("group", "add", "Flags")
-    let chat = try sbd.chatOf("Flags")
+    let refused = [
+      ("manager", try sbd.id(of: try #require(JSON.parse(try sbd.sb("manager", "--json"))))),
+      ("conversation", try #require(JSON.parse(try sbd.sb("manager", "new", "--json"))?["id"]?.string)),
+      ("group chat", try sbd.chatOf("Flags")),
+      ("operator", try sbd.id(of: try #require(JSON.parse(try sbd.sb("operator", "--json"))))),
+    ]
 
-    let r = try sbd.run(["highlight", chat])
+    for (kind, id) in refused {
+      let r = try sbd.run(["highlight", id])
 
-    #expect(r.status != 0)
-    #expect(r.stderr.contains("only a work session can be highlighted"), "\(r.stderr)")
-    #expect(try sbd.count("highlighted", of: chat) == 0)
-  }
-
-  @Test func highlightRefusesTheOperator() throws {
-    let sbd = try Instance()
-    let op = try sbd.id(of: try #require(JSON.parse(try sbd.sb("operator", "--json"))))
-
-    let r = try sbd.run(["highlight", op])
-
-    #expect(r.status != 0)
-    #expect(r.stderr.contains("only a work session can be highlighted"), "\(r.stderr)")
-    #expect(try sbd.count("highlighted", of: op) == 0)
+      #expect(r.status != 0, "\(kind)")
+      #expect(r.stderr.contains("only a work session can be highlighted"), "\(kind): \(r.stderr)")
+      #expect(try sbd.count("highlighted", of: id) == 0, "\(kind)")
+    }
   }
 
   /// The caller and the target can each name the session by its id, its name, or a prefix of its id.
-  @Test(arguments: [("id", "id"), ("name", "id"), ("prefix", "id"), ("id", "name"), ("id", "prefix")])
-  func highlightRefusesTheSessionThatRunsIt(_ target: String, _ caller: String) throws {
+  @Test func highlightRefusesTheSessionThatRunsIt() throws {
     let sbd = try Instance()
     let s = try needsYouSession(sbd, name: "worker")
     func ref(_ form: String) -> String {
@@ -468,12 +420,14 @@ extension Instance {
       }
     }
 
-    let r = try sbd.run(["highlight", ref(target)], env: ["CLAUDECODE": "1", "SB_SESSION_ID": ref(caller)])
+    for (target, caller) in [("id", "id"), ("name", "id"), ("prefix", "id"), ("id", "name"), ("id", "prefix")] {
+      let r = try sbd.run(["highlight", ref(target)], env: ["CLAUDECODE": "1", "SB_SESSION_ID": ref(caller)])
 
-    #expect(r.status != 0)
-    #expect(r.stderr.contains("worker can't highlight itself"), "\(r.stderr)")
+      #expect(r.status != 0, "\(target), \(caller)")
+      #expect(r.stderr.contains("worker can't highlight itself"), "\(target), \(caller): \(r.stderr)")
+    }
     #expect(try sbd.count("highlighted", of: s.id) == 0)
-    #expect(try sbd.listed(s.id).object?.keys.contains("highlighted") == false)
+    #expect(try sbd.highlightField(s.id) == nil)
   }
 
   @Test func clearRefusesTheSessionThatRunsIt() throws {
@@ -486,7 +440,7 @@ extension Instance {
     #expect(r.status != 0)
     #expect(r.stderr.contains("worker can't change its own highlight"), "\(r.stderr)")
     #expect(try sbd.count("unhighlighted", of: s.id) == 0)
-    #expect(try sbd.listed(s.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(s.id) == .bool(true))
   }
 
   @Test func highlightRequestWithTheTargetAsCallerIsRefused() throws {
@@ -545,7 +499,7 @@ extension Instance {
 
     #expect(snoozed == [older.id])
     #expect(woken == [newer.id, older.id])
-    #expect(try sbd.listed(newer.id)["highlighted"] == .bool(true))
+    #expect(try sbd.highlightField(newer.id) == .bool(true))
   }
 
   // MARK: Text output

@@ -563,7 +563,7 @@ func printTable(_ sessions: [SessionSummary]) {
     let name = oneLine(s.name, max: nameWidth)
     let todos = s.openTodos.count
     let marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
-    let lead = s.highlighted == true ? "* " : "  "
+    let lead = s.isHighlighted ? "* " : "  "
     print(
       "\(lead)\(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
         .printable
@@ -574,7 +574,7 @@ func printTable(_ sessions: [SessionSummary]) {
 func printSession(_ s: SessionSummary) {
   print("\(s.id)  \(s.name)".printable)
   print("  state:   \(s.state.title): \(s.reasonLine) (\(ago(s.since)))".printable)
-  if s.highlighted == true { print("  highlighted: yes") }
+  if s.isHighlighted { print("  highlighted: yes") }
   if let until = s.snoozedUntil { print("  snoozed: until \(Wait.formatTime(until))") }
   if s.waitsToStart {
     printFollowup(s)

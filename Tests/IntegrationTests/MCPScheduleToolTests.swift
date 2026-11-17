@@ -259,18 +259,6 @@ import Testing
 
   // MARK: A scoped server
 
-  /// A session outside the scope's group Flags.
-  enum Outsider: String, CaseIterable {
-    case otherGroup, ungrouped
-
-    func session(_ s: Scope) -> SessionSummary {
-      switch self {
-      case .otherGroup: s.outside
-      case .ungrouped: s.loose
-      }
-    }
-  }
-
   /// How `member` leaves the group Flags.
   enum Leave: String, CaseIterable {
     case toUngrouped, toAnotherGroup

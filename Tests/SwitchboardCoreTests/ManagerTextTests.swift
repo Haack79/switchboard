@@ -176,9 +176,4 @@ extension ManagerTextTests {
     #expect(line.contains("--clear"), "\(line)")
     #expect(line.contains("Done"), "\(line)")
   }
-
-  /// The guide names only tools that the server has.
-  @Test func theServerHasTheHighlightToolThatTheManagerGuideNames() {
-    #expect(MCPToolServer.allTools.contains { $0.name == "highlight" })
-  }
 }

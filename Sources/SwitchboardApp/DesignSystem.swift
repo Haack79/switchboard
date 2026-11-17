@@ -1,11 +1,12 @@
 import SwiftUI
+import SwitchboardCore
 
 /// The values that views share so that the same element looks the same everywhere.
 enum Design {
   /// The opacity of a tinted badge's background.
   static let badgeTint = 0.18
   /// The ring of a highlighted session. Accent is the selection and focus color, so the ring uses the attention color.
-  static let highlight = Color.orange
+  static let highlight = AttentionState.needsYou.color
   static let highlightRingWidth: CGFloat = 2.5
 }
 

@@ -61,16 +61,13 @@ private func session(_ id: String, kind: SessionKind = .work, state: AttentionSt
 
   // MARK: The context menu item
 
-  /// "Remove Highlight" shows whenever the flag is set. "Highlight" shows only where sbd accepts a highlight: a
-  /// work session that isn't Done.
+  /// "Remove Highlight" shows whenever the flag is set. "Highlight" shows only where `canHighlight` accepts one.
   @Test(arguments: [SessionKind.work, .manager, .chat, .operator], AttentionState.allCases)
   func menuTitleForEachKindAndState(_ kind: SessionKind, _ state: AttentionState) {
     let plain = session("s", kind: kind, state: state)
     let highlighted = session("s", kind: kind, state: state, on: true)
 
-    #expect(
-      HighlightMenuItem.title(for: plain) == (kind == .work && state != .done ? "Highlight" : nil),
-      "not highlighted")
+    #expect(HighlightMenuItem.title(for: plain) == (plain.canHighlight ? "Highlight" : nil), "not highlighted")
     #expect(HighlightMenuItem.title(for: highlighted) == "Remove Highlight", "highlighted")
   }
 }
