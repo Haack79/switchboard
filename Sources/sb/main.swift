@@ -49,8 +49,12 @@ let usage = """
                                   run new sessions under this account. --move
                                   moves the sessions whose claude is stopped
                                   too. A terminal asks when neither is given
-    account move <name|folder> [--dry-run]
-                                  move the sessions whose claude is stopped
+    account move <name|folder> [--session <ref>]... [--stop] [--dry-run]
+                                  move the sessions whose claude is stopped.
+                                  --session moves only the sessions it names,
+                                  by id, id prefix, or name, and exits nonzero
+                                  when one of them stays. --stop stops a named
+                                  session's claude first
     usage                         show each account's use of its 5-hour and
                                   weekly limits, and when each resets
     manager [<conv>] [<text>]     open a Manager conversation, a session that manages
@@ -109,7 +113,8 @@ let usage = """
     open <session> [--terminals]  resume the session if its claude is stopped.
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
-    stop <session>                stop the session's claude
+    stop <session>                stop the session's claude and wait up to 5 s
+                                  for it to exit
     pause <session|group> [--until WHEN] [--reason R] [--message M]
                                   stop the session's claude and keep it stopped.
                                   Nothing starts it or types into it, and every
