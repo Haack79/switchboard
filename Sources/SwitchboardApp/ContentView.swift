@@ -161,7 +161,7 @@ struct ContentView: View {
       "Delete \(model.confirmingDelete?.name ?? "this session")?", isPresented: isConfirmingDelete,
       presenting: model.confirmingDelete.map { ($0, TodoDeletion($0)) }
     ) { session, todos in
-      Button(todos.button("Delete"), role: .destructive) { model.deleteDone(session, resolve: todos.ids) }
+      Button(todos.button("Delete"), role: .destructive) { model.deleteSession(session, resolve: todos.ids) }
     } message: { session, todos in
       Text(model.sessionNames.replacingIDs(in: todos.message(before: BoardModel.deletePlan(session).message)))
     }
@@ -242,25 +242,7 @@ struct Sidebar: View {
               if row.session.isRemovableDone { DeleteButton(session: row.session) }
             }
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
-            .contextMenu {
-              SnoozeMenuItems(session: row.session)
-              DeleteSelectedMenuItem(id: row.id, count: removableSelection)
-              PauseMenuItem(model: model, session: row.session)
-              if row.session.queued == true {
-                Button("Start Now") { model.startNow(row.id) }
-                  .disabled(model.startingNow.contains(row.id))
-                  .help(BoardModel.startNowHelp)
-              }
-              if CleanupOffer.canCleanUp(row.session) {
-                Button("Clean Up: Delete the Worktree and Branch…") { model.confirmingCleanup = row.id }
-                  .disabled(model.cleaningUp.contains(row.id))
-              }
-              if row.session.isRemovableDone {
-                Button("Delete \(BoardModel.deletePlan(row.session).summary)…", role: .destructive) {
-                  model.confirmingDelete = row.session
-                }
-              }
-            }
+            .contextMenu { SessionMenuItems(session: row.session, removableSelection: removableSelection) }
           }
         } header: {
           HStack {
@@ -379,24 +361,6 @@ struct Sidebar: View {
     Binding(
       get: { !model.collapsed.contains(state) },
       set: { if $0 { model.collapsed.remove(state) } else { model.collapsed.insert(state) } })
-  }
-}
-
-/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
-/// `removableSelectionCount`, which the sidebar reads once for every row.
-struct DeleteSelectedMenuItem: View {
-  @EnvironmentObject var model: BoardModel
-  let id: String
-  let count: Int
-
-  var body: some View {
-    if model.showsMultiSelection, model.multiSelection.contains(id) {
-      Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
-        model.checkSelectionRemoval()
-      }
-      .disabled(count == 0 || model.showingDoneRemoval)
-      Divider()
-    }
   }
 }
 
@@ -667,9 +631,9 @@ struct BoardView: View {
                             }
                           }
                           .contextMenu {
-                            SnoozeMenuItems(session: s)
-                            PauseMenuItem(model: model, session: s)
-                            if drops { moveMenu(s.id, from: lane.group?.id) }
+                            SessionMenuItems(session: s, hasExtra: drops) {
+                              if drops { moveMenu(s.id, from: lane.group?.id) }
+                            }
                           }
                           .id(s.id)
                         }

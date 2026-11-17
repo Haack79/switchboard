@@ -63,20 +63,6 @@ struct PauseBanner: View {
     "Stop claude and hold every message until you resume it. Nothing starts it again until then."
 }
 
-/// Pause or Resume in a session's context menu.
-struct PauseMenuItem: View {
-  let model: BoardModel
-  let session: SessionSummary
-
-  var body: some View {
-    if session.pause != nil {
-      Button("Resume") { model.resume(session.id) }.help(PauseBanner.resumeHelp)
-    } else if session.canPause {
-      Button("Pause") { model.pause(session.id) }.help(PauseBanner.pauseHelp)
-    }
-  }
-}
-
 /// A Board card's Resume button for a paused session.
 struct ResumeButton: View {
   @EnvironmentObject var model: BoardModel

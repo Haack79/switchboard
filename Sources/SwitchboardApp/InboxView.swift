@@ -150,7 +150,7 @@ struct TriageRow: View {
     .listRowChrome(current: current)
     .hoverCard(session, activeAccount: model.activeAccountFolder, card: model.hoverCard)
     .onTapGesture { model.inboxFocus = session.id }
-    .contextMenu { SnoozeMenuItems(session: session) }
+    .contextMenu { SessionMenuItems(session: session) }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(current ? .isSelected : [])
   }

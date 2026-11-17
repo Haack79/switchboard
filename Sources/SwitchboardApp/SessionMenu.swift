@@ -1,0 +1,102 @@
+import SwiftUI
+import SwitchboardCore
+
+/// An action of a session row's context menu. `divider` separates the destructive actions that follow it.
+enum SessionMenuAction: Hashable {
+  case snooze
+  case pause
+  case resume
+  case startNow
+  case stop
+  case divider
+  case cleanUp
+  case delete(String)
+  case deleteSelection(count: Int)
+}
+
+enum SessionMenu {
+  /// The actions in menu order: the non-destructive ones, then a divider and the destructive ones, with the delete
+  /// last. `selectionCount` is the removable count of the sidebar's multi-selection when the row belongs to it, and
+  /// nil otherwise. A row in a multi-selection offers to delete the selection instead of the row alone. A session
+  /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep.
+  /// `hasExtra` is true when the row shows items of its own before the destructive ones. The divider shows only
+  /// when an item comes before it.
+  static func actions(for s: SessionSummary, selectionCount: Int?, hasExtra: Bool = false) -> [SessionMenuAction] {
+    var safe: [SessionMenuAction] = []
+    if s.canSnooze { safe.append(.snooze) }
+    if s.pause != nil {
+      safe.append(.resume)
+    } else if s.canPause {
+      safe.append(.pause)
+    }
+    if s.queued == true { safe.append(.startNow) }
+    if s.live && s.pause == nil { safe.append(.stop) }
+    var destructive: [SessionMenuAction] = []
+    if CleanupOffer.canCleanUp(s) { destructive.append(.cleanUp) }
+    if let selectionCount {
+      destructive.append(.deleteSelection(count: selectionCount))
+    } else if s.isRemovableWork && s.removal == nil {
+      destructive.append(.delete("Delete \(BoardModel.deletePlan(s).summary)…"))
+    }
+    return destructive.isEmpty || (safe.isEmpty && !hasExtra) ? safe + destructive : safe + [.divider] + destructive
+  }
+}
+
+/// The context menu items that every session row shares: the actions before the divider, the row's `extra` items,
+/// and then the destructive actions. Delete… opens the delete confirmation on ContentView.
+struct SessionMenuItems<Extra: View>: View {
+  @EnvironmentObject var model: BoardModel
+  let session: SessionSummary
+  /// The removable count of the sidebar's multi-selection, which the sidebar reads once for every row.
+  var removableSelection: Int? = nil
+  /// False when `extra` shows nothing for this row, so that no divider opens the menu.
+  var hasExtra = true
+  @ViewBuilder var extra: () -> Extra
+
+  var body: some View {
+    let inSelection =
+      removableSelection != nil && model.showsMultiSelection
+      && model.multiSelection.contains(session.id)
+    let actions = SessionMenu.actions(
+      for: session, selectionCount: inSelection ? removableSelection : nil, hasExtra: hasExtra)
+    let split = actions.firstIndex(of: .divider) ?? actions.endIndex
+    ForEach(actions[..<split], id: \.self, content: item)
+    extra()
+    ForEach(actions[split...], id: \.self, content: item)
+  }
+
+  @ViewBuilder private func item(_ action: SessionMenuAction) -> some View {
+    let id = session.id
+    switch action {
+    case .snooze:
+      SnoozeMenuItems(session: session)
+    case .pause:
+      Button("Pause") { model.pause(id) }.help(PauseBanner.pauseHelp)
+    case .resume:
+      Button("Resume") { model.resume(id) }.help(PauseBanner.resumeHelp)
+    case .startNow:
+      Button("Start Now") { model.startNow(id) }
+        .disabled(model.startingNow.contains(id))
+        .help(BoardModel.startNowHelp)
+    case .stop:
+      Button("Stop Claude") { model.stop(id) }.help(BoardModel.stopHelp)
+    case .divider:
+      Divider()
+    case .cleanUp:
+      Button("Clean Up: Delete the Worktree and Branch…") { model.confirmingCleanup = id }
+        .disabled(model.cleaningUp.contains(id))
+    case .delete(let title):
+      Button(title, role: .destructive) { model.confirmingDelete = session }
+        .disabled(model.deleting.contains(id))
+    case .deleteSelection(let count):
+      Button(DoneRemovalText.deleteSessions(count), role: .destructive) { model.checkSelectionRemoval() }
+        .disabled(count == 0 || model.showingDoneRemoval)
+    }
+  }
+}
+
+extension SessionMenuItems where Extra == EmptyView {
+  init(session: SessionSummary, removableSelection: Int? = nil) {
+    self.init(session: session, removableSelection: removableSelection, hasExtra: false) { EmptyView() }
+  }
+}
