@@ -1675,14 +1675,12 @@ public final class Service {
   }
 
   /// Defers the session's held questions first, so that their cards stay.
-  /// Returns the pid that it signalled.
-  @discardableResult func stop(_ id: String, reason: String) throws -> Int {
+  func stop(_ id: String, reason: String) throws {
     try requireRead(id)
     guard case .running(let pid) = claudeState(id) else { throw APIError("\(id) is not running") }
     deferQuestions(id)
     try stopClaude(id, pid)
     record(id, "stopped", ["reason": .string(reason), "pid": .number(Double(pid))])
-    return pid
   }
 
   /// Stops the claude of each session that `pick` returns on the state queue.
@@ -1701,8 +1699,9 @@ public final class Service {
     _ = try prepared(request, origin: origin) {
       picked = try pick()
       for id in picked {
-        let pid = try stop(id, reason: reason)
-        guard entries[id]?.session.host == nil else { continue }
+        let state = claudeState(id)
+        try stop(id, reason: reason)
+        guard entries[id]?.session.host == nil, case .running(let pid) = state else { continue }
         pids.insert(pid)
         if let shell = paneRow(id, .claude)?.pid, shell > 1 { pids.insert(shell) }
       }
@@ -2502,7 +2501,7 @@ public final class Service {
             if Pause.blocker(e.session) != nil {
               enforcePause(id, now: now)
             } else if stopPolicy.idleStopDue(stopInput(e, jobs: jobs, now: now), now: now) {
-              _ = try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
+              try? stop(id, reason: "idle for \(config.idleStopSeconds) s")
             }
           }
         case .stopped:

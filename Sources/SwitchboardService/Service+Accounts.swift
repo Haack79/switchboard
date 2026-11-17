@@ -138,8 +138,8 @@ extension Service {
   /// move to those sessions. The result then lists each named session that
   /// stays in `blocked`, including one already on the account. `stop` needs
   /// `sessions`. Before a move with `stop` runs, sbd stops the claudes that
-  /// `sessionsToStopForMove` picks. Only a dry run lists a running named
-  /// session as one that would move.
+  /// `sessionsToStopForMove` picks. A dry run with `stop` lists a running
+  /// named session as one that would move.
   func moveSessions(_ args: JSON) throws -> AccountMove {
     let target = try moveTarget(args)
     let dryRun = args["dryRun"]?.bool ?? false
@@ -198,7 +198,9 @@ extension Service {
     return try Set(refs.map { try lookup(["session": $0]) }).sorted()
   }
 
-  /// Why a move of every session skips the session without listing it.
+  /// Why the move does not consider the session: it has not started, or it
+  /// already runs under the account. A bulk move skips such a session. A
+  /// named move lists it in `blocked`.
   private func notMovable(_ session: Session, to target: ClaudeAccount) -> String? {
     if session.cwd.isEmpty { return "it has not started" }
     if claudeAccount(of: session.id) == .local(target) { return "it already runs under \(target.name)" }
@@ -206,7 +208,7 @@ extension Service {
   }
 
   /// Why the session cannot move now, so that `dryRun` lists the same
-  /// sessions as a move. `listsRunningAsMovable` passes a claude that runs.
+  /// sessions as a move. With `listsRunningAsMovable`, a running claude does not refuse the move.
   /// Only a dry run of a move with `stop` sets it, because the real move
   /// stops that claude before it runs and then refuses a claude that still runs.
   private func moveRefusal(_ id: String, to target: ClaudeAccount, listsRunningAsMovable: Bool) -> String? {

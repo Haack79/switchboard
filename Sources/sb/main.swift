@@ -113,7 +113,8 @@ let usage = """
     open <session> [--terminals]  resume the session if its claude is stopped.
                                   --terminals also starts the panes and prints
                                   their tmux targets as JSON
-    stop <session>                stop the session's claude
+    stop <session>                stop the session's claude and wait up to 5 s
+                                  for it to exit
     pause <session|group> [--until WHEN] [--reason R] [--message M]
                                   stop the session's claude and keep it stopped.
                                   Nothing starts it or types into it, and every

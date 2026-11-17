@@ -414,14 +414,34 @@ import Testing
     #expect(try sbd.get(other.id).account == sbd.account("A"))
   }
 
+  /// The stub's claude exits 7 s after SIGTERM, which outlasts the 5 s wait.
+  @Test func theStopFlagRefusesAClaudeThatOutlivesTheWait() throws {
+    let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
+    try sbd.sb("account", "use", "A")
+    let s = try sbd.new(prompt: "linger 7", name: "slow")
+    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "I'll linger 7 s when I stop." && $0.claudePid != nil }
+
+    let result = try refusedMove(sbd, "--stop", "--session", "slow")
+    #expect(result.moved.isEmpty)
+    #expect(result.blocked.map(\.session) == [s.id])
+    #expect(result.blocked.first?.reason.contains("Stop it first") == true)
+    #expect(try sbd.get(s.id).account == sbd.account("A"))
+    #expect(transcript(sbd, "B", s) == nil)
+  }
+
   @Test func anUnknownSessionAStopWithoutASessionOrAnEmptyListMovesNothing() throws {
     let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset)
     let s = try stoppedSession(sbd, name: "first")
+    let live = try sbd.idleSession(name: "live")
 
     let error = try #require(throws: TestError.self) {
       try sbd.sb("account", "move", "--json", "B", "--session", "first", "--session", "nosuch")
     }
     #expect(error.description.contains("no session nosuch"))
+    #expect(throws: TestError.self) {
+      try sbd.sb("account", "move", "B", "--stop", "--session", "live", "--session", "nosuch")
+    }
+    #expect(try sbd.get(live.id).claudePid != nil)
     #expect(throws: TestError.self) { try sbd.sb("account", "move", "B", "--stop") }
     let requests: [[String: JSON]] = [
       ["account": "B", "sessions": .array([])],
