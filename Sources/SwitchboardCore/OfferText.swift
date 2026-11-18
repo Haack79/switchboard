@@ -18,19 +18,21 @@ public enum OfferText {
   public static func title(question: String, previous: String?) -> String {
     let limit = Triage.titleLength
     let text = plain(question)
-    guard let prefix = Attention.offerPrefix(text) else { return Triage.title(text) }
+    guard let prefix = Attention.offerPrefix(text) else { return Triage.title(text, max: limit) }
     let phrase = Triage.capitalized(text.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces))
     var words = phrase.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-    guard words.count >= 2, let referents = previous.flatMap(referents) else { return Triage.title(phrase) }
+    guard words.count >= 2, let referents = previous.flatMap(referents) else { return Triage.title(phrase, max: limit) }
     let word = words[1]
     let bare = word.trimmingCharacters(in: tokenTrim)
-    guard pronouns.contains(bare.lowercased()), let range = word.range(of: bare) else { return Triage.title(phrase) }
+    guard pronouns.contains(bare.lowercased()), let range = word.range(of: bare) else {
+      return Triage.title(phrase, max: limit)
+    }
     for referent in referents {
       words[1] = word.replacingCharacters(in: range, with: referent)
       let named = words.joined(separator: " ")
       if named.count <= limit { return named }
     }
-    return Triage.title(phrase)
+    return Triage.title(phrase, max: limit)
   }
 
   /// Whether the offer can take a plain Yes or No: a question that names no

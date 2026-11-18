@@ -134,6 +134,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// current turn, and the id of its event.
   public var sessionSummary: TriageSummary?
   public var sessionSummaryId: Int64 = 0
+  /// Whether the turn of `sessionSummary` has ended at a main Stop. The next main Stop drops the card.
+  public var sessionSummaryStopped = false
   /// The model's summary of the PR for the merge card, from the last
   /// `mergeBrief` event that has one.
   public var mergeBrief: MergeBrief?
@@ -490,6 +492,9 @@ public struct Verdict: Equatable, Sendable {
   /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
   /// blocking prompts, the operator's Inbox admits only this one.
   public var byWaitRule = false
+  /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
+  /// has no wait left, so it names none.
+  public var overdueWaits: [String] = []
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }

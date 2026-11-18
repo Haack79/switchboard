@@ -111,7 +111,7 @@ extension Triage {
     let listed = reports.prefix(TriageCard.summaryLines).map(\.text)
     let rest = reports.count - listed.count
     return TriageItem(
-      title: title(OperatorReport.reason(reports)), kind: .question,
+      title: title(OperatorReport.reason(reports), max: titleLength), kind: .question,
       summary: (listed + (rest > 0 ? ["and \(rest) more"] : [])).joined(separator: "\n"),
       options: [TriageOption(label: "Reply", action: .reply, placeholder: "Your answer to the operator")],
       source: .report, ref: "report:\(reports.last!.id)")

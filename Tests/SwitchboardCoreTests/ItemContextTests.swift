@@ -943,6 +943,21 @@ private struct TailOnlyMachine: Machine {
     #expect(TranscriptAnchor.of(item: try promptItem(facts), facts: facts) == .end)
   }
 
+  /// A title over 60 characters must still give the ref that the anchor compares with (Risk 3).
+  @Test(arguments: [false, true])
+  func aPromptWithoutACardWhoseReasonIsOverSixtyCharactersAnchorsAtItsCall(_ question: Bool) throws {
+    let text = "Which of the three release branches should the hotfix for #1204 land on first?"
+    let input: JSON = question ? fruitQuestions : ["command": .string(text)]
+    let facts = cardlessPrompt(
+      ToolCall(tool: question ? "AskUserQuestion" : "Bash", summary: text, since: 1, input: input), question: question)
+    let item = try promptItem(facts)
+    try #require(item.title.count > Triage.titleLength)
+
+    let anchor = TranscriptAnchor.of(item: item, facts: facts)
+
+    #expect(anchor == .toolCall(tool: question ? "AskUserQuestion" : "Bash", input: input))
+  }
+
   @Test func anotherRuleItemWhileAPromptIsOpenIsUnanchored() {
     let facts = cardlessPrompt(ToolCall(tool: "Bash", summary: "touch x", since: 1, input: ["command": "touch x"]))
     let item = TriageItem(

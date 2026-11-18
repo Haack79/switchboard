@@ -364,22 +364,31 @@ extension SessionFacts {
   /// Keeps the summary of the turn that ended at the last Stop, and the card
   /// that the session wrote during its current turn. A failed or skipped
   /// summary, and a summary for any other turn, leave none. A new prompt
-  /// starts a newer turn, which drops both.
+  /// starts a newer turn, which drops both. A turn can also start without a
+  /// prompt, so the second main Stop after the card's turn drops the card.
   mutating func applyTriage(_ event: Event) {
     switch event.kind {
     case "Stop":
       lastStop = event.id
       triage = nil
+      // A Stop with `stop_hook_active` continues the turn that a Stop hook blocked.
+      guard sessionSummary != nil, !event.fromSubagent, event.data["stop_hook_active"]?.bool != true else { return }
+      if sessionSummaryStopped {
+        dropSessionSummary()
+      } else {
+        sessionSummaryStopped = true
+      }
     case "UserPromptSubmit":
       // A summary of the earlier turn that arrives later keys to no turn.
       lastStop = 0
       triage = nil
-      sessionSummary = nil
-      sessionSummaryId = 0
+      dropSessionSummary()
     case Triage.sessionEvent:
       guard let card = try? JSONCoding.convert(event.data, to: TriageSummary.self) else { return }
       sessionSummary = card
       sessionSummaryId = event.id
+      // A card recorded after its turn's Stop belongs to that ended turn.
+      sessionSummaryStopped = !turnRunning
     case "triage":
       countSummaryCall(event)
       guard lastStop != 0, event.data["stop"]?.int.map(Int64.init) == lastStop, event.data["error"] == nil,
@@ -389,6 +398,12 @@ extension SessionFacts {
     default:
       break
     }
+  }
+
+  private mutating func dropSessionSummary() {
+    sessionSummary = nil
+    sessionSummaryId = 0
+    sessionSummaryStopped = false
   }
 
   /// Counts a model call that the event records toward `triage.perHour`. A
@@ -402,7 +417,10 @@ extension SessionFacts {
 /// The triage list: one item for each session that needs the user or that
 /// Claude can continue, and the order the list shows them in.
 public enum Triage {
+  /// The longest title of an item that a model, a session's card, a prompt card, or an offer gives.
   public static let titleLength = 60
+  /// The longest title of a rule item. A rule's reason can name a team, a PR, and a duration.
+  public static let ruleTitleLength = 100
   /// The kind of the event that `sb summary set` records.
   public static let sessionEvent = "summary"
 
@@ -533,6 +551,7 @@ public enum Triage {
     if let review = verdict.review { item.review = review }
     let kind: Callout.Kind = verdict.state == .needsYou ? .warning : .info
     item.callouts.insert(contentsOf: [Callout(kind: kind, title: title(verdict.reason))] + verdict.callouts, at: 0)
+    item.details.overdueWaits = verdict.overdueWaits
     let lead = item.primary
     let added = verdict.options.filter { rule in
       !item.options.contains { $0.action == rule.action && ($0.action != .send || $0.message == rule.message) }
@@ -566,7 +585,7 @@ public enum Triage {
     switch card.kind {
     case .send:
       return TriageItem(
-        title: title(card.reason), kind: .approval,
+        title: title(card.reason, max: titleLength), kind: .approval,
         summary: "Claude asks to send \(card.summary). Nothing is sent until you send it.",
         options: [
           TriageOption(label: "Send", action: .allow),
@@ -577,7 +596,7 @@ public enum Triage {
           targets: (card.send?.targets ?? []).map { sessionMention(name: $0.name, id: $0.id) }))
     case .trust:
       return TriageItem(
-        title: title(card.reason), kind: .approval,
+        title: title(card.reason, max: titleLength), kind: .approval,
         summary:
           "Claude Code asks whether you trust \(codeSpan(card.summary)) before it starts. Trust lets it read, edit, and run files there. Exit stops it and keeps your message for the next start.",
         options: [
@@ -586,7 +605,7 @@ public enum Triage {
         ], source: .card)
     case .mcp:
       return TriageItem(
-        title: title(card.reason), kind: .approval, summary: card.mcpRequest?.effect ?? "",
+        title: title(card.reason, max: titleLength), kind: .approval, summary: card.mcpRequest?.effect ?? "",
         options: [
           TriageOption(label: "Allow", action: .allow, recommended: true),
           TriageOption(label: "Deny", action: .deny),
@@ -595,7 +614,7 @@ public enum Triage {
           openByDefault: true, toolInput: .init(tool: card.tool, text: card.mcpRequest?.reason ?? "")))
     case .permission:
       return TriageItem(
-        title: title(card.reason), kind: .approval, summary: permissionSummary(card),
+        title: title(card.reason, max: titleLength), kind: .approval, summary: permissionSummary(card),
         options: [
           TriageOption(label: "Allow", action: .allow, recommended: true),
           TriageOption(label: "Deny", action: .deny),
@@ -613,7 +632,7 @@ public enum Triage {
         TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
       }
       return TriageItem(
-        title: title(card.reason), kind: .question,
+        title: title(card.reason, max: titleLength), kind: .question,
         summary: card.questions.map(\.question).joined(separator: " "), options: options,
         multiSelect: only?.multiSelect ?? false, source: .card)
     }
@@ -624,7 +643,8 @@ public enum Triage {
     return TriageItem(
       title: title(verdict.reason), kind: verdict.kind,
       summary: verdict.summary ?? (text.hasSuffix(".") ? text : text + "."),
-      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule)
+      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule,
+      details: TriageDetails(overdueWaits: verdict.overdueWaits))
   }
 
   /// The reply's closing section as the summary. An offer's title starts
@@ -634,10 +654,11 @@ public enum Triage {
     let summary = closingSection(reply)
     switch Attention.classify(reply) {
     case .question:
-      return TriageItem(title: title(verdict.reason), kind: .question, summary: summary, source: .fallback)
+      return TriageItem(
+        title: title(verdict.reason, max: titleLength), kind: .question, summary: summary, source: .fallback)
     case .offer(let step):
       guard let asked = Attention.lastQuestion(reply), asked.question == step else {
-        return TriageItem(title: title(step), kind: .approval, summary: summary, source: .fallback)
+        return TriageItem(title: title(step, max: titleLength), kind: .approval, summary: summary, source: .fallback)
       }
       let options =
         OfferText.isYesNo(step) ? ["Yes", "No"].map { TriageOption(label: $0, action: .send, message: $0) } : []
@@ -645,7 +666,8 @@ public enum Triage {
         title: OfferText.title(question: step, previous: asked.previous), kind: .approval,
         summary: summary, options: options, source: .fallback)
     case .other:
-      return TriageItem(title: title(verdict.reason), kind: .info, summary: summary, source: .fallback)
+      return TriageItem(
+        title: title(verdict.reason, max: titleLength), kind: .info, summary: summary, source: .fallback)
     }
   }
 
@@ -706,9 +728,9 @@ public enum Triage {
   /// The ref of a rule item with this title.
   static func ruleRef(_ title: String) -> String { "rule:\(title)" }
 
-  static func title(_ reason: String) -> String {
+  static func title(_ reason: String, max: Int = ruleTitleLength) -> String {
     let text = capitalized(reason).replacingOccurrences(of: "; ", with: ": ")
-    return oneLine(text, max: titleLength)
+    return oneLine(text, max: max)
   }
 
   /// The picks as one option, whose message is the one reply that they send.

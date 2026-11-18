@@ -215,14 +215,18 @@ public struct Wait: Codable, Equatable, Sendable {
     outcomeLine("still open after \(Wait.age((recheck ?? created) - created))")
   }
 
-  /// A duration in its largest whole unit, such as `45 min`, `2 h`, or `3 d`.
-  static func age(_ ms: Int64) -> String {
-    let minute: Int64 = 60_000
-    let hour = 60 * minute
-    let day = 24 * hour
-    if ms >= day { return "\(ms / day) d" }
-    if ms >= hour { return "\(ms / hour) h" }
-    return "\(max(1, ms / minute)) min"
+  /// A duration in its largest whole unit and at least a minute, such as `45m`, `2h`, or `3d`.
+  static func age(_ ms: Int64) -> String { compactDuration(max(ms, 60_000)) }
+
+  /// Whether GitHub still has a review request for `who`, from the PR's pending requests. GitHub names a team by
+  /// its slug alone, so an `org/slug` reviewer matches that slug in any org. Nil when the wait names no reviewer, and
+  /// when the list is nil or empty.
+  public func pendingReviewer(in requests: [String]?) -> Bool? {
+    guard let who, let requests, !requests.isEmpty else { return nil }
+    let bare = who.hasPrefix("@") ? String(who.dropFirst()) : who
+    guard let slash = bare.lastIndex(of: "/") else { return requests.contains { Wait.sameLogin($0, bare) } }
+    let slug = bare[bare.index(after: slash)...]
+    return requests.contains { $0.caseInsensitiveCompare(slug) == .orderedSame }
   }
 
   /// The reason line after the wait resolved with `notify`.
@@ -488,7 +492,7 @@ extension Attention {
     if !overdue.isEmpty {
       return Verdict(
         state: .needsYou, reason: oneLine(overdue.map(\.overdueLine).joined(separator: "; ")), kind: .info,
-        byWaitRule: true)
+        byWaitRule: true, overdueWaits: overdue.map(\.id))
     }
     return Verdict(state: .waiting, reason: oneLine(waits.map(\.line).joined(separator: "; ")))
   }
