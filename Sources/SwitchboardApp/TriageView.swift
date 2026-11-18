@@ -39,20 +39,23 @@ struct TriageDetail: View {
       if Self.pane(for: session, showingTerminal: model.showingTerminal) == .terminal {
         SessionView(session: session)
       } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 14) {
-            if session.removal?.state == .failed {
-              FailedRemovalActions(session: session)
-              reply
-            } else if let item = session.triage {
-              DecisionCard(session: session, item: item, step: $step)
-            } else {
-              working
-              reply
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+              if session.removal?.state == .failed {
+                FailedRemovalActions(session: session)
+                reply
+              } else if let item = session.triage {
+                DecisionCard(session: session, item: item, step: $step)
+              } else {
+                working
+                reply
+              }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .padding(16)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .environment(\.detailScroll, proxy)
         }
         if let list = session.stepList {
           Divider()
