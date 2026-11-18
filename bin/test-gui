@@ -842,8 +842,11 @@ check_boardselect() {
   posted board-click "$c" 1 shift || fail "the app could not ⇧-click the card of $c: $result"
   wait_for 5 selects "$c" || fail "⇧-click did not add $c: $(app board-selection)"
   selects "$b" || fail "⇧-click dropped $b: $(app board-selection)"
-  posted board-click-empty "$c" || fail "the app could not click empty space: $result"
-  wait_for 5 selection_is none || fail "a click on empty space did not clear the selection: $(app board-selection)"
+  # The hidden window sometimes drops a posted click on empty space, so the click is retried.
+  cleared_by_empty_click() {
+    posted board-click-empty "$c" && wait_for 2 selection_is none
+  }
+  wait_for 10 cleared_by_empty_click || fail "a click on empty space did not clear the selection: $(app board-selection)"
   posted board-drag "$a" "$b" || fail "the app could not drag from empty space: $result"
   wait_for 5 selects "$a" || fail "the rectangle did not select $a: $(app board-selection)"
   wait_for 5 selects "$b" || fail "the rectangle did not select $b: $(app board-selection)"

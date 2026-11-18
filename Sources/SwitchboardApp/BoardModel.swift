@@ -823,6 +823,8 @@ final class BoardModel: ObservableObject {
       },
       finally: { self.startingNow.remove(id) })
   }
+  static let stopHelp =
+    "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
   static let startNowHelp =
     "Start claude now. When the live cap is full, sbd stops the lowest-priority idle session to make room."
   func setDone(_ id: String, _ done: Bool) { perform("done", ["session": .string(id), "done": .bool(done)]) }
@@ -1536,11 +1538,15 @@ final class BoardModel: ObservableObject {
       name: s.name, worktree: s.repo == nil ? nil : s.cwd, branch: branch)
   }
 
-  /// Hands a Done session to sbd's removal job, which deletes everything `deletePlan` names after the
+  /// The scope of a one-session delete. A Done session keeps the `done` scope, so sbd refuses it when it left
+  /// Done after the dialog opened. Any other work session, such as an Inbox item, takes the `work` scope.
+  nonisolated static func deleteScope(_ s: SessionSummary) -> RemovalScope { s.isRemovableDone ? .done : .work }
+
+  /// Hands a session to sbd's removal job, which deletes everything `deletePlan` names after the
   /// safety checks of `rm`. The request runs on `worker`, in order with the other actions.
-  func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
+  func deleteSession(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    queueRemovals([s.id], scope: .done, resolve: resolve, finally: { self.deleting.remove(s.id) })
+    queueRemovals([s.id], scope: Self.deleteScope(s), resolve: resolve, finally: { self.deleting.remove(s.id) })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.
