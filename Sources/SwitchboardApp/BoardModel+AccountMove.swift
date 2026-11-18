@@ -40,6 +40,10 @@ extension BoardModel {
     }
   }
 
+  /// Whether the Board shows the group's lane. The org filter hides a group
+  /// whose sessions it hides all of, and a group chat stays listed anyway.
+  func boardShowsGroup(_ id: String) -> Bool { shownGroups.contains { $0.id == id } }
+
   /// Shows the Board with the session's card in its group's lane, where the
   /// lane's account menu sets the group's account. A group chat has no card.
   func showGroupOnBoard(_ session: SessionSummary) {

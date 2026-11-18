@@ -24,7 +24,7 @@ struct MoveToAccountMenuItems: View {
       .disabled(entry.disabled)
       .help(entry.help ?? "")
     }
-    if let lock {
+    if let lock, model.boardShowsGroup(lock.groupID) {
       Divider()
       Button("Show \(lock.groupName) on the Board") { model.showGroupOnBoard(session) }
     }

@@ -9,7 +9,7 @@ struct SessionAccountEntry: Identifiable, Equatable {
   /// The session runs under this account.
   var checked: Bool
   var disabled: Bool
-  /// Why the entry is disabled, when the reason is not the checkmark.
+  /// Why the entry is disabled.
   var help: String?
   var id: String { folder }
 }
@@ -17,6 +17,7 @@ struct SessionAccountEntry: Identifiable, Equatable {
 /// The group whose account a session follows. sbd refuses to move the session
 /// to any other account.
 struct GroupLock: Equatable {
+  var groupID: String
   var groupName: String
   var folder: String
   var accountName: String { ClaudeAccount(folder: folder).name }
@@ -37,7 +38,7 @@ enum SessionAccountMenu {
   static func groupLock(for s: SessionSummary, groups: [GroupSummary]) -> GroupLock? {
     guard let id = s.chat ?? s.group, let group = groups.first(where: { $0.id == id }), let folder = group.account
     else { return nil }
-    return GroupLock(groupName: group.name, folder: folder)
+    return GroupLock(groupID: id, groupName: group.name, folder: folder)
   }
 
   static func entries(
@@ -49,16 +50,12 @@ enum SessionAccountMenu {
       let folder = row.account.folder
       let checked = current == ClaudeAccount(folder: folder)
       var entry = SessionAccountEntry(
-        folder: folder, title: AccountMenu.label(row), checked: checked, disabled: checked, help: nil)
-      if checked { return entry }
+        folder: folder, title: row.signedOut ? row.choiceTitle : AccountMenu.label(row), checked: checked,
+        disabled: checked || row.signedOut, help: row.signedOut ? row.usage?.error : nil)
       // sbd compares the group's folder to the target's as text.
-      if let lock, lock.folder != folder {
+      if !checked, let lock, lock.folder != folder {
         entry.disabled = true
         entry.help = lock.line
-      } else if row.signedOut {
-        entry.title = row.choiceTitle
-        entry.disabled = true
-        entry.help = row.usage?.error
       }
       return entry
     }

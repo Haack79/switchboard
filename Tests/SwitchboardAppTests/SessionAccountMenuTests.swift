@@ -148,6 +148,30 @@ import Testing
     #expect(entry?.checked == false)
   }
 
+  @Test func aSignedOutCurrentAccountIsCheckedAndSaysItIsNotSignedIn() {
+    let login = "not signed in. Run CLAUDE_CONFIG_DIR=/Users/me/.claude-personal claude /login"
+    let usage = [AccountUsage(name: "personal", folder: Self.personal, error: login, signedOut: true)]
+
+    let entry = entries(session(), usage: usage).first { $0.folder == Self.personal }
+
+    #expect(entry?.checked == true)
+    #expect(entry?.disabled == true)
+    #expect(entry?.title == "personal (not signed in)")
+    #expect(entry?.help == login)
+  }
+
+  /// The group's reason wins the help text, and the title still says the account is signed out.
+  @Test func aSignedOutAccountThatTheGroupExcludesSaysItIsNotSignedIn() {
+    let usage = [AccountUsage(name: "max", folder: Self.max, error: "not signed in", signedOut: true)]
+
+    let entry = entries(session(group: "g1"), usage: usage, groups: groups(account: Self.work))
+      .first { $0.folder == Self.max }
+
+    #expect(entry?.disabled == true)
+    #expect(entry?.title == "max (not signed in)")
+    #expect(entry?.help == "Its group, Flags, runs on work. Change the group's account instead.")
+  }
+
   /// sbd moves a session to an account it has not read yet, so the entry stays enabled.
   @Test func anAccountWithoutAReadingIsEnabled() {
     let list = entries(session(), usage: [])
@@ -213,6 +237,7 @@ import Testing
     let lock = SessionAccountMenu.groupLock(for: chat(), groups: groups(account: Self.work))
     let list = entries(chat(), groups: groups(account: Self.work))
 
+    #expect(lock?.groupID == "g1")
     #expect(lock?.groupName == "Flags")
     #expect(enabled(list) == [Self.work])
   }

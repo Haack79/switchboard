@@ -250,6 +250,24 @@ import Testing
     #expect(model.boardFocus == nil)
   }
 
+  /// The org filter hides a group whose sessions it hides all of, so the menu offers no link to its lane.
+  @Test func theBoardDoesNotShowAGroupWhoseSessionsTheOrgFilterHides() {
+    let model = orgFilterModel(posthogOnly)
+    model.apply(
+      .success([orgSession("ph", "PostHog/posthog", group: "g1"), orgSession("hk", "haacked/switchboard", group: "g2")]
+      ),
+      followups: nil)
+    model.groups = [
+      GroupSummary(
+        SessionGroup(id: "g1", name: "Flags", created: 0, account: "/Users/me/.claude-work"), sessions: ["ph"]),
+      GroupSummary(
+        SessionGroup(id: "g2", name: "Docs", created: 0, account: "/Users/me/.claude-work"), sessions: ["hk"]),
+    ]
+
+    #expect(model.boardShowsGroup("g1"))
+    #expect(!model.boardShowsGroup("g2"))
+  }
+
   // MARK: Guard: no stop without the user's Stop and Move
 
   /// Each path on which the user never pressed Stop and Move.
