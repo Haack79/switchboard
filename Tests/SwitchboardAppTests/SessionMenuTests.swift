@@ -149,6 +149,17 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
     #expect(!SessionMenu.actions(for: s, selectionCount: nil).contains(where: isDelete))
   }
 
+  @Test func offersNoDeleteForADocketRowThatIsNotDone() {
+    #expect(!SessionMenu.actions(for: docketSession("d1"), selectionCount: nil).contains(where: isDelete))
+  }
+
+  @Test func offersDeleteForADocketRowInDone() {
+    var s = docketSession("d1")
+    s.state = .done
+
+    #expect(SessionMenu.actions(for: s, selectionCount: nil).contains(where: isDelete))
+  }
+
   @Test func offersDeleteForAFollowupThatStarted() {
     var s = liveWork(.working)
     s.followup = Followup(prompt: "p")
@@ -175,6 +186,35 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
   @Test func offersNoDeleteSelectionForARowOutsideTheMultiSelection() {
     #expect(!SessionMenu.actions(for: liveWork(), selectionCount: nil).contains(where: isDeleteSelection))
+  }
+
+  @Test func passesTheRemovableCountForASidebarRowInTheMultiSelection() {
+    let count = SessionMenu.selectionCount(
+      for: "s1", removableSelection: 2, showsMultiSelection: true, multiSelection: ["s1", "s2"])
+
+    #expect(count == 2)
+  }
+
+  @Test func passesNoCountForASidebarRowOutsideTheMultiSelection() {
+    let count = SessionMenu.selectionCount(
+      for: "s3", removableSelection: 2, showsMultiSelection: true, multiSelection: ["s1", "s2"])
+
+    #expect(count == nil)
+  }
+
+  /// The Board and the Inbox pass no `removableSelection`, so their rows never offer the selection delete.
+  @Test func passesNoCountForARowOutsideTheSidebar() {
+    let count = SessionMenu.selectionCount(
+      for: "s1", removableSelection: nil, showsMultiSelection: true, multiSelection: ["s1", "s2"])
+
+    #expect(count == nil)
+  }
+
+  @Test func passesNoCountWithoutAMultiSelection() {
+    let count = SessionMenu.selectionCount(
+      for: "s1", removableSelection: 1, showsMultiSelection: false, multiSelection: ["s1"])
+
+    #expect(count == nil)
   }
 }
 

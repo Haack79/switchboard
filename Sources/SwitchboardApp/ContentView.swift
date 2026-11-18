@@ -633,8 +633,10 @@ struct BoardView: View {
                             }
                           }
                           .contextMenu {
-                            SessionMenuItems(session: s, hasExtra: drops) {
-                              if drops { moveMenu(s.id, from: lane.group?.id) }
+                            if drops {
+                              SessionMenuItems(session: s) { moveMenu(s.id, from: lane.group?.id) }
+                            } else {
+                              SessionMenuItems(session: s)
                             }
                           }
                           .id(s.id)

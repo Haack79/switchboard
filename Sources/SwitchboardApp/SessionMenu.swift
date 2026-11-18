@@ -19,7 +19,8 @@ enum SessionMenu {
   /// The actions in menu order: the non-destructive ones, then a divider and the destructive ones, with the delete
   /// last. `selectionCount` is the removable count of the sidebar's multi-selection when the row belongs to it, and
   /// nil otherwise. A row in a multi-selection offers to delete the selection instead of the row alone. A session
-  /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep.
+  /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep. A docket row offers Delete
+  /// only in Done, because the confirmation describes a session that runs claude in a worktree.
   /// `hasExtra` is true when the row shows items of its own before the destructive ones. The divider shows only
   /// when an item comes before it.
   static func actions(for s: SessionSummary, selectionCount: Int?, hasExtra: Bool = false) -> [SessionMenuAction] {
@@ -37,10 +38,19 @@ enum SessionMenu {
     if CleanupOffer.canCleanUp(s) { destructive.append(.cleanUp) }
     if let selectionCount {
       destructive.append(.deleteSelection(count: selectionCount))
-    } else if s.isRemovableWork && s.removal == nil {
+    } else if s.removal == nil && (s.isRemovableDone || (s.isRemovableWork && s.docket == nil)) {
       destructive.append(.delete("Delete \(BoardModel.deletePlan(s).summary)…"))
     }
     return destructive.isEmpty || (safe.isEmpty && !hasExtra) ? safe + destructive : safe + [.divider] + destructive
+  }
+
+  /// The `selectionCount` that row `id` passes to `actions`. A row gets `removableSelection` back only when it
+  /// belongs to a multi-selection.
+  static func selectionCount(
+    for id: String, removableSelection: Int?, showsMultiSelection: Bool, multiSelection: Set<String>
+  ) -> Int? {
+    guard let removableSelection, showsMultiSelection, multiSelection.contains(id) else { return nil }
+    return removableSelection
   }
 }
 
@@ -51,16 +61,14 @@ struct SessionMenuItems<Extra: View>: View {
   let session: SessionSummary
   /// The removable count of the sidebar's multi-selection, which the sidebar reads once for every row.
   var removableSelection: Int? = nil
-  /// False when `extra` shows nothing for this row, so that no divider opens the menu.
-  var hasExtra = true
   @ViewBuilder var extra: () -> Extra
 
   var body: some View {
-    let inSelection =
-      removableSelection != nil && model.showsMultiSelection
-      && model.multiSelection.contains(session.id)
+    let selectionCount = SessionMenu.selectionCount(
+      for: session.id, removableSelection: removableSelection, showsMultiSelection: model.showsMultiSelection,
+      multiSelection: model.multiSelection)
     let actions = SessionMenu.actions(
-      for: session, selectionCount: inSelection ? removableSelection : nil, hasExtra: hasExtra)
+      for: session, selectionCount: selectionCount, hasExtra: Extra.self != EmptyView.self)
     let split = actions.firstIndex(of: .divider) ?? actions.endIndex
     ForEach(actions[..<split], id: \.self, content: item)
     extra()
@@ -101,6 +109,6 @@ struct SessionMenuItems<Extra: View>: View {
 
 extension SessionMenuItems where Extra == EmptyView {
   init(session: SessionSummary, removableSelection: Int? = nil) {
-    self.init(session: session, removableSelection: removableSelection, hasExtra: false) { EmptyView() }
+    self.init(session: session, removableSelection: removableSelection) { EmptyView() }
   }
 }
