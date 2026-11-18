@@ -1,0 +1,101 @@
+import Foundation
+import SwitchboardCore
+
+/// How the Loops view orders its rows. Both orders keep the loops that need attention on top.
+enum LoopSort: String, CaseIterable {
+  /// Core's attention order: failed, overdue, due, active, held, then paused.
+  case status
+  /// By session name, then the attention order.
+  case session
+
+  var title: String {
+    switch self {
+    case .status: "Status"
+    case .session: "Session"
+    }
+  }
+}
+
+/// One loop in the Loops view, with its session and its status.
+struct LoopRow: Identifiable {
+  let session: SessionSummary
+  let schedule: Schedule
+  let status: ScheduleStatus
+
+  var id: String { schedule.id }
+
+  static func attentionOrder(_ a: LoopRow, _ b: LoopRow) -> Bool {
+    ScheduleRow.attentionOrder(a.scheduleRow, b.scheduleRow)
+  }
+
+  private var scheduleRow: ScheduleRow {
+    ScheduleRow(session: session.id, name: session.name, schedule: schedule, status: status)
+  }
+}
+
+extension BoardModel {
+  /// The shown sessions that have a loop, by name. The Loops view's session filter lists them.
+  var loopSessions: [SessionSummary] {
+    sessions.filter { !($0.schedules ?? []).isEmpty }.sorted(by: Self.byName)
+  }
+
+  /// `loopSessionFilter` while a shown session with that id has a loop, else nil. A filter whose session lost its
+  /// last loop therefore lists every loop.
+  var loopSessionChoice: String? {
+    loopSessionFilter.flatMap { id in loopSessions.contains { $0.id == id } ? id : nil }
+  }
+
+  /// The loops of the shown sessions that `loopSessionChoice` picks, in `loopSort`'s order.
+  func loopRows(now: Int64) -> [LoopRow] {
+    let choice = loopSessionChoice
+    let rows = allLoopRows(now: now).filter { choice == nil || $0.session.id == choice }
+    switch loopSort {
+    case .status:
+      return rows.sorted(by: LoopRow.attentionOrder)
+    case .session:
+      return rows.sorted { a, b in
+        if a.status.needsAttention != b.status.needsAttention { return a.status.needsAttention }
+        if a.session.id != b.session.id { return Self.byName(a.session, b.session) }
+        return LoopRow.attentionOrder(a, b)
+      }
+    }
+  }
+
+  /// The loops of every shown session that need attention. The tab's session filter does not change it.
+  func loopAttentionCount(now: Int64) -> Int {
+    allLoopRows(now: now).filter(\.status.needsAttention).count
+  }
+
+  /// The focused loop while the list shows it, else the first row.
+  var currentLoop: LoopRow? { currentLoop(in: loopRows(now: nowMs())) }
+
+  func currentLoop(in rows: [LoopRow]) -> LoopRow? {
+    rows.first { $0.id == loopFocus } ?? rows.first
+  }
+
+  func moveLoop(by step: Int, wrap: Bool = true) {
+    let rows = loopRows(now: nowMs())
+    guard let next = ListStep.step(rows.map(\.id), from: currentLoop(in: rows)?.id, by: step, wrap: wrap) else {
+      return
+    }
+    loopFocus = next
+    loopJumps += 1
+  }
+
+  private func allLoopRows(now: Int64) -> [LoopRow] {
+    sessions.flatMap { session in
+      let hold = session.scheduleHold
+      return (session.schedules ?? []).map {
+        LoopRow(session: session, schedule: $0, status: ScheduleStatus($0, hold: hold, now: now))
+      }
+    }
+  }
+
+  private static func byName(_ a: SessionSummary, _ b: SessionSummary) -> Bool {
+    switch a.name.localizedStandardCompare(b.name) {
+    case .orderedAscending: true
+    case .orderedDescending: false
+    case .orderedSame: a.id < b.id
+    }
+  }
+}

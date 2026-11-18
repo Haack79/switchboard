@@ -63,9 +63,8 @@ func scheduleText(_ s: Schedule, status: String) -> String {
 
 /// The summary carries the facts that sbd's tick reads, so the status matches the one that sbd computes.
 func printSchedules(_ s: SessionSummary) {
-  let hold = Schedule.hold(done: s.markedDone, paused: s.pause != nil, removing: s.removal?.holdsSession == true)
   for schedule in s.schedules ?? [] {
-    let status = ScheduleStatus(schedule, hold: hold, now: nowMs())
+    let status = ScheduleStatus(schedule, hold: s.scheduleHold, now: nowMs())
     print("  schedule: \(schedule.id)  \(scheduleText(schedule, status: status.text))".printable)
   }
 }

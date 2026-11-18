@@ -11,18 +11,29 @@ import Testing
     #expect(ContentView.viewLabel("Issues", 0) == "Issues")
   }
 
-  /// The toolbar picker and the Session menu's Show items read these titles.
-  @Test func mainViewTitlesKeepThePickerAndMenuOrder() {
-    #expect(MainView.allCases.map(\.title) == ["Inbox", "Board", "Issues"])
+  @Test func loopsWithNoLoopThatNeedsAttentionShowsNoCount() {
+    #expect(ContentView.viewLabel("Loops", 0) == "Loops")
   }
 
-  /// The Session menu binds Show Inbox, Show Board, and Show Issues to ⌘1 to ⌘3.
-  @Test func mainViewShortcutKeysAreOneToThree() {
-    #expect(MainView.allCases.map(\.shortcutKey) == ["1", "2", "3"])
+  @Test func loopsShowsHowManyLoopsNeedAttention() {
+    #expect(ContentView.viewLabel("Loops", 2) == "Loops 2")
+  }
+
+  /// The toolbar picker and the Session menu's Show items read these titles.
+  @Test func mainViewTitlesKeepThePickerAndMenuOrder() {
+    #expect(MainView.allCases.map(\.title) == ["Inbox", "Board", "Issues", "Loops"])
+  }
+
+  /// The Session menu binds Show Inbox, Show Board, Show Issues, and Show Loops to ⌘1 to ⌘4.
+  @Test func mainViewShortcutKeysAreOneToFour() {
+    #expect(MainView.allCases.map(\.shortcutKey) == ["1", "2", "3", "4"])
   }
 
   /// The navigation history menu shows these symbols next to each place.
   @Test func mainViewSymbolsMatchTheHistoryIcons() {
-    #expect(MainView.allCases.map(\.symbol) == ["tray", "square.grid.3x3", "smallcircle.filled.circle"])
+    #expect(
+      MainView.allCases.map(\.symbol) == [
+        "tray", "square.grid.3x3", "smallcircle.filled.circle", "clock.arrow.circlepath",
+      ])
   }
 }

@@ -35,6 +35,14 @@ public struct Schedule: Codable, Equatable, Sendable {
       self.skipped = skipped
       self.error = error
     }
+
+    /// Such as `pasted 5m ago · 2 skipped` or `failed 2m ago: <error>`.
+    public func text(now: Int64 = nowMs()) -> String {
+      var text = "\(outcome.rawValue) \(ago(t, now: now)) ago"
+      if let error { text += ": \(error)" }
+      if skipped > 0 { text += " · \(skipped) skipped" }
+      return text
+    }
   }
 
   public static let maxPerSession = 10
@@ -215,10 +223,14 @@ public struct Schedule: Codable, Equatable, Sendable {
   /// failed 2m ago: <error>`, or `never ran`.
   public func lastText(now: Int64 = nowMs()) -> String {
     guard let last else { return "never ran" }
-    var text = "last: \(last.outcome.rawValue) \(ago(last.t, now: now)) ago"
-    if let error = last.error { text += ": \(error)" }
-    if last.skipped > 0 { text += " · \(last.skipped) skipped" }
-    return text
+    return "last: \(last.text(now: now))"
+  }
+}
+
+extension SessionSummary {
+  /// `Schedule.hold` from the facts that `Service.summary` copies from the session, so it matches sbd's tick.
+  public var scheduleHold: String? {
+    Schedule.hold(done: markedDone, paused: pause != nil, removing: isBeingRemoved)
   }
 }
 

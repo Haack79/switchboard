@@ -25,4 +25,11 @@ import Testing
     #expect(sent.op == "remove-schedule")
     #expect(sent.args == ["schedule": "r1"])
   }
+
+  @Test func runningAScheduleNowSendsRunScheduleWithTheId() async {
+    let sent = await firstRequest { $0.runSchedule("r1") }
+
+    #expect(sent.op == "run-schedule")
+    #expect(sent.args == ["schedule": "r1"])
+  }
 }

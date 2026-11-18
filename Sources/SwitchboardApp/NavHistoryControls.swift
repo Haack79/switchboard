@@ -64,6 +64,7 @@ private struct RecentPlacesList: View {
     case .inbox: Image(systemName: MainView.inbox.symbol)
     case .board: Image(systemName: MainView.board.symbol)
     case .issues: Image(systemName: MainView.issues.symbol)
+    case .loops: Image(systemName: MainView.loops.symbol)
     case .session(let id):
       Circle().fill(model.summary(id)?.state.color ?? .gray).frame(width: 8, height: 8)
     }

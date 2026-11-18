@@ -53,11 +53,12 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
-  private func count(for view: MainView) -> Int {
+  private func count(for view: MainView, now: Int64) -> Int {
     switch view {
     case .inbox: model.triage.count
     case .board: 0
     case .issues: model.issueCount
+    case .loops: model.loopAttentionCount(now: now)
     }
   }
 
@@ -118,6 +119,7 @@ struct ContentView: View {
           case .inbox: InboxView()
           case .board: BoardView()
           case .issues: IssuesView()
+          case .loops: LoopsView()
           }
         }
       }
@@ -134,15 +136,19 @@ struct ContentView: View {
     .toolbar {
       ToolbarItem(placement: .navigation) { NavHistoryControls() }
       ToolbarItem(placement: .navigation) {
-        // No segment is selected while a session shows.
-        Picker("View", selection: viewChoice) {
-          ForEach(MainView.allCases, id: \.self) { view in
-            Text(Self.viewLabel(view.title, count(for: view))).tag(MainView?.some(view))
+        // The Loops count changes with the time alone, while sbd's `ls` answer stays the same.
+        TimelineView(.everyMinute) { _ in
+          let now = nowMs()
+          // No segment is selected while a session shows.
+          Picker("View", selection: viewChoice) {
+            ForEach(MainView.allCases, id: \.self) { view in
+              Text(Self.viewLabel(view.title, count(for: view, now: now))).tag(MainView?.some(view))
+            }
           }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .help("Show the Inbox (⌘1), the Board (⌘2), Issues (⌘3), or Loops (⌘4)")
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
       ToolbarItem(placement: .navigation) { SessionFilterMenu() }
       ToolbarItem { ManagerButton() }

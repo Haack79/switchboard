@@ -8,12 +8,14 @@ enum MainView: CaseIterable {
   case inbox
   case board
   case issues
+  case loops
 
   var title: String {
     switch self {
     case .inbox: "Inbox"
     case .board: "Board"
     case .issues: "Issues"
+    case .loops: "Loops"
     }
   }
 
@@ -22,6 +24,7 @@ enum MainView: CaseIterable {
     case .inbox: "tray"
     case .board: "square.grid.3x3"
     case .issues: "smallcircle.filled.circle"
+    case .loops: "clock.arrow.circlepath"
     }
   }
 
@@ -31,6 +34,7 @@ enum MainView: CaseIterable {
     case .inbox: "1"
     case .board: "2"
     case .issues: "3"
+    case .loops: "4"
     }
   }
 }
@@ -298,6 +302,16 @@ final class BoardModel: ObservableObject {
   /// entry starts in `KnownRepos.preferredGroup`.
   @Published var issueGroupPicks: [String: String?] = [:]
   @Published var showingIssueSetup = false
+  /// The loop that the user last moved to in the Loops view, by schedule id.
+  @Published var loopFocus: String?
+  /// Counts moves in the Loops view. Each one scrolls to the current loop.
+  @Published var loopJumps = 0
+  /// The installed app saves it.
+  @Published var loopSort: LoopSort {
+    didSet { if loopSort != oldValue { viewSettingsStore?.set(loopSort.rawValue, forKey: Self.loopSortKey) } }
+  }
+  /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
+  @Published var loopSessionFilter: String?
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -382,6 +396,7 @@ final class BoardModel: ObservableObject {
   static let orgFilterKey = "orgFilter"
   static let groupFilterKey = "groupFilter"
   static let hidesBacklogKey = "issuesHideBacklog"
+  static let loopSortKey = "loopsSort"
   /// Where the org filter, the group filter, and the other saved view settings are saved. It is nil outside the
   /// installed app, so a debug or test run never saves a setting that changes a later run.
   private let viewSettingsStore: UserDefaults?
@@ -401,6 +416,7 @@ final class BoardModel: ObservableObject {
       org: viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter,
       group: viewSettingsStore?.stringArray(forKey: Self.groupFilterKey).map { GroupFilter(keys: $0) } ?? groupFilter)
     hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
+    loopSort = viewSettingsStore?.string(forKey: Self.loopSortKey).flatMap(LoopSort.init) ?? .status
     makeHoverCards()
   }
 
