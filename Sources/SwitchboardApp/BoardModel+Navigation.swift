@@ -46,6 +46,7 @@ extension BoardModel {
 
   func moveBoardFocus(_ direction: BoardDirection) {
     boardFocus = boardGrid.move(from: currentBoardCard, direction) ?? boardFocus
+    boardJumps += 1
   }
 
   /// Steps to the next or previous session, around the ends, in the sidebar, the Inbox, or the Board,
@@ -59,6 +60,7 @@ extension BoardModel {
     case .board:
       if let next = ListStep.step(boardGrid.readingOrder, from: currentBoardCard, by: step, wrap: true) {
         boardFocus = next
+        boardJumps += 1
       }
     case .issues:
       moveIssue(by: step)

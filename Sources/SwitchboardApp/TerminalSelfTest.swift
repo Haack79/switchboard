@@ -102,12 +102,15 @@ enum TerminalSelfTest {
   /// start a tracking loop that reads events from the queue until a mouse-up arrives. The mouse-up therefore goes
   /// to the queue before the mouse-down goes to the window, so the call returns whether or not such a loop runs.
   /// Returns false when AppKit makes no event. With `view`, the mouse-down goes to that view instead of the window.
+  /// `count` is the click's number in a series, such as 2 for the second click of a double click.
   @discardableResult
-  static func click(at point: NSPoint, in window: NSWindow, on view: NSView? = nil) -> Bool {
+  static func click(
+    at point: NSPoint, in window: NSWindow, on view: NSView? = nil, count: Int = 1, flags: NSEvent.ModifierFlags = []
+  ) -> Bool {
     func mouse(_ type: NSEvent.EventType) -> NSEvent? {
       NSEvent.mouseEvent(
-        with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        with: type, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)
     }
     guard let down = mouse(.leftMouseDown), let up = mouse(.leftMouseUp) else { return false }
     NSApp.postEvent(up, atStart: false)

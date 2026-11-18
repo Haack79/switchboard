@@ -49,6 +49,8 @@ extension BoardModel {
   func showGroupOnBoard(_ session: SessionSummary) {
     UserDefaults.standard.set(BoardLanes.group.rawValue, forKey: BoardLanes.storageKey)
     show(.board)
-    if session.kind == .work { boardFocus = session.id }
+    guard session.kind == .work else { return }
+    boardFocus = session.id
+    boardJumps += 1
   }
 }

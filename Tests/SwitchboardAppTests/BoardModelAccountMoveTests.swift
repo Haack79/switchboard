@@ -232,10 +232,13 @@ import Testing
     let model = model([s])
     UserDefaults.standard.set(BoardLanes.repo.rawValue, forKey: BoardLanes.storageKey)
 
+    let jumps = model.boardJumps
+
     model.showGroupOnBoard(s)
 
     #expect(model.mainView == .board)
     #expect(model.boardFocus == "a")
+    #expect(model.boardJumps == jumps + 1)
     #expect(UserDefaults.standard.string(forKey: BoardLanes.storageKey) == BoardLanes.group.rawValue)
   }
 
@@ -244,10 +247,13 @@ import Testing
     let groupChat = chat()
     let model = model([session(), groupChat])
 
+    let jumps = model.boardJumps
+
     model.showGroupOnBoard(groupChat)
 
     #expect(model.mainView == .board)
     #expect(model.boardFocus == nil)
+    #expect(model.boardJumps == jumps)
   }
 
   /// The org filter hides a group whose sessions it hides all of, so the menu offers no link to its lane.
