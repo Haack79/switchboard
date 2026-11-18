@@ -247,7 +247,8 @@ struct SessionView: View {
         CleanupNote(session: session)
         // The title row wraps the session's name at 1024 pt when the account sits in it.
         HStack(spacing: 8) {
-          SessionAccountControl(session: session)
+          // ChatHeader shows the account above a chat's terminal view, which nests this view.
+          if !session.kind.showsAsChat { SessionAccountControl(session: session) }
           Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
             .font(.caption)
             .foregroundStyle(.tertiary)
