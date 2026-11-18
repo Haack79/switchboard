@@ -32,6 +32,24 @@ import Testing
 
   // MARK: The resolution order
 
+  /// A close, or a merge in a repo without a deploy signal, settles a deploy wait at the time GitHub gives. A
+  /// deploy comment settles it at a time the PR doesn't carry.
+  @Test func aDeployWaitCarriesTheTimeOfTheMergeOrCloseThatSettledIt() throws {
+    var closed = pr(.closed)
+    closed.closedAt = "2026-10-23T00:00:00Z"
+    var charts = pr(repo: "PostHog/charts")
+    charts.mergedAt = "2026-10-23T01:00:00Z"
+    var posthog = pr()
+    posthog.mergedAt = "2026-10-23T01:00:00Z"
+
+    #expect(
+      wait().deploySettlement(of: closed, comments: [])?.changedAt == Transcript.milliseconds("2026-10-23T00:00:00Z"))
+    #expect(
+      wait().deploySettlement(of: charts, comments: [])?.changedAt == Transcript.milliseconds("2026-10-23T01:00:00Z"))
+    let deployed = try #require(wait().deploySettlement(of: posthog, comments: [try comment("comment-deployed.md")]))
+    #expect(deployed.changedAt == nil)
+  }
+
   /// A deploy wait is usually set after its PR merged, so an earlier merge
   /// counts. An earlier PR of a reused branch that closed without merging
   /// still doesn't.

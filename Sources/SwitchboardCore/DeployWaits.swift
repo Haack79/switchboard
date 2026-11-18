@@ -68,9 +68,17 @@ extension Wait {
   /// PostHog/posthog PR. Nothing that sbd reads shows a PostHog/charts PR or a
   /// PR in another repository deploy. Those resolve when they merge.
   public func deployResolution(of pr: SwitchboardCore.PullRequest, comments: [PRComment]) -> String? {
+    deploySettlement(of: pr, comments: comments)?.outcome
+  }
+
+  /// `deployResolution(of:comments:)` with the time, in ms, of the merge or close that settled the wait. The time
+  /// is nil when a deploy comment settled it.
+  public func deploySettlement(of pr: SwitchboardCore.PullRequest, comments: [PRComment]) -> (
+    outcome: String, changedAt: Int64?
+  )? {
     switch pr.state {
     case .open: return nil
-    case .closed: return "it closed without merging"
+    case .closed: return ("it closed without merging", pr.endedAt)
     case .merged: break
     }
     if service != nil { return nil }
@@ -78,12 +86,12 @@ extension Wait {
       let comment = comments.lazy.filter { $0.author == DeployComment.author }
         .compactMap { $0.body.flatMap(DeployComment.parse) }.last
       guard let comment, comment.deployed(to: deployEnvironments) else { return nil }
-      return deployedOutcome
+      return (deployedOutcome, nil)
     }
     if Dependencies.sameRepo(pr.repo, Wait.chartsRepository) {
-      return "it merged, and Switchboard can't read ArgoCD to see it deploy"
+      return ("it merged, and Switchboard can't read ArgoCD to see it deploy", pr.endedAt)
     }
-    return "it merged, and Switchboard has no deploy signal for \(pr.repo)"
+    return ("it merged, and Switchboard has no deploy signal for \(pr.repo)", pr.endedAt)
   }
 
   /// What happened, when a deploy wait that names a service can resolve, or
