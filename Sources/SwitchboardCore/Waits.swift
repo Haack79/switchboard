@@ -300,8 +300,14 @@ public struct Wait: Codable, Equatable, Sendable {
   ///   merged it or removed it from the queue after `countsAfter`. A PR that
   ///   Trunk has not queued yet keeps the wait open. A state that trunk gave
   ///   names Trunk's reason for a removal.
-  public func resolution(of pr: SwitchboardCore.PullRequest) -> String? {
-    let ended: String? =
+  public func resolution(of pr: SwitchboardCore.PullRequest) -> String? { settlement(of: pr)?.outcome }
+
+  /// `resolution(of:)` with the time, in ms, of the change on GitHub or Trunk
+  /// that settled the wait: the merge or close, the matching review, the
+  /// approval, or Trunk's queue state. The time is nil when the PR doesn't
+  /// give one, as for a `ci` rollup.
+  public func settlement(of pr: SwitchboardCore.PullRequest) -> (outcome: String, changedAt: Int64?)? {
+    let endedOutcome: String? =
       switch (pr.state, kind) {
       case (.open, _): nil
       case (.merged, .merge): "it merged"
@@ -310,13 +316,14 @@ public struct Wait: Codable, Equatable, Sendable {
       case (.closed, .merge), (.closed, .queue): "it closed without merging"
       case (.closed, _): "the PR closed first"
       }
+    let ended = endedOutcome.map { ($0, pr.endedAt) }
     switch kind {
     case .merge:
       return ended
     case .ci:
-      if pr.checksPassed { return "the checks passed" }
-      if let depot = pr.depotFailure { return depot.outcome }
-      return pr.checksFailed ? "the checks failed" : ended
+      if pr.checksPassed { return ("the checks passed", nil) }
+      if let depot = pr.depotFailure { return (depot.outcome, nil) }
+      return pr.checksFailed ? ("the checks failed", nil) : ended
     case .review, .botReview:
       let verbs = ["APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed"]
       let newest = pr.reviews.last { r in
@@ -327,23 +334,28 @@ public struct Wait: Codable, Equatable, Sendable {
         if let who { return Wait.sameLogin(r.author, who) }
         return kind == .botReview && r.bot == true
       }
-      return newest.flatMap { r in verbs[r.state].map { "\(r.author) \($0)" } } ?? ended
+      return newest.flatMap { r in
+        verbs[r.state].map { ("\(r.author) \($0)", r.submittedAt.flatMap(Transcript.milliseconds)) }
+      } ?? ended
     case .approval:
       if let who {
         return pr.verdicts.first { $0.isApproval && Wait.sameLogin($0.author, who) }
-          .map { "\($0.author) approved" } ?? ended
+          .map { ("\($0.author) approved", $0.submittedAt.flatMap(Transcript.milliseconds)) } ?? ended
       }
       guard pr.isApproved else { return ended }
-      return pr.approvers.isEmpty ? "the PR is approved" : "approved by " + pr.approvers.joined(separator: ", ")
+      return (
+        pr.approvers.isEmpty ? "the PR is approved" : "approved by " + pr.approvers.joined(separator: ", "),
+        pr.approvedAt.flatMap(Transcript.milliseconds)
+      )
     case .queue:
       if ended != nil { return ended }
       // A status from before the wait can describe an earlier run of the PR.
       guard let at = pr.queueAt, at > countsAfter else { return nil }
       switch pr.queue {
       case .removed?:
-        guard let label = pr.queueLabel, let text = pr.queueText else { return "Trunk removed it from the queue" }
-        return "Trunk removed it from the queue (\(label)): \(text)"
-      case .merged?: return "Trunk merged it"
+        guard let label = pr.queueLabel, let text = pr.queueText else { return ("Trunk removed it from the queue", at) }
+        return ("Trunk removed it from the queue (\(label)): \(text)", at)
+      case .merged?: return ("Trunk merged it", at)
       default: return nil
       }
     case .deploy, .session, .date, .manual:
@@ -356,9 +368,7 @@ public struct Wait: Codable, Equatable, Sendable {
   /// a merge doesn't count for it.
   public func finishedBeforeItCounts(_ pr: SwitchboardCore.PullRequest) -> Bool {
     guard pr.state != .open, !(kind == .deploy && pr.state == .merged) else { return false }
-    guard let at = (pr.state == .merged ? pr.mergedAt : pr.closedAt).flatMap(Transcript.milliseconds) else {
-      return true
-    }
+    guard let at = pr.endedAt else { return true }
     return at < countsAfter
   }
 

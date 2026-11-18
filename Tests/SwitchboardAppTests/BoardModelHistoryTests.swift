@@ -458,7 +458,7 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
     try selectBetween(model, "c", "d", "b")
     let before = model.history.entries.count
 
-    model.deleteDone(done)
+    model.deleteSession(done)
     await settle { !sent.queues.isEmpty }
     model.apply(.success(sessions(["b", "c"]) + [removalSession("d", .queued, state: .done)]), followups: nil)
 

@@ -2,17 +2,6 @@ import AppKit
 import SwiftUI
 import SwitchboardCore
 
-/// The items that every session context menu starts with.
-struct SessionMenuItems: View {
-  let session: SessionSummary
-
-  var body: some View {
-    HighlightMenuItem(session: session)
-    SnoozeMenuItems(session: session)
-    CopyLinkMenuItem(session: session)
-  }
-}
-
 /// Copy Link: the session's id link as a Markdown link labeled with its name.
 struct CopyLinkMenuItem: View {
   let session: SessionSummary

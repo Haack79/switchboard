@@ -92,10 +92,17 @@ private struct MarkdownBlocksView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
-    case .quote(let blocks):
+    case .quote(let blocks, let alert):
       HStack(spacing: 8) {
-        QuoteBar()
-        MarkdownBlocksView(blocks: blocks).foregroundStyle(.secondary)
+        QuoteBar(color: alert?.color)
+        if let alert {
+          VStack(alignment: .leading, spacing: 8) {
+            Label(alert.title, systemImage: alert.icon).fontWeight(.semibold).foregroundStyle(alert.color)
+            MarkdownBlocksView(blocks: blocks)
+          }
+        } else {
+          MarkdownBlocksView(blocks: blocks).foregroundStyle(.secondary)
+        }
       }
       .fixedSize(horizontal: false, vertical: true)
     case .table(let header, let alignments, let rows):
@@ -295,6 +302,30 @@ private struct CappedWidthLayout: Layout {
   }
 }
 
+extension MarkdownBlock.AlertKind {
+  /// GitHub's icons for the alerts are outlines, so these are too.
+  var icon: String {
+    switch self {
+    case .note: "info.circle"
+    case .tip: "lightbulb"
+    case .important: "exclamationmark.bubble"
+    case .warning: "exclamationmark.triangle"
+    case .caution: "exclamationmark.octagon"
+    }
+  }
+
+  /// The system colors adapt to the dark appearance.
+  var color: Color {
+    switch self {
+    case .note: .blue
+    case .tip: .green
+    case .important: .purple
+    case .warning: .orange
+    case .caution: .red
+    }
+  }
+}
+
 extension MarkdownBlock.Alignment {
   fileprivate var horizontal: HorizontalAlignment {
     switch self {
@@ -313,7 +344,11 @@ extension MarkdownBlock.Alignment {
   }
 }
 
-/// The bar at the left edge of a Markdown quote.
+/// The bar at the left edge of a Markdown quote. An alert's bar takes the alert's color.
 struct QuoteBar: View {
-  var body: some View { Rectangle().fill(.secondary.opacity(0.5)).frame(width: 3) }
+  var color: Color?
+
+  var body: some View {
+    Rectangle().fill(color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary.opacity(0.5))).frame(width: 3)
+  }
 }

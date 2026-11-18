@@ -25,7 +25,7 @@ final class BoardModel: ObservableObject {
   @Published var orgFilter: OrgFilter {
     didSet {
       guard orgFilter != oldValue else { return }
-      orgFilterStore?.set(orgFilter.keys.sorted(), forKey: Self.orgFilterKey)
+      viewSettingsStore?.set(orgFilter.keys.sorted(), forKey: Self.orgFilterKey)
       clearHiddenSelectionAndUpdateBadge()
     }
   }
@@ -226,6 +226,10 @@ final class BoardModel: ObservableObject {
   @Published var issueSort = IssueSort.updated
   /// Whether the Issues list has a section per repository instead of a section per bucket.
   @Published var issuesByRepo = false
+  /// Whether the Issues list leaves out the backlog issues and shows only their count. The installed app saves it.
+  @Published var hidesBacklog: Bool {
+    didSet { if hidesBacklog != oldValue { viewSettingsStore?.set(hidesBacklog, forKey: Self.hidesBacklogKey) } }
+  }
   /// The Issues sections that the user collapsed, by section id.
   @Published var collapsedIssueSections: Set<String> = IssueSection.collapsedAtFirst
   /// The issues whose Start is on its way to sbd.
@@ -316,22 +320,24 @@ final class BoardModel: ObservableObject {
   private var usageRead = Date.distantPast
 
   static let orgFilterKey = "orgFilter"
-  /// Where the org filter is saved. It is nil outside the installed app, so
-  /// a debug or test run never saves a filter that hides a later run's sessions.
-  private let orgFilterStore: UserDefaults?
+  static let hidesBacklogKey = "issuesHideBacklog"
+  /// Where the org filter and the other saved view settings are saved. It is nil outside the installed app, so a
+  /// debug or test run never saves a setting that changes a later run.
+  private let viewSettingsStore: UserDefaults?
 
   /// Takes the client so that tests can't reach the user's sbd by default.
   /// Without `draftsFolder`, the message drafts last only while the model does.
-  /// The filter starts from `orgFilterStore` when it holds one, else from `orgFilter`.
+  /// The filter starts from `viewSettingsStore` when it holds one, else from `orgFilter`.
   init(
-    client: Client, draftsFolder: String? = nil, orgFilterStore: UserDefaults? = nil,
+    client: Client, draftsFolder: String? = nil, viewSettingsStore: UserDefaults? = nil,
     orgFilter: OrgFilter = OrgFilter()
   ) {
     self.client = client
     references = ReferenceStore()
     messageDrafts = MessageDrafts(folder: draftsFolder)
-    self.orgFilterStore = orgFilterStore
-    self.orgFilter = orgFilterStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
+    self.viewSettingsStore = viewSettingsStore
+    self.orgFilter = viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
+    hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
     makeHoverCards()
   }
 
@@ -808,6 +814,8 @@ final class BoardModel: ObservableObject {
       },
       finally: { self.startingNow.remove(id) })
   }
+  static let stopHelp =
+    "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
   static let startNowHelp =
     "Start claude now. When the live cap is full, sbd stops the lowest-priority idle session to make room."
   func setDone(_ id: String, _ done: Bool) { perform("done", ["session": .string(id), "done": .bool(done)]) }
@@ -1568,11 +1576,15 @@ final class BoardModel: ObservableObject {
       name: s.name, worktree: s.repo == nil ? nil : s.cwd, branch: branch)
   }
 
-  /// Hands a Done session to sbd's removal job, which deletes everything `deletePlan` names after the
+  /// The scope of a one-session delete. A Done session keeps the `done` scope, so sbd refuses it when it left
+  /// Done after the dialog opened. Any other work session, such as an Inbox item, takes the `work` scope.
+  nonisolated static func deleteScope(_ s: SessionSummary) -> RemovalScope { s.isRemovableDone ? .done : .work }
+
+  /// Hands a session to sbd's removal job, which deletes everything `deletePlan` names after the
   /// safety checks of `rm`. The request runs on `worker`, in order with the other actions.
-  func deleteDone(_ s: SessionSummary, resolve: [String] = []) {
+  func deleteSession(_ s: SessionSummary, resolve: [String] = []) {
     guard deleting.insert(s.id).inserted else { return }
-    queueRemovals([s.id], scope: .done, resolve: resolve, finally: { self.deleting.remove(s.id) })
+    queueRemovals([s.id], scope: Self.deleteScope(s), resolve: resolve, finally: { self.deleting.remove(s.id) })
   }
 
   /// Removes the worktree and the local branch of a session whose PR merged.
