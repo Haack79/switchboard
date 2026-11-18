@@ -520,6 +520,7 @@ struct SessionRow: View {
           subtitle
         }
         CleanupNote(session: session)
+        BranchSwitchNote(session: session)
       }
     }
     .padding(.vertical, 2)
@@ -1168,6 +1169,7 @@ struct BoardCard: View {
             InlineText(plain: note, links: false).font(.caption2).foregroundStyle(.orange).lineLimit(2)
           }
           CleanupNote(session: s)
+          BranchSwitchNote(session: s)
           MergeNote(session: s)
           // A Board column is too narrow for the badge beside the PR number.
           HStack(alignment: .firstTextBaseline, spacing: 6) {
