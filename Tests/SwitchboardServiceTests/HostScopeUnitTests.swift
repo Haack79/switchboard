@@ -1031,7 +1031,7 @@ private func text(_ answer: Response) -> String {
 
       let unsent = service.queue.sync { () -> [String] in
         service.notifyParents(now: nowMs())
-        return service.parentNotices.unsent["m1"] ?? []
+        return (service.parentNotices.unsent["m1"] ?? []).map(\.text)
       }
       let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
         $0.data["text"]?.string

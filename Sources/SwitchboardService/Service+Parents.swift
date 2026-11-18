@@ -8,9 +8,15 @@ struct ParentNotices {
   /// hears at each digest.
   var marks: [String: ChildMark] = [:]
   /// The lines for each parent, oldest first.
-  var unsent: [String: [String]] = [:]
+  var unsent: [String: [Line]] = [:]
   /// The counts that each Manager or chat got in its last digest.
   var heardCounts: [String: BoardCounts] = [:]
+
+  /// A line of a notice, with the id of the child that it is about.
+  struct Line: Equatable {
+    var child: String
+    var text: String
+  }
 }
 
 extension Service {
@@ -57,12 +63,26 @@ extension Service {
   /// counts that each Manager and chat would get now, so sbd tells no parent
   /// about what happened before it started.
   func seedParentMarks(now: Int64) {
-    for (id, e) in entries where parentOf(e.session) != nil {
-      var seeded = mark(id, now: now).mark
-      seeded.heardPRs.formUnion(factsForParent(id).prNumbers)
-      parentNotices.marks[id] = seeded
-    }
+    for (id, e) in entries where parentOf(e.session) != nil { seedMark(id, now: now) }
     for id in entries.keys where !hearsNotices(id) { parentNotices.heardCounts[id] = otherCounts(id) }
+  }
+
+  /// Records what the child shows now and every PR number it has had, so its
+  /// parent hears only what changes after now.
+  func seedMark(_ id: String, now: Int64) {
+    var seeded = mark(id, now: now).mark
+    seeded.heardPRs.formUnion(factsForParent(id).prNumbers)
+    parentNotices.marks[id] = seeded
+  }
+
+  /// Drops the child's mark and every line about it that a parent has not
+  /// heard yet.
+  func forgetChild(_ id: String) {
+    parentNotices.marks[id] = nil
+    for (parent, lines) in parentNotices.unsent {
+      let kept = lines.filter { $0.child != id }
+      parentNotices.unsent[parent] = kept.isEmpty ? nil : kept
+    }
   }
 
   /// The states of the work sessions that are not the parent's children. A
@@ -91,7 +111,7 @@ extension Service {
       }
       guard let lines = parentNotices.unsent[parent], !lines.isEmpty, canTakeNotice(e, now: now) else { continue }
       do {
-        _ = try send(parent, ParentNotice.message(lines), by: .sbd, trigger: .notice)
+        _ = try send(parent, ParentNotice.message(lines.map(\.text)), by: .sbd, trigger: .notice)
         parentNotices.unsent[parent] = nil
       } catch {
         logLine("can't tell \(parent) about its children: \(error)")
@@ -109,7 +129,8 @@ extension Service {
       guard after != before else { continue }
       parentNotices.unsent[parent, default: []] += ParentNotice.lines(
         name: e.session.name, id: id, before: before, after: after, reason: reason,
-        prURL: prURL(id))
+        prURL: prURL(id)
+      ).map { ParentNotices.Line(child: id, text: $0) }
     }
     parentNotices.marks = parentNotices.marks.filter { children.contains($0.key) }
     parentNotices.heardCounts = parentNotices.heardCounts.filter { entries[$0.key] != nil }
