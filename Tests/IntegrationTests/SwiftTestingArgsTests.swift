@@ -53,6 +53,48 @@ private func requireSwiftTesting(developerDir: String, call: String) throws -> C
   return try runHelper(body, developerDir: developerDir, errexit: false)
 }
 
+/// A Testing binary at `framework`/Testing whose bytes hold the width
+/// variable's name when `readsWidth` is true. Testing.framework links its
+/// binary from Versions/Current. `symlink` puts the file there and links it.
+private struct TestingBinary: Sendable, CustomTestStringConvertible {
+  var framework: String
+  var readsWidth: Bool
+  var symlink = false
+
+  var testDescription: String {
+    let kind = framework == FakeDeveloperDir.cltFramework ? "Command Line Tools" : "Xcode"
+    return "\(kind)\(symlink ? ", linked" : ""), \(readsWidth ? "reads" : "ignores")"
+  }
+
+  func write(in dev: FakeDeveloperDir) throws {
+    let fm = FileManager.default
+    let dir = "\(dev.path)/\(framework)"
+    let target = symlink ? "\(dir)/Versions/A/Testing" : "\(dir)/Testing"
+    try fm.createDirectory(
+      atPath: (target as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    let marker = readsWidth ? "SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH" : "SWT_EXIT_TEST_ID"
+    var bytes = Data([0xCF, 0xFA, 0xED, 0xFE, 0x00])
+    bytes.append(Data(marker.utf8))
+    bytes.append(0x00)
+    try bytes.write(to: URL(fileURLWithPath: target))
+    if symlink {
+      try fm.createSymbolicLink(atPath: "\(dir)/Versions/Current", withDestinationPath: "A")
+      try fm.createSymbolicLink(atPath: "\(dir)/Testing", withDestinationPath: "Versions/Current/Testing")
+    }
+  }
+}
+
+/// Runs `warn_if_tests_start_at_once`. The script first checks that sourcing
+/// defined it, so a missing function can't pass as silence.
+private func widthWarning(developerDir: String) throws -> CommandResult {
+  let body = """
+    declare -F warn_if_tests_start_at_once >/dev/null || { echo "warn_if_tests_start_at_once is not defined" >&2; exit 3; }
+    warn_if_tests_start_at_once
+    echo after
+    """
+  return try runHelper(body, developerDir: developerDir)
+}
+
 @Suite(.blocking(timeLimit: .seconds(60))) struct SwiftTestingArgsTests {
   @Test(arguments: [
     Layout(
@@ -141,5 +183,43 @@ private func requireSwiftTesting(developerDir: String, call: String) throws -> C
     #expect(r.status == 0, "\(r.stderr)")
     #expect(r.stdout == "sourced\nafter\n")
     #expect(r.stderr == "")
+  }
+
+  /// The binary that ignores the width is the one in Xcode 26.0, Swift 6.2.
+  @Test(arguments: [
+    TestingBinary(framework: FakeDeveloperDir.xcodeFramework, readsWidth: false),
+    TestingBinary(framework: FakeDeveloperDir.xcodeFramework, readsWidth: true),
+    TestingBinary(framework: FakeDeveloperDir.xcodeFramework, readsWidth: false, symlink: true),
+    TestingBinary(framework: FakeDeveloperDir.xcodeFramework, readsWidth: true, symlink: true),
+    TestingBinary(framework: FakeDeveloperDir.cltFramework, readsWidth: false),
+    TestingBinary(framework: FakeDeveloperDir.cltFramework, readsWidth: true),
+  ])
+  fileprivate func warnsOnlyWhenTheTestingBinaryIgnoresTheWidth(_ binary: TestingBinary) throws {
+    let dev = try FakeDeveloperDir()
+    try binary.write(in: dev)
+
+    let r = try widthWarning(developerDir: dev.path)
+
+    #expect(r.status == 0, "\(r.stderr)")
+    #expect(r.stdout == "after\n")
+    if binary.readsWidth {
+      #expect(r.stderr == "", "\(r.stderr)")
+    } else {
+      #expect(r.stderr.contains("starts every test at once"), "\(r.stderr)")
+      #expect(r.stderr.contains(dev.path), "\(r.stderr)")
+      #expect(r.stderr.contains("Swift 6.3"), "\(r.stderr)")
+    }
+  }
+
+  /// A framework folder without a binary gives the check nothing to read.
+  @Test(arguments: [[], [FakeDeveloperDir.xcodeFramework], [FakeDeveloperDir.cltFramework]])
+  func saysNothingWithoutATestingBinary(_ folders: [String]) throws {
+    let dev = try FakeDeveloperDir(folders: folders)
+
+    let r = try widthWarning(developerDir: dev.path)
+
+    #expect(r.status == 0, "\(r.stderr)")
+    #expect(r.stdout == "after\n")
+    #expect(r.stderr == "", "\(r.stderr)")
   }
 }
