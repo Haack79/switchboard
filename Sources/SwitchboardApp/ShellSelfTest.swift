@@ -23,9 +23,9 @@ import SwiftUI
 /// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`. `board-click <session>
 /// [count] [cmd|shift]` clicks the session's Board card `count` times, as a double click does for 2, with ⌘ or ⇧
 /// held. `board-click-empty <session>` clicks the empty space just below the card. `board-drag <session>
-/// <session> [cmd]` drags from the empty space just above the first card to the middle of the second. The
-/// three report `posted on` the hit view's type and send their events over the next half second. `board-selection` reports the
-/// selected ids, sorted and joined by commas, or `none`.
+/// <session> [cmd]` drags from the empty space beside the first card, on the side that faces the second, to the
+/// middle of the second. The three report `posted on` the hit view's type and send their events over the next
+/// half second. `board-selection` reports the selected ids, sorted and joined by commas, or `none`.
 @MainActor
 enum ShellSelfTest {
   static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
@@ -136,8 +136,12 @@ enum ShellSelfTest {
       return press(at: NSPoint(x: card.midX, y: card.minY - 4))
     case "board-drag":
       let args = rest.split(separator: " ").map(String.init)
-      guard args.count >= 2, let from = boardCard(args[0]), let to = boardCard(args[1]) else { return "no card" }
-      let start = NSPoint(x: from.minX + clickInset, y: from.maxY + 4)
+      // Scrolling the second card into view can move the first, so both frames are read after both scrolls.
+      guard args.count >= 2, boardCard(args[1]) != nil, let from = boardCard(args[0]),
+        let to = boardCard(args[1], scroll: false)
+      else { return "no card" }
+      // The drag starts in the gap on the side of the first card that faces the second, so it crosses both.
+      let start = NSPoint(x: from.midX, y: to.midY < from.midY ? from.maxY + 4 : from.minY - 4)
       return drag(from: start, to: NSPoint(x: to.midX, y: to.midY), flags: args.contains("cmd") ? .command : [])
     case "board-selection":
       let ids = model.multiSelection.sorted()
@@ -149,11 +153,11 @@ enum ShellSelfTest {
 
   /// The frame of the session's Board card in window coordinates, after the Board scrolls the card and 24 pt
   /// around it into view. The commands click and drag in the space just outside the card.
-  private static func boardCard(_ id: String) -> NSRect? {
+  private static func boardCard(_ id: String, scroll: Bool = true) -> NSRect? {
     guard let root = window?.contentView, let anchor = ClickAnchorView.find("board-card-\(id)", in: root) else {
       return nil
     }
-    anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24))
+    if scroll { anchor.scrollToVisible(anchor.bounds.insetBy(dx: 0, dy: -24)) }
     root.layoutSubtreeIfNeeded()
     return anchor.convert(anchor.bounds, to: nil)
   }
