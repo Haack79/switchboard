@@ -572,7 +572,8 @@ func printTable(_ sessions: [SessionSummary]) {
     let live = s.live ? "●" : "○"
     let name = oneLine(s.name, max: nameWidth)
     let todos = s.openTodos.count
-    let marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    var marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    if let start = s.startBranch { marker += "  [switched from \(start)]" }
     let lead = s.isHighlighted ? "* " : "  "
     print(
       "\(lead)\(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
@@ -607,7 +608,9 @@ func printSession(_ s: SessionSummary) {
   if let account = s.account { print("  account: \(ClaudeAccount(folder: account).name)") }
   if let mode = s.permissionMode { print("  mode:    \(PermissionMode.title(mode))".printable) }
   if let b = s.branch { print("  branch:  \(b)") }
+  if let note = s.branchSwitchNote { print("  warning: \(note)".printable) }
   if let pr = s.pr { print("  pr:      \(pr.line)  \(pr.url)") }
+  if let earlier = s.earlierPRs { print("  earlier PRs: " + earlier.map { "#\($0)" }.joined(separator: ", ")) }
   for issue in s.issues ?? [] {
     print(
       "  issue:   \(issue.label(from: s.pr?.repo)) (\(issue.via.title))\(issue.url.map { "  \($0)" } ?? "")".printable)
