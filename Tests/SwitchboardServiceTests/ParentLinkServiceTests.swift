@@ -4,6 +4,8 @@ import Testing
 @testable import SwitchboardCore
 @testable import SwitchboardService
 
+// A `try` inside `#expect` fails to compile in these closures. Each check therefore binds the thrown value first.
+
 // MARK: Sessions
 
 /// A started work session in a folder, so it runs claude.
@@ -321,7 +323,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D4: group, account, host, waits, notes, and every other field stay as they were.
+  /// Group, account, host, waits, notes, and every other field stay as they were.
   @Test(.timeLimit(.minutes(1)))
   func clearChangesNoOtherFieldOfTheChild() throws {
     var kid = work("kid", parent: "boss", host: nil, group: "g1")
@@ -349,7 +351,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D5: a parent that sbd removed gets no event.
+  /// A parent that sbd removed gets no event.
   @Test(.timeLimit(.minutes(1)))
   func clearWhenTheParentWasRemovedRecordsOnlyTheChildsEvent() throws {
     try withParents([work("kid", parent: "gone")]) { service in
@@ -377,7 +379,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
 
 // MARK: Refusals that change nothing
 
-/// Every refusal in D6, D8, and D9 fails with its text and leaves the store, the log, and the notice state as they were.
+/// Every refusal fails with its text and leaves the store, the log, and the notice state as they were.
 @Suite struct ParentLinkRefusalTests {
   /// Runs the request on a service that holds `sessions` and returns its error. It records an issue when the request
   /// succeeds or changes anything.
@@ -456,7 +458,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     #expect(!error.isEmpty)
   }
 
-  // MARK: D8: the child can't change its own parent
+  // MARK: The child can't change its own parent
 
   @Test(
     .timeLimit(.minutes(1)),
@@ -471,7 +473,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     #expect(error.contains("kidname can't change its own parent"), "\(error)")
   }
 
-  // MARK: D8: a scoped request stays in its group
+  // MARK: A scoped request stays in its group
 
   @Test(.timeLimit(.minutes(1)), arguments: [String?.none, "g2"])
   func aScopedClearOfAChildOutsideTheGroupIsRefused(_ group: String?) throws {
@@ -511,7 +513,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     #expect(error.contains("is not in group"), "\(error)")
   }
 
-  // MARK: D9: the rules of a set
+  // MARK: The rules of a set
 
   @Test(.timeLimit(.minutes(1)))
   func aSetToAnUnknownParentIsRefused() throws {
@@ -559,7 +561,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     #expect(error.contains("only a work session can have a parent"), "\(error)")
   }
 
-  /// D9 lists the refusals in order, and the runs-claude rule comes before the work-session rule.
+  /// The runs-claude refusal comes before the work-session refusal.
   @Test(.timeLimit(.minutes(1)))
   func aSetThatBreaksTwoRulesGetsTheRefusalListedFirst() throws {
     let error = try refusal(
@@ -680,7 +682,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D6: a double undo sends the same set twice, and the second changes nothing.
+  /// A double undo sends the same set twice, and the second changes nothing.
   @Test(.timeLimit(.minutes(1)))
   func setToTheCurrentParentSucceedsAndChangesNothing() throws {
     try withParents([work("boss"), work("kid", parent: "boss")]) { service in
@@ -750,7 +752,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D4: a move never re-inherits the new parent's group, account, or host.
+  /// A move never re-inherits the new parent's group, account, or host.
   @Test(.timeLimit(.minutes(1)))
   func aMoveKeepsTheChildsGroupAccountAndHost() throws {
     var kid = work("kid", parent: "old", group: "g1")
@@ -786,7 +788,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D8: any caller but the child may change its parent, such as the parent itself.
+  /// Any caller but the child may change its parent, such as the parent itself.
   @Test(.timeLimit(.minutes(1)))
   func theParentCanUnlinkItsChild() throws {
     try withParents([work("boss"), work("kid", parent: "boss")]) { service in
@@ -797,7 +799,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  /// D9: a done parent or child is allowed.
+  /// A done parent or child is allowed.
   @Test(.timeLimit(.minutes(1)))
   func aSetToADoneParentIsAccepted() throws {
     var boss = work("boss")
@@ -880,8 +882,8 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
 
 // MARK: Risk 3: queued notices and the seed
 
-/// After a `parent` request, no parent holds a queued line about the child (D10), and a new parent hears only what
-/// changes after the link (D11).
+/// After a `parent` request, no parent holds a queued line about the child, and a new parent hears only what
+/// changes after the link.
 @Suite struct ParentLinkNoticeTests {
   static let family = [work("boss"), work("kid", parent: "boss"), work("sibling", parent: "boss")]
 
@@ -957,7 +959,7 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
-  // MARK: D11
+  // MARK: A new parent hears only what changes after the link
 
   /// The child already has a PR, a reply, and a state its new parent never heard about. `.fresh` would hide a bare
   /// child, so the test gives it all three and then proves that, without the seed, a line would queue.
@@ -1084,8 +1086,16 @@ enum ParentLinkShape: String, CaseIterable, Sendable, CustomTestStringConvertibl
     }
   }
 
+  /// The test computes `shown` with `SessionTree.parentID`, the predicate behind the app's menu. A change to that
+  /// predicate that shows the item on a row sbd refuses fails here.
   @Test(arguments: ParentLinkShape.allCases)
-  func everyRowWhoseMenuShowsIsOneThatSbdAccepts(_ shape: ParentLinkShape) {
-    #expect(!shape.shown || shape.accepted)
+  func everyRowWhoseMenuShowsIsOneThatSbdAccepts(_ shape: ParentLinkShape) throws {
+    let kid = try #require(shape.sessions.first { $0.id == "kid" })
+    let ids = Set(shape.sessions.map(\.id))
+    let parent = SessionTree.parentID(of: kid.id, parent: kid.parent, followup: kid.followup, isKnown: ids.contains)
+    let shown = parent != nil
+
+    #expect(shown == shape.shown)
+    #expect(!shown || shape.accepted)
   }
 }

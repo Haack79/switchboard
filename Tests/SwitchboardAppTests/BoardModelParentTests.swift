@@ -114,13 +114,6 @@ private let relinkKid: [String: JSON] = ["session": "kid", "parent": "p1"]
     #expect(sent.args == clearKid)
   }
 
-  @Test func setParentSendsTheNewParent() async {
-    let sent = await firstRequest { $0.setParent("kid", to: "p1") }
-
-    #expect(sent.op == "parent")
-    #expect(sent.args == relinkKid)
-  }
-
   // MARK: Undo and redo
 
   /// A model whose unlink of `kid` sbd accepted, with a fresh undo manager that groups by hand. The undo manager

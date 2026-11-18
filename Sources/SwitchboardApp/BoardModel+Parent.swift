@@ -21,9 +21,6 @@ extension BoardModel {
     sendParent(id, nil) { [weak self] in self?.registerFlip(id, parent: parent, name: name, relinks: true) }
   }
 
-  /// Moves the session to `parent`.
-  func setParent(_ id: String, to parent: String) { sendParent(id, parent) }
-
   /// Sends the `parent` request that moves the session to `parent`, or that unlinks it when `parent` is nil.
   private func sendParent(_ id: String, _ parent: String?, then: (() -> Void)? = nil) {
     var args: [String: JSON] = ["session": .string(id)]

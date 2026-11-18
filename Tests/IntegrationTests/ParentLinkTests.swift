@@ -2,6 +2,8 @@ import Foundation
 import SwitchboardCore
 import Testing
 
+// A `try` inside `#expect` fails to compile in these closures. Each check therefore binds the thrown value first.
+
 /// `sb parent <session> --clear` unlinks a session from the session that started it, and `sb parent <session>
 /// <parent>` moves it to another parent. The parent stops hearing what changed in it. The MCP tool `set_parent` sends
 /// the same request.
@@ -84,7 +86,7 @@ import Testing
     #expect(actual5 == "claude")
   }
 
-  /// D4 and D12: the child keeps its group, account, host, waits, notes, and PR.
+  /// The child keeps its group, account, host, waits, notes, and PR.
   @Test func unlinkKeepsTheChildsGroupAccountHostWaitsAndNotes() throws {
     let sbd = try Instance()
     let (_, kid) = try parentAndChild(sbd)
@@ -108,7 +110,7 @@ import Testing
     #expect(after.pr == before.pr)
   }
 
-  /// D12: a `session` wait on the parent that targets the child keeps resolving after the unlink.
+  /// A `session` wait on the parent that targets the child keeps resolving after the unlink.
   @Test func unlinkKeepsTheParentsWaitOnTheChild() throws {
     let sbd = try Instance()
     let (parent, kid) = try parentAndChild(sbd)
@@ -394,6 +396,20 @@ import Testing
     #expect(actual22 == other.id)
   }
 
+  @Test func setParentWithBothAParentAndClearIsRefused() throws {
+    let sbd = try Instance()
+    let (parent, kid) = try parentAndChild(sbd)
+    let other = try idle(sbd, name: "other")
+    let mcp = try MCPClient(sbd, env: inside(try managerID(sbd)))
+
+    let result = try mcp.call("set_parent", ["session": .string(kid.id), "parent": .string(other.name), "clear": true])
+
+    #expect(result.isError, "\(result.text)")
+    #expect(result.text.contains("not both"), "\(result.text)")
+    let actual23 = try sbd.get(kid.id).parent
+    #expect(actual23 == parent.id)
+  }
+
   @Test func aSessionCantChangeItsOwnParentThroughMCP() throws {
     let sbd = try Instance()
     let (parent, kid) = try parentAndChild(sbd)
@@ -403,8 +419,8 @@ import Testing
 
     #expect(result.isError, "\(result.text)")
     #expect(result.text.contains("can't change its own parent"), "\(result.text)")
-    let actual23 = try sbd.get(kid.id).parent
-    #expect(actual23 == parent.id)
+    let actual24 = try sbd.get(kid.id).parent
+    #expect(actual24 == parent.id)
   }
 
   // MARK: A server scoped to group Flags
@@ -422,8 +438,8 @@ import Testing
 
     #expect(result.isError, "\(result.text)")
     #expect(result.text.contains("is not in group"), "\(result.text)")
-    let actual24 = try sbd.get(target.id).parent
-    #expect(actual24 == s.member.id)
+    let actual25 = try sbd.get(target.id).parent
+    #expect(actual25 == s.member.id)
   }
 
   @Test(arguments: Outsider.allCases)
@@ -436,8 +452,8 @@ import Testing
 
     #expect(result.isError, "\(result.text)")
     #expect(result.text.contains("is not in group"), "\(result.text)")
-    let actual25 = try sbd.get(s.member.id).parent
-    #expect(actual25 == nil)
+    let actual26 = try sbd.get(s.member.id).parent
+    #expect(actual26 == nil)
   }
 
   /// The positive control: a scoped server unlinks a member of its group.
@@ -450,8 +466,8 @@ import Testing
     let result = try mcp.call("set_parent", ["session": .string(s.member.id), "clear": true])
 
     #expect(!result.isError, "\(result.text)")
-    let actual26 = try sbd.get(s.member.id).parent
-    #expect(actual26 == nil)
+    let actual27 = try sbd.get(s.member.id).parent
+    #expect(actual27 == nil)
   }
 
   // MARK: sbd's own check of the scope
@@ -471,8 +487,8 @@ import Testing
       ])
 
     #expect(error.contains("is not in group"), "\(error)")
-    let actual27 = try sbd.get(s.outside.id).parent
-    #expect(actual27 == s.member.id)
+    let actual28 = try sbd.get(s.outside.id).parent
+    #expect(actual28 == s.member.id)
   }
 
   @Test func sbdRefusesAScopedMoveUnderASessionOutsideTheGroup() throws {
@@ -488,7 +504,7 @@ import Testing
       ])
 
     #expect(error.contains("is not in group"), "\(error)")
-    let actual28 = try sbd.get(s.member.id).parent
-    #expect(actual28 == nil)
+    let actual29 = try sbd.get(s.member.id).parent
+    #expect(actual29 == nil)
   }
 }
