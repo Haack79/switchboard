@@ -709,6 +709,8 @@ public final class Service {
       try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id, for: origin))
+    case "parent":
+      return try parentRequest(args, origin: origin)
     case "issue":
       let id = try lookup(args)
       let session = entries[id]!.session
