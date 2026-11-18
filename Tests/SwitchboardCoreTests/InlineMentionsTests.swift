@@ -11,7 +11,7 @@ private typealias Match = SessionNames.Match
 /// The repository that a bare `#N` refers to in these tests.
 private let contextRepo = "haacked/switchboard"
 
-private let liveNames = ["seb4ec": "zsh-startup-for-switchboard"]
+private let liveNames = ["seb4ec": "zsh-startup-for-switchboard", "swb_eb4ec": "new-id-form"]
 private let names = SessionNames(live: liveNames, removed: [:])
 
 /// Sessions whose names hold a bare reference. A session's name is never scanned again, so it never links.
@@ -263,15 +263,24 @@ private let referenceRows: [(String, String)] = [
   ("seb4ec,#1", "⟨seb4ec⟩,«#1»"),
   ("zsh-startup-for-switchboard (seb4ec) #1", "⟨seb4ec⟩ «#1»"),
   ("seb4ec (zsh-startup-for-switchboard) fixes o/r#2", "⟨seb4ec⟩ fixes «o/r#2»"),
+  ("#1,swb_eb4ec", "«#1»,⟨swb_eb4ec⟩"),
+  ("#1 (swb_eb4ec)", "«#1» (⟨swb_eb4ec⟩)"),
+  ("swb_eb4ec #1", "⟨swb_eb4ec⟩ «#1»"),
+  ("swb_eb4ec,#1", "⟨swb_eb4ec⟩,«#1»"),
+  ("new-id-form (swb_eb4ec) #1", "⟨swb_eb4ec⟩ «#1»"),
+  ("swb_eb4ec (new-id-form) fixes o/r#2", "⟨swb_eb4ec⟩ fixes «o/r#2»"),
+  ("seb4ec and swb_eb4ec fix #3", "⟨seb4ec⟩ and ⟨swb_eb4ec⟩ fix «#3»"),
   // URLs with text inside them that other finders would match.
   ("https://github.com/o/r/pull/1?seb4ec", "«https://github.com/o/r/pull/1?seb4ec»"),
   ("https://github.com/o/r/pull/1?x=seb4ec", "«https://github.com/o/r/pull/1?x=seb4ec»"),
+  ("https://github.com/o/r/pull/1?swb_eb4ec", "«https://github.com/o/r/pull/1?swb_eb4ec»"),
   ("https://github.com/o/r/pull/1?a,#2", "«https://github.com/o/r/pull/1?a,#2»"),
   ("https://github.com/o/r/pull/1?a,o/r#2", "«https://github.com/o/r/pull/1?a,o/r#2»"),
   ("https://github.com/o/r/issues/1#2", "«https://github.com/o/r/issues/1#2»"),
   // Text after a URL.
   ("https://github.com/o/r/pull/1 seb4ec", "«https://github.com/o/r/pull/1» ⟨seb4ec⟩"),
   ("https://github.com/o/r/pull/1, seb4ec", "«https://github.com/o/r/pull/1», ⟨seb4ec⟩"),
+  ("https://github.com/o/r/pull/1 swb_eb4ec", "«https://github.com/o/r/pull/1» ⟨swb_eb4ec⟩"),
   ("https://github.com/o/r/pull/1 #2", "«https://github.com/o/r/pull/1» «#2»"),
   ("see https://example.com/x and #12", "see https://example.com/x and «#12»"),
   ("see https://example.com/x. #12", "see https://example.com/x. «#12»"),
@@ -394,6 +403,9 @@ private let unchangedMarkdown: [String] = [
   "see ![#1](x.png) now", "see [![#1](x.png)](https://github.com/o/r/pull/1) now",
   // A word in a neighboring run touches the reference.
   "*a*#1", "#1*a*", "*o/r*#1", "`x`#1", "#1`x`", "[x](https://x.dev)#1",
+  // A new-form id split across runs, or touched by a word in a neighboring run.
+  "swb_eb**4ec**", "swb_eb4**ec**", "swb_eb[4ec](https://x.test)", "swb_eb`4ec`", "seb**4ec**", "*a*swb_eb4ec",
+  "swb_eb4ec*a*",
 ]
 
 /// Markdown and its pieces under the context repo.
@@ -407,6 +419,10 @@ private let markdownRows: [(String, [Want])] = [
   ("*a* #1", [.text("a", .emphasis), .text(" "), .ref("#1")]),
   ("#1 *a*", [.ref("#1"), .text(" "), .text("a", .emphasis)]),
   ("seb4ec **#1**", [.session("seb4ec"), .text(" "), .ref("#1", .strong)]),
+  ("swb_eb4ec **#1**", [.session("swb_eb4ec"), .text(" "), .ref("#1", .strong)]),
+  ("see swb_eb4ec here", [.text("see "), .session("swb_eb4ec"), .text(" here")]),
+  ("_swb_eb4ec_ #1", [.session("swb_eb4ec", .emphasis), .text(" "), .ref("#1")]),
+  ("**swb_eb4ec** #1", [.session("swb_eb4ec", .strong), .text(" "), .ref("#1")]),
   ("#1 [docs](https://example.com/docs)", [.ref("#1"), .text(" "), .text("docs", link: "https://example.com/docs")]),
   // Links whose link is a GitHub issue or pull request keep their run.
   ("[text](https://github.com/o/r/pull/1)", [.linked("text", link: "https://github.com/o/r/pull/1")]),
@@ -513,6 +529,18 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
     let text = try paragraph(markdown)
 
     #expect(InlineMentions(names: names, repo: repo).pieces(text) == unchanged(text))
+  }
+
+  /// The first run holds no whole id, so the id that the two runs spell together links nothing, while the
+  /// reference after it still links.
+  @Test(arguments: contexts)
+  func newIdSplitAcrossRunsLinksNoSession(_ repo: String?) {
+    let text = MarkdownText([Run("see swb_eb4"), Run("ec", .strong), Run(" o/r#1")])
+
+    let pieces = InlineMentions(names: names, repo: repo).pieces(text)
+
+    #expect(!pieces.contains { if case .session? = $0.mention { true } else { false } }, "\(pieces)")
+    #expect(pieces.contains { referenced($0.mention) != nil }, "\(pieces)")
   }
 
   /// A code block never becomes a paragraph's `MarkdownText`, so its references never reach `pieces`.
@@ -755,19 +783,19 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
 
   // MARK: Performance
 
-  /// 2,000 distinct ids in the session id alphabet.
-  private static let manyIds: [String] = {
+  /// 2,000 distinct ids of each form in the session id alphabet.
+  private static let manyIds: [String] = ["s", "swb_"].flatMap { prefix in
     let alphabet = Array("abcdefghijkmnpqrstuvwxyz23456789")
     return (0..<2_000).map { i in
       var n = i
-      var id = "s"
+      var id = prefix
       for _ in 0..<5 {
         id.append(alphabet[n % alphabet.count])
         n /= alphabet.count
       }
       return id
     }
-  }()
+  }
 
   private static func manyNames() -> SessionNames {
     SessionNames(
@@ -792,7 +820,7 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
   /// minutes, so this bound still catches one.
   private static let linearBound = Duration.seconds(5)
 
-  @Test func findingTwoThousandIdsAndTwoThousandReferencesInOneRunIsFast() {
+  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachInOneRunIsFast() {
     let string = Self.manyIds.enumerated().map { "Ask \($1) about \(Self.referenceText($0))\(Self.filler)" }.joined()
     let text = MarkdownText(stringLiteral: string)
     let mentions = InlineMentions(names: Self.manyNames(), repo: contextRepo)
@@ -801,12 +829,12 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
     let elapsed = ContinuousClock().measure { pieces = mentions.pieces(text) }
 
     #expect(string.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == 2_000)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == 2_000)
+    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.manyIds.count)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.manyIds.count)
     #expect(elapsed < Self.linearBound)
   }
 
-  @Test func findingTwoThousandIdsAndTwoThousandReferencesAcrossManyRunsIsFast() {
+  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachAcrossManyRunsIsFast() {
     let runs = Self.manyIds.enumerated().flatMap { i, id in
       [Run("Ask "), Run(id, .emphasis), Run(" about "), Run(Self.referenceText(i), .strong), Run(Self.filler)]
     }
@@ -817,8 +845,8 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
     let elapsed = ContinuousClock().measure { pieces = mentions.pieces(text) }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == 2_000)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == 2_000)
+    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.manyIds.count)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.manyIds.count)
     #expect(elapsed < Self.linearBound)
   }
 }

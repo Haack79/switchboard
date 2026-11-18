@@ -38,7 +38,7 @@ public struct ChildMark: Equatable, Sendable {
 public enum ChildQuestions {
   /// The guidance that the Manager guide, the chat guide, and the default system prompt give every agent.
   public static let guidance =
-    "If you started other sessions, each one asks the user its own questions in its own Inbox item. Never ask the user a question or decision that one of those sessions already asks, whether in a reply, with `sb summary set`, or in a report. Link to that session and say in a few words what it waits on, without copying its question, such as \"[fix-cache](switchboard://session/seb4ec) asks you to pick a cache size in its Inbox item.\" Ask the user only your own decisions, such as whether to merge a PR, remove a worktree, or send one message to several sessions."
+    "If you started other sessions, each one asks the user its own questions in its own Inbox item. Never ask the user a question or decision that one of those sessions already asks, whether in a reply, with `sb summary set`, or in a report. Link to that session and say in a few words what it waits on, without copying its question, such as \"[fix-cache](switchboard://session/swb_eb4ec) asks you to pick a cache size in its Inbox item.\" Ask the user only your own decisions, such as whether to merge a PR, remove a worktree, or send one message to several sessions."
 
 }
 
