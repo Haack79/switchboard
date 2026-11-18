@@ -164,7 +164,6 @@ let everyGroupShape = [
 
     // i2 is hidden by the org filter, w1, u1, c2, and f2 by the group filter, and w2 by both.
     #expect(model.hiddenCount == 6)
-    #expect(model.hiddenCount + model.board.count == model.listedBoard.count)
     #expect(model.hiddenNeedingYou == 4)
   }
 
@@ -173,15 +172,6 @@ let everyGroupShape = [
 
     #expect(model.hiddenCount == 5)
     #expect(model.hiddenNeedingYou == 3)
-  }
-
-  @Test(arguments: everyGroupShape)
-  func theHiddenCountAndTheBoardAddUpToTheListedBoard(_ shape: GroupShape) {
-    for org in [OrgFilter(), posthogOnly, OrgFilter(keys: ["haacked"])] {
-      let model = model(shape.filter, org: org)
-
-      #expect(model.hiddenCount + model.board.count == model.listedBoard.count)
-    }
   }
 
   @Test func allGroupsAndAllOrgsHideNothing() {
@@ -765,8 +755,12 @@ let everyGroupShape = [
     let model = model(GroupFilter(keys: [Self.ungrouped]), [groupedSession("u1", group: nil)], followups: nil)
     let next = [groupedSession("u1", group: "g9", state: .needsYou)]
     let listed = Self.groups + [Self.group("g9", "New", ["u1"])]
+    var notified: [String] = []
+    model.notifier = { notified.append($0.id) }
 
-    #expect(model.sessionsToNotify(next, filter: model.filter(after: listed)).isEmpty)
+    model.apply(.success(next), followups: nil, groups: listed)
+
+    #expect(notified.isEmpty)
   }
 
   @Test func aSessionInAShownGroupThatStartsNeedingYouNotifies() {

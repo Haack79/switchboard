@@ -18,8 +18,14 @@ public struct SessionFilter: Equatable, Sendable {
   public var isAll: Bool { org.isAll && group.isAll }
 
   public func shows(_ s: SessionSummary) -> Bool {
-    org.shows(s) && group.shows(s, known: knownGroups)
+    org.shows(s) && groupShows(s)
   }
+
+  /// Whether the group filter shows `s`, judged against the groups that sbd last listed.
+  public func groupShows(_ s: SessionSummary) -> Bool { group.shows(s, known: knownGroups) }
+
+  /// The group filter's key for `s`, judged against the groups that sbd last listed.
+  public func groupKey(of s: SessionSummary) -> String? { GroupFilter.key(of: s, known: knownGroups) }
 
   /// Whether the filter shows `s` and the app can tell that it does. A
   /// session whose org sbd hasn't read shows under an org filter, but its org

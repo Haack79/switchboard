@@ -159,6 +159,24 @@ import Testing
       return
     }
     #expect(shown.remove.map(\.id) == ["d1"])
+    #expect(shown.skip.isEmpty)
+  }
+
+  @Test func aPlanBeforeTheFirstGroupListSkipsTheShownSessionsForTheGroupList() async throws {
+    let sent = SentRequests()
+    let model = model(GroupFilter(keys: ["g1"]), loaded: false)
+    model.send = recordingSend(sent, plan: plan(["d1", "d2", "dh"]))
+
+    model.checkDoneRemoval()
+    await settle { if case .confirming = model.doneRemoval { true } else { false } }
+
+    guard case .confirming(let shown, _) = model.doneRemoval else {
+      Issue.record("the check did not finish")
+      return
+    }
+    #expect(shown.remove.isEmpty)
+    #expect(shown.skip.map(\.id) == ["d1", "dh"])
+    #expect(shown.skip.allSatisfy { $0.reason == BoardModel.unlistedGroupsReason })
   }
 
   // MARK: Changes between the plan and the confirm

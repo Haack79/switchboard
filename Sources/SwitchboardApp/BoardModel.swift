@@ -284,6 +284,8 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// Posts the notification that a session needs the user. Tests replace it.
+  lazy var notifier: @MainActor (SessionSummary) -> Void = { [weak self] s in self?.notify(s) }
   /// Sends a quick ask to sbd. Tests replace it.
   lazy var ask: @Sendable (String, CallCancel) throws -> JSON = { [client = self.client] question, cancel in
     try client.call("quick-ask", ["question": .string(question)], timeout: QuickAsk.clientTimeout, cancel: cancel)
@@ -358,7 +360,7 @@ final class BoardModel: ObservableObject {
     makeHoverCards()
   }
 
-  /// Clears a selection that the org filter hides or the removal job holds, drops those sessions from the
+  /// Clears a selection that the filter hides or the removal job holds, drops those sessions from the
   /// multi-selection, closes the hover card of a session that is no longer shown, and counts the shown sessions
   /// in the Dock badge. The current history entry follows what the window shows, because a refresh can change
   /// the Inbox's first item.
@@ -392,7 +394,7 @@ final class BoardModel: ObservableObject {
   /// `allBoard` without the sessions that sbd's removal job holds.
   var listedBoard: [SessionSummary] { allBoard.filter { !$0.isBeingRemoved } }
 
-  /// The ids of the sessions and follow-ups that the org filter shows.
+  /// The ids of the sessions and follow-ups that the filter shows.
   var shownIDs: Set<String> { Set(board.map(\.id)) }
 
   /// The ids that Delete All may remove. Under an org filter, a session whose org sbd hasn't read yet shows but
@@ -406,8 +408,7 @@ final class BoardModel: ObservableObject {
   /// The org filter's menu rows, counted over the sessions that the group filter shows and the removal job does
   /// not hold. A row's count is then how many sessions checking it adds.
   var orgEntries: [FilterEntry] {
-    let filter = filter
-    return orgFilter.entries(listedBoard.filter { filter.group.shows($0, known: filter.knownGroups) })
+    orgFilter.entries(listedBoard.filter(filter.groupShows))
   }
 
   /// The group filter's menu rows, counted over the sessions that the org filter shows and the removal job does
@@ -493,9 +494,7 @@ final class BoardModel: ObservableObject {
     guard !filter.isAll, let s = listedBoard.first(where: { $0.id == id }), !filter.shows(s) else { return filter }
     var next = filter
     if !filter.org.shows(s), let key = OrgFilter.key(of: s) { next.org.insert(key) }
-    if !filter.group.shows(s, known: filter.knownGroups), let key = GroupFilter.key(of: s, known: filter.knownGroups) {
-      next.group.insert(key)
-    }
+    if !filter.groupShows(s), let key = filter.groupKey(of: s) { next.group.insert(key) }
     return next
   }
 
@@ -673,7 +672,7 @@ final class BoardModel: ObservableObject {
       updateSessionNames(list + allFollowups, removed: removed)
       // Only shown sessions notify. The last seen sessions cover every session.
       // Widening the filter later therefore sends nothing for a change that happened while the session was hidden.
-      if loaded { sessionsToNotify(list, filter: groups.map(filter(after:)) ?? filter).forEach(notify) }
+      if loaded { sessionsToNotify(list, filter: groups.map(filter(after:)) ?? filter).forEach(notifier) }
       // A hidden session keeps its drafts.
       let open = Set(list.flatMap { $0.cards.map(\.id) })
       drafts = drafts.filter { open.contains($0.key) }

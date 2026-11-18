@@ -94,7 +94,7 @@ extension BoardModel {
   /// Why `filter` hides `s`, naming the filter that hides it.
   nonisolated static func hiddenReason(_ s: SessionSummary, _ filter: SessionFilter) -> String {
     let org = !filter.org.shows(s)
-    let group = !filter.group.shows(s, known: filter.knownGroups)
+    let group = !filter.groupShows(s)
     return hiddenReason(org && group ? .both : group ? .groups : .orgs)
   }
 
