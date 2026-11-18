@@ -225,6 +225,9 @@ let usage = """
                                   prompt, a failed CI run, or the PR's merge ends it early. The
                                   session keeps working. Refuses the session that runs it
     unsnooze <session>            end the session's snooze and put its item back in the Inbox
+    highlight <session> [--clear] ring the session in the app and put its Inbox item first. --clear
+                                  removes it. Done clears it. sb ls marks it with *. Refuses the
+                                  session that runs it
     import [--all] [--repo R]     list the Claude sessions outside Switchboard that
                                   run in a worktree, or every one with --all, and
                                   only those of the repo named R with --repo
@@ -563,8 +566,9 @@ func printTable(_ sessions: [SessionSummary]) {
     let name = oneLine(s.name, max: nameWidth)
     let todos = s.openTodos.count
     let marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    let lead = s.isHighlighted ? "* " : "  "
     print(
-      "  \(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
+      "\(lead)\(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
         .printable
     )
   }
@@ -573,6 +577,7 @@ func printTable(_ sessions: [SessionSummary]) {
 func printSession(_ s: SessionSummary) {
   print("\(s.id)  \(s.name)".printable)
   print("  state:   \(s.state.title): \(s.reasonLine) (\(ago(s.since)))".printable)
+  if s.isHighlighted { print("  highlighted: yes") }
   if let until = s.snoozedUntil { print("  snoozed: until \(Wait.formatTime(until))") }
   if s.waitsToStart {
     printFollowup(s)
@@ -986,6 +991,8 @@ case "snooze":
   snoozeCommand(a)
 case "unsnooze":
   unsnoozeCommand(a)
+case "highlight":
+  highlightCommand(a)
 case "cleanup":
   let result = call("cleanup", ["session": .string(a.session("cleanup"))], timeout: 300)
   if a.json { printJSON(result) } else { print("cleaned up \(result["cleaned"]?.string ?? "")") }
