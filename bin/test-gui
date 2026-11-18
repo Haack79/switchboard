@@ -846,7 +846,7 @@ check_boardselect() {
   wait_for 5 selection_is none || fail "a click on empty space did not clear the selection: $(app board-selection)"
   posted board-drag "$a" "$b" || fail "the app could not drag from empty space: $result"
   wait_for 5 selects "$a" || fail "the rectangle did not select $a: $(app board-selection)"
-  selects "$b" || fail "the rectangle did not select $b: $(app board-selection)"
+  wait_for 5 selects "$b" || fail "the rectangle did not select $b: $(app board-selection)"
   shows board || fail "the rectangle left the Board: $(app where)"
   app snapshot "$shots/rectangle.png" >/dev/null
   posted board-click "$a" 2 || fail "the app could not double-click the card of $a: $result"
