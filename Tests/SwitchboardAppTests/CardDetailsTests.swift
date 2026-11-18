@@ -335,6 +335,39 @@ private func inDetailPane(_ view: some View) -> some View {
 
   /// Outside the pane, as in a session's card list, a box stops at its maximum height and scrolls the rest.
   @Test func aTextBoxOutsideTheDetailPaneStopsAtItsMaximumHeight() {
-    #expect(fittingHeight(CardView.textBox(lines(200), maxHeight: 200)) < 240)
+    let long = fittingHeight(CardView.textBox(lines(200), maxHeight: 200))
+
+    #expect(long == fittingHeight(CardView.textBox(lines(100), maxHeight: 200)))
+    #expect(long > 200 && long < 240)
+  }
+
+  // MARK: Pane
+
+  /// The pane that TriageDetail draws puts its scroll proxy in the environment, which drops the caps above. Outside
+  /// it is the control: when it fails, the probe was never drawn.
+  @Test func theDetailPaneGivesItsContentTheScrollProxy() {
+    let inside = DetailScrollProbe.Seen()
+    let outside = DetailScrollProbe.Seen()
+    _ = fittingHeight(DetailPane { DetailScrollProbe(seen: inside) })
+    _ = fittingHeight(DetailScrollProbe(seen: outside))
+
+    #expect(inside.proxy == true)
+    #expect(outside.proxy == false)
+  }
+}
+
+/// Records whether the environment held the detail pane's scroll proxy when SwiftUI drew the probe.
+private struct DetailScrollProbe: View {
+  final class Seen {
+    /// Nil until SwiftUI draws the probe.
+    var proxy: Bool?
+  }
+
+  @Environment(\.detailScroll) private var detailScroll
+  let seen: Seen
+
+  var body: some View {
+    seen.proxy = detailScroll != nil
+    return Color.clear.frame(height: 1)
   }
 }

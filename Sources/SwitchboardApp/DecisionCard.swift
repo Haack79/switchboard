@@ -343,8 +343,8 @@ struct CardDetails: View {
   @State private var open: Bool
   /// How many steps before the item to read.
   @State private var steps = ItemContext.defaultSteps
-  /// Set when the user opens Details, so the pane scrolls to the item's own step once the steps show.
-  @State private var scrollsToAnchor = false
+  /// Set when the user opens Details, so the pane scrolls to the newest step once the steps show.
+  @State private var scrollsToNewestStep = false
   @Environment(\.detailScroll) private var detailScroll
   /// A debug setting with no menu item: `defaults write <bundle id> showsRecentEvents -bool true`.
   @AppStorage("showsRecentEvents") private var showsRecentEvents = false
@@ -417,7 +417,11 @@ struct CardDetails: View {
     .onAppear { if open { load() } }
     .onChange(of: open) {
       guard open else { return }
-      scrollsToAnchor = true
+      scrollsToNewestStep = true
+      // Steps loaded earlier can show before this runs, and then their onAppear has already passed.
+      if Self.context(for: ref, in: model.itemContexts[session.id])?.steps.isEmpty == false {
+        scrollToNewestStepIfAsked()
+      }
       load()
     }
   }
@@ -427,16 +431,16 @@ struct CardDetails: View {
     if showsRecentEvents { model.loadEvents(session.id) }
   }
 
-  /// The id of the steps' box in the Inbox's detail pane. Its bottom is the newest step, the item's own.
-  static let anchorID = "CardDetails.anchor"
+  /// The id of the steps' box in the Inbox's detail pane. Its bottom is the newest step.
+  private static let stepsBoxID = "CardDetails.steps"
 
-  /// Scrolls the pane to the item's own step after the user opens Details. A Details that starts open leaves the
-  /// pane at the Summary.
-  private func scrollToAnchorIfAsked() {
-    guard scrollsToAnchor else { return }
-    scrollsToAnchor = false
+  /// Scrolls the pane to the newest step after the user opens Details. A Details that starts open leaves the pane
+  /// at the Summary.
+  private func scrollToNewestStepIfAsked() {
+    guard scrollsToNewestStep else { return }
+    scrollsToNewestStep = false
     // The steps have no layout in the pane until the next run loop pass.
-    DispatchQueue.main.async { detailScroll?.scrollTo(Self.anchorID, anchor: .bottom) }
+    DispatchQueue.main.async { detailScroll?.scrollTo(Self.stepsBoxID, anchor: .bottom) }
   }
 
   private func transcript(_ context: ItemContext) -> some View {
@@ -466,9 +470,9 @@ struct CardDetails: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(8)
       .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
-      .id(Self.anchorID)
+      .id(Self.stepsBoxID)
     }
-    .onAppear(perform: scrollToAnchorIfAsked)
+    .onAppear(perform: scrollToNewestStepIfAsked)
   }
 
   private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
