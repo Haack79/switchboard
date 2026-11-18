@@ -862,6 +862,23 @@ private func text(_ answer: Response) -> String {
   }
 
   @Test(.timeLimit(.minutes(1)))
+  func theHostGetsNoEarlierPRFromAnUnlistedRepo() throws {
+    try withSessions(hosts: listedHosts) { service in
+      try service.givePR("m1", listed: false)
+      try service.givePR("m1", listed: true)
+
+      let get = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
+      let ls = service.handle(Request(op: "ls"), origin: .remote("mini"))
+      let mac = service.handle(Request(op: "get", args: ["session": "m1"]))
+
+      #expect(get.result?["pr"]?["title"] == "Listed title")
+      #expect(get.result?["earlierPRs"] == nil)
+      #expect(ls.result?.array?.first { $0["id"] == "m1" }?["earlierPRs"] == nil)
+      #expect(mac.result?["earlierPRs"] == [4242])
+    }
+  }
+
+  @Test(.timeLimit(.minutes(1)))
   func thisMacStillSeesTheUnlistedPR() throws {
     try withSessions(hosts: listedHosts) { service in
       try service.givePR("m1", listed: false)

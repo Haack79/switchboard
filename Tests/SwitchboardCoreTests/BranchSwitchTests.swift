@@ -77,7 +77,7 @@ private func summary(branch: String?, startBranch: String?) -> SessionSummary {
     Case(name: "switched, after the start branch's PR closed", pr: nil, prNumbers: [101, 202], expected: start),
     Case(name: "switched back to the start branch", factsBranch: start, pr: 101, prNumbers: [101, 202]),
     Case(name: "no branch when the session started", sessionBranch: nil, pr: 202, prNumbers: [101, 202]),
-    Case(name: "the folder's branch never differed", factsBranch: nil, pr: 101, prNumbers: [101, 202]),
+    Case(name: "the folder's branch isn't known yet", factsBranch: nil, pr: 101, prNumbers: [101, 202]),
     Case(name: "started on main, PR only on the new branch", sessionBranch: "main", pr: 202, prNumbers: [202]),
     Case(name: "started on main, no PR yet", sessionBranch: "main", pr: nil, prNumbers: []),
     Case(name: "a Manager conversation", kind: .manager, pr: 202, prNumbers: [101, 202]),

@@ -17,7 +17,7 @@ public enum BranchSwitch {
 }
 
 extension SessionFacts {
-  /// The numbers of the PRs that the session had before its current one, in ascending order.
+  /// The numbers of every PR that the session has had except its current one, in ascending order.
   public var earlierPRNumbers: [Int] {
     prNumbers.filter { $0 != pr?.number }.sorted()
   }
