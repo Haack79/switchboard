@@ -215,6 +215,14 @@ public struct MCPToolServer: Sendable {
       return try pause(args, scoped)
     case "resume":
       return try resume(args, scoped)
+    case "highlight":
+      var request: [String: JSON] = [
+        "session": try sessionID(args, scoped), "highlighted": .bool(args["clear"]?.bool != true),
+        "by": MCPToolServer.byClaude,
+      ]
+      if let caller { request["caller"] = .string(caller) }
+      if let scoped { request["scope"] = .string(scoped.group.id) }
+      return try client.call("highlight", request)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)

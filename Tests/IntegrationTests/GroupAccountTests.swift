@@ -385,6 +385,37 @@ import Testing
     #expect(try sbd.get(loose.id).account == sbd.account("A"))
   }
 
+  /// A move that names a session refuses it when its group runs its
+  /// sessions under another account, and `--stop` leaves its claude running.
+  /// A move to the group's own account goes ahead.
+  @Test func aNamedMoveRefusesASessionThatItsGroupBindsToAnotherAccount() throws {
+    let sbd = try instance()
+    let group = try addGroup(sbd, "Flags")
+    try setAccount(sbd, "Flags", "B")
+    let live = try newInGroup(sbd, group.id)
+    try sbd.waitFor(live.id, "the first reply") { $0.lastReply == "Done: hello" && $0.claudePid != nil }
+    let loose = try stoppedSession(sbd, on: "A", prompt: "loose")
+    try sbd.sb("group", "move", loose.id, "--to", "Flags")
+
+    for extra in [["--dry-run"], [], ["--stop"]] {
+      let r = try sbd.run(["account", "move", "--json", "A", "--session", live.id] + extra)
+      #expect(r.status != 0, "\(extra): \(r.stdout)")
+      let result = try decode(AccountMove.self, r.stdout)
+      #expect(result.moved.isEmpty)
+      #expect(result.blocked.map(\.session) == [live.id])
+      #expect(result.blocked.first?.reason.contains("its group Flags runs its sessions under the account") == true)
+    }
+    let kept = try sbd.get(live.id)
+    #expect(kept.account == sbd.account("B"))
+    #expect(kept.group == group.id)
+    #expect(kept.claudePid != nil)
+
+    let result = try decode(AccountMove.self, sbd.sb("account", "move", "--json", "B", "--session", loose.id))
+    #expect(result.moved == [loose.id])
+    #expect(try sbd.get(loose.id).account == sbd.account("B"))
+    #expect(try sbd.get(loose.id).group == group.id)
+  }
+
   // MARK: The move at the next launch
 
   @Test func aStoppedSessionMovedIntoTheGroupResumesUnderItsAccount() throws {
