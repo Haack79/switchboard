@@ -39,12 +39,6 @@ public enum SessionLink {
     return URL(string: prefix + name.addingPercentEncoding(withAllowedCharacters: unreserved)!)!
   }
 
-  /// The id of a link that `url(for:)` made, else nil.
-  public static func id(from url: URL) -> String? {
-    guard case .id(let id) = target(from: url) else { return nil }
-    return id
-  }
-
   /// What the link names, else nil. Any app can open the scheme, so the URL
   /// must start with exactly `switchboard://session/`, and the rest must be
   /// one path segment with no query, fragment, or `;`. The segment is an id

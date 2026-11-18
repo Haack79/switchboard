@@ -119,6 +119,8 @@ struct SwitchboardApp: App {
           }
           .keyboardShortcut("a", modifiers: [.command, .shift])
           .disabled(acknowledgeTarget?.canAcknowledge != true)
+          Button("Copy Link") { model.selected.map { CopyLinkMenuItem.copy($0) } }
+            .disabled(model.selected == nil)
         }
         .disabled(model.showsMultiSelection)
       }

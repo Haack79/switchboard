@@ -301,11 +301,12 @@ final class BoardModel: ObservableObject {
   /// The session that `create` or `openManager` selected before a refresh
   /// listed it.
   private(set) var pendingSelection: String?
-  /// The session that `focus` named before a refresh listed it, the successful
-  /// refreshes that have not listed it, and the selection when it started. It
-  /// waits for `focusRefreshLimit` refreshes. Selecting another session ends it.
-  private var focusWait: (id: String, misses: Int, selection: String?)?
-  var pendingFocus: String? { focusWait?.id }
+  /// The link target that `focus` named before a refresh listed its session,
+  /// the successful refreshes that have not listed it, and the selection when
+  /// it started. It waits for `focusRefreshLimit` refreshes. Selecting another
+  /// session ends it.
+  private var focusWait: (target: SessionLink.Target, misses: Int, selection: String?)?
+  var pendingFocus: SessionLink.Target? { focusWait?.target }
   private static let focusRefreshLimit = 3
   private var loaded = false
   private var followupsRead = Date.distantPast
@@ -1013,37 +1014,46 @@ final class BoardModel: ObservableObject {
   }
 
   /// Reveals the session that an in-app session link names. It returns
-  /// whether the URL has the app's scheme. A link to a session that is gone
-  /// does nothing. Every `switchboard:` URL counts as handled, so that Launch
-  /// Services never hands the app's own link to another copy of the app.
+  /// whether the URL has the app's scheme. A link that names no listed
+  /// session sets the error banner at once, without a wait for a refresh.
+  /// Every `switchboard:` URL counts as handled, so that Launch Services never
+  /// hands the app's own link to another copy of the app.
   func openSessionLink(_ url: URL) -> Bool {
     guard url.scheme?.lowercased() == SessionLink.scheme else { return false }
-    if let id = SessionLink.id(from: url) { reveal(id) }
+    guard let target = SessionLink.target(from: url) else {
+      actionError = Self.cantOpen(url)
+      return true
+    }
+    switch linkOutcome(target) {
+    case .reveal(let id): reveal(id)
+    case .error(let text): actionError = text
+    case nil: actionError = Self.unknownLinkError(target)
+    }
     return true
   }
 
   /// Focuses the session that a URL from another app or from `sb focus` names.
   func openExternalLink(_ url: URL) {
-    guard let id = SessionLink.id(from: url) else {
-      actionError = "Switchboard can't open \(url.absoluteString)"
+    guard let target = SessionLink.target(from: url) else {
+      actionError = Self.cantOpen(url)
       // The error banner shows only in the window.
       showWindow?()
       return
     }
-    focus(id)
+    focus(target)
   }
 
   /// Closes the search panel, the quick-ask panel, and Recent Places, then shows the session as a
   /// sidebar click does. A session that no refresh has listed yet, such as one
   /// that `sb new` just made or any session at a cold launch, is focused when
   /// a refresh lists it.
-  func focus(_ id: String) {
+  func focus(_ target: SessionLink.Target) {
     showingSearch = false
     closeQuickAsk()
     showingRecentPlaces = false
     focusWait = nil
-    if !settleFocus(id) {
-      focusWait = (id, 0, selection)
+    if !settleFocus(target) {
+      focusWait = (target, 0, selection)
       // An unstarted follow-up shows only in `followup-ls`. A refresh reads
       // that list every 5 s, which can be after the wait gives up.
       followupsRead = .distantPast
@@ -1052,18 +1062,41 @@ final class BoardModel: ObservableObject {
     }
   }
 
-  /// Reveals the session when a refresh lists it, or reports a removed one.
-  /// It returns false while the session can still appear.
-  private func settleFocus(_ id: String) -> Bool {
-    if summary(id) != nil {
+  /// Reveals the session when a refresh lists it, or reports a removed one or
+  /// a name that more than one session has. It returns false while the
+  /// session can still appear.
+  private func settleFocus(_ target: SessionLink.Target) -> Bool {
+    switch linkOutcome(target) {
+    case .reveal(let id):
       reveal(id)
-    } else if sessionNames.entry(id)?.removed == true {
-      actionError = "Session \(id) was removed"
+    case .error(let text):
+      actionError = text
       showWindow?()
-    } else {
+    case nil:
       return false
     }
     return true
+  }
+
+  private enum LinkOutcome {
+    case reveal(String)
+    case error(String)
+  }
+
+  /// What a link target comes to against every listed session and follow-up,
+  /// whatever the org filter says. It is nil when no listed session matches
+  /// and a later refresh could list one.
+  private func linkOutcome(_ target: SessionLink.Target) -> LinkOutcome? {
+    switch SessionLink.resolve(target, in: allBoard.map { ($0.id, $0.name) }) {
+    case .session(let id):
+      return .reveal(id)
+    case .ambiguous(let count):
+      guard case .name(let name) = target else { return nil }
+      return .error("\"\(Self.shown(name))\" names \(count) sessions. Use the session's id link.")
+    case .unknown:
+      guard case .id(let id) = target, sessionNames.entry(id)?.removed == true else { return nil }
+      return .error("Session \(id) was removed")
+    }
   }
 
   private func resolvePendingFocus() {
@@ -1071,12 +1104,36 @@ final class BoardModel: ObservableObject {
     focusWait = nil
     // The user picked another session while the focus waited.
     if selection != nil && selection != wait.selection { return }
-    if settleFocus(wait.id) { return }
+    if settleFocus(wait.target) { return }
     if wait.misses + 1 >= Self.focusRefreshLimit {
-      actionError = "Switchboard has no session \(wait.id)"
+      actionError = Self.unknownLinkError(wait.target)
     } else {
-      focusWait = (wait.id, wait.misses + 1, wait.selection)
+      focusWait = (wait.target, wait.misses + 1, wait.selection)
     }
+  }
+
+  private static func cantOpen(_ url: URL) -> String { "Switchboard can't open \(url.absoluteString)" }
+
+  private static func unknownLinkError(_ target: SessionLink.Target) -> String {
+    switch target {
+    case .id(let id): "Switchboard has no session \(id)"
+    case .name(let name): "Switchboard has no session named \"\(shown(name))\""
+    }
+  }
+
+  /// A link's name with each format character, such as a bidi override or a
+  /// zero-width space, written as its code point. The raw character would
+  /// make the banner show text other than the name that the link holds.
+  private static func shown(_ name: String) -> String {
+    var text = ""
+    for scalar in name.unicodeScalars {
+      if scalar.properties.generalCategory == .format {
+        text += String(format: "<U+%04X>", scalar.value)
+      } else {
+        text.unicodeScalars.append(scalar)
+      }
+    }
+    return text
   }
 
   /// Answers a card: allow, deny with an optional message, or one answer per
