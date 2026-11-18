@@ -31,10 +31,12 @@ struct InlineText: View {
     if let tooltip { content(segments).help(tooltip) } else { content(segments) }
   }
 
+  private static let removedSuffix = ", removed"
+
   /// The help lines of removed sessions. A removed session opens no card, so
   /// its line stays in the tooltip when the text's live sessions open cards.
   private static func removedOnly(_ help: String?) -> String? {
-    let lines = (help ?? "").split(separator: "\n").filter { $0.hasSuffix(", removed") }
+    let lines = (help ?? "").split(separator: "\n").filter { $0.hasSuffix(removedSuffix) }
     return lines.isEmpty ? nil : lines.joined(separator: "\n")
   }
 
@@ -104,7 +106,7 @@ struct InlineText: View {
           reference = ReferenceAttribute(referent: .session(.id(match.id)), part: index)
         }
         if listed.insert(match.id).inserted {
-          lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
+          lines.append("\(match.name): \(match.id)" + (match.removed ? removedSuffix : ""))
         }
       case .reference(let ref)? where links: reference = ReferenceAttribute(referent: .github(ref), part: index)
       case .sessionLink(let target)? where links:
