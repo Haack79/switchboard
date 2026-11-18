@@ -203,5 +203,9 @@ extension MCPToolServer {
         "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
         "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
       ], required: ["text"]),
+    Tool(
+      "highlight",
+      "Highlights a session as high priority, or with `clear` true removes the highlight. A highlighted session gets an orange ring in the app, and its Inbox item comes first. Use it for the few sessions that matter most, because a highlight on every session ranks none. The highlight clears when the session reaches Done. A session can't highlight itself.",
+      ["session": session, "clear": boolean("Set true to remove the highlight.")], required: ["session"]),
   ]
 }
