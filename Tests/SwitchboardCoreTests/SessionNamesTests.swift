@@ -449,6 +449,21 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
 
+  @Test func plainStringBracketSessionLinkBecomesItsLabel() {
+    #expect(
+      names.replacingIDs(in: "Ask [the fix](switchboard://session/seb4ec) now, then sgcctv.")
+        == "Ask the fix now, then render-session-names.")
+  }
+
+  @Test(arguments: [
+    "Ask [the fix](switchboard://session/seb4ec?x=1) now.",
+    "Ask [the fix](switchboard://other/seb4ec) now.",
+    "Ask [the fix](https://example.com/seb4ec) now.",
+  ])
+  func plainStringBracketLinkToARefusedURLComesBackAsWritten(_ input: String) {
+    #expect(names.replacingIDs(in: input) == input)
+  }
+
   @Test func sessionWithAnEmptyNameResolvesNothing() {
     let names = SessionNames(live: ["seb4ec": ""], removed: ["sq7kpm": ""])
 

@@ -4,7 +4,7 @@ import SwiftUI
 import SwitchboardCore
 
 /// Hooks for scripted checks of the GUI. SB_SELECT selects a session when the
-/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_GROUP_FILTER=<id,id> starts it with that group filter, where `(ungrouped)` names the sessions in no group, SB_FILTER=open opens the filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, or `issues`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
+/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, and SB_HOVER_REF=<session id> opens the session card on the first text that names that session by its id or links to its id link, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_ORGS=open opens the org filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, or `issues`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
 /// PNG file that the app draws its windows into after SB_SNAPSHOT_DELAY
 /// seconds (default 3): the main window with its toolbar, and any sheet or
 /// popover in front of it. The app draws the windows itself, so this needs no
@@ -15,6 +15,8 @@ import SwitchboardCore
 /// points 1 s before the drawing, so a narrow layout can be drawn, and puts
 /// the window's frame back after it. SwiftTerm draws text in layers that the
 /// drawing misses, so `sb screen` checks terminals.
+/// SB_GROUP_FILTER=<id,id> starts the app with that group filter, where `(ungrouped)` names the sessions in no
+/// group. Like SB_ORG_FILTER, it never saves the filter. SB_ORGS=open opens the menu that holds both filters.
 @MainActor
 enum Snapshot {
   static let opensDetails = ProcessInfo.processInfo.environment["SB_DETAILS"] != nil
@@ -22,8 +24,9 @@ enum Snapshot {
   static let groupFilter = GroupFilter(list: ProcessInfo.processInfo.environment["SB_GROUP_FILTER"] ?? "")
   static let opensRepoPicker = ProcessInfo.processInfo.environment["SB_REPO_PICKER"] == "open"
   static let hoverSession = ProcessInfo.processInfo.environment["SB_HOVER"]
-  static let hoverReference = ProcessInfo.processInfo.environment["SB_HOVER_REF"].flatMap {
-    GitHubRef(parsing: $0)?.key
+  static let hoverReference = ProcessInfo.processInfo.environment["SB_HOVER_REF"].flatMap { value in
+    if let ref = GitHubRef(parsing: value) { return Referent.github(ref).key }
+    return SessionNames.isSessionID(value) ? Referent.session(.id(value)).key : nil
   }
   static let searchQuery = ProcessInfo.processInfo.environment["SB_SEARCH"]
 
@@ -65,7 +68,7 @@ enum Snapshot {
         model, choose: env["SB_ACCOUNTS_CHOOSE"], move: env["SB_ACCOUNTS_MOVE"] != nil,
         confirm: env["SB_ACCOUNTS_CONFIRM"])
     }
-    if env["SB_FILTER"] == "open" {
+    if env["SB_ORGS"] == "open" {
       whenListed(model) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { model.showingFilter = true } }
     }
     if let places = env["SB_HISTORY"] {

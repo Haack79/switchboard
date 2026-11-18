@@ -51,7 +51,7 @@ private func isDeleteSelection(_ a: SessionMenuAction) -> Bool {
 private func isDestructive(_ a: SessionMenuAction) -> Bool {
   switch a {
   case .cleanUp, .delete, .deleteSelection: true
-  case .highlight, .snooze, .pause, .resume, .startNow, .stop, .divider: false
+  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .divider: false
   }
 }
 
@@ -242,7 +242,7 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil)
-        == [.snooze, .pause, .startNow, .stop, .divider, .cleanUp, expectedDelete(s)])
+        == [.snooze, .copyLink, .pause, .startNow, .stop, .divider, .cleanUp, expectedDelete(s)])
   }
 
   @Test func separatesStopFromDeleteWithADivider() {
@@ -250,38 +250,34 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil) == [
-        .highlight, .snooze, .pause, .stop, .divider, expectedDelete(s),
+        .highlight, .snooze, .copyLink, .pause, .stop, .divider, expectedDelete(s),
       ])
   }
 
   @Test func showsPauseAndStopButNoSnoozeOrDeleteForALiveChat() {
-    #expect(SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil) == [.pause, .stop])
+    #expect(SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil) == [.copyLink, .pause, .stop])
   }
 
   @Test func showsOnlyPauseForAManagerConversationThatIsNotRunning() {
-    #expect(SessionMenu.actions(for: ofKind(.manager, live: false), selectionCount: nil) == [.pause])
+    #expect(SessionMenu.actions(for: ofKind(.manager, live: false), selectionCount: nil) == [.copyLink, .pause])
   }
 
   @Test func separatesCleanUpAndDeleteFromSnoozeAndPauseWithADivider() {
     let s = cleanupSession(CleanupStatus(state: .ready))
 
     #expect(
-      SessionMenu.actions(for: s, selectionCount: nil) == [.snooze, .pause, .divider, .cleanUp, expectedDelete(s)])
+      SessionMenu.actions(for: s, selectionCount: nil) == [
+        .snooze, .copyLink, .pause, .divider, .cleanUp, expectedDelete(s),
+      ])
   }
 
-  /// A session marked Done whose worktree the cleanup removed shows no Snooze and no Pause, so no item precedes Delete.
-  @Test func leavesOutTheDividerWhenNoItemPrecedesTheDelete() {
+  /// A session marked Done whose worktree the cleanup removed shows no Snooze and no Pause, so only Copy Link
+  /// precedes the divider.
+  @Test func keepsTheDividerAfterCopyLinkWhenNoOtherItemPrecedesTheDelete() {
     var s = cleanupSession(CleanupStatus(state: .removed))
     s.markedDone = true
 
-    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [expectedDelete(s)])
-  }
-
-  @Test func keepsTheDividerAfterTheRowsOwnItems() {
-    var s = cleanupSession(CleanupStatus(state: .removed))
-    s.markedDone = true
-
-    #expect(SessionMenu.actions(for: s, selectionCount: nil, hasExtra: true) == [.divider, expectedDelete(s)])
+    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [.copyLink, .divider, expectedDelete(s)])
   }
 
   @Test func separatesDeleteOfAPausedSessionWithADivider() {
@@ -289,7 +285,9 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
     s.pause = paused
 
     #expect(
-      SessionMenu.actions(for: s, selectionCount: nil) == [.highlight, .snooze, .resume, .divider, expectedDelete(s)])
+      SessionMenu.actions(for: s, selectionCount: nil) == [
+        .highlight, .snooze, .copyLink, .resume, .divider, expectedDelete(s),
+      ])
   }
 
   @Test func offersHighlightFirstForAWorkSessionThatIsNotDone() {
@@ -345,6 +343,13 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
       ("live operator", ofKind(.operator), nil),
     ]
   }()
+
+  @Test(arguments: shapes.indices)
+  func offersCopyLinkOnceInEveryShape(_ i: Int) {
+    let actions = SessionMenu.actions(for: Self.shapes[i].1, selectionCount: Self.shapes[i].2)
+
+    #expect(actions.filter { $0 == .copyLink }.count == 1, "\(Self.shapes[i].0)")
+  }
 
   @Test(arguments: shapes.indices)
   func endsWithNoDivider(_ i: Int) {

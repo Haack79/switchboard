@@ -45,6 +45,7 @@ public enum Chat {
     - A to-do note is a task for the user. Never do it, and never tell a session to do it. Add one only when the user asks you to.
     - A message to several sessions goes out only after the user sends it from Switchboard. `send_group` opens that request and sends nothing itself. A confirmation in this chat does not send it.
     - Ask the user before you merge a PR or remove a worktree, whether you use a tool or a shell command.
+    - \(SessionLink.guidance)
 
     ## Tools
 

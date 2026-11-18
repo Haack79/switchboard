@@ -189,7 +189,7 @@ public struct Wait: Codable, Equatable, Sendable {
     case .queue: return "the merge queue for \(pr)"
     case .merge: return "\(pr) to merge"
     case .deploy: return "\(pr) to reach \(environment ?? "prod")" + (service.map { " in \($0)" } ?? "")
-    case .session: return "\(session?.name ?? "another session") to reach \((state ?? .done).title)"
+    case .session: return (session?.name ?? "another session") + sessionGoal
     case .date: return "until " + (until.map { Wait.formatTime($0) } ?? "a date")
     case .manual: return note ?? "a manual wait"
     }
@@ -199,7 +199,24 @@ public struct Wait: Codable, Equatable, Sendable {
   /// parentheses, and a manual wait's recheck time.
   public var line: String {
     if kind == .manual { return summary + (until.map { " (recheck \(Wait.formatTime($0)))" } ?? "") }
-    return summary + (note.map { " (\($0))" } ?? "")
+    return summary + noteSuffix
+  }
+
+  /// A session wait's summary after the target's name.
+  private var sessionGoal: String { " to reach \((state ?? .done).title)" }
+
+  private var noteSuffix: String { note.map { " (\($0))" } ?? "" }
+
+  /// `line` as the app draws it. A session wait's target name links to the target's id URL when `names` has the
+  /// target live. The link comes from the wait's target id, not from the text, and the name is the one the wait
+  /// recorded.
+  public func lineText(names: SessionNames) -> MarkdownText {
+    guard kind == .session, let target = session, !target.name.isEmpty, names.entry(target.id)?.removed == false
+    else { return MarkdownText(stringLiteral: line) }
+    return MarkdownText([
+      MarkdownText.Run(target.name, link: SessionLink.url(for: target.id).absoluteString),
+      MarkdownText.Run(sessionGoal + noteSuffix),
+    ])
   }
 
   /// Whether the wait is past its recheck time and still open.
