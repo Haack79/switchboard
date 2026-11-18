@@ -51,7 +51,7 @@ private func isDeleteSelection(_ a: SessionMenuAction) -> Bool {
 private func isDestructive(_ a: SessionMenuAction) -> Bool {
   switch a {
   case .cleanUp, .delete, .deleteSelection: true
-  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .divider: false
+  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .moveToAccount, .divider: false
   }
 }
 
@@ -80,6 +80,26 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
   @Test(arguments: [SessionKind.manager, .chat, .operator])
   func offersStopForALiveSessionOfAnyKind(_ kind: SessionKind) {
     #expect(SessionMenu.actions(for: ofKind(kind), selectionCount: nil).contains(.stop))
+  }
+}
+
+@Suite struct SessionMenuMoveToAccount {
+  @Test func offersMoveToAccountAfterStopAndBeforeTheDivider() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: nil, movesAccount: true)
+
+    let move = actions.firstIndex(of: .moveToAccount)
+    #expect(move != nil)
+    #expect(move.map { $0 > actions.firstIndex(of: .stop)! } == true)
+    #expect(actions.firstIndex(of: .divider).map { move! < $0 } ?? true)
+  }
+
+  @Test func offersNoMoveToAccountWhenTheSessionCannotMove() {
+    #expect(!SessionMenu.actions(for: liveWork(), selectionCount: nil).contains(.moveToAccount))
+  }
+
+  @Test(arguments: [SessionKind.manager, .chat, .operator])
+  func offersMoveToAccountForASessionOfAnyKind(_ kind: SessionKind) {
+    #expect(SessionMenu.actions(for: ofKind(kind), selectionCount: nil, movesAccount: true).contains(.moveToAccount))
   }
 }
 

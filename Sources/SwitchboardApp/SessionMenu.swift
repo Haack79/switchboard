@@ -10,6 +10,7 @@ enum SessionMenuAction: Hashable {
   case resume
   case startNow
   case stop
+  case moveToAccount
   case divider
   case cleanUp
   case delete(String)
@@ -22,7 +23,8 @@ enum SessionMenu {
   /// nil otherwise. A row in a multi-selection offers to delete the selection instead of the row alone. A session
   /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep. A docket row offers Delete
   /// only in Done, because the confirmation describes a session that runs claude in a worktree.
-  static func actions(for s: SessionSummary, selectionCount: Int?) -> [SessionMenuAction] {
+  /// `movesAccount` is true when the session can move to another account.
+  static func actions(for s: SessionSummary, selectionCount: Int?, movesAccount: Bool = false) -> [SessionMenuAction] {
     var safe: [SessionMenuAction] = []
     if HighlightMenuItem.title(for: s) != nil { safe.append(.highlight) }
     if s.canSnooze { safe.append(.snooze) }
@@ -34,6 +36,7 @@ enum SessionMenu {
     }
     if s.queued == true { safe.append(.startNow) }
     if s.live && s.pause == nil { safe.append(.stop) }
+    if movesAccount { safe.append(.moveToAccount) }
     var destructive: [SessionMenuAction] = []
     if CleanupOffer.canCleanUp(s) { destructive.append(.cleanUp) }
     if let selectionCount {
@@ -67,7 +70,9 @@ struct SessionMenuItems<Extra: View>: View {
     let selectionCount = SessionMenu.selectionCount(
       for: session.id, removableSelection: removableSelection, showsMultiSelection: model.showsMultiSelection,
       multiSelection: model.multiSelection)
-    let actions = SessionMenu.actions(for: session, selectionCount: selectionCount)
+    let actions = SessionMenu.actions(
+      for: session, selectionCount: selectionCount,
+      movesAccount: SessionAccountMenu.shows(session, accountCount: model.accounts.count))
     let split = actions.firstIndex(of: .divider) ?? actions.endIndex
     ForEach(actions[..<split], id: \.self, content: item)
     extra()
@@ -93,6 +98,8 @@ struct SessionMenuItems<Extra: View>: View {
         .help(BoardModel.startNowHelp)
     case .stop:
       Button("Stop Claude") { model.stop(id) }.help(BoardModel.stopHelp)
+    case .moveToAccount:
+      Menu("Move to Account") { MoveToAccountMenuItems(session: session) }
     case .divider:
       Divider()
     case .cleanUp:

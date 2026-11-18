@@ -68,4 +68,7 @@ func printMove(_ move: AccountMove, dryRun: Bool = false) {
   print(
     "\(dryRun ? "\(n) session\(n == 1 ? "" : "s") would move" : "Moved \(n) session\(n == 1 ? "" : "s")") to \(name)")
   for b in move.blocked { print("  stays: \(b.session)  \(b.name): \(b.reason)") }
+  for (id, servers) in (move.mcpDropped ?? [:]).sorted(by: { $0.key < $1.key }) {
+    print("  drops MCP servers: \(id): \(servers.joined(separator: ", "))")
+  }
 }

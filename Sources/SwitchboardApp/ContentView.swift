@@ -287,6 +287,15 @@ struct Sidebar: View {
     } message: { change in
       Text(accountSwitchMessage(change))
     }
+    .confirmationDialog(
+      model.confirmingAccountMove?.title ?? "", isPresented: isConfirmingAccountMove,
+      presenting: model.confirmingAccountMove
+    ) { move in
+      Button(move.button) { model.confirmAccountMove(move) }
+      Button("Cancel", role: .cancel) {}
+    } message: { move in
+      Text(move.message)
+    }
     // A sixth toolbar item pushes New Session into the overflow menu at the minimum window width, so search
     // sits here. It looks like a search field, and the panel holds the real one.
     .safeAreaInset(edge: .top) {
@@ -337,6 +346,10 @@ struct Sidebar: View {
         }
       }
     }
+  }
+
+  private var isConfirmingAccountMove: Binding<Bool> {
+    Binding(get: { model.confirmingAccountMove != nil }, set: { if !$0 { model.confirmingAccountMove = nil } })
   }
 
   private var isSwitchingAccount: Binding<Bool> {
@@ -738,7 +751,7 @@ struct BoardView: View {
           .takesListFocus(.board, $focused, model: model)
           // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
           .onAppear { if !model.namingGroup { focused = true } }
-          .onChange(of: model.boardJumps) {
+          .onChange(of: model.boardJumps, initial: true) {
             if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
           }
         }

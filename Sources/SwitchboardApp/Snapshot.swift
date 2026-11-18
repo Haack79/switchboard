@@ -4,7 +4,7 @@ import SwiftUI
 import SwitchboardCore
 
 /// Hooks for scripted checks of the GUI. SB_SELECT selects a session when the
-/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, and SB_HOVER_REF=<session id> opens the session card on the first text that names that session by its id or links to its id link, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_ORGS=open opens the org filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, or `issues`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
+/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, and SB_HOVER_REF=<session id> opens the session card on the first text that names that session by its id or links to its id link, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ACCOUNT_MOVE=<session id>:<account name> asks to move that session to that account once both are listed, which shows the move's confirmation when it asks one, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_ORGS=open opens the org filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, or `issues`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
 /// PNG file that the app draws its windows into after SB_SNAPSHOT_DELAY
 /// seconds (default 3): the main window with its toolbar, and any sheet or
 /// popover in front of it. The app draws the windows itself, so this needs no
@@ -72,6 +72,9 @@ enum Snapshot {
       visit(
         places.split(separator: ",").map(String.init), model, back: Int(env["SB_HISTORY_BACK"] ?? "") ?? 0,
         openList: env["SB_HISTORY_MENU"] == "open")
+    }
+    if let spec = env["SB_ACCOUNT_MOVE"], let colon = spec.lastIndex(of: ":") {
+      requestAccountMove(model, id: String(spec[..<colon]), account: String(spec[spec.index(after: colon)...]))
     }
     if let path = env["SB_QUIT_FILE"] {
       Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
@@ -166,6 +169,17 @@ enum Snapshot {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
           if let change = model.switchingAccount { model.confirmAccountSwitch(change, move: answer == "move") }
         }
+      }
+    }
+  }
+
+  /// The move needs the session and the accounts, so the hook waits for both.
+  private static func requestAccountMove(_ model: BoardModel, id: String, account name: String) {
+    Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { timer in
+      MainActor.assumeIsolated {
+        guard model.summary(id) != nil, let account = model.accounts.first(where: { $0.name == name }) else { return }
+        timer.invalidate()
+        model.requestAccountMove(id, to: account.folder)
       }
     }
   }
