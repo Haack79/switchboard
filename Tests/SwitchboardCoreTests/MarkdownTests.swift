@@ -11,6 +11,10 @@ private func item(_ text: MarkdownText, _ more: MarkdownBlock...) -> MarkdownBlo
 
 private func text(_ runs: Run...) -> MarkdownText { MarkdownText(runs) }
 
+private func alert(_ kind: MarkdownBlock.AlertKind, _ blocks: [MarkdownBlock]) -> MarkdownBlock {
+  .quote(blocks, alert: kind)
+}
+
 @Suite struct MarkdownTests {
   @Test func headings() {
     let md = "# One\n## Two\n### Three\n#### Four\n##### Five\n###### Six\n\nSetext one\n===\n\nSetext two\n---"
@@ -143,6 +147,84 @@ private func text(_ runs: Run...) -> MarkdownText { MarkdownText(runs) }
           .code(language: nil, text: "    code"), .quote([.paragraph("inner"), .quote([.paragraph("innermost")])]),
         ])
       ])
+  }
+
+  @Test func eachAlertKindReadsItsMarker() {
+    for kind in MarkdownBlock.AlertKind.allCases {
+      #expect(
+        MarkdownBlock.parse("> [!\(kind.rawValue.uppercased())]\n> Body text.") == [
+          alert(kind, [.paragraph("Body text.")])
+        ])
+    }
+    #expect(MarkdownBlock.AlertKind.allCases.map(\.title) == ["Note", "Tip", "Important", "Warning", "Caution"])
+  }
+
+  @Test func theIssuesWarningIsAnAlert() {
+    #expect(
+      MarkdownBlock.parse("> [!WARNING]\n> AI draft — James has not edited this yet.\n\nAt 100% of the ramp.") == [
+        alert(.warning, [.paragraph("AI draft — James has not edited this yet.")]), .paragraph("At 100% of the ramp."),
+      ])
+  }
+
+  @Test func anAlertMarkerIgnoresCaseAndKeepsTheBlocksAfterIt() {
+    #expect(MarkdownBlock.parse("> [!note]\n> lower") == [alert(.note, [.paragraph("lower")])])
+    #expect(
+      MarkdownBlock.parse("> [!TIP]\n> **Bold** start\n>\n> - one\n> - two\n>\n> ```swift\n> let x = 1\n> ```") == [
+        alert(
+          .tip,
+          [
+            .paragraph(text(Run("Bold", .strong), Run(" start"))),
+            .list(number: nil, items: [item("one"), item("two")]),
+            .code(language: "swift", text: "let x = 1"),
+          ])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!IMPORTANT]\n>\n> After a blank line.") == [
+        alert(.important, [.paragraph("After a blank line.")])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!CAUTION]\r\n> One.\r\n> Two.") == [alert(.caution, [.paragraph("One.\nTwo.")])])
+  }
+
+  @Test func aQuoteThatGitHubWouldNotReadAsAnAlertStaysAQuote() {
+    // Text on the marker's line, no text after the marker, an unknown kind, or a styled marker.
+    #expect(MarkdownBlock.parse("> [!NOTE] same line") == [.quote([.paragraph("[!NOTE] same line")])])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] **bold**\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("bold", .strong), Run("\ntext")))])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] [link](https://x.example)\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("link", link: "https://x.example"), Run("\ntext")))])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] `code`\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("code", .code), Run("\ntext")))])
+      ])
+    // HTML after the marker on its line stays a quote, even when the HTML draws a line break.
+    for html in ["<br>", "<br/>", "<div>", "<p>", "<b>x</b>", "<span>x</span>"] {
+      let blocks = MarkdownBlock.parse("> [!NOTE]\(html)Body\n> more")
+      #expect(blocks.count == 1, "\(html)")
+      if case .quote(_, let alert) = blocks.first { #expect(alert == nil, "\(html)") } else { Issue.record("\(html)") }
+    }
+    // A hard line break after the marker ends its line, as a soft one does.
+    #expect(MarkdownBlock.parse("> [!NOTE]  \n> Body") == [alert(.note, [.paragraph("Body")])])
+    #expect(MarkdownBlock.parse("> [!NOTE]\\\n> Body") == [alert(.note, [.paragraph("Body")])])
+    #expect(MarkdownBlock.parse("> [!NOTE]") == [.quote([.paragraph("[!NOTE]")])])
+    #expect(MarkdownBlock.parse("> [!DANGER]\n> text") == [.quote([.paragraph("[!DANGER]\ntext")])])
+    #expect(
+      MarkdownBlock.parse("> `[!NOTE]`\n> text") == [.quote([.paragraph(text(Run("[!NOTE]", .code), Run("\ntext")))])])
+    // GitHub reads an alert only at the top level, not inside a list or another quote.
+    #expect(
+      MarkdownBlock.parse("- > [!NOTE]\n  > text") == [
+        .list(number: nil, items: [.init(checked: nil, blocks: [.quote([.paragraph("[!NOTE]\ntext")])])])
+      ])
+    #expect(MarkdownBlock.parse("> > [!NOTE]\n> > text") == [.quote([.quote([.paragraph("[!NOTE]\ntext")])])])
+  }
+
+  @Test func anAlertsTextCountsAsTheQuotesDoes() {
+    let blocks = MarkdownBlock.parse("> [!NOTE]\n> Read *this*.")
+    #expect(blocks.map(\.plainText) == ["Read this."])
   }
 
   @Test func horizontalRules() {
@@ -325,7 +407,7 @@ private func text(_ runs: Run...) -> MarkdownText { MarkdownText(runs) }
       1
         + (blocks.map { block -> Int in
           switch block {
-          case .quote(let inner), .details(_, _, let inner): depth(inner)
+          case .quote(let inner, _), .details(_, _, let inner): depth(inner)
           case .list(_, let items): items.map { depth($0.blocks) }.max() ?? 0
           default: 0
           }

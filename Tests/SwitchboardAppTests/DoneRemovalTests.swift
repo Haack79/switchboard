@@ -240,7 +240,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
       return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
 
-    model.deleteDone(done)
+    model.deleteSession(done)
     await settle { !sent.queues.isEmpty }
 
     let args = try #require(sent.queues.first)
@@ -258,7 +258,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
       return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
 
-    model.deleteDone(done)
+    model.deleteSession(done)
     await settle { !sent.queues.isEmpty }
 
     #expect(!sent.ops.contains("rm"))
@@ -274,7 +274,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
       return op == "rm-queue" ? try queuedEveryTarget(args) : .null
     }
 
-    model.deleteDone(done, resolve: ["t1", "t2"])
+    model.deleteSession(done, resolve: ["t1", "t2"])
     await settle { !sent.queues.isEmpty }
 
     let args = try #require(sent.queues.first)
@@ -291,7 +291,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     }
 
     model.perform("before", [:])
-    model.deleteDone(done)
+    model.deleteSession(done)
     model.perform("after", [:])
     await settle { sent.value.count >= 3 }
 
@@ -310,7 +310,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     }
     model.selection = "d"
 
-    model.deleteDone(done)
+    model.deleteSession(done)
     await settle { model.actionError != nil }
 
     #expect(!sent.queues.isEmpty)
@@ -329,7 +329,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
     }
     model.selection = "d"
 
-    model.deleteDone(done)
+    model.deleteSession(done)
     await settle { model.actionError != nil }
 
     #expect(!sent.queues.isEmpty)

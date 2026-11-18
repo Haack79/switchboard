@@ -259,9 +259,7 @@ struct SessionView: View {
             .help(PauseBanner.resumeHelp)
         } else if session.live {
           Button("Stop") { model.stop(session.id) }
-            .help(
-              "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
-            )
+            .help(BoardModel.stopHelp)
         } else if session.queued == true {
           Button("Start Now") { model.startNow(session.id) }
             .disabled(model.startingNow.contains(session.id))

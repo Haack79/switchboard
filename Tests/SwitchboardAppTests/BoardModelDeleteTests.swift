@@ -95,8 +95,8 @@ import Testing
   @Test func ignoresASecondDeleteWhileTheFirstRuns() async {
     let sent = await firstRequest { model in
       let session = done()
-      model.deleteDone(session)
-      model.deleteDone(session)
+      model.deleteSession(session)
+      model.deleteSession(session)
       #expect(model.deleting == [session.id])
     }
     #expect(sent.count == 1)

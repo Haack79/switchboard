@@ -114,6 +114,15 @@ public enum MarkdownBlock: Equatable, Sendable {
     }
   }
 
+  /// The kinds of GitHub alert. An alert is a quote whose first line is `[!NOTE]`,
+  /// `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`.
+  public enum AlertKind: String, CaseIterable, Sendable {
+    case note, tip, important, warning, caution
+
+    /// The title GitHub shows above the alert's text.
+    public var title: String { rawValue.capitalized }
+  }
+
   case heading(level: Int, text: MarkdownText)
   case paragraph(MarkdownText)
   /// A paragraph that holds only images.
@@ -121,7 +130,8 @@ public enum MarkdownBlock: Equatable, Sendable {
   /// `number` is the first item's number for a numbered list, or nil for bullets.
   case list(number: Int?, items: [Item])
   case code(language: String?, text: String)
-  case quote([MarkdownBlock])
+  /// `alert` is set for a GitHub alert. An alert's blocks leave out the `[!KIND]` line.
+  case quote([MarkdownBlock], alert: AlertKind? = nil)
   /// Every row has one cell for each header cell.
   case table(header: [MarkdownText], alignments: [Alignment], rows: [[MarkdownText]])
   case rule
@@ -207,7 +217,10 @@ public enum MarkdownBlock: Equatable, Sendable {
       let info = string(cmark_node_get_fence_info(node)).split(whereSeparator: \.isWhitespace).first.map(String.init)
       return .code(language: info, text: codeText(node))
     case "block_quote":
-      return .quote(blocks(of: node, depth: depth + 1))
+      let blocks = blocks(of: node, depth: depth + 1)
+      // GitHub reads an alert only at the top level of the document.
+      return cmark_node_get_type(cmark_node_parent(node)) == CMARK_NODE_DOCUMENT && firstLineIsPlainText(node)
+        ? quote(alerting: blocks) : .quote(blocks)
     case "thematic_break":
       return .rule
     case "table":
@@ -215,6 +228,31 @@ public enum MarkdownBlock: Equatable, Sendable {
     default:
       return nil
     }
+  }
+
+  /// Whether the quote's first paragraph opens with a line of plain text, which a line break or the paragraph's end
+  /// follows. The line is read from cmark-gfm's tree, so styled text or HTML after the text on the same line,
+  /// such as `<br>`, makes it false.
+  private static func firstLineIsPlainText(_ quote: Node) -> Bool {
+    guard let paragraph = cmark_node_first_child(quote), kind(paragraph) == "paragraph" else { return false }
+    var child = cmark_node_first_child(paragraph)
+    while let node = child, kind(node) == "text" { child = cmark_node_next(node) }
+    return child.map { ["softbreak", "linebreak"].contains(kind($0)) } ?? true
+  }
+
+  /// A quote whose first line is a marker such as `[!WARNING]` is an alert, when some text follows the marker.
+  /// The caller checks that the first line is plain text, as GitHub requires.
+  private static func quote(alerting blocks: [MarkdownBlock]) -> MarkdownBlock {
+    guard case .paragraph(let text)? = blocks.first, let first = text.runs.first else { return .quote(blocks) }
+    let line = first.text.prefix { $0 != "\n" }
+    let marker = line.trimmingCharacters(in: .whitespaces)
+    guard marker.hasPrefix("[!"), marker.hasSuffix("]"),
+      let kind = AlertKind(rawValue: marker.dropFirst(2).dropLast().lowercased())
+    else { return .quote(blocks) }
+    var rest = text
+    rest.runs[0].text.removeFirst(line.count)
+    let body = [textBlock(rest)].compactMap { $0 } + blocks.dropFirst()
+    return body.isEmpty ? .quote(blocks) : .quote(body, alert: kind)
   }
 
   /// A paragraph of only images and whitespace becomes `.images`.
@@ -599,7 +637,7 @@ extension MarkdownBlock {
     switch self {
     case .paragraph(let text), .heading(_, let text): text.plain
     case .list(_, let items): items.flatMap(\.blocks).map(\.plainText).joined(separator: " ")
-    case .quote(let blocks): blocks.map(\.plainText).joined(separator: " ")
+    case .quote(let blocks, _): blocks.map(\.plainText).joined(separator: " ")
     default: ""
     }
   }

@@ -51,7 +51,7 @@ func orgFilterModel(
   _ filter: OrgFilter = OrgFilter(), groupFilter: GroupFilter = GroupFilter(), store: UserDefaults? = nil
 ) -> BoardModel {
   _ = NSApplication.shared
-  return BoardModel(client: offlineClient(), filterStore: store, orgFilter: filter, groupFilter: groupFilter)
+  return BoardModel(client: offlineClient(), viewSettingsStore: store, orgFilter: filter, groupFilter: groupFilter)
 }
 
 let posthogOnly = OrgFilter(keys: ["posthog"])

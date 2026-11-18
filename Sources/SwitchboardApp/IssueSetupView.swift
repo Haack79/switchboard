@@ -15,9 +15,10 @@ struct IssueSetupView: View {
   @State private var adding = false
   @State private var labels = ""
   @State private var people = ""
+  @State private var backlog = ""
   @State private var defaultPreset: String?
-  /// Whether the team and preset fields hold the list's values. The sheet can open before the first read.
-  @State private var loaded = false
+  /// The team that the fields loaded, or nil before the first read. The sheet can open before it.
+  @State private var loadedTeam: IssueTeam?
 
   var body: some View {
     let list = model.issueList
@@ -85,8 +86,11 @@ struct IssueSetupView: View {
         VStack(alignment: .leading, spacing: 6) {
           TextField("Labels", text: $labels, prompt: Text("Labels, separated by commas"))
           TextField("People", text: $people, prompt: Text("Logins, separated by commas"))
-          Text("Sorts fetched issues into the Mine and Team views. It doesn't change which issues are fetched.")
-            .font(.caption).foregroundStyle(.secondary)
+          TextField("Backlog", text: $backlog, prompt: Text("Backlog labels, separated by commas"))
+          Text(
+            "Sorts fetched issues into the Mine and Team views, with backlog issues last. It doesn't change which issues are fetched."
+          )
+          .font(.caption).foregroundStyle(.secondary)
         }
         .padding(4)
       }
@@ -103,7 +107,10 @@ struct IssueSetupView: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Save") {
-          model.saveIssueSettings(labels: split(labels), people: split(people), defaultPreset: defaultPreset)
+          model.saveIssueSettings(
+            labels: Self.list(labels, loaded: loadedTeam?.labels),
+            people: Self.list(people, loaded: loadedTeam?.people),
+            backlog: Self.list(backlog, loaded: loadedTeam?.backlog), defaultPreset: defaultPreset)
           dismiss()
         }
         .keyboardShortcut(returnOwner == .save ? .defaultAction : nil)
@@ -113,10 +120,11 @@ struct IssueSetupView: View {
     .frame(width: 600)
     .onAppear { model.loadRepos() }
     .onChange(of: model.issueList == nil, initial: true) {
-      guard !loaded, let list = model.issueList else { return }
-      loaded = true
-      labels = list.team.labels.joined(separator: ", ")
-      people = list.team.people.joined(separator: ", ")
+      guard loadedTeam == nil, let list = model.issueList else { return }
+      loadedTeam = list.team
+      labels = Self.text(list.team.labels)
+      people = Self.text(list.team.people)
+      backlog = Self.text(list.team.backlog)
       defaultPreset = IssuePreset.choose(list.presets, last: nil, default: list.defaultPreset)?.name
     }
   }
@@ -161,7 +169,12 @@ struct IssueSetupView: View {
       .joined(separator: ", ")
   }
 
-  private func split(_ text: String) -> [String] {
-    text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+  static func text(_ list: [String]) -> String { list.joined(separator: ", ") }
+
+  /// The entries of a field that lists them separated by commas. A field that still shows the text of the list it
+  /// loaded gives that list back, because an entry that config.json or `sb issues team` set can hold a comma.
+  static func list(_ text: String, loaded: [String]?) -> [String] {
+    if let loaded, text == Self.text(loaded) { return loaded }
+    return text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
   }
 }

@@ -273,6 +273,15 @@ public struct PullRequest: Codable, Equatable, Sendable {
     return reviewDecision == .approved || (reviewRequests?.isEmpty ?? true)
   }
 
+  /// When the PR merged or closed, in ms, or nil while it is open or when GitHub gave no time.
+  public var endedAt: Int64? {
+    switch state {
+    case .merged: mergedAt.flatMap(Transcript.milliseconds)
+    case .closed: closedAt.flatMap(Transcript.milliseconds)
+    case .open: nil
+    }
+  }
+
   /// When the newest approval was submitted.
   public var approvedAt: String? {
     verdicts.filter(\.isApproval).compactMap(\.submittedAt).max()

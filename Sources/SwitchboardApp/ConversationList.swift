@@ -44,8 +44,9 @@ struct ConversationsSection: View {
       .clickAnchor(s.id)
       .tag(s.id)
       .contextMenu {
-        DeleteSelectedMenuItem(id: s.id, count: removableSelection)
-        Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
+        SessionMenuItems(session: s, removableSelection: removableSelection) {
+          Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
+        }
       }
   }
 }

@@ -37,6 +37,9 @@ extension Service {
       try updateIssueSettings { settings in
         if let labels = args["labels"]?.array { settings.team.labels = labels.compactMap(\.string) }
         if let people = args["people"]?.array { settings.team.people = people.compactMap(\.string) }
+        if let backlog = args["backlog"]?.array {
+          settings.team.backlog = IssueTeam.backlogLabels(backlog.compactMap(\.string))
+        }
         if let preset = args["defaultPreset"]?.string {
           _ = try IssuePreset.named(preset, in: settings.allPresets)
           settings.defaultPreset = preset

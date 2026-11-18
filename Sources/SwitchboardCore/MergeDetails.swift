@@ -193,7 +193,7 @@ public struct MergeDetails: Codable, Equatable, Sendable {
         let plain = itemText(item)
         return kept(plain) ? Unit(text: plain, section: section, prose: true) : nil
       }
-    case .quote(let blocks):
+    case .quote(let blocks, _):
       return blocks.flatMap { units($0, section: section) }
     case .table(let header, _, let rows):
       let text = ([header] + rows).map { $0.map(\.plain).joined(separator: " | ") }.joined(separator: "\n")
@@ -215,7 +215,7 @@ public struct MergeDetails: Codable, Equatable, Sendable {
         if item.checked == false { return plain.isEmpty ? [] : [oneLine(plain, max: TriageCard.lineLength)] }
         return gapSentences(plain)
       }
-    case .quote(let blocks):
+    case .quote(let blocks, _):
       return blocks.flatMap(testGaps)
     default:
       return []

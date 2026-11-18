@@ -234,4 +234,20 @@ import Testing
       checks: "PENDING", reviewDecision: .approved, verdicts: [review("alex", "APPROVED", PRWaitTests.beforeSince)])
     #expect(wait(kind, since: PRWaitTests.since).resolution(of: read) == wait(kind).resolution(of: read))
   }
+
+  /// A settlement carries the time of the change that settled the wait.
+  @Test func aSettlementCarriesTheTimeOfTheChangeThatSettledIt() {
+    let at = PRWaitTests.set + 1000
+    let alex = [review("alex", "APPROVED", PRWaitTests.after)]
+    #expect(wait(.approval, who: "alex").settlement(of: pr(verdicts: alex))?.changedAt == at)
+    #expect(wait(.queue).settlement(of: pr(queue: .removed))?.changedAt == at)
+    #expect(wait(.queue).settlement(of: pr(queue: .merged))?.changedAt == at)
+    var closed = pr(.closed)
+    closed.closedAt = PRWaitTests.after
+    #expect(wait(.merge).settlement(of: closed)?.changedAt == at)
+    var merged = pr(.merged)
+    merged.mergedAt = PRWaitTests.after
+    #expect(wait(.ci).settlement(of: merged)?.changedAt == at)
+    #expect(wait(.review, who: "alex").settlement(of: merged)?.changedAt == at)
+  }
 }

@@ -13,7 +13,7 @@ struct SwitchboardApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var model = BoardModel(
     client: Client(), draftsFolder: Home().drafts,
-    filterStore: Bundle.main.bundleIdentifier != nil ? .standard : nil, orgFilter: Snapshot.orgFilter,
+    viewSettingsStore: Bundle.main.bundleIdentifier != nil ? .standard : nil, orgFilter: Snapshot.orgFilter,
     groupFilter: Snapshot.groupFilter)
 
   var body: some Scene {
