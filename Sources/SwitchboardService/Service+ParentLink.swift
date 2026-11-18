@@ -7,7 +7,8 @@ extension Service {
   /// new parent hears only what changes after the move. The session keeps its group, account, host, and waits. It
   /// records `unlinked` on the session and its old parent, and `linked` on the session and its new parent. It
   /// refuses a follow-up, whose parent is the session that captured it, the asking session `caller`, a session
-  /// outside a scoped request's `scope`, and a move that would put the session under itself.
+  /// outside a scoped request's `scope`, and a move that would put the session under itself. A clear with `from`
+  /// refuses when the session's parent is no longer `from`, so a stale view can't unlink it from another parent.
   func parentRequest(_ args: JSON, origin: RequestOrigin) throws -> JSON {
     let by = try Author(parsing: args["by"]?.string)
     let id = try lookupOther(args, refusing: "change its own parent")
@@ -20,7 +21,10 @@ extension Service {
     guard clear != (args["parent"] != nil) else { throw APIError("parent needs a parent or clear, not both") }
     let new: String?
     if clear {
-      guard session.parent != nil else { throw APIError("\(session.name) has no parent") }
+      guard let old = session.parent else { throw APIError("\(session.name) has no parent") }
+      if let from = args["from"]?.string, from != old {
+        throw APIError("\(session.name) is no longer under \(entries[from]?.session.name ?? from)")
+      }
       new = nil
     } else {
       let ref = args["parent"]!

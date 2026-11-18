@@ -396,13 +396,16 @@ import Testing
     #expect(actual22 == other.id)
   }
 
-  @Test func setParentWithBothAParentAndClearIsRefused() throws {
+  /// An empty `parent` still counts as a parent, so it doesn't turn the request into a plain clear.
+  @Test(arguments: [false, true])
+  func setParentWithBothAParentAndClearIsRefused(emptyParent: Bool) throws {
     let sbd = try Instance()
     let (parent, kid) = try parentAndChild(sbd)
     let other = try idle(sbd, name: "other")
     let mcp = try MCPClient(sbd, env: inside(try managerID(sbd)))
 
-    let result = try mcp.call("set_parent", ["session": .string(kid.id), "parent": .string(other.name), "clear": true])
+    let result = try mcp.call(
+      "set_parent", ["session": .string(kid.id), "parent": .string(emptyParent ? "" : other.name), "clear": true])
 
     #expect(result.isError, "\(result.text)")
     #expect(result.text.contains("not both"), "\(result.text)")

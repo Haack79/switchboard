@@ -97,7 +97,7 @@ private func parentRequests(_ sent: SentRequests) -> [[String: JSON]] {
   sent.value.filter { $0.op == "parent" }.map(\.args)
 }
 
-private let clearKid: [String: JSON] = ["session": "kid", "clear": true]
+private let clearKid: [String: JSON] = ["session": "kid", "clear": true, "from": "p1"]
 private let relinkKid: [String: JSON] = ["session": "kid", "parent": "p1"]
 
 @MainActor
@@ -269,6 +269,13 @@ private let relinkKid: [String: JSON] = ["session": "kid", "parent": "p1"]
     let model = appliedModel([kid(parent: "sunknown")])
 
     #expect(model.linkedParentName(of: kid(parent: "sunknown")) == nil)
+  }
+
+  /// sbd links a session back only to a parent that runs claude, so the menu offers no unlink that undo can't restore.
+  @Test func linkedParentNameIsNilForAParentThatRunsNoClaude() {
+    let model = appliedModel([docketSession("p1"), kid()])
+
+    #expect(model.linkedParentName(of: kid()) == nil)
   }
 
   /// The name follows a rename of the parent.

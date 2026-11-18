@@ -366,6 +366,16 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
     }
   }
 
+  @Test(.timeLimit(.minutes(1)))
+  func clearFromTheCurrentParentIsAccepted() throws {
+    try withParents([work("boss"), work("kid", parent: "boss")]) { service in
+      let answer = service.parent(["session": "kid", "clear": true, "from": "boss"])
+
+      #expect(answer.ok, "\(answer.error ?? "")")
+      #expect(service.rawParent(of: "kid") == nil)
+    }
+  }
+
   @Test(.timeLimit(.minutes(1)), arguments: ["kid", "kidname", "ki"])
   func clearFindsTheChildByIdPrefixOrName(_ ref: String) throws {
     try withParents([work("boss"), work("kid", name: "kidname", parent: "boss")]) { service in
@@ -495,6 +505,17 @@ private func line(_ child: String, _ text: String? = nil) -> ParentNotices.Line 
 
   /// A name that matches no session gets the same refusal as one outside the group, so a chat can't learn which
   /// names exist.
+  /// The app sends the parent it showed as `from`. A move since then makes sbd refuse, so undo never restores a
+  /// parent that the unlink didn't remove.
+  @Test(.timeLimit(.minutes(1)))
+  func aClearFromAParentTheSessionNoLongerHasIsRefused() throws {
+    let error = try refusal(
+      [work("old"), work("new"), work("kid", name: "kidname", parent: "new")],
+      ["session": "kid", "clear": true, "from": "old"])
+
+    #expect(error.contains("kidname is no longer under old"), "\(error)")
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func aScopedSetToANameThatMatchesNoSessionGetsTheScopeRefusal() throws {
     let error = try refusal(
