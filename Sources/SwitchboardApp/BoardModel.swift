@@ -14,22 +14,44 @@ enum MainView {
 /// state in memory and answers in a few milliseconds.
 @MainActor
 final class BoardModel: ObservableObject {
-  /// The sessions that the org filter shows and sbd's removal job does not hold. Every list, count, badge,
+  /// The sessions that the filter shows and sbd's removal job does not hold. Every list, count, badge,
   /// and action target reads this. A lookup of a session that a shown session
   /// names, such as a card's asker or a parent, reads `allSessions` or
   /// `allBoard`, because that session may be hidden.
-  var sessions: [SessionSummary] { allSessions.filter { !$0.isBeingRemoved && orgFilter.shows($0) } }
-  /// Every session that sbd lists, whatever the org filter says, including the sessions that the removal job holds.
+  var sessions: [SessionSummary] {
+    let filter = filter
+    return allSessions.filter { !$0.isBeingRemoved && filter.shows($0) }
+  }
+  /// Every session that sbd lists, whatever the filter says, including the sessions that the removal job holds.
   @Published private(set) var allSessions: [SessionSummary] = []
-  /// The GitHub orgs whose sessions the app shows. The installed app saves it.
-  @Published var orgFilter: OrgFilter {
+  /// What every list, count, and action target filters by. The installed app saves its org and group keys. Its
+  /// `knownGroups` comes from sbd's last `group-ls` answer, so a local change such as a delete does not change
+  /// it before sbd confirms the change.
+  @Published var filter: SessionFilter {
     didSet {
-      guard orgFilter != oldValue else { return }
-      viewSettingsStore?.set(orgFilter.keys.sorted(), forKey: Self.orgFilterKey)
+      guard filter != oldValue else { return }
+      if filter.org != oldValue.org { viewSettingsStore?.set(filter.org.keys.sorted(), forKey: Self.orgFilterKey) }
+      if filter.group != oldValue.group {
+        viewSettingsStore?.set(filter.group.keys.sorted(), forKey: Self.groupFilterKey)
+      }
       clearHiddenSelectionAndUpdateBadge()
     }
   }
-  @Published var showingOrgFilter = false
+  /// The GitHub orgs whose sessions the app shows.
+  var orgFilter: OrgFilter {
+    get { filter.org }
+    set { filter.org = newValue }
+  }
+  /// The groups whose sessions the app shows.
+  var groupFilter: GroupFilter {
+    get { filter.group }
+    set { filter.group = newValue }
+  }
+  /// The groups that the user made while the group filter was on, with how many more `group-ls` answers may lack
+  /// them before they leave the filter. An answer read before the creation lacks them, and it must not drop them.
+  /// An answer that lists a group, or the last one allowed to lack it, ends its exemption.
+  private var unlistedNewGroups: [String: Int] = [:]
+  @Published var showingFilter = false
   /// Decides when a session tile's hover card shows. Tests replace it.
   var hoverCard: HoverCard<String>?
   /// Decides when a reference's hover card shows. Tests replace it.
@@ -39,12 +61,12 @@ final class BoardModel: ObservableObject {
   @Published var unreachable: String?
   /// The last failed action, shown until the next one succeeds.
   @Published var actionError: String?
-  /// Selecting a session that the org filter hides adds its org to the filter. The filter change runs inside
+  /// Selecting a session that the filter hides changes the filter to show it. The filter change runs inside
   /// the navigation, so it records nothing of its own. Every change ends a multi-selection.
   @Published var selection: String? {
     didSet {
       if !multiSelection.isEmpty { multiSelection = [] }
-      navigate { if let selection, selection != oldValue { showOrg(of: selection) } }
+      navigate { if let selection, selection != oldValue { showHidden(selection) } }
     }
   }
   /// The sessions that the sidebar selects with ⌘-click or ⇧-click, or the Board with a click or a rectangle:
@@ -197,7 +219,7 @@ final class BoardModel: ObservableObject {
   /// Follow-ups that wait to start, from `followup-ls`. `ls` also lists the
   /// ones whose trigger fired. They change only through actions and
   /// triggers, so the app reads them every 5 s.
-  var followups: [SessionSummary] { allFollowups.filter(orgFilter.shows) }
+  var followups: [SessionSummary] { allFollowups.filter(filter.shows) }
   /// Every follow-up that waits to start, whatever the org filter says.
   @Published private(set) var allFollowups: [SessionSummary] = []
   /// The names of every session that `ls`, `followup-ls`, or `removed-ls`
@@ -278,6 +300,8 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// Posts the notification that a session needs the user. Tests replace it.
+  lazy var notifier: @MainActor (SessionSummary) -> Void = { [weak self] s in self?.notify(s) }
   /// Sends a quick ask to sbd. Tests replace it.
   lazy var ask: @Sendable (String, CallCancel) throws -> JSON = { [client = self.client] question, cancel in
     try client.call("quick-ask", ["question": .string(question)], timeout: QuickAsk.clientTimeout, cancel: cancel)
@@ -331,28 +355,31 @@ final class BoardModel: ObservableObject {
   private var usageRead = Date.distantPast
 
   static let orgFilterKey = "orgFilter"
+  static let groupFilterKey = "groupFilter"
   static let hidesBacklogKey = "issuesHideBacklog"
-  /// Where the org filter and the other saved view settings are saved. It is nil outside the installed app, so a
-  /// debug or test run never saves a setting that changes a later run.
+  /// Where the org filter, the group filter, and the other saved view settings are saved. It is nil outside the
+  /// installed app, so a debug or test run never saves a setting that changes a later run.
   private let viewSettingsStore: UserDefaults?
 
   /// Takes the client so that tests can't reach the user's sbd by default.
   /// Without `draftsFolder`, the message drafts last only while the model does.
-  /// The filter starts from `viewSettingsStore` when it holds one, else from `orgFilter`.
+  /// Each filter starts from `viewSettingsStore` when it holds one, else from `orgFilter` or `groupFilter`.
   init(
     client: Client, draftsFolder: String? = nil, viewSettingsStore: UserDefaults? = nil,
-    orgFilter: OrgFilter = OrgFilter()
+    orgFilter: OrgFilter = OrgFilter(), groupFilter: GroupFilter = GroupFilter()
   ) {
     self.client = client
     references = ReferenceStore()
     messageDrafts = MessageDrafts(folder: draftsFolder)
     self.viewSettingsStore = viewSettingsStore
-    self.orgFilter = viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter
+    filter = SessionFilter(
+      org: viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter,
+      group: viewSettingsStore?.stringArray(forKey: Self.groupFilterKey).map { GroupFilter(keys: $0) } ?? groupFilter)
     hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
     makeHoverCards()
   }
 
-  /// Clears a selection that the org filter hides or the removal job holds, drops those sessions from the
+  /// Clears a selection that the filter hides or the removal job holds, drops those sessions from the
   /// multi-selection, closes the hover card of a session that is no longer shown, and counts the shown sessions
   /// in the Dock badge. The current history entry follows what the window shows, because a refresh can change
   /// the Inbox's first item.
@@ -387,48 +414,113 @@ final class BoardModel: ObservableObject {
   /// `allBoard` without the sessions that sbd's removal job holds.
   var listedBoard: [SessionSummary] { allBoard.filter { !$0.isBeingRemoved } }
 
-  /// The ids of the sessions and follow-ups that the org filter shows.
+  /// The ids of the sessions and follow-ups that the filter shows.
   var shownIDs: Set<String> { Set(board.map(\.id)) }
 
-  /// The ids that Delete All may remove. Under a filter, a session whose org
-  /// sbd hasn't read yet shows but isn't removable, because its org may be one
-  /// that the filter hides.
+  /// The ids that Delete All may remove. Under an org filter, a session whose org sbd hasn't read yet shows but
+  /// isn't removable, because its org may be one that the filter hides. Under a group filter, no session is
+  /// removable before sbd's first `group-ls` answer, because a session's group may be one that sbd deleted.
   var removableIDs: Set<String> {
-    orgFilter.isAll ? shownIDs : Set(board.filter { OrgFilter.key(of: $0) != nil }.map(\.id))
+    let filter = filter
+    return Set(listedBoard.filter(filter.surelyShows).map(\.id))
   }
 
-  /// The org filter's menu rows, counted over every session that the removal job does not hold.
-  var orgEntries: [OrgFilter.Entry] { orgFilter.entries(listedBoard) }
+  /// The org filter's menu rows, counted over the sessions that the group filter shows and the removal job does
+  /// not hold. A row's count is then how many sessions checking it adds.
+  var orgEntries: [FilterEntry] {
+    orgFilter.entries(listedBoard.filter(filter.groupShows))
+  }
 
-  /// The groups that the Board shows: all of them under All Orgs, else each
-  /// group that is empty or has a member that the filter shows.
+  /// The group filter's menu rows, counted over the sessions that the org filter shows and the removal job does
+  /// not hold.
+  var groupEntries: [FilterEntry] {
+    groupFilter.entries(listedBoard.filter(orgFilter.shows), groups: groups, known: filter.knownGroups)
+  }
+
+  /// The groups that the Board shows: the ones that the group filter selects, and under an org filter, only
+  /// those that are empty or have a member that the filter shows.
   var shownGroups: [GroupSummary] {
-    guard !orgFilter.isAll else { return groups }
-    let shown = shownIDs
-    return groups.filter { $0.sessions.isEmpty || $0.sessions.contains(where: shown.contains) }
+    let filter = filter
+    guard !filter.isAll else { return groups }
+    let shown = filter.org.isAll ? [] : shownIDs
+    return groups.filter { g in
+      (filter.group.isAll || filter.group.keys.contains(g.id))
+        && (filter.org.isAll || g.sessions.isEmpty || g.sessions.contains(where: shown.contains))
+    }
+  }
+
+  /// True when the filters hide every work session that sbd lists. The Manager always shows, so only work
+  /// sessions count.
+  var filterHidesAllWork: Bool {
+    !filter.isAll && workBoard.isEmpty && listedBoard.contains { $0.kind == .work }
+  }
+
+  /// Sets both filters to show every session.
+  func showAll() {
+    filter = SessionFilter(knownGroups: filter.knownGroups)
+  }
+
+  /// Takes sbd's `group-ls` answer. A selected group that the answer lacks leaves the filter, unless the user
+  /// just made it and no answer has listed it yet. The filter widens to keep the selected session in sight when
+  /// the answer moves it out of the selected groups, as a merge or a delete does.
+  func applyGroups(_ listed: [GroupSummary]) {
+    if groups != listed { groups = listed }
+    let next = filter(after: listed, sessions: allBoard)
+    let ids = Set(listed.map(\.id))
+    unlistedNewGroups = unlistedNewGroups.filter { !ids.contains($0.key) && $0.value > 1 }.mapValues { $0 - 1 }
+    if next != filter { filter = next }
+  }
+
+  /// The filter once it takes sbd's `group-ls` answer `listed`, widened to keep the selected session in sight
+  /// as `sessions` lists it. A session that the removal job holds never widens it.
+  func filter(after listed: [GroupSummary], sessions: [SessionSummary]) -> SessionFilter {
+    let ids = Set(listed.map(\.id))
+    var next = filter
+    next.knownGroups = ids
+    next.group = filter.group.pruned(known: ids.union(unlistedNewGroups.keys))
+    if let id = selection, let s = sessions.first(where: { $0.id == id && !$0.isBeingRemoved }) {
+      next = widened(next, toShow: s)
+    }
+    return next
+  }
+
+  /// Adds the group that sbd's answer names to a group filter that is on, so the group that the user just made
+  /// stays in sight.
+  func showAnsweredGroup(_ answer: JSON) {
+    guard !groupFilter.isAll, let id = answer["id"]?.string else { return }
+    if filter.knownGroups?.contains(id) != true { unlistedNewGroups[id] = 2 }
+    groupFilter.insert(id)
   }
 
   /// The group suggestions whose sessions the filter all shows, so accepting
   /// one never moves a hidden session.
   var shownSuggestions: [GroupSuggestion] {
-    guard !orgFilter.isAll else { return suggestions }
+    guard !filter.isAll else { return suggestions }
     let shown = shownIDs
     return suggestions.filter { $0.sessions.allSatisfy(shown.contains) }
   }
 
-  /// How many sessions and follow-ups the org filter hides.
+  /// How many sessions and follow-ups the filter hides.
   var hiddenCount: Int { listedBoard.count - board.count }
   /// How many hidden sessions would be in the Inbox.
   var hiddenNeedingYou: Int { listedBoard.filter(Triage.needsYou).count - board.filter(Triage.needsYou).count }
 
-  /// Adds the session's org to the filter when the filter hides it, so a
-  /// session that the app opens never stays out of sight.
-  func showOrg(of id: String) {
+  /// Changes the filter to show the session when it hides it, so a session
+  /// that the app opens never stays out of sight.
+  func showHidden(_ id: String) {
     // An insert of a key that the filter already holds still publishes. `apply` calls this every second.
-    guard !orgFilter.isAll, let s = listedBoard.first(where: { $0.id == id }), !orgFilter.shows(s),
-      let key = OrgFilter.key(of: s)
-    else { return }
-    orgFilter.insert(key)
+    guard let s = listedBoard.first(where: { $0.id == id }) else { return }
+    let next = widened(filter, toShow: s)
+    if next != filter { filter = next }
+  }
+
+  /// `filter` with the keys added that it needs to show the listed session `id`.
+  private func widened(_ filter: SessionFilter, toShow s: SessionSummary) -> SessionFilter {
+    guard !filter.isAll, !filter.shows(s) else { return filter }
+    var next = filter
+    if !filter.org.shows(s), let key = OrgFilter.key(of: s) { next.org.insert(key) }
+    if !filter.groupShows(s), let key = filter.groupKey(of: s) { next.group.insert(key) }
+    return next
   }
 
   /// The Manager and a group chat count only while a prompt blocks them. The
@@ -460,7 +552,10 @@ final class BoardModel: ObservableObject {
   var workBoard: [SessionSummary] { board.filter { $0.kind == .work } }
 
   /// The group's chat, or nil before its first start.
-  func chat(of group: String) -> SessionSummary? { sessions.first { $0.kind == .chat && $0.chat == group } }
+  /// It reads every listed session, because the group filter can hide the chat.
+  func chat(of group: String) -> SessionSummary? {
+    allSessions.first { !$0.isBeingRemoved && $0.kind == .chat && $0.chat == group }
+  }
 
   /// The current name of the group that the chat manages, or nil for any other session.
   private func groupName(of s: SessionSummary) -> String? {
@@ -489,13 +584,16 @@ final class BoardModel: ObservableObject {
   /// labels. A session therefore shows the same repo in both lists.
   var repoLabels: [String: String] { RepoLabels.labels(board) }
 
-  /// The sessions and the follow-ups that wait to start, as the org filter shows them.
-  var board: [SessionSummary] { listedBoard.filter(orgFilter.shows) }
+  /// The sessions and the follow-ups that wait to start, as the filter shows them.
+  var board: [SessionSummary] { listedBoard.filter(filter.shows) }
 
   var selected: SessionSummary? { board.first { $0.id == selection } }
 
-  /// True while the sidebar has no rows and sbd answers.
-  var sidebarIsEmpty: Bool { sidebarGroups.isEmpty && managers.isEmpty && unreachable == nil }
+  /// True while the sidebar has no rows and sbd answers. It is false when the filters hide every work session,
+  /// because the sidebar then shows `FilterHidesAll` instead.
+  var sidebarIsEmpty: Bool {
+    sidebarGroups.isEmpty && managers.isEmpty && unreachable == nil && !filterHidesAllWork
+  }
 
   /// The main view while no session is selected, else nil.
   var visibleView: MainView? { selection == nil ? mainView : nil }
@@ -542,13 +640,12 @@ final class BoardModel: ObservableObject {
       let removed = readRemoved ? try? client.call("removed-ls", as: [RemovedSession].self) : nil
       Task { @MainActor in
         if let accounts, self.accounts != accounts { self.accounts = accounts }
-        if let groups, self.groups != groups { self.groups = groups }
         if let suggestions, self.suggestions != suggestions { self.suggestions = suggestions }
         if let proposals, self.planProposals != proposals { self.planProposals = proposals }
         if let issues, self.issueList != issues { self.issueList = issues }
         if let usage, self.usage != usage { self.usage = usage }
         if let notices, self.removalNotices != notices { self.removalNotices = notices }
-        self.apply(result, followups: more, removed: removed, readRemoved: readRemoved)
+        self.apply(result, followups: more, groups: groups, removed: removed, readRemoved: readRemoved)
       }
     }
   }
@@ -582,11 +679,11 @@ final class BoardModel: ObservableObject {
     return readRemovedNext
   }
 
-  /// A nil `followups` or `removed` means the refresh did not read that list.
+  /// A nil `followups`, `groups`, or `removed` means the refresh did not read that list.
   /// `readRemoved` says whether it tried to read `removed-ls`.
   func apply(
-    _ result: Result<[SessionSummary], Error>, followups more: [SessionSummary]?, removed: [RemovedSession]? = nil,
-    readRemoved: Bool = false
+    _ result: Result<[SessionSummary], Error>, followups more: [SessionSummary]?, groups: [GroupSummary]? = nil,
+    removed: [RemovedSession]? = nil, readRemoved: Bool = false
   ) {
     if readRemoved, removed == nil || (try? result.get()) == nil { readRemovedNext = true }
     switch result {
@@ -600,7 +697,8 @@ final class BoardModel: ObservableObject {
       updateSessionNames(list + allFollowups, removed: removed)
       // Only shown sessions notify. The last seen sessions cover every session.
       // Widening the filter later therefore sends nothing for a change that happened while the session was hidden.
-      if loaded { sessionsToNotify(list).forEach(notify) }
+      let filterAfter = groups.map { filter(after: $0, sessions: list) } ?? filter
+      if loaded { sessionsToNotify(list, filter: filterAfter).forEach(notifier) }
       // A hidden session keeps its drafts.
       let open = Set(list.flatMap { $0.cards.map(\.id) })
       drafts = drafts.filter { open.contains($0.key) }
@@ -608,9 +706,11 @@ final class BoardModel: ObservableObject {
         keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.otherAnswerKeys(list))
           .union(MessageDrafts.replyKeys(list)))
       if !sameShown(allSessions, list) { allSessions = list }
-      // A filter change that hides the selection clears it in `orgFilter.didSet`.
+      // After the new list, so that the filter change reads each session's group from the same poll as the groups.
+      if let groups { applyGroups(groups) }
+      // A filter change that hides the selection clears it in `filter.didSet`.
       // A selected session that is hidden here therefore had no known org until this refresh.
-      if let id = selection { showOrg(of: id) }
+      if let id = selection { showHidden(id) }
       if let id = pendingSelection, allBoard.contains(where: { $0.id == id }) { pendingSelection = nil }
       resolvePendingFocus()
       clearHiddenSelectionAndUpdateBadge()
@@ -641,10 +741,12 @@ final class BoardModel: ObservableObject {
   /// The shown sessions that just entered the Inbox. A chat can need the user
   /// before its item reaches the Inbox. This therefore compares each session
   /// with its place in the last refresh's Inbox, not with its last state.
-  func sessionsToNotify(_ list: [SessionSummary]) -> [SessionSummary] {
-    list.filter { s in
+  /// `filter` is the filter as it will be after this refresh, and defaults to the current one.
+  func sessionsToNotify(_ list: [SessionSummary], filter: SessionFilter? = nil) -> [SessionSummary] {
+    let filter = filter ?? self.filter
+    return list.filter { s in
       guard Triage.needsYou(s), !s.isBeingRemoved, let last = lastSeen[s.id], !Triage.needsYou(last),
-        orgFilter.shows(s)
+        filter.shows(s)
       else { return false }
       // A follow-up that starts passes through Needs you until its first
       // prompt. Only a follow-up that fired and is still unstarted notifies.
@@ -874,6 +976,7 @@ final class BoardModel: ObservableObject {
     let moving = movableIDs(ids, to: group)
     guard !moving.isEmpty else { return false }
     for id in moving { update(id) { $0.group = group } }
+    for id in moving { showHidden(id) }
     var args: [String: JSON] = ["sessions": .array(moving.map { .string($0) })]
     if let group { args["group"] = .string(group) } else { args["ungrouped"] = true }
     perform("group-move", args)
@@ -902,20 +1005,26 @@ final class BoardModel: ObservableObject {
   /// before the refresh lists the suggestions again. The removal keeps the
   /// row's buttons from turning back on for a suggestion that sbd no longer has.
   private func answerSuggestion(_ id: String, _ key: String) {
-    answer(id, in: \.answeringSuggestions, "group-suggest", [key: .string(id)]) {
+    answer(id, in: \.answeringSuggestions, "group-suggest", [key: .string(id)], answered: showAnsweredGroup) {
       $0.suggestions.removeAll { $0.id == id }
     }
   }
 
   /// Sends an answer to an item once. `answering` holds the item's id until
   /// sbd replies. `remove` takes the item out of its list when sbd takes the
-  /// answer.
+  /// answer. `answered` then gets sbd's answer.
   func answer(
     _ id: String, in answering: ReferenceWritableKeyPath<BoardModel, Set<String>>, _ op: String,
-    _ args: [String: JSON], on queue: DispatchQueue? = nil, remove: @escaping (BoardModel) -> Void
+    _ args: [String: JSON], on queue: DispatchQueue? = nil, answered: ((JSON) -> Void)? = nil,
+    remove: @escaping (BoardModel) -> Void
   ) {
     guard self[keyPath: answering].insert(id).inserted else { return }
-    perform(op, args, on: queue, then: { _ in remove(self) }, finally: { self[keyPath: answering].remove(id) })
+    perform(
+      op, args, on: queue,
+      then: { result in
+        remove(self)
+        answered?(result)
+      }, finally: { self[keyPath: answering].remove(id) })
   }
   func applyProposal(_ id: String) { answerProposal(id, "plan-apply", on: planWrites) }
   func rejectProposal(_ id: String) { answerProposal(id, "plan-reject") }

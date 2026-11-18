@@ -433,7 +433,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
 
     #expect(targets == ["ph"])
     await settle { model.actionError != nil }
-    #expect(model.actionError?.contains(BoardModel.hiddenOrgReason) == true, "\(model.actionError ?? "nil")")
+    #expect(model.actionError?.contains(BoardModel.hiddenReason(.orgs)) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func aSessionWhoseOrgBecomesKnownAndHiddenWhileTheSheetIsOpenIsNeverQueued() async throws {
@@ -450,7 +450,7 @@ func removalItem(_ id: String) -> RemovalPlan.Item {
 
     #expect(targets == ["ph"])
     await settle { model.actionError != nil }
-    #expect(model.actionError?.contains(BoardModel.hiddenOrgReason) == true, "\(model.actionError ?? "nil")")
+    #expect(model.actionError?.contains(BoardModel.hiddenReason(.orgs)) == true, "\(model.actionError ?? "nil")")
   }
 
   @Test func aSessionWhoseOrgIsUnknownIsNeverQueuedUnderAFilter() async throws {

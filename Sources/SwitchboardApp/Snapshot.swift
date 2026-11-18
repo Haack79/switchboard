@@ -15,10 +15,13 @@ import SwitchboardCore
 /// points 1 s before the drawing, so a narrow layout can be drawn, and puts
 /// the window's frame back after it. SwiftTerm draws text in layers that the
 /// drawing misses, so `sb screen` checks terminals.
+/// SB_GROUP_FILTER=<id,id> starts the app with that group filter, where `(ungrouped)` names the sessions in no
+/// group. Like SB_ORG_FILTER, it never saves the filter. SB_ORGS=open opens the menu that holds both filters.
 @MainActor
 enum Snapshot {
   static let opensDetails = ProcessInfo.processInfo.environment["SB_DETAILS"] != nil
   static let orgFilter = OrgFilter(list: ProcessInfo.processInfo.environment["SB_ORG_FILTER"] ?? "")
+  static let groupFilter = GroupFilter(list: ProcessInfo.processInfo.environment["SB_GROUP_FILTER"] ?? "")
   static let opensRepoPicker = ProcessInfo.processInfo.environment["SB_REPO_PICKER"] == "open"
   static let hoverSession = ProcessInfo.processInfo.environment["SB_HOVER"]
   static let hoverReference = ProcessInfo.processInfo.environment["SB_HOVER_REF"].flatMap { value in
@@ -66,7 +69,7 @@ enum Snapshot {
         confirm: env["SB_ACCOUNTS_CONFIRM"])
     }
     if env["SB_ORGS"] == "open" {
-      whenListed(model) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { model.showingOrgFilter = true } }
+      whenListed(model) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { model.showingFilter = true } }
     }
     if let places = env["SB_HISTORY"] {
       visit(

@@ -645,7 +645,7 @@ private func selectBetween(_ model: BoardModel, _ first: String, _ middle: Strin
 
   // MARK: The org filter
 
-  /// Restoring a hidden session would widen the filter through `selection`'s `showOrg`.
+  /// Restoring a hidden session would widen the filter through `selection`'s `showHidden`.
   @Test func backSkipsASessionThatTheFilterHidesAndKeepsTheFilter() {
     let model = twoOrgs()
     model.selection = "ph1"

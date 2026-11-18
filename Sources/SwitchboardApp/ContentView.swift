@@ -136,7 +136,7 @@ struct ContentView: View {
         .labelsHidden()
         .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
-      ToolbarItem(placement: .navigation) { OrgFilterMenu() }
+      ToolbarItem(placement: .navigation) { SessionFilterMenu() }
       ToolbarItem { ManagerButton() }
       ToolbarItem { AccountMenu() }
       ToolbarItem {
@@ -225,10 +225,12 @@ struct Sidebar: View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
     let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
+    let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       OperatorRow(activeAccount: activeAccount)
-      ForEach(model.sidebarGroups) { group in
+      if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
+      ForEach(groups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
           ForEach(group.rows) { row in
@@ -323,7 +325,7 @@ struct Sidebar: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
-        OrgFilterBar()
+        FilterBar()
         Button {
           model.startNewGroup()
         } label: {
@@ -630,7 +632,11 @@ struct BoardView: View {
         layout.lanes.flatMap { lane in lane.cells.joined().map { ($0.id, lane.group?.id) } },
         uniquingKeysWith: { first, _ in first })
       : [:]
-    if layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group) {
+    // The new group's name field is in the lanes header, so naming a group keeps the header up.
+    let empty = layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group)
+    if empty && model.filterHidesAllWork {
+      FilterHidesAll().frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if empty {
       VStack(spacing: 12) {
         Image(systemName: "square.grid.3x3").font(.system(size: 40)).foregroundStyle(.secondary)
         Text("Start a session to see it here").foregroundStyle(.secondary)

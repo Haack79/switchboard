@@ -41,7 +41,7 @@ extension BoardModel {
   /// The session or follow-up `id`, whatever the org filter says.
   func summary(_ id: String?) -> SessionSummary? { allBoard.first { $0.id == id } }
 
-  /// Maps a location to the place it shows now, or nil when its session is removed or the org filter hides
+  /// Maps a location to the place it shows now, or nil when its session is removed or the filter hides
   /// it. A hidden session counts as unavailable, because selecting it would widen the filter.
   func resolver() -> (NavLocation) -> NavLocation? {
     let shown = Dictionary(board.map { ($0.id, $0.kind.showsAsChat) }, uniquingKeysWith: { a, _ in a })
