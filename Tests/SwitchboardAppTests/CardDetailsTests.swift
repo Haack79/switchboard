@@ -288,11 +288,12 @@ private func inDetailPane(_ view: some View) -> some View {
   ScrollViewReader { view.environment(\.detailScroll, $0) }
 }
 
+private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", text: "touch x")]
+
 /// Details takes the height its content needs, so the Inbox's own scroll view is the only one on the card.
 @MainActor
 @Suite struct CardDetailsHeightTests {
   private let ref = "card:1"
-  static let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", text: "touch x")]
 
   /// The height of an open Details whose loaded context has `count` steps.
   private func detailsHeight(steps count: Int, toolInput: TriageDetails.ToolInput? = nil) -> CGFloat {
