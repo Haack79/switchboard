@@ -86,7 +86,7 @@ private struct TestingBinary: Sendable, CustomTestStringConvertible {
 
 /// Runs `warn_if_tests_start_at_once`. The script first checks that sourcing
 /// defined it, so a missing function can't pass as silence.
-private func widthWarning(developerDir: String) throws -> CommandResult {
+private func widthWarning(developerDir: String?) throws -> CommandResult {
   let body = """
     declare -F warn_if_tests_start_at_once >/dev/null || { echo "warn_if_tests_start_at_once is not defined" >&2; exit 3; }
     warn_if_tests_start_at_once
@@ -222,4 +222,17 @@ private func widthWarning(developerDir: String) throws -> CommandResult {
     #expect(r.stdout == "after\n")
     #expect(r.stderr == "", "\(r.stderr)")
   }
+
+  #if compiler(>=6.3)
+    /// The fakes above hold the exact name the check looks for. This test
+    /// checks the real Swift Testing that built the tests, which reads the
+    /// width from Swift 6.3.
+    @Test func saysNothingForTheToolchainThatBuiltTheTests() throws {
+      let r = try widthWarning(developerDir: ProcessInfo.processInfo.environment["DEVELOPER_DIR"])
+
+      #expect(r.status == 0, "\(r.stderr)")
+      #expect(r.stdout == "after\n")
+      #expect(r.stderr == "", "\(r.stderr)")
+    }
+  #endif
 }
