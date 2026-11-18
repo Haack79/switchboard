@@ -537,11 +537,10 @@ final class GitHubPoller {
     let ids = triggers.keys.sorted()
     // A request's cost goes to its PRs after the request returns, because a PR's repo is known only after its first read.
     func count(_ prIds: [String], from before: Stats, to after: Stats, countsReads: Bool) {
-      let served = prIds.compactMap { id in
-        triggers[id].map {
-          GitHubUsage.Read(
-            trigger: $0, owner: prs[id].map { GitHub.ownerAndName($0.pr.repo).owner.lowercased() } ?? "unknown")
-        }
+      let served = prIds.map { id in
+        GitHubUsage.Read(
+          trigger: triggers[id] ?? .retry,
+          owner: prs[id].map { GitHub.ownerAndName($0.pr.repo).owner.lowercased() } ?? "unknown")
       }
       let requests = after.requests - before.requests
       let points = after.points - before.points
@@ -623,7 +622,7 @@ final class GitHubPoller {
       let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(ids), stats: &stats), ids)
       for comment in read { bodies[comment.id] = comment }
       for s in chunk where gone.contains(s.comment.id) { bodies[s.comment.id] = s.comment }
-      count(chunk.map(\.prId), from: before, to: stats, countsReads: false)
+      count(Array(Set(chunk.map(\.prId))), from: before, to: stats, countsReads: false)
     }
   }
 

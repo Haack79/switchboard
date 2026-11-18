@@ -270,7 +270,7 @@ private func read(_ trigger: ReadTrigger, _ owner: String) -> GitHubUsage.Read {
     #expect(trigger(pr, polledAgo: Self.pendingMs) == .pending)
   }
 
-  /// A wait that reads its PR while pending, or Trunk's queue, sets `pendingRate`.
+  /// A wait that needs its PR read at the pending rate, or Trunk's queue, sets `pendingRate`.
   @Test func aSettledPRAtThePendingRateReadsAsPendingOnceThePendingIntervalPasses() {
     #expect(trigger(Self.settled, polledAgo: Self.pendingMs - 1, pendingRate: true) == nil)
     #expect(trigger(Self.settled, polledAgo: Self.pendingMs, pendingRate: true) == .pending)
@@ -286,7 +286,8 @@ private func read(_ trigger: ReadTrigger, _ owner: String) -> GitHubUsage.Read {
     #expect(trigger(Self.settled, polledAgo: polledAgo) == nil)
   }
 
-  /// The trigger reads a PR exactly when `isDue` or a newer wait would.
+  /// The trigger reads a PR exactly when `all`, a newer wait, or the PR's interval says to. The expected value
+  /// states the rule without `readTrigger`, so the test fails when `readTrigger` departs from it.
   @Test(
     arguments: [nil, ReadTriggerTests.pending, ReadTriggerTests.awaitingReview, ReadTriggerTests.settled]
       as [PullRequest?],
@@ -296,9 +297,22 @@ private func read(_ trigger: ReadTrigger, _ owner: String) -> GitHubUsage.Read {
     ] as [Int64?])
   func theTriggerReadsExactlyThePRsThatAreDue(_ pr: PullRequest?, _ polledAgo: Int64?) {
     let lastPolled = polledAgo.map { Self.now - $0 }
-    let due = GitHub.isDue(
-      pr, lastPolled: lastPolled, now: Self.now, pendingMs: Self.pendingMs, idleMs: Self.idleMs)
+    for all in [false, true] {
+      for pendingRate in [false, true] {
+        for waitedAgo in [nil, 0, 5, 10_000_000] as [Int64?] {
+          let idleMs = pendingRate ? Self.pendingMs : Self.idleMs
+          let due =
+            pr.map {
+              GitHub.elapsed(
+                since: lastPolled, $0.isPending || $0.awaitsReview ? Self.pendingMs : idleMs, now: Self.now)
+            } ?? true
+          let read = all || (waitedAgo.map { Self.now - $0 } ?? 0) > (lastPolled ?? 0) || due
 
-    #expect((trigger(pr, polledAgo: polledAgo) != nil) == due)
+          #expect(
+            (trigger(pr, polledAgo: polledAgo, waitedAgo: waitedAgo, all: all, pendingRate: pendingRate) != nil)
+              == read, "all \(all), pendingRate \(pendingRate), waitedAgo \(String(describing: waitedAgo))")
+        }
+      }
+    }
   }
 }

@@ -152,6 +152,26 @@ extension FakeGitHub {
     #expect(split > 0)
   }
 
+  /// A stacked PR's merged-base request counts among the shares.
+  @Test func theSharesAddUpWhenAStackedPRReadsItsMergedBase() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    github.change(StatsPR.charts.number) {
+      $0["baseRefName"] = "haacked/stacked-base"
+      $0["baseRef"] = ["associatedPullRequests": ["nodes": []]]
+    }
+    _ = try sbd.session(in: StatsPR.charts.repo, branch: StatsPR.charts.branch)
+    let before = shares(try sbd.pollStats()).values.map(\.requests).reduce(0, +)
+    let mark = github.mark
+
+    try sbd.poll(all: true)
+
+    let after = shares(try sbd.pollStats()).values.map(\.requests).reduce(0, +)
+    let seen = github.seen(since: mark)
+    #expect(seen.graphQL.contains { $0.kind == "base" })
+    #expect(abs(after - before - Double(seen.split)) < 1e-9, "the shares grew by \(after - before), not \(seen.split)")
+  }
+
   @Test(arguments: [StatsPR.haacked, StatsPR.charts])
   func theTotalsCountEveryRequestGitHubSaw(_ w: StatsPR) throws {
     let github = try FakeGitHub()

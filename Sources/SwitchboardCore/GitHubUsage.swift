@@ -8,11 +8,13 @@ public enum ReadTrigger: String, CaseIterable, Sendable {
   case wait
   /// The poller had not read the PR yet.
   case first
-  /// The pending interval passed: the PR's checks or review are pending, a wait reads it while pending, or Trunk
-  /// queued it.
+  /// The pending interval passed: the PR's checks or review are pending, an open wait needs the PR read at the
+  /// pending rate, or Trunk queued it.
   case pending
   /// The idle interval passed.
   case idle
+  /// The PR isn't due, and the poller reads a comment body of it that an earlier poll failed to read.
+  case retry
 }
 
 /// The GitHub requests and GraphQL points that sbd spent since it started. The totals count every request. The
