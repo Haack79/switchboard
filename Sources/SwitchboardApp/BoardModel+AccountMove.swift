@@ -43,6 +43,7 @@ extension BoardModel {
   /// Shows the Board with the session's card in its group's lane, where the
   /// lane's account menu sets the group's account. A group chat has no card.
   func showGroupOnBoard(_ session: SessionSummary) {
+    UserDefaults.standard.set(BoardLanes.group.rawValue, forKey: BoardLanes.storageKey)
     show(.board)
     if session.kind == .work { boardFocus = session.id }
   }

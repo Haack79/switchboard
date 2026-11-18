@@ -753,7 +753,7 @@ struct BoardView: View {
           .takesListFocus(.board, $focused, model: model)
           // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
           .onAppear { if !model.namingGroup { focused = true } }
-          .onChange(of: model.boardFocus) {
+          .onChange(of: model.boardFocus, initial: true) {
             if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
           }
         }

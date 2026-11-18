@@ -272,8 +272,6 @@ import Testing
   static let connectorLine =
     "Claude.ai connectors, such as Slack, belong to each account's claude.ai login. A connector that only personal has won't be there."
   static let restartLine = "It restarts on the new account with its next message."
-  /// The start of `AccountMove.consequences`, which the message carries after its own lines.
-  static let consequencesStart = "A moved session resumes its conversation under the new account"
 
   func plan(_ id: String, mcpDropped: [String: [String]]? = nil) -> AccountMove {
     AccountMove(account: Self.work, moved: [id], blocked: [], mcpDropped: mcpDropped)
@@ -331,7 +329,8 @@ import Testing
 
     #expect(move?.title == "Stop a and move it to work?")
     #expect(move?.message.hasPrefix(Self.restartLine) == true)
-    #expect(move?.message.contains(Self.consequencesStart) == true)
+    #expect(move?.message.hasSuffix(AccountMove.resumeConsequences) == true)
+    #expect(move?.message.contains("stays on its account until you stop it") == false)
     #expect(move?.button == "Stop and Move")
     #expect(move?.stop == true)
     #expect(move?.session == "a")
@@ -359,7 +358,7 @@ import Testing
     #expect(move?.button == "Move")
     #expect(move?.stop == false)
     #expect(move?.message.contains(Self.memoryLine) == true)
-    #expect(move?.message.contains(Self.consequencesStart) == true)
+    #expect(move?.message.hasSuffix(AccountMove.resumeConsequences) == true)
   }
 
   /// A conversation with an `mcp` list runs under `--strict-mcp-config`, which loads no claude.ai connectors.

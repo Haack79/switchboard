@@ -226,14 +226,17 @@ import Testing
 
   // MARK: Show the group on the Board
 
-  @Test func showGroupOnBoardShowsTheBoardAndFocusesTheSession() {
+  /// Only group lanes show a lane's group account menu.
+  @Test func showGroupOnBoardShowsTheBoardInGroupLanesAndFocusesTheSession() {
     let s = session()
     let model = model([s])
+    UserDefaults.standard.set(BoardLanes.repo.rawValue, forKey: BoardLanes.storageKey)
 
     model.showGroupOnBoard(s)
 
     #expect(model.mainView == .board)
     #expect(model.boardFocus == "a")
+    #expect(UserDefaults.standard.string(forKey: BoardLanes.storageKey) == BoardLanes.group.rawValue)
   }
 
   /// A chat has no card on the Board.
