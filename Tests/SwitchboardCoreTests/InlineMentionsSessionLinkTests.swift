@@ -182,6 +182,7 @@ extension InlineMentionsTests {
       "[a](<\(idURL)>)",
       "[a](switchboard://other/\(liveID))",
       "[a](SWITCHBOARD://session/\(liveID))",
+      "\\[a](\(idURL))",
     ]
 
     @Test(arguments: notBracketLinks)
@@ -293,6 +294,15 @@ extension InlineMentionsTests {
     ])
     func aRefusedBareURLStaysPlainAndNoIdInsideItMatches(_ input: String) {
       #expect(pieces(plain: input) == [plain(input)])
+    }
+
+    /// A word or path that touches the scheme keeps the URL from linking, and no id inside it matches.
+    @Test(arguments: ["x\(idURL)", "a/\(idURL)"])
+    func aBareURLThatAWordOrPathTouchesStaysPlain(_ input: String) {
+      let found = pieces(plain: input)
+
+      #expect(found.allSatisfy { $0.mention == nil }, "\(found)")
+      #expect(found.map(\.run.text).joined() == input)
     }
 
     /// The control for the refused URLs: the same id after the same scalars, with no URL, matches.
@@ -464,6 +474,7 @@ extension InlineMentionsTests {
       "[a\\]b](\(idURL))",
       "[chat](switchboard://session/Fix%20CI%20chat)",
       "[a](switchboard://session/x\\)y)",
+      "[a](switchboard://session/a(b))",
       SessionLink.markdown(name: markdownName, id: liveID),
       SessionLink.markdown(name: "fix-flag-cache-race", id: "sdcs7r"),
       "See \(idURL) and [y](switchboard://session/sdcs7r).",

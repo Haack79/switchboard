@@ -1111,8 +1111,7 @@ final class BoardModel: ObservableObject {
     case .session(let id):
       return sessions.first { $0.id == id }.map(LinkOutcome.reveal) ?? .notListed
     case .ambiguous(let count):
-      guard case .name(let name) = target else { return .notListed }
-      return .error("\"\(Self.shown(name))\" names \(count) sessions. Use the session's id link.")
+      return .error("\"\(Self.shown(target.text))\" names \(count) sessions. Use the session's id link.")
     case .unknown:
       guard case .id(let id) = target, sessionNames.entry(id)?.removed == true else { return .notListed }
       return .error("Session \(id) was removed")

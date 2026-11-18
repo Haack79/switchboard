@@ -27,7 +27,15 @@ struct InlineText: View {
 
   var body: some View {
     let (segments, help) = Self.segments(text, names: names, repo: repo, links: links)
-    if let help, !opensSessionCard(segments) { content(segments).help(help) } else { content(segments) }
+    let tooltip = opensSessionCard(segments) ? Self.removedOnly(help) : help
+    if let tooltip { content(segments).help(tooltip) } else { content(segments) }
+  }
+
+  /// The help lines of removed sessions. A removed session opens no card, so
+  /// its line stays in the tooltip when the text's live sessions open cards.
+  private static func removedOnly(_ help: String?) -> String? {
+    let lines = (help ?? "").split(separator: "\n").filter { $0.hasSuffix(", removed") }
+    return lines.isEmpty ? nil : lines.joined(separator: "\n")
   }
 
   /// Whether the pointer can open the reference card on a session in the

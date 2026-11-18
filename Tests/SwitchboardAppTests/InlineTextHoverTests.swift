@@ -478,6 +478,19 @@ extension InlineTextHoverTests {
       #expect(helps(text).contains("\(removedName): \(removedID), removed"))
     }
 
+    /// The live session's card shows its id. The removed session opens no card, so its line stays in the help.
+    @Test func withACardARemovedSessionBesideALiveOneKeepsItsHelp() {
+      let model = offlineModel()
+      let text = InlineText(plain: "Ask \(liveID) and \(removedID) to rebase.")
+        .environment(\.sessionNames, SessionNames(live: [liveID: liveName], removed: [removedID: removedName]))
+        .environment(\.referenceCard, model.referenceCard)
+
+      let found = helps(text)
+
+      #expect(found.contains("\(removedName): \(removedID), removed"), "\(found)")
+      #expect(!found.contains { $0.contains(liveID) }, "\(found)")
+    }
+
     /// A text inside a button's label draws no link and no card, and has no help today.
     @Test func withoutLinksThereIsStillNoHelp() {
       let found = helps(InlineText(plain: "Ask \(liveID) to rebase.", links: false).inlineLinks(namedModel()))

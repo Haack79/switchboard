@@ -763,7 +763,7 @@ private func tombstone(_ id: String) -> RemovedSession {
     model.apply(.success([]), followups: nil)
 
     #expect(model.actionError == nil)
-    #expect(model.pendingFocus != nil)
+    #expect(model.pendingFocus == .name("no-such-session"))
   }
 
   @Test func anExternalUnknownNameLinkGivesUpAtTheThirdSuccessfulApply() {
