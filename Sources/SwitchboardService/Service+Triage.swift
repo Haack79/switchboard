@@ -47,18 +47,16 @@ extension Service {
   /// you, or when its item is the card that it wrote. The list leaves out a Ready to merge child that shows only
   /// sbd's merge item, because whether to merge is the parent's own decision.
   private func childItems(of id: String, for origin: RequestOrigin) -> [JSON] {
-    entries.values.filter { parentOf($0.session) == id }
+    let children: [SessionSummary] = entries.values.filter { parentOf($0.session) == id }
       .map { summary($0.session.id, for: origin) }
-      .filter { $0.state == .needsYou || $0.triage?.source == .session }
-      .sorted { $0.name < $1.name }
-      .compactMap { child in
-        child.triage.map {
-          [
-            "session": .string(child.id), "name": .string(child.name),
-            "url": .string(SessionLink.url(for: child.id).absoluteString), "title": .string($0.title),
-          ]
-        }
-      }
+    var items: [JSON] = []
+    for child in children.sorted(by: { $0.name < $1.name }) {
+      guard let item = child.triage, child.state == .needsYou || item.source == .session else { continue }
+      let url = SessionLink.url(for: child.id).absoluteString
+      items.append(
+        ["session": .string(child.id), "name": .string(child.name), "url": .string(url), "title": .string(item.title)])
+    }
+    return items
   }
 
   /// The request that does what a click on the option does. Each action is a
