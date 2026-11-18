@@ -27,6 +27,9 @@ final class GitHubPoller {
     var restPausedUntil: Int64 = 0
   }
   private let http = OSAllocatedUnfairLock(initialState: HTTPState())
+  /// The requests and points since sbd started. `send` and `request` can run off `queue`, so the counts sit
+  /// behind a lock.
+  private let usage = OSAllocatedUnfairLock(initialState: GitHubUsage(since: nowMs()))
 
   var graphQLPausedUntil: Int64 { http.withLock { $0.graphQLPausedUntil } }
   var tracked: [String: Tracked] = [:]
@@ -215,6 +218,11 @@ final class GitHubPoller {
   /// looks up every branch, and counts every finished PR's folder, due or not.
   func poll(all: Bool) -> JSON {
     queue.sync { cycle(all: all) }
+  }
+
+  /// The GitHub requests and points since sbd started, without polling.
+  func usageReport() -> JSON {
+    (try? JSON(encoding: usage.withLock { $0 }.report(now: nowMs()))) ?? [:]
   }
 
   private func cycle(all: Bool) -> JSON {
@@ -519,15 +527,30 @@ final class GitHubPoller {
     // A PR in `waited.pending` or in Trunk's queue polls at the pending rate. A
     // PR with any open wait also polls at once when the wait is newer than the
     // last read. That read can't show what happened after the wait was set.
-    let ids = Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)).sorted().filter {
-      all || (waited.created[$0] ?? 0) > (prs[$0]?.polled ?? 0)
-        || GitHub.isDue(
-          prs[$0]?.pr, lastPolled: prs[$0]?.polled, now: now, pendingMs: settings.pendingMs,
-          idleMs: waited.pending.contains($0) || queued.contains($0) ? settings.pendingMs : settings.idleMs)
+    var triggers: [String: ReadTrigger] = [:]
+    for id in Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)) {
+      triggers[id] = GitHub.readTrigger(
+        prs[id]?.pr, lastPolled: prs[id]?.polled, waitedAt: waited.created[id], all: all,
+        pendingRate: waited.pending.contains(id) || queued.contains(id), now: now, pendingMs: settings.pendingMs,
+        idleMs: settings.idleMs)
+    }
+    let ids = triggers.keys.sorted()
+    // A request's cost goes to its PRs after the request returns, because a PR's repo is known only after its first read.
+    func count(_ prIds: [String], from before: Stats, to after: Stats, countsReads: Bool) {
+      let served = prIds.compactMap { id in
+        triggers[id].map {
+          GitHubUsage.Read(
+            trigger: $0, owner: prs[id].map { GitHub.ownerAndName($0.pr.repo).owner.lowercased() } ?? "unknown")
+        }
+      }
+      let requests = after.requests - before.requests
+      let points = after.points - before.points
+      usage.withLock { $0.share(requests: requests, points: points, among: served, countsReads: countsReads) }
     }
     var stacked: [String] = []
     var gone: Set<String> = []
     for chunk in GitHub.chunks(ids) {
+      let before = stats
       let (read, notFound) = GitHub.parseStatus(
         try request(GitHub.statusQuery, idsVariable(chunk), stats: &stats), chunk)
       gone.formUnion(notFound)
@@ -541,6 +564,7 @@ final class GitHubPoller {
         if pr.base != pr.defaultBranch { stacked.append(pr.id) }
       }
       stats.polled += read.count
+      count(chunk, from: before, to: stats, countsReads: true)
     }
     for (id, var t) in tracked {
       if let prId = t.branch.prId, gone.contains(prId) {
@@ -577,10 +601,12 @@ final class GitHubPoller {
       if let prId = target.prId, gone.contains(prId) { targets[key] = Target(prId: nil, lookedUp: now) }
     }
     for chunk in GitHub.chunks(stacked) {
+      let before = stats
       let response = try request(GitHub.baseQuery, idsVariable(chunk), stats: &stats)
       for (id, base) in (response["data"]?["nodes"]?.array ?? []).compactMap(GitHub.parseMergedBase) {
         prs[id]?.pr.mergedBase = base
       }
+      count(chunk, from: before, to: stats, countsReads: false)
     }
     // A body that the poller read after its PR's status can carry a newer
     // edit time. A comment that GitHub reports NOT_FOUND, as after a
@@ -588,13 +614,16 @@ final class GitHubPoller {
     // poller reads either again only when a status response shows a newer
     // edit time. A body that failed in another way is read again at the next
     // poll.
-    let stale = prs.values.flatMap(\.comments).filter { c in
-      bodies[c.id].map { ($0.editedAt ?? "") < (c.editedAt ?? "") } ?? true
+    let stale = prs.flatMap { id, read in read.comments.map { (prId: id, comment: $0) } }.filter { s in
+      bodies[s.comment.id].map { ($0.editedAt ?? "") < (s.comment.editedAt ?? "") } ?? true
     }
-    for chunk in GitHub.chunks(stale.map(\.id), size: GitHub.lightChunkSize) {
-      let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(chunk), stats: &stats), chunk)
+    for chunk in GitHub.chunks(stale, size: GitHub.lightChunkSize) {
+      let before = stats
+      let ids = chunk.map(\.comment.id)
+      let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(ids), stats: &stats), ids)
       for comment in read { bodies[comment.id] = comment }
-      for comment in stale where gone.contains(comment.id) { bodies[comment.id] = comment }
+      for s in chunk where gone.contains(s.comment.id) { bodies[s.comment.id] = s.comment }
+      count(chunk.map(\.prId), from: before, to: stats, countsReads: false)
     }
   }
 
@@ -626,7 +655,9 @@ final class GitHubPoller {
       throw APIError("GitHub answered \(status) \(GitHub.message(json))")
     }
     if json["errors"] != nil { logLine("github: \(GitHub.message(json))") }
-    stats.points += data["rateLimit"]?["cost"]?.int ?? 0
+    let cost = data["rateLimit"]?["cost"]?.int ?? 0
+    stats.points += cost
+    usage.withLock { $0.points += cost }
     return json
   }
 
@@ -654,6 +685,7 @@ final class GitHubPoller {
       var req = request
       req.setValue("bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
       stats.requests += 1
+      usage.withLock { $0.requests += 1 }
       return try transport(req)
     }
     var (status, headers, body) = try attempt()

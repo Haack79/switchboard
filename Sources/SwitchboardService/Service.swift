@@ -490,6 +490,7 @@ public final class Service {
     case "issues-refresh", "issues-start", "issues-clone":
       return .success(try issueWorkRequest(request.op, request.args))
     case "poll":
+      if request.args["stats"]?.bool == true { return .success(github?.usageReport() ?? [:]) }
       // A poll waits on GitHub, so it runs off the state queue.
       return .success(github?.poll(all: request.args["all"]?.bool ?? false) ?? [:])
     case "ref-details":

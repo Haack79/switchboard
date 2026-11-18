@@ -399,6 +399,9 @@ let usage = """
   Service:
     poll [--all]                  ask GitHub and Depot about the sessions' PRs
                                   now; --all reads every PR, not only those due
+    poll --stats                  show the GitHub requests and points since sbd
+                                  started, by why each PR was read, without
+                                  polling
     snapshots [--write]           show how the last start built each session,
                                   from a snapshot or a full replay; --write
                                   first saves a snapshot of every session
@@ -1067,6 +1070,9 @@ case "issues":
   issues(a)
 case "ref":
   refCommand(a)
+case "poll" where a.switches.contains("--stats"):
+  let result = call("poll", ["stats": true])
+  if a.json { printJSON(result) } else { printPollStats(result) }
 case "poll":
   let result = call("poll", ["all": .bool(a.switches.contains("--all"))], timeout: 300)
   if a.json {
