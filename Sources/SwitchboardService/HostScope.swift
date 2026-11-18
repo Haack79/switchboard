@@ -83,7 +83,7 @@ enum HostScope {
     for op in ["rm", "cleanup", "rm-done"] { refused[op] = stops }
     for op in [
       "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe",
-      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log",
+      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log", "parent",
     ] {
       refused[op] = reaches
     }

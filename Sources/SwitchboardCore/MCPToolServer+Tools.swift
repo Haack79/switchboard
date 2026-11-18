@@ -207,5 +207,13 @@ extension MCPToolServer {
       "highlight",
       "Highlights a session as high priority, or with `clear` true removes the highlight. A highlighted session gets an orange ring in the app, and its Inbox item comes first. Use it for the few sessions that matter most, because a highlight on every session ranks none. The highlight clears when the session reaches Done. A session can't highlight itself.",
       ["session": session, "clear": boolean("Set true to remove the highlight.")], required: ["session"]),
+    Tool(
+      "set_parent",
+      "Moves a session to another parent, or with `clear` true unlinks it from its parent. Unlink a session you started when it is independent work, so you stop hearing about it. The parent stops hearing what changed in the session, and the session stops showing under it. The session keeps its group, account, host, and waits. A session can't change its own parent.",
+      [
+        "session": session,
+        "parent": string("The new parent: an id, a unique id prefix, or a unique name. Leave it out with `clear`."),
+        "clear": boolean("Set true to unlink the session from its parent."),
+      ], required: ["session"]),
   ]
 }

@@ -18,13 +18,13 @@ import Testing
   }
 
   /// A server with no calling session leaves out the tools that only a Manager conversation gets.
-  @Test func toolsListHasTheTwentyFiveToolsByTheirExactNames() throws {
+  @Test func toolsListHasTheTwentySixToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 25)
+    #expect(names.count == 26)
     #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly))
   }
 

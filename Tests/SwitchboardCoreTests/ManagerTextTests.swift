@@ -177,3 +177,26 @@ extension ManagerTextTests {
     #expect(line.contains("Done"), "\(line)")
   }
 }
+
+/// The Manager guide teaches `sb parent` and the MCP `set_parent` tool, in the bullet after `sb highlight`.
+extension ManagerTextTests {
+  private var guideLines: [Substring] { Manager.guide.split(separator: "\n") }
+
+  @Test func theManagerGuideNamesSbParentAndTheSetParentTool() throws {
+    let line = try #require(guideLines.first { $0.contains("`sb parent") }, "no `sb parent` line")
+
+    #expect(line.contains("`set_parent`"), "\(line)")
+    #expect(line.contains("--clear"), "\(line)")
+  }
+
+  @Test func theSbParentBulletFollowsTheSbHighlightBullet() throws {
+    let highlight = try #require(guideLines.firstIndex { $0.contains("`sb highlight") })
+    let parent = try #require(guideLines.firstIndex { $0.contains("`sb parent") })
+
+    #expect(parent == highlight + 1)
+  }
+
+  @Test func theServerHasTheSetParentToolThatTheManagerGuideNames() {
+    #expect(MCPToolServer.allTools.contains { $0.name == "set_parent" })
+  }
+}
