@@ -369,6 +369,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var host: String?
   /// The state of the host's link, or nil for a session on this Mac and for a host that has no link.
   public var link: LinkState?
+  /// The session's link, `switchboard://session/<id>`, which agents copy into
+  /// their replies. An sbd that predates it sends nil.
+  public var url: String?
   /// The session's pause, or nil when it isn't paused.
   public var pause: Pause?
   /// How many messages wait for the resume of a paused session, or nil when it isn't paused.

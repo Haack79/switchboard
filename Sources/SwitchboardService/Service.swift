@@ -2605,6 +2605,7 @@ public final class Service {
       waits: s.waits ?? [], notes: s.notes ?? [], cards: facts.cards,
       openPrompt: facts.openPermission != nil || facts.openQuestion != nil, pr: facts.pr.map(PRSummary.init),
       markedDone: s.done)
+    out.url = SessionLink.url(for: id).absoluteString
     if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)
