@@ -1032,10 +1032,11 @@ final class BoardModel: ObservableObject {
       actionError = Self.cantOpen(url)
       return true
     }
-    switch linkOutcome(target) {
-    case .reveal(let id): reveal(id)
-    case .error(let text): actionError = text
-    case nil: actionError = Self.unknownLinkError(target)
+    let outcome = linkOutcome(target)
+    if case .reveal(let s) = outcome {
+      reveal(s.id)
+    } else {
+      actionError = outcome.error(for: target)
     }
     return true
   }
@@ -1075,34 +1076,45 @@ final class BoardModel: ObservableObject {
   /// session can still appear.
   private func settleFocus(_ target: SessionLink.Target) -> Bool {
     switch linkOutcome(target) {
-    case .reveal(let id):
-      reveal(id)
+    case .reveal(let s):
+      reveal(s.id)
     case .error(let text):
       actionError = text
       showWindow?()
-    case nil:
+    case .notListed:
       return false
     }
     return true
   }
 
   enum LinkOutcome {
-    case reveal(String)
+    case reveal(SessionSummary)
     case error(String)
+    /// No listed session matches, and a later refresh could list one.
+    case notListed
+
+    /// The error banner for `target`, or nil when the link reveals a session.
+    func error(for target: SessionLink.Target) -> String? {
+      switch self {
+      case .reveal: nil
+      case .error(let text): text
+      case .notListed: BoardModel.unknownLinkError(target)
+      }
+    }
   }
 
   /// What a link target comes to against every listed session and follow-up,
-  /// whatever the org filter says. It is nil when no listed session matches
-  /// and a later refresh could list one.
-  func linkOutcome(_ target: SessionLink.Target) -> LinkOutcome? {
-    switch SessionLink.resolve(target, in: allBoard.map { ($0.id, $0.name) }) {
+  /// whatever the org filter says.
+  func linkOutcome(_ target: SessionLink.Target) -> LinkOutcome {
+    let sessions = allBoard
+    switch SessionLink.resolve(target, in: sessions.lazy.map { (id: $0.id, name: $0.name) }) {
     case .session(let id):
-      return .reveal(id)
+      return sessions.first { $0.id == id }.map(LinkOutcome.reveal) ?? .notListed
     case .ambiguous(let count):
-      guard case .name(let name) = target else { return nil }
+      guard case .name(let name) = target else { return .notListed }
       return .error("\"\(Self.shown(name))\" names \(count) sessions. Use the session's id link.")
     case .unknown:
-      guard case .id(let id) = target, sessionNames.entry(id)?.removed == true else { return nil }
+      guard case .id(let id) = target, sessionNames.entry(id)?.removed == true else { return .notListed }
       return .error("Session \(id) was removed")
     }
   }
@@ -1122,17 +1134,17 @@ final class BoardModel: ObservableObject {
 
   private static func cantOpen(_ url: URL) -> String { "Switchboard can't open \(url.absoluteString)" }
 
-  static func unknownLinkError(_ target: SessionLink.Target) -> String {
+  nonisolated static func unknownLinkError(_ target: SessionLink.Target) -> String {
     switch target {
-    case .id(let id): "Switchboard has no session \(id)"
-    case .name(let name): "Switchboard has no session named \"\(shown(name))\""
+    case .id: "Switchboard has no session \(target.text)"
+    case .name: "Switchboard has no session named \"\(shown(target.text))\""
     }
   }
 
   /// A link's name with each format character, such as a bidi override or a
   /// zero-width space, written as its code point. The raw character would
   /// make the banner show text other than the name that the link holds.
-  static func shown(_ name: String) -> String {
+  nonisolated static func shown(_ name: String) -> String {
     var text = ""
     for scalar in name.unicodeScalars {
       if scalar.properties.generalCategory == .format {

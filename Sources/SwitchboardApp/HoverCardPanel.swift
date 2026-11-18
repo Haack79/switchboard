@@ -244,25 +244,18 @@ private struct SessionLinkCardView: View {
   let target: SessionLink.Target
 
   var body: some View {
-    switch model.linkOutcome(target) {
-    case .reveal(let id)?:
-      if let s = model.summary(id) {
-        HoverCardBody(
-          content: HoverCardContent(s, activeAccount: model.activeAccountFolder, names: model.sessionNames, link: true))
-      }
-    case .error(let message)?: unresolved(message)
-    case nil: unresolved(BoardModel.unknownLinkError(target))
+    let outcome = model.linkOutcome(target)
+    if case .reveal(let s) = outcome {
+      HoverCardBody(content: .link(s, activeAccount: model.activeAccountFolder, names: model.sessionNames))
+    } else if let message = outcome.error(for: target) {
+      unresolved(message)
     }
   }
 
   private func unresolved(_ message: String) -> some View {
-    let written =
-      switch target {
-      case .id(let id): id
-      case .name(let name): BoardModel.shown(name)
-      }
-    return VStack(alignment: .leading, spacing: 2) {
-      Text(verbatim: written).font(.headline).lineLimit(2)
+    VStack(alignment: .leading, spacing: 2) {
+      // `shown` leaves an id as it is, because an id holds no format character.
+      Text(verbatim: BoardModel.shown(target.text)).font(.headline).lineLimit(2)
       Text(verbatim: message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
     .hoverCardFrame()

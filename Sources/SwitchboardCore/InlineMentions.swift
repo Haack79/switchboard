@@ -74,15 +74,17 @@ public struct InlineMentions: Sendable {
       let references = references(in: run, range, scalars)
       let urls = references.filter(\.isURL)
       let candidates = names.spans(in: run, range, scalars).filter { !Self.overlaps($0.range, urls) } + references
-      let spans = Self.merged(candidates, from: range.lowerBound).filter { $0.mention != nil }
+      let spans = Self.merged(candidates, from: range.lowerBound).compactMap { span in
+        span.mention.map { (span, $0) }
+      }
       guard !spans.isEmpty else {
         pieces.append(Piece(run: run, mention: nil))
         continue
       }
       var at = range.lowerBound
-      for span in spans {
+      for (span, mention) in spans {
         if at < span.range.lowerBound { pieces.append(Self.plainPiece(scalars[at..<span.range.lowerBound], run)) }
-        pieces.append(Self.piece(span, scalars[span.range], run))
+        pieces.append(Self.piece(span, mention, scalars[span.range], run))
         at = span.range.upperBound
       }
       if at < range.upperBound { pieces.append(Self.plainPiece(scalars[at..<range.upperBound], run)) }
@@ -96,14 +98,18 @@ public struct InlineMentions: Sendable {
   /// gives its span too.
   private func references(in run: MarkdownText.Run, _ range: Range<Int>, _ s: [Unicode.Scalar]) -> [Span] {
     guard run.image == nil else { return [] }
-    if let target = run.link.flatMap(URL.init(string:)).flatMap(SessionLink.target(from:)) {
+    // `target(from:)` refuses a link without the exact prefix. The check skips the URL parse for every other link.
+    if let link = run.link, link.hasPrefix(SessionLink.prefix),
+      let target = URL(string: link).flatMap(SessionLink.target(from:))
+    {
       return [Span(range: range, mention: .sessionLink(target))]
     }
     guard run.style.isDisjoint(with: [.code, .footnote]) else { return [] }
     guard let link = run.link else {
+      let references = GitHubRef.spans(in: range, s, repo: repo)
+      let sessionLinks = SessionLink.spans(in: range, s)
       // A GitHub URL and a session URL can overlap when no space separates them.
-      return Self.merged(
-        GitHubRef.spans(in: range, s, repo: repo) + SessionLink.spans(in: range, s), from: range.lowerBound)
+      return sessionLinks.isEmpty ? references : Self.merged(references + sessionLinks, from: range.lowerBound)
     }
     return GitHubRef(linkableURL: link).map { [.reference(range, $0)] } ?? []
   }
@@ -133,22 +139,22 @@ public struct InlineMentions: Sendable {
     return kept
   }
 
-  /// The piece for a span that has a mention.
-  private static func piece(_ span: Span, _ covered: ArraySlice<Unicode.Scalar>, _ run: MarkdownText.Run) -> Piece {
+  /// The piece for a span and its mention.
+  private static func piece(
+    _ span: Span, _ mention: Mention, _ covered: ArraySlice<Unicode.Scalar>, _ run: MarkdownText.Run
+  ) -> Piece {
     var piece = plainPiece(covered, run)
-    piece.mention = span.mention
-    switch span.mention {
-    case .session(let match)?:
+    piece.mention = mention
+    switch mention {
+    case .session(let match):
       var style = run.style
       style.remove(.code)
       piece.run = MarkdownText.Run(match.name, style)
-    case .reference(let ref)?:
+    case .reference(let ref):
       if piece.run.link == nil { piece.run.link = ref.link(writtenAs: piece.run.text) }
-    case .sessionLink?:
+    case .sessionLink:
       if let label = span.label { piece.run.text = label }
       if let link = span.link { piece.run.link = link }
-    case nil:
-      break
     }
     return piece
   }

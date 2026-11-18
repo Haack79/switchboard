@@ -196,8 +196,7 @@ enum Referent: Hashable, Sendable {
   var key: String {
     switch self {
     case .github(let ref): "github:\(ref.key)"
-    case .session(.id(let id)): "session:\(id)"
-    case .session(.name(let name)): "session:\(name)"
+    case .session(let target): "session:\(target.text)"
     }
   }
 }

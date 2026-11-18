@@ -6,13 +6,21 @@ import Foundation
 public enum SessionLink {
   public static let scheme = "switchboard"
   private static let schemeStart = "\(scheme)://"
-  private static let prefix = "\(schemeStart)session/"
+  static let prefix = "\(schemeStart)session/"
 
   /// What a link names. Names are not unique and change on rename, so the
   /// links that Switchboard writes always name the id.
   public enum Target: Hashable, Sendable {
     case id(String)
     case name(String)
+
+    /// The id or the name, as the link holds it.
+    public var text: String {
+      switch self {
+      case .id(let id): id
+      case .name(let name): name
+      }
+    }
   }
 
   public enum Resolution: Equatable, Sendable {
@@ -25,7 +33,7 @@ public enum SessionLink {
   /// The guidance that the Manager guide, the chat guide, and the default
   /// system prompt give every agent.
   public static let guidance =
-    "When you name a Switchboard session in a reply, write it as a Markdown link to the session's URL, such as [fix-cache](switchboard://session/seb4ec). Copy the URL from the `url` field of `sb get --json` or `sb ls --json`, or of the `get_session` or `list_sessions` tool."
+    "When you name a Switchboard session in a reply, write it as a Markdown link to its id URL, such as [fix-cache](switchboard://session/seb4ec). Copy the URL from the `url` field of `sb get --json`, `sb ls --json`, or the `get_session` and `list_sessions` tools. Never build the URL yourself: if you don't have it, look the session up first."
 
   /// `id` is a session id, so the string always parses as a URL.
   public static func url(for id: String) -> URL { URL(string: prefix + id)! }
@@ -57,7 +65,7 @@ public enum SessionLink {
 
   /// The one session that the target names. An id target matches ids only,
   /// and a name target matches exact, case-sensitive names only.
-  public static func resolve(_ target: Target, in sessions: [(id: String, name: String)]) -> Resolution {
+  public static func resolve(_ target: Target, in sessions: some Sequence<(id: String, name: String)>) -> Resolution {
     switch target {
     case .id(let id):
       return sessions.contains { $0.id == id } ? .session(id) : .unknown
@@ -99,7 +107,7 @@ public enum SessionLink {
     var spans: [InlineMentions.Span] = []
     var i = range.lowerBound
     while i < range.upperBound {
-      if s[i] == "\\", i + 1 < range.upperBound, isASCIIPunctuation(s[i + 1]) {
+      if isEscape(at: i, before: range.upperBound, s) {
         i += 2
       } else if s[i] == "[", let span = bracketLink(at: i, before: range.upperBound, s) {
         spans.append(span)
@@ -129,7 +137,7 @@ public enum SessionLink {
     var i = open + 1
     while i < limit, s[i] != "]" {
       if s[i] == "[" || s[i] == "\n" || s[i] == "\r" { return nil }
-      if s[i] == "\\", i + 1 < limit, isASCIIPunctuation(s[i + 1]) { i += 1 }
+      if isEscape(at: i, before: limit, s) { i += 1 }
       label.append(s[i])
       i += 1
     }
@@ -139,7 +147,7 @@ public enum SessionLink {
     var depth = 0
     while end < limit, s[end] != ")" || depth > 0 {
       switch s[end] {
-      case "\\" where end + 1 < limit && isASCIIPunctuation(s[end + 1]): end += 1
+      case "\\" where isEscape(at: end, before: limit, s): end += 1
       case "(": depth += 1
       case ")": depth -= 1
       case "[", "]": return nil
@@ -154,6 +162,11 @@ public enum SessionLink {
     guard let target = URL(string: url).flatMap(target(from:)) else { return nil }
     return InlineMentions.Span(
       range: open..<end + 1, mention: .sessionLink(target), isURL: true, label: String(label), link: url)
+  }
+
+  /// Whether `s[i]` is a backslash that escapes the ASCII punctuation character after it.
+  private static func isEscape(at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> Bool {
+    s[i] == "\\" && i + 1 < limit && isASCIIPunctuation(s[i + 1])
   }
 
   private static func isASCIIPunctuation(_ c: Unicode.Scalar) -> Bool {

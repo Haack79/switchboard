@@ -25,10 +25,7 @@ struct HoverCardContent: Equatable {
   /// The account appears only when the session records an account other than
   /// `activeAccount`. A session without a recorded account runs under sbd's
   /// own account, which the app can't name.
-  init(
-    _ s: SessionSummary, activeAccount: String, names: SessionNames = .empty,
-    now: Int64 = nowMs(), link: Bool = false
-  ) {
+  init(_ s: SessionSummary, activeAccount: String, names: SessionNames = .empty, now: Int64 = nowMs()) {
     title = s.name
     let repo = s.pr?.repo ?? s.repoFolder.map { ($0 as NSString).lastPathComponent }
     let branch = s.branch == s.name ? nil : s.branch
@@ -47,10 +44,16 @@ struct HoverCardContent: Equatable {
     ].compactMap { $0 }
     pr = s.pr.map { PRChip(text: $0.line, status: $0.status) }
     summary = Self.summary(s, names: names)
-    if link {
-      state = s.state
-      id = s.id
-    }
+  }
+
+  /// A session link's card, which adds the state and the id.
+  static func link(
+    _ s: SessionSummary, activeAccount: String, names: SessionNames = .empty, now: Int64 = nowMs()
+  ) -> HoverCardContent {
+    var content = HoverCardContent(s, activeAccount: activeAccount, names: names, now: now)
+    content.state = s.state
+    content.id = s.id
+    return content
   }
 
   /// Every fact in one string, for VoiceOver, which reads no hover card.

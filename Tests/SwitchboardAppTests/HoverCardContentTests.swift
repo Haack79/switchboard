@@ -949,9 +949,8 @@ extension HoverCardContentTests {
 // MARK: - Link cards
 
 /// The card that a session link in text opens. It adds the state and the id, which no tile shows beside the text.
-/// The `link:` parameter is the one guessed signature in these tests.
 private func linkCard(_ s: SessionSummary, activeAccount: String = ClaudeAccount.defaultFolder) -> HoverCardContent {
-  HoverCardContent(s, activeAccount: activeAccount, now: now, link: true)
+  HoverCardContent.link(s, activeAccount: activeAccount, now: now)
 }
 
 extension HoverCardContentTests {
