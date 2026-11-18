@@ -29,10 +29,14 @@ enum IssueScope: String, CaseIterable {
 
 /// One heading of the Issues list and its issues.
 struct IssueSection: Identifiable, Equatable {
-  /// A bucket's raw value, or `repo:<owner/name>`.
+  /// A bucket's raw value, `repo:<owner/name>`, or `backlogID`.
   var id: String
   var title: String
   var issues: [ListedIssue]
+  /// The number of backlog issues that Hide Backlog leaves out. It is nil for a section that lists its issues.
+  var hiddenCount: Int?
+
+  static let backlogID = "backlog"
 
   /// Team assigned to others, Other, and Being worked on start collapsed.
   static let collapsedAtFirst: Set<String> = [
@@ -54,9 +58,12 @@ extension BoardModel {
   var issueCount: Int { issueList?.count(shows: orgFilter.shows(repo:)) ?? 0 }
 
   /// The Issues list's sections in order: a section per bucket of the scope, or with `issuesByRepo` a section per
-  /// repository and then Being worked on. Each section's issues follow `issueSort`.
+  /// repository and then Being worked on. The scope's backlog issues follow in one Backlog section, which holds no
+  /// issues while `hidesBacklog` is on. Each section's issues follow `issueSort`.
   var issueSections: [IssueSection] {
-    let shown = issues.filter { issueScope.buckets.contains($0.bucket) }
+    let inScope = issues.filter { issueScope.buckets.contains($0.bucket) }
+    let shown = inScope.filter { !$0.backlog }
+    let backlog = inScope.filter(\.backlog)
     let sorted = { (rows: [ListedIssue]) in rows.sorted { self.issueSort.inOrder($0.issue, $1.issue) } }
     let section = { (bucket: IssueBucket) in
       IssueSection(id: bucket.rawValue, title: bucket.title, issues: sorted(shown.filter { $0.bucket == bucket }))
@@ -70,8 +77,18 @@ extension BoardModel {
     } else {
       sections = issueScope.buckets.map(section)
     }
-    return sections.filter { !$0.issues.isEmpty }
+    sections.removeAll { $0.issues.isEmpty }
+    if !backlog.isEmpty {
+      sections.append(
+        IssueSection(
+          id: IssueSection.backlogID, title: "Backlog", issues: hidesBacklog ? [] : sorted(backlog),
+          hiddenCount: hidesBacklog ? backlog.count : nil))
+    }
+    return sections
   }
+
+  /// Whether the sort menu offers Hide Backlog, which needs a backlog label.
+  var showsBacklogToggle: Bool { !(issueList?.team.backlog.isEmpty ?? true) }
 
   /// The ids of the rows that the Issues list shows, in order. A collapsed section's rows are left out.
   var issueOrder: [String] {
@@ -93,6 +110,12 @@ extension BoardModel {
 
   func toggleIssueSection(_ id: String) {
     if collapsedIssueSections.remove(id) == nil { collapsedIssueSections.insert(id) }
+  }
+
+  /// Turns off Hide Backlog and expands the Backlog section, so its issues show after one click.
+  func showBacklog() {
+    hidesBacklog = false
+    collapsedIssueSections.remove(IssueSection.backlogID)
   }
 
   /// Asks sbd to poll the sources when its last poll is over a minute old, as the Issues view opens.
@@ -239,8 +262,11 @@ extension BoardModel {
   }
 
   /// Saves the team's labels and logins and the default preset.
-  func saveIssueSettings(labels: [String], people: [String], defaultPreset: String?) {
-    var args: [String: JSON] = ["labels": .array(labels.map(JSON.string)), "people": .array(people.map(JSON.string))]
+  func saveIssueSettings(labels: [String], people: [String], backlog: [String], defaultPreset: String?) {
+    var args: [String: JSON] = [
+      "labels": .array(labels.map(JSON.string)), "people": .array(people.map(JSON.string)),
+      "backlog": .array(backlog.map(JSON.string)),
+    ]
     if let defaultPreset { args["defaultPreset"] = .string(defaultPreset) }
     perform("issues-settings", args) { self.apply(issueReply: $0) }
   }
