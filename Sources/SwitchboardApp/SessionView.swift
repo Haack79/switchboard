@@ -235,7 +235,6 @@ struct SessionView: View {
               .font(.caption)
               .foregroundStyle(.secondary)
           }
-          SessionAccountControl(session: session)
         }
         InlineText(plain: session.reason).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
         if let pr = session.pr, let url = pr.link {
@@ -246,12 +245,16 @@ struct SessionView: View {
         }
         IssueBadge(session: session)
         CleanupNote(session: session)
-        Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .textSelection(.enabled)
+        // The title row wraps the session's name at 1024 pt when the account sits in it.
+        HStack(spacing: 8) {
+          SessionAccountControl(session: session)
+          Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+        }
       }
       Spacer()
       HStack {
