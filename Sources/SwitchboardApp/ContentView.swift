@@ -53,6 +53,14 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
+  private func count(for view: MainView) -> Int {
+    switch view {
+    case .inbox: model.triage.count
+    case .board: 0
+    case .issues: model.issueCount
+    }
+  }
+
   private var viewChoice: Binding<MainView?> {
     Binding(
       get: { model.selected == nil ? model.mainView : nil },
@@ -128,9 +136,9 @@ struct ContentView: View {
       ToolbarItem(placement: .navigation) {
         // No segment is selected while a session shows.
         Picker("View", selection: viewChoice) {
-          Text(Self.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
-          Text("Board").tag(MainView?.some(.board))
-          Text(Self.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
+          ForEach(MainView.allCases, id: \.self) { view in
+            Text(Self.viewLabel(view.title, count(for: view))).tag(MainView?.some(view))
+          }
         }
         .pickerStyle(.segmented)
         .labelsHidden()

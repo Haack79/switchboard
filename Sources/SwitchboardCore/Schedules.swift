@@ -133,6 +133,16 @@ public struct Schedule: Codable, Equatable, Sendable {
     return PromptGuard.openCard(facts) ?? PromptGuard.turn(facts, process: process, messageWaiting: messageWaiting)
   }
 
+  /// The reason that a session runs none of its schedules, or nil when it
+  /// can run them. A removal job may be stopping the session's claude, so a
+  /// session that the job holds waits too.
+  public static func hold(done: Bool, paused: Bool, removing: Bool) -> String? {
+    if done { return "the session is marked done" }
+    if paused { return "the session is paused" }
+    if removing { return "the session is being removed" }
+    return nil
+  }
+
   /// The next run after a run at `now`, and the due times that the run
   /// drops. The next run counts from `now`, not from the old due time.
   public func fired(at now: Int64) -> (next: Int64, skipped: Int) {

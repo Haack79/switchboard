@@ -20,19 +20,27 @@ struct ScheduleCaption {
 
 /// A session's schedules, each with Pause or Resume and Remove.
 struct ScheduleList: View {
-  @EnvironmentObject var model: BoardModel
   let session: SessionSummary
 
   var body: some View {
     TimelineView(.everyMinute) { _ in
       let now = nowMs()
       VStack(alignment: .leading, spacing: 10) {
-        ForEach(session.schedules ?? [], id: \.id) { row($0, ScheduleCaption($0, now: now)) }
+        ForEach(session.schedules ?? [], id: \.id) {
+          ScheduleItem(schedule: $0, caption: ScheduleCaption($0, now: now))
+        }
       }
     }
   }
+}
 
-  private func row(_ schedule: Schedule, _ caption: ScheduleCaption) -> some View {
+/// One schedule's row: its prompt, timing, and last run, with Pause or Resume and Remove.
+struct ScheduleItem: View {
+  @EnvironmentObject var model: BoardModel
+  let schedule: Schedule
+  let caption: ScheduleCaption
+
+  var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(caption.prompt).lineLimit(3).help(caption.prompt).textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)

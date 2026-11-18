@@ -4,10 +4,35 @@ import SwitchboardCore
 import UserNotifications
 
 /// The views that the detail pane shows while no session is selected.
-enum MainView {
+enum MainView: CaseIterable {
   case inbox
   case board
   case issues
+
+  var title: String {
+    switch self {
+    case .inbox: "Inbox"
+    case .board: "Board"
+    case .issues: "Issues"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .inbox: "tray"
+    case .board: "square.grid.3x3"
+    case .issues: "smallcircle.filled.circle"
+    }
+  }
+
+  /// The key that, with ⌘, shows the view from the Session menu.
+  var shortcutKey: Character {
+    switch self {
+    case .inbox: "1"
+    case .board: "2"
+    case .issues: "3"
+    }
+  }
 }
 
 /// The app's view of sbd. It polls `ls` once a second, because sbd keeps

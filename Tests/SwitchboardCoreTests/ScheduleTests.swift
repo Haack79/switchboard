@@ -548,3 +548,46 @@ extension ScheduleTests {
     }
   }
 }
+
+extension ScheduleTests {
+  /// `fireDueSchedules` skips a session exactly when `hold` returns a reason,
+  /// and the Loops status shows the same reason as `held`.
+  @Suite struct ScheduleHoldTests {
+    @Test func aSessionWithNoHoldIsFree() {
+      #expect(Schedule.hold(done: false, paused: false, removing: false) == nil)
+    }
+
+    @Test func aSessionMarkedDoneHolds() {
+      #expect(Schedule.hold(done: true, paused: false, removing: false) == "the session is marked done")
+    }
+
+    @Test func aPausedSessionHolds() {
+      #expect(Schedule.hold(done: false, paused: true, removing: false) == "the session is paused")
+    }
+
+    @Test func aSessionBeingRemovedHolds() {
+      #expect(Schedule.hold(done: false, paused: false, removing: true) == "the session is being removed")
+    }
+
+    @Test func aSessionMarkedDoneAndPausedGivesTheDoneReason() {
+      #expect(Schedule.hold(done: true, paused: true, removing: false) == "the session is marked done")
+    }
+
+    /// Every combination of the three facts, so the reason order is pinned
+    /// for the pairs that the single-condition tests leave out.
+    @Test(
+      arguments: [
+        (false, false, false, nil),
+        (true, false, false, "the session is marked done"),
+        (false, true, false, "the session is paused"),
+        (false, false, true, "the session is being removed"),
+        (true, true, false, "the session is marked done"),
+        (true, false, true, "the session is marked done"),
+        (false, true, true, "the session is paused"),
+        (true, true, true, "the session is marked done"),
+      ] as [(Bool, Bool, Bool, String?)])
+    func theFirstHeldConditionNamesTheReason(_ done: Bool, _ paused: Bool, _ removing: Bool, _ reason: String?) {
+      #expect(Schedule.hold(done: done, paused: paused, removing: removing) == reason)
+    }
+  }
+}

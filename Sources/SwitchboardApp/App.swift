@@ -58,12 +58,10 @@ struct SwitchboardApp: App {
         Button("Open Manager") { model.openManager() }
           .keyboardShortcut("m", modifiers: [.command, .shift])
         Button("Open Operator") { model.openOperator() }
-        Button("Show Inbox") { model.show(.inbox) }
-          .keyboardShortcut("1")
-        Button("Show Board") { model.show(.board) }
-          .keyboardShortcut("2")
-        Button("Show Issues") { model.show(.issues) }
-          .keyboardShortcut("3")
+        ForEach(MainView.allCases, id: \.self) { view in
+          Button("Show \(view.title)") { model.show(view) }
+            .keyboardShortcut(KeyEquivalent(view.shortcutKey))
+        }
         Button("Filter Sessions…") { model.showingFilter.toggle() }
           .keyboardShortcut("o", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)

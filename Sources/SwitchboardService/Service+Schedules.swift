@@ -10,64 +10,75 @@ extension Service {
   /// change happen in one step.
   func scheduleRequest(_ op: String, _ args: JSON) throws -> JSON {
     switch op {
-    case "schedule":
-      let id: String
-      do {
-        id = try lookup(args)
-      } catch  where args["group"] == nil && args["session"]?.string == Manager.operatorName {
-        // The Manager guide schedules loops on the operator by name, so an unscoped request creates it as `sb wait` does.
-        id = try ensureOperator()
-      }
-      try requireInScope(id, args: args)
-      let session = entries[id]!.session
-      try refuseNotStarted(session)
-      let open = session.schedules ?? []
-      guard open.count < Schedule.maxPerSession else {
-        throw APIError(
-          "\(id) has \(Schedule.maxPerSession) schedules, the most a session can have. Remove one with: sb schedule rm <id>"
-        )
-      }
-      let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
-      let taken = entries.values.flatMap { $0.session.schedules ?? [] }.map(\.id)
-      let schedule = try request.makeSchedule(id: shortId("r", taken: taken), now: nowMs())
-      try update(id) { $0.schedules = open + [schedule] }
-      record(id, "schedule", ["schedule": try JSON(encoding: schedule)])
-      return try JSON(encoding: scheduleRow(id, schedule))
-    case "schedules":
-      let only = try args["session"].map { _ in try lookup(args) }
-      let sessions = try entries.values.map(\.session)
-        .filter { s in only == nil || only == s.id }
-        .filter { try inScope($0.id, args: args) }
-      let rows: [ScheduleRow] = sessions.flatMap { s in (s.schedules ?? []).map { scheduleRow(s.id, $0) } }
-      func order(_ r: ScheduleRow) -> (Int, Int64, String) {
-        (r.schedule.paused == true ? 1 : 0, r.schedule.next, r.schedule.id)
-      }
-      return try JSON(encoding: rows.sorted { order($0) < order($1) })
-    case "remove-schedule":
-      let (id, schedule) = try ownedSchedule(args)
-      try update(id) { s in
-        let rest = (s.schedules ?? []).filter { $0.id != schedule.id }
-        s.schedules = rest.isEmpty ? nil : rest
-      }
-      record(id, "schedule-removed", ["schedule": try JSON(encoding: schedule)])
-      return try JSON(encoding: scheduleRow(id, schedule))
-    case "pause-schedule":
-      let (id, found) = try ownedSchedule(args)
-      var schedule = found
-      let pausing = args["paused"]?.bool ?? true
-      guard pausing != (schedule.paused == true) else { return try JSON(encoding: scheduleRow(id, schedule)) }
-      if pausing {
-        schedule.paused = true
-      } else {
-        schedule.next = try Schedule.next(after: nowMs(), every: schedule.every)
-        schedule.paused = nil
-      }
-      try changeSchedule(id, schedule.id) { $0 = schedule }
-      record(id, pausing ? "schedule-paused" : "schedule-resumed", ["schedule": try JSON(encoding: schedule)])
-      return try JSON(encoding: scheduleRow(id, schedule))
-    default:
-      throw APIError("unknown request \(op)")
+    case "schedule": return try addSchedule(args)
+    case "schedules": return try listSchedules(args)
+    case "remove-schedule": return try removeSchedule(args)
+    case "pause-schedule": return try pauseSchedule(args)
+    default: throw APIError("unknown request \(op)")
     }
+  }
+
+  private func addSchedule(_ args: JSON) throws -> JSON {
+    let id: String
+    do {
+      id = try lookup(args)
+    } catch  where args["group"] == nil && args["session"]?.string == Manager.operatorName {
+      // The Manager guide schedules loops on the operator by name, so an unscoped request creates it as `sb wait` does.
+      id = try ensureOperator()
+    }
+    try requireInScope(id, args: args)
+    let session = entries[id]!.session
+    try refuseNotStarted(session)
+    let open = session.schedules ?? []
+    guard open.count < Schedule.maxPerSession else {
+      throw APIError(
+        "\(id) has \(Schedule.maxPerSession) schedules, the most a session can have. Remove one with: sb schedule rm <id>"
+      )
+    }
+    let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
+    let taken = entries.values.flatMap { $0.session.schedules ?? [] }.map(\.id)
+    let schedule = try request.makeSchedule(id: shortId("r", taken: taken), now: nowMs())
+    try update(id) { $0.schedules = open + [schedule] }
+    record(id, "schedule", ["schedule": try JSON(encoding: schedule)])
+    return try JSON(encoding: scheduleRow(id, schedule))
+  }
+
+  private func listSchedules(_ args: JSON) throws -> JSON {
+    let only = try args["session"].map { _ in try lookup(args) }
+    let sessions = try entries.values.map(\.session)
+      .filter { s in only == nil || only == s.id }
+      .filter { try inScope($0.id, args: args) }
+    let rows: [ScheduleRow] = sessions.flatMap { s in (s.schedules ?? []).map { scheduleRow(s.id, $0) } }
+    func order(_ r: ScheduleRow) -> (Int, Int64, String) {
+      (r.schedule.paused == true ? 1 : 0, r.schedule.next, r.schedule.id)
+    }
+    return try JSON(encoding: rows.sorted { order($0) < order($1) })
+  }
+
+  private func removeSchedule(_ args: JSON) throws -> JSON {
+    let (id, schedule) = try ownedSchedule(args)
+    try update(id) { s in
+      let rest = (s.schedules ?? []).filter { $0.id != schedule.id }
+      s.schedules = rest.isEmpty ? nil : rest
+    }
+    record(id, "schedule-removed", ["schedule": try JSON(encoding: schedule)])
+    return try JSON(encoding: scheduleRow(id, schedule))
+  }
+
+  private func pauseSchedule(_ args: JSON) throws -> JSON {
+    let (id, found) = try ownedSchedule(args)
+    var schedule = found
+    let pausing = args["paused"]?.bool ?? true
+    guard pausing != (schedule.paused == true) else { return try JSON(encoding: scheduleRow(id, schedule)) }
+    if pausing {
+      schedule.paused = true
+    } else {
+      schedule.next = try Schedule.next(after: nowMs(), every: schedule.every)
+      schedule.paused = nil
+    }
+    try changeSchedule(id, schedule.id) { $0 = schedule }
+    record(id, pausing ? "schedule-paused" : "schedule-resumed", ["schedule": try JSON(encoding: schedule)])
+    return try JSON(encoding: scheduleRow(id, schedule))
   }
 
   /// Sends each due schedule's prompt to its session when the session is
@@ -80,8 +91,10 @@ extension Service {
   /// stay due, so Undo lets them run.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
-      !e.session.done && Pause.blocker(e.session) == nil && e.session.removal?.holdsSession != true
-        && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
+      Schedule.hold(
+        done: e.session.done, paused: Pause.blocker(e.session) != nil, removing: e.session.removal?.holdsSession == true
+      )
+        == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
     }
     for id in ids.sorted() {
       guard let session = entries[id]?.session else { continue }

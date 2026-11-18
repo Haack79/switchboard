@@ -137,9 +137,9 @@ extension BoardModel {
     let name: (String?) -> String? = { self.summary($0)?.name }
     let text: String
     switch location.place {
-    case .board: text = "Board"
-    case .issues: text = "Issues"
-    case .inbox(let item): text = name(item).map { "Inbox: \($0)" } ?? "Inbox"
+    case .board: text = MainView.board.title
+    case .issues: text = MainView.issues.title
+    case .inbox(let item): text = name(item).map { "\(MainView.inbox.title): \($0)" } ?? MainView.inbox.title
     case .session(let id): text = name(id) ?? id
     }
     return location.terminal ? "\(text) (terminal)" : text
