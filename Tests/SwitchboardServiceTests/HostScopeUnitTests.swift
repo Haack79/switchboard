@@ -862,6 +862,23 @@ private func text(_ answer: Response) -> String {
   }
 
   @Test(.timeLimit(.minutes(1)))
+  func theHostGetsNoEarlierPRFromAnUnlistedRepo() throws {
+    try withSessions(hosts: listedHosts) { service in
+      try service.givePR("m1", listed: false)
+      try service.givePR("m1", listed: true)
+
+      let get = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
+      let ls = service.handle(Request(op: "ls"), origin: .remote("mini"))
+      let mac = service.handle(Request(op: "get", args: ["session": "m1"]))
+
+      #expect(get.result?["pr"]?["title"] == "Listed title")
+      #expect(get.result?["earlierPRs"] == nil)
+      #expect(ls.result?.array?.first { $0["id"] == "m1" }?["earlierPRs"] == nil)
+      #expect(mac.result?["earlierPRs"] == [4242])
+    }
+  }
+
+  @Test(.timeLimit(.minutes(1)))
   func thisMacStillSeesTheUnlistedPR() throws {
     try withSessions(hosts: listedHosts) { service in
       try service.givePR("m1", listed: false)
@@ -1040,6 +1057,42 @@ private func text(_ answer: Response) -> String {
 
       #expect(heard.contains("m3 (m3) opened PR #77"), "\(heard)")
       for mark in unlistedMarks { #expect(!heard.contains(mark), "\(heard)") }
+    }
+  }
+
+  /// sbd remembers every PR that a child had across a restart, so the child's return to an earlier PR tells its
+  /// parent on the host nothing new.
+  @Test(.timeLimit(.minutes(1)))
+  func aParentOnTheHostHearsNothingWhenItsChildReturnsToAnEarlierPRAfterARestart() throws {
+    try withSessions(hosts: listedHosts) { service in
+      service.queue.sync {
+        var child = session("m3", host: "mini")
+        child.parent = "m1"
+        service.entries["m3"] = Service.Entry(session: child)
+      }
+      func give(_ number: Int) throws {
+        let pr = try JSON(
+          encoding: PullRequest(
+            id: "PR_\(number)", number: number, url: "https://github.com/secret/listed/pull/\(number)",
+            repo: "secret/listed", title: "Listed \(number)"))
+        service.queue.sync {
+          service.entries["m3"]?.facts.prompts = 1
+          _ = service.record("m3", "pr", ["pr": pr, "comments": []])
+        }
+      }
+      try give(77)
+      try give(78)
+      service.queue.sync { service.seedParentMarks(now: nowMs()) }
+      try give(77)
+      let heard = service.queue.sync { () -> [String] in
+        service.notifyParents(now: nowMs())
+        return service.parentNotices.unsent["m1"] ?? []
+      }
+      let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
+        $0.data["text"]?.string
+      }
+
+      #expect(!(sent + heard).joined(separator: "\n").contains("opened PR #77"), "\(sent + heard)")
     }
   }
 

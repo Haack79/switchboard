@@ -57,12 +57,6 @@ public struct SessionNames: Equatable, Sendable {
 
   public var isEmpty: Bool { entries.isEmpty }
 
-  /// Whether `s` has the format of a session id: `s` and then `ShortId.length` characters from `ShortId.alphabet`.
-  public static func isSessionID(_ s: String) -> Bool {
-    let scalars = Array(s.unicodeScalars)
-    return scalars.count == idLength && scalars[0] == "s" && scalars[1...].allSatisfy(inIdAlphabet)
-  }
-
   public func entry(_ id: String) -> Entry? { entries[id] }
 
   /// The session's name, or `id` when no session has it.
@@ -80,14 +74,15 @@ public struct SessionNames: Equatable, Sendable {
     guard run.link == nil, run.image == nil, !run.style.contains(.footnote) else { return [] }
     if run.style.contains(.code) {
       // A code span is rewritten only when its whole text is one id.
-      guard range.count == Self.idLength, let match = match(at: range.lowerBound, s) else { return [] }
+      guard let (match, length) = match(at: range.lowerBound, before: range.upperBound, s), length == range.count
+      else { return [] }
       return [Span(range: range, mention: .session(match))]
     }
     var candidates: [Span] = []
     var i = range.lowerBound
-    while i + Self.idLength <= range.upperBound {
-      if let match = match(at: i, s) {
-        let bare = i..<i + Self.idLength
+    while i < range.upperBound {
+      if let (match, length) = match(at: i, before: range.upperBound, s) {
+        let bare = i..<i + length
         let wide = collapsed(bare, match, within: range, s)
         // A collapsed `name (id)` wins over an id found inside its name. When an
         // earlier span takes part of a collapsed one, the bare id still matches.
@@ -99,16 +94,16 @@ public struct SessionNames: Equatable, Sendable {
     return candidates
   }
 
-  /// The session whose id starts at `i`, when the id is a whole token and resolves.
-  private func match(at i: Int, _ s: [Unicode.Scalar]) -> Match? {
-    let end = i + Self.idLength
-    guard end <= s.count, s[i] == "s", s[i + 1..<end].allSatisfy(Self.inIdAlphabet),
+  /// The session whose id starts at `i` and ends at or before `limit`, with the id's length, when the id is a whole
+  /// token and resolves.
+  private func match(at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> (Match, Int)? {
+    guard let length = SessionID.length(at: i, in: s, before: limit),
       i == 0 || TokenBoundary.allowedBefore(s[i - 1]),
-      TokenBoundary.allowedAfter(end, s)
+      TokenBoundary.allowedAfter(i + length, s)
     else { return nil }
-    let id = String(String.UnicodeScalarView(s[i..<end]))
+    let id = String(String.UnicodeScalarView(s[i..<i + length]))
     guard let entry = entries[id] else { return nil }
-    return Match(id: id, name: entry.name, removed: entry.removed)
+    return (Match(id: id, name: entry.name, removed: entry.removed), length)
   }
 
   /// The id's range widened to `<name> (<id>)` or `<id> (<name>)` when the
@@ -144,16 +139,4 @@ public struct SessionNames: Equatable, Sendable {
     return first.properties.lowercaseMapping == expectedFirst.properties.lowercaseMapping
       && written.dropFirst().elementsEqual(expected.dropFirst())
   }
-
-  /// The `s` prefix and the characters that `shortId` adds.
-  private static let idLength = 1 + ShortId.length
-
-  /// A table indexed by ASCII code, so that the matcher's test for each scalar does not hash.
-  private static let idAlphabet: [Bool] = {
-    var table = [Bool](repeating: false, count: 128)
-    for c in ShortId.alphabet.unicodeScalars { table[Int(c.value)] = true }
-    return table
-  }()
-
-  private static func inIdAlphabet(_ c: Unicode.Scalar) -> Bool { c.value < 128 && idAlphabet[Int(c.value)] }
 }

@@ -4,13 +4,15 @@ import Testing
 
 private func session(
   _ id: String, name: String? = nil, repo: String? = nil, branch: String? = nil, pr: PRSummary? = nil,
-  issues: [Int] = [], group: String? = nil, reason: String = "", notes: [String] = [], lastActivity: Int64 = 0
+  issues: [Int] = [], group: String? = nil, reason: String = "", notes: [String] = [], lastActivity: Int64 = 0,
+  earlierPRs: [Int] = []
 ) -> SessionSummary {
   var s = SessionSummary(
     id: id, name: name ?? id, cwd: repo ?? "/tmp", repo: repo, branch: branch, claudeSessionId: id, state: .working,
     reason: reason, since: 0, lastActivity: lastActivity, live: true, claudePid: nil, attached: false, lastReply: nil,
     waits: [], notes: notes.enumerated().map { Note(id: "n\($0.offset)", text: $0.element, by: .you, t: 0) }, pr: pr)
   s.issues = issues.isEmpty ? nil : issues.map { SessionIssue(repo: "o/r", number: $0, via: .set) }
+  s.earlierPRs = earlierPRs.isEmpty ? nil : earlierPRs
   s.group = group.map { _ in "g1" }
   s.groupName = group
   return s
@@ -366,6 +368,27 @@ private func ids(_ sessions: [SessionSummary], _ query: String) -> [String] {
     let result = try #require(SessionSearch.rank(sessions, query: query).first)
 
     #expect(result.hint == hint)
+  }
+
+  /// The row shows only the current PR's number.
+  @Test(arguments: [
+    ("135173", SessionSearch.Hit(field: .pr, text: "135173")),
+    ("#135173", SessionSearch.Hit(field: .pr, text: "135173")),
+    ("136787", nil), ("#136787", nil),
+  ])
+  func aMatchOnAnEarlierPRGivesAPRHint(_ query: String, _ hint: SessionSearch.Hit?) throws {
+    let sessions = [session("s", pr: pr(136787), earlierPRs: [135173]), session("other", pr: pr(136788))]
+
+    let result = try #require(SessionSearch.rank(sessions, query: query).first)
+
+    #expect(result.id == "s")
+    #expect(result.hint == hint)
+  }
+
+  @Test func anEarlierPRMatchesASessionWithNoCurrentPR() {
+    let sessions = [session("s", earlierPRs: [135173, 136787]), session("other", pr: pr(136788))]
+
+    #expect(ids(sessions, "136787") == ["s"])
   }
 
   /// The row shows the label `widgets`, not the PR's `acme/widgets`.

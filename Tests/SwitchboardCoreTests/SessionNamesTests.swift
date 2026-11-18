@@ -19,9 +19,11 @@ private let liveNames: [String: String] = [
   "g4rvrf": "a-group",
   "w3k9ap": "a-wait",
   "sl0ok1": "not-an-id",
+  // A new-form id.
+  "swb_eb4ec": "new-id-form",
 ]
 
-private let removedNames: [String: String] = ["sq7kpm": "old-cleanup"]
+private let removedNames: [String: String] = ["sq7kpm": "old-cleanup", "swb_q7kpm": "removed-new-form"]
 
 private var names: SessionNames { SessionNames(live: liveNames, removed: removedNames) }
 
@@ -105,6 +107,17 @@ private let unchangedPlain: [String] = [
   "https://example.com/x?a;seb4ec", "see https://example.com/?seb4ec now", "http://example.com/a,seb4ec",
   "(https://example.com/x)seb4ec", "see https://example.com/x,seb4ec", "https://github.com/o/r/pull/new/x,seb4ec",
   "https://example.com/?sq7kpm",
+  // New-form ids: an unknown id, case, the prefix written another way, length, and letters on either side.
+  "swb_zzzzz", "Ask swb_zzzzz to rebase", "SWB_eb4ec", "Swb_eb4ec", "swb_EB4EC", "swb-eb4ec", "swb__eb4ec",
+  "swbeb4ec", "sw_eb4ec", "wb_eb4ec", "swb_eb4e", "swb_eb4ecx", "xswb_eb4ec", "2swb_eb4ec", "swb_eb4ec2", "éswb_eb4ec",
+  "swb_eb4ecé",
+  // Each character that the boundary rules forbid, on each side of a new-form id.
+  "x_swb_eb4ec", "swb_eb4ec_x", "_swb_eb4ec", "swb_eb4ec_", "swb_eb4ec-x", "-swb_eb4ec", "/swb_eb4ec", "swb_eb4ec/",
+  "\\swb_eb4ec", "#swb_eb4ec", "@swb_eb4ec", "swb_eb4ec@", "=swb_eb4ec", "swb_eb4ec=1", "~swb_eb4ec", "+swb_eb4ec",
+  // Pane names, paths, assignments, `.ext`, `:suffix`, and URLs with a new-form id.
+  "swb_eb4ec-claude", "swb_eb4ec-shell", "sessions/swb_eb4ec/claude.sh", "SB_SESSION_ID=swb_eb4ec", "swb_eb4ec.jsonl",
+  "swb_eb4ec:card", "swb_eb4ec:/tmp", "swb_eb4ec._x", "host:swb_eb4ec", "https://example.com/swb_eb4ec",
+  "https://example.com/?swb_eb4ec", "swb_q7kpm-claude", "sessions/swb_q7kpm/claude.sh", "swb_q7kpm.jsonl",
 ]
 
 /// Unstyled text and the pieces the matcher gives for it, written as described in `expectedPieces`.
@@ -196,6 +209,38 @@ private let changedPlain: [(String, String)] = [
   ("see https://example.com/x. seb4ec", "see https://example.com/x. ⟨seb4ec⟩"),
   ("(https://example.com/x) seb4ec", "(https://example.com/x) ⟨seb4ec⟩"),
   ("seb4ec https://example.com/?seb4ec", "⟨seb4ec⟩ https://example.com/?seb4ec"),
+  // New-form ids, alone, beside punctuation, and beside old-form ids.
+  ("swb_eb4ec", "⟨swb_eb4ec⟩"),
+  ("swb_eb4ec is done", "⟨swb_eb4ec⟩ is done"),
+  ("Ask swb_eb4ec to rebase", "Ask ⟨swb_eb4ec⟩ to rebase"),
+  ("see swb_eb4ec", "see ⟨swb_eb4ec⟩"),
+  ("(swb_eb4ec)", "(⟨swb_eb4ec⟩)"),
+  ("[swb_eb4ec]", "[⟨swb_eb4ec⟩]"),
+  ("\"swb_eb4ec\"", "\"⟨swb_eb4ec⟩\""),
+  ("swb_eb4ec, then", "⟨swb_eb4ec⟩, then"),
+  ("waiting on swb_eb4ec.", "waiting on ⟨swb_eb4ec⟩."),
+  ("waiting on swb_eb4ec:", "waiting on ⟨swb_eb4ec⟩:"),
+  ("swb_eb4ec: done", "⟨swb_eb4ec⟩: done"),
+  ("swb_eb4ec's PR", "⟨swb_eb4ec⟩'s PR"),
+  ("a\nswb_eb4ec\nb", "a\n⟨swb_eb4ec⟩\nb"),
+  ("🙂swb_eb4ec🙂", "🙂⟨swb_eb4ec⟩🙂"),
+  ("sb send swb_eb4ec hi", "sb send ⟨swb_eb4ec⟩ hi"),
+  ("swb_q7kpm", "⟨swb_q7kpm⟩"),
+  ("seb4ec and swb_eb4ec", "⟨seb4ec⟩ and ⟨swb_eb4ec⟩"),
+  ("swb_eb4ec and seb4ec", "⟨swb_eb4ec⟩ and ⟨seb4ec⟩"),
+  ("swb_eb4ec,seb4ec", "⟨swb_eb4ec⟩,⟨seb4ec⟩"),
+  ("sgcctv swb_eb4ec sq7kpm swb_q7kpm", "⟨sgcctv⟩ ⟨swb_eb4ec⟩ ⟨sq7kpm⟩ ⟨swb_q7kpm⟩"),
+  // `name (id)` and `id (name)` with a new-form id.
+  ("new-id-form (swb_eb4ec)", "⟨swb_eb4ec⟩"),
+  ("Ask new-id-form (swb_eb4ec) to rebase", "Ask ⟨swb_eb4ec⟩ to rebase"),
+  ("swb_eb4ec (new-id-form)", "⟨swb_eb4ec⟩"),
+  ("swb_eb4ec (new-id-form) is done", "⟨swb_eb4ec⟩ is done"),
+  ("New-id-form (swb_eb4ec) is done", "⟨swb_eb4ec⟩ is done"),
+  ("removed-new-form (swb_q7kpm)", "⟨swb_q7kpm⟩"),
+  ("swb_q7kpm (removed-new-form)", "⟨swb_q7kpm⟩"),
+  ("new-id-form (swb_eb4ec)x", "new-id-form (⟨swb_eb4ec⟩)x"),
+  ("zsh-startup-for-switchboard (swb_eb4ec)", "zsh-startup-for-switchboard (⟨swb_eb4ec⟩)"),
+  ("swb_eb4ec https://example.com/?swb_eb4ec", "⟨swb_eb4ec⟩ https://example.com/?swb_eb4ec"),
 ]
 
 /// Markdown that the matcher must leave exactly as `MarkdownBlock.parse` gives it.
@@ -212,6 +257,10 @@ private let unchangedMarkdown: [String] = [
   "seb4ec\\_x", "seb4ec&amp;x",
   // A `.` in the next run, followed by a word.
   "**seb4ec**.jsonl", "**seb4ec**:/tmp", "`seb4ec`:/tmp",
+  // New-form ids: code spans that hold more than the id, links, and a letter or `_` in a neighboring run.
+  "`sb send swb_eb4ec hi`", "`swb_eb4ec x`", "`x swb_eb4ec`", "`swb_eb4ec.`", "`swb_zzzzz`",
+  "[swb_eb4ec](https://example.com)", "[the session](https://example.com/swb_eb4ec)", "see ![swb_eb4ec](x.png) now",
+  "*a*swb_eb4ec", "swb_eb4ec*a*", "`x`swb_eb4ec", "swb_eb4ec`x`", "x_swb_eb4ec", "swb_eb4ec\\_x", "**swb_eb4ec**.jsonl",
 ]
 
 private let docsLink = "https://example.com/docs"
@@ -257,6 +306,21 @@ private let changedMarkdown: [(String, [Piece])] = [
     [mention("seb4ec"), piece(" ("), piece("zsh-startup-for-switchboard", .emphasis), piece(")")]
   ),
   ("zsh-startup-for-switchboard (`seb4ec`)", [piece("zsh-startup-for-switchboard ("), mention("seb4ec"), piece(")")]),
+  // New-form ids. cmark reads the `_` inside the id as text, so it opens and closes no emphasis.
+  ("see swb_eb4ec here", [piece("see "), mention("swb_eb4ec"), piece(" here")]),
+  ("swb\\_eb4ec", [mention("swb_eb4ec")]),
+  ("`swb_eb4ec`", [mention("swb_eb4ec")]),
+  ("`swb_q7kpm`", [mention("swb_q7kpm")]),
+  ("<code>swb_eb4ec</code>", [mention("swb_eb4ec")]),
+  ("_swb_eb4ec_", [mention("swb_eb4ec", .emphasis)]),
+  ("*swb_eb4ec*", [mention("swb_eb4ec", .emphasis)]),
+  ("__swb_eb4ec__", [mention("swb_eb4ec", .strong)]),
+  ("**swb_eb4ec**", [mention("swb_eb4ec", .strong)]),
+  ("~~swb_eb4ec~~", [mention("swb_eb4ec", .strikethrough)]),
+  ("Ask **swb_eb4ec**.", [piece("Ask "), mention("swb_eb4ec", .strong), piece(".")]),
+  ("seb4ec and swb_eb4ec", [mention("seb4ec"), piece(" and "), mention("swb_eb4ec")]),
+  ("_new-id-form (swb_eb4ec)_", [mention("swb_eb4ec", .emphasis)]),
+  ("new-id-form (`swb_eb4ec`)", [piece("new-id-form ("), mention("swb_eb4ec"), piece(")")]),
 ]
 
 @Suite struct SessionNamesTests {
@@ -431,10 +495,11 @@ private let changedMarkdown: [(String, [Piece])] = [
       ])
   }
 
-  @Test func exactIdCodeSpanKeepsItsOtherStyles() {
-    let text = text(Run("seb4ec", [.code, .strong]))
+  @Test(arguments: ["seb4ec", "swb_eb4ec"])
+  func exactIdCodeSpanKeepsItsOtherStyles(_ id: String) {
+    let text = text(Run(id, [.code, .strong]))
 
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention("seb4ec", .strong)])
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention(id, .strong)])
   }
 
   @Test func exactIdCodeSpanOfAnUnknownIdKeepsItsCodeStyle() {
@@ -445,6 +510,82 @@ private let changedMarkdown: [(String, [Piece])] = [
 
   @Test func idSplitAcrossRunsPassesThrough() {
     let text = text(Run("seb"), Run("4ec"))
+
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
+  }
+
+  /// An id never reaches past the end of its run. The first run alone holds no whole id, so nothing links, whatever
+  /// the style of the run after it.
+  @Test(arguments: [[], .emphasis, .strong, .code, .strikethrough] as [MarkdownText.Style])
+  func newIdSplitAcrossRunsPassesThrough(_ style: MarkdownText.Style) {
+    let text = text(Run("see swb_eb4"), Run("ec", style), Run(" now"))
+
+    #expect(InlineMentions(names: names, repo: nil).pieces(text).allSatisfy { $0.mention == nil })
+  }
+
+  @Test(arguments: [("swb_", "eb4ec"), ("swb", "_eb4ec"), ("s", "wb_eb4ec"), ("swb_eb4e", "c"), ("swb_eb", "4ec")])
+  func newIdSplitAtEachPointPassesThrough(_ first: String, _ second: String) {
+    let text = text(Run(first), Run(second, .emphasis))
+
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
+  }
+
+  @Test func oldIdAtTheEndOfARunBeforeAStyledRunMatches() {
+    let text = text(Run("see seb4ec"), Run(" now", .strong))
+
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(text) == [
+        piece("see "), mention("seb4ec"), piece(" now", .strong),
+      ])
+  }
+
+  @Test(arguments: ["swb_eb4ecx", "swb_eb4e"])
+  func codeSpanThatIsNotExactlyAKnownNewIdKeepsItsCodeStyle(_ code: String) {
+    let text = text(Run(code, .code))
+
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
+  }
+
+  /// cmark splits each of these into runs at the id, and the matcher must not join the runs back into an id.
+  @Test(arguments: [
+    "swb_eb**4ec**", "swb_eb4**ec**", "swb_eb4*ec*", "swb_eb4~~ec~~", "swb_eb[4ec](https://x.test)", "swb_eb`4ec`",
+    "swb_eb4e`c`", "see swb_eb4**ec** now", "seb**4ec**", "seb4e*c*",
+  ])
+  func markdownThatSplitsAnIdAcrossRunsLinksNothing(_ markdown: String) throws {
+    let text = try paragraph(markdown)
+    try #require(text.runs.count >= 2, "\(markdown) parses to \(text.runs)")
+
+    #expect(InlineMentions(names: names, repo: nil).pieces(text).allSatisfy { $0.mention == nil })
+  }
+
+  /// The `_` of a new id is plain text to cmark, so the paragraph keeps the id in one unstyled run.
+  @Test(arguments: ["see swb_eb4ec here", "swb_eb4ec", "seb4ec and swb_eb4ec", "Ask new-id-form (swb_eb4ec) now."])
+  func markdownKeepsANewIdInOneUnstyledRun(_ markdown: String) throws {
+    let text = try paragraph(markdown)
+
+    #expect(text.runs == [Run(markdown)])
+  }
+
+  /// An `s` inside a new id starts an old-form shape. The `_` before it is not a token boundary, so it never matches.
+  @Test(arguments: [
+    ("swb_s2abcd", "swb_s2abcd"),
+    ("swb_s2abc", "⟨swb_s2abc⟩"),
+    ("swb_s2abc s2abcd", "⟨swb_s2abc⟩ ⟨s2abcd⟩"),
+    ("s2abcd", "⟨s2abcd⟩"),
+    ("see swb_s2abcd now", "see swb_s2abcd now"),
+  ])
+  func oldIdInsideANewIdDoesNotMatch(_ input: String, _ expected: String) {
+    let live = ["swb_s2abc": "new-form", "s2abcd": "old-form"]
+    let names = SessionNames(live: live, removed: [:])
+
+    #expect(
+      InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: input))
+        == expectedPieces(expected, live: live))
+  }
+
+  @Test func oldIdInTheRunAfterANewPrefixDoesNotMatch() {
+    let names = SessionNames(live: ["s2abcd": "old-form"], removed: [:])
+    let text = text(Run("swb_", .emphasis), Run("s2abcd"))
 
     #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
@@ -481,12 +622,45 @@ private let changedMarkdown: [(String, [Piece])] = [
         == expectedPieces("⟨sa2222⟩ (⟨sb3333⟩)", live: live))
   }
 
-  @Test func idAtTheEdgeOfAnEmphasisRunMatches() {
-    let text = text(Run("Ask "), Run("seb4ec", .emphasis), Run(" now"))
+  @Test func plainStringBracketSessionLinkToANewIdBecomesItsLabel() {
+    #expect(
+      names.replacingIDs(in: "Ask [the fix](switchboard://session/swb_eb4ec) now, then swb_eb4ec.")
+        == "Ask the fix now, then new-id-form.")
+  }
+
+  /// Unstyled rows with a new-form id that cmark parses as one paragraph of the same text.
+  private static let newIdParityInputs: [String] = (unchangedPlain + changedPlain.map(\.0)).filter { input in
+    input.contains("swb") && input == input.trimmingCharacters(in: .whitespacesAndNewlines)
+      && input.allSatisfy { !"`*[]<>&~\\!#".contains($0) } && !input.contains("://") && !input.contains("www.")
+  }
+
+  @Test func newIdParityInputsHoldIdsThatLink() {
+    let linking = Self.newIdParityInputs.filter { input in
+      InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: input)).contains { $0.mention != nil }
+    }
+
+    #expect(linking.count >= 15, "\(linking)")
+  }
+
+  /// The plain-text path and the parsed-paragraph path find the same sessions in text that holds a new id, so the
+  /// `_` in the id changes nothing that cmark reads.
+  @Test(arguments: newIdParityInputs)
+  func plainTextAndItsParagraphFindTheSameSessions(_ input: String) throws {
+    let mentions = InlineMentions(names: names, repo: nil)
+
+    let fromPlain = mentions.pieces(MarkdownText(stringLiteral: input)).compactMap(\.mention)
+    let fromParagraph = mentions.pieces(try paragraph(input)).compactMap(\.mention)
+
+    #expect(fromPlain == fromParagraph)
+  }
+
+  @Test(arguments: ["seb4ec", "swb_eb4ec"])
+  func idAtTheEdgeOfAnEmphasisRunMatches(_ id: String) {
+    let text = text(Run("Ask "), Run(id, .emphasis), Run(" now"))
 
     #expect(
       InlineMentions(names: names, repo: nil).pieces(text) == [
-        piece("Ask "), mention("seb4ec", .emphasis), piece(" now"),
+        piece("Ask "), mention(id, .emphasis), piece(" now"),
       ])
   }
 
@@ -524,19 +698,19 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(decoded == session)
   }
 
-  /// 2,000 distinct ids in the session id alphabet.
-  private static let manyIds: [String] = {
-    let alphabet = Array("abcdefghijkmnpqrstuvwxyz23456789")
+  /// 2,000 distinct ids of each form in the session id alphabet.
+  private static let manyIds: [String] = ["s", SessionID.prefix].flatMap { prefix in
+    let alphabet = Array(ShortId.alphabet)
     return (0..<2_000).map { i in
       var n = i
-      var id = "s"
-      for _ in 0..<5 {
+      var id = prefix
+      for _ in 0..<ShortId.length {
         id.append(alphabet[n % alphabet.count])
         n /= alphabet.count
       }
       return id
     }
-  }()
+  }
 
   private static func manyNames() -> SessionNames {
     SessionNames(
@@ -551,7 +725,7 @@ private let changedMarkdown: [(String, [Piece])] = [
   /// minutes, so this bound still catches one.
   private static let linearBound = Duration.seconds(5)
 
-  @Test func matchingTwoThousandIdsInOneRunIsFast() {
+  @Test func matchingTwoThousandIdsOfEachFormInOneRunIsFast() {
     let string = Self.manyIds.map { "Ask \($0)\(Self.filler)" }.joined()
     let text = MarkdownText(stringLiteral: string)
     let names = Self.manyNames()
@@ -562,11 +736,11 @@ private let changedMarkdown: [(String, [Piece])] = [
     }
 
     #expect(string.utf8.count >= 200_000)
-    #expect(matched == 2_000)
+    #expect(matched == Self.manyIds.count)
     #expect(elapsed < Self.linearBound)
   }
 
-  @Test func matchingTwoThousandIdsAcrossManyRunsIsFast() {
+  @Test func matchingTwoThousandIdsOfEachFormAcrossManyRunsIsFast() {
     let runs = Self.manyIds.flatMap { [Run("Ask "), Run($0, .emphasis), Run(Self.filler)] }
     let text = MarkdownText(runs)
     let names = Self.manyNames()
@@ -577,7 +751,7 @@ private let changedMarkdown: [(String, [Piece])] = [
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(matched == 2_000)
+    #expect(matched == Self.manyIds.count)
     #expect(elapsed < Self.linearBound)
   }
 }

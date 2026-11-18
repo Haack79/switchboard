@@ -26,7 +26,7 @@ enum Snapshot {
   static let hoverSession = ProcessInfo.processInfo.environment["SB_HOVER"]
   static let hoverReference = ProcessInfo.processInfo.environment["SB_HOVER_REF"].flatMap { value in
     if let ref = GitHubRef(parsing: value) { return Referent.github(ref).key }
-    return SessionNames.isSessionID(value) ? Referent.session(.id(value)).key : nil
+    return SessionID.isValid(value) ? Referent.session(.id(value)).key : nil
   }
   static let searchQuery = ProcessInfo.processInfo.environment["SB_SEARCH"]
 

@@ -81,7 +81,7 @@ extension MCPToolServer {
       ]),
     Tool(
       "spawn",
-      "Starts a session on a new branch in a new worktree of a repository, or with `followup` adds it as a follow-up that has not started. The calling session becomes its parent. The prompt is the new session's whole brief, so make it self-contained.",
+      "Starts a session on a new branch in a new worktree of a repository, or with `followup` adds it as a follow-up that has not started. The calling session becomes its parent. The prompt is the new session's whole brief, so make it self-contained. Use it for follow-up work instead of checking out another branch in your own folder, so each PR keeps its own session.",
       [
         "repository": string("The repository: owner/name, a bare name, or the path of a checkout."),
         "branch": string("The new branch."),
