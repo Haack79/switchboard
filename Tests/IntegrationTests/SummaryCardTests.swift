@@ -132,8 +132,9 @@ extension Instance {
     let own = try sbd.setSummary(kid.id, asking).stdout
 
     #expect(text.contains("already ask the user in their own Inbox items"), "\(text)")
-    #expect(text.contains("[kid](switchboard://session/\(kid.id)): Pick how to land #98"), "\(text)")
-    #expect(decided.contains("[kid](switchboard://session/\(kid.id)): Pick how to land #98"), "\(decided)")
+    let kidLine = "[kid](switchboard://session/\(kid.id)): Pick how to land #98"
+    #expect(text.contains(kidLine), "\(text)")
+    #expect(decided.contains(kidLine), "\(decided)")
     #expect(json["childItems"]?.array?.map { $0["session"]?.string } == [kid.id], "\(json)")
     #expect(!review.contains("These sessions you started"), "\(review)")
     #expect(!own.contains("These sessions you started"), "\(own)")
