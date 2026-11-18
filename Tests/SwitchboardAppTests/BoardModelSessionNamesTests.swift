@@ -338,8 +338,8 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(model.sessions.contains { $0.id == liveID })
     }
 
-    /// The app keeps a link to a session that is gone and does nothing. Launch Services would otherwise hand the
-    /// link to whichever build of the app it picks.
+    /// The app keeps a link to a session that is gone and selects nothing. Launch Services would otherwise hand the
+    /// link to whichever build of the app it picks. The click comes from the window, so the window is not shown again.
     @Test(arguments: [goneID, "sxxxxx"])
     func aLinkToASessionThatIsGoneIsHandledAndRevealsNothing(_ id: String) {
       let model = offlineModel()
@@ -354,15 +354,16 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(shown.value == 0)
     }
 
-    /// An in-app click on a link to a session that is gone leaves no error and nothing for a later refresh to select.
-    @Test(arguments: [goneID, "sxxxxx"])
-    func aLinkToASessionThatIsGoneSetsNoErrorAndNoPendingFocus(_ id: String) {
+    /// An in-app click on a link to a session that is gone sets the banner at once and leaves nothing for a later
+    /// refresh to select.
+    @Test(arguments: [(goneID, "Session \(goneID) was removed"), ("sxxxxx", "Switchboard has no session sxxxxx")])
+    func aLinkToASessionThatIsGoneSetsTheBannerAndNoPendingFocus(_ id: String, _ banner: String) {
       let model = offlineModel()
       model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
 
       _ = model.openSessionLink(SessionLink.url(for: id))
 
-      #expect(model.actionError == nil)
+      #expect(model.actionError == banner)
       #expect(model.pendingFocus == nil)
     }
 
@@ -378,7 +379,6 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       "switchboard://session/seb4ec#top",
       "switchboard://session/seb4ec/",
       "switchboard://other/seb4ec",
-      "switchboard://session/seb4e",
       "switchboard://",
       "switchboard:",
     ])
@@ -503,25 +503,15 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
       #expect(model.pendingFocus == nil)
     }
 
-    /// The user clicked the in-app link while looking at the text that names the removed session, which
-    /// already shows as removed.
-    @Test func anInAppLinkToARemovedSessionSetsNoError() {
+    /// Both paths say why the link shows nothing.
+    @Test(arguments: LinkPath.allCases)
+    func aLinkToARemovedSessionSetsTheRemovedError(_ path: LinkPath) {
       let model = offlineModel()
       model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
 
-      LinkPath.inApp.open(SessionLink.url(for: goneID), on: model)
+      path.open(SessionLink.url(for: goneID), on: model)
 
-      #expect(model.actionError == nil)
-    }
-
-    /// A URL from another app is the user's only sign of the session, so the app says why it shows nothing.
-    @Test func anExternalLinkToARemovedSessionSetsTheRemovedError() {
-      let model = offlineModel()
-      model.apply(.success([named(liveID, liveName)]), followups: nil, removed: [tombstone(goneID, goneName)])
-
-      LinkPath.external.open(SessionLink.url(for: goneID), on: model)
-
-      #expect(model.actionError?.contains("removed") == true)
+      #expect(model.actionError == "Session \(goneID) was removed")
     }
 
     /// An in-app link to an unknown id names no session the user can wait for.
@@ -541,7 +531,7 @@ private func tombstone(_ id: String, _ name: String, removed: Int64 = 1_794_377_
 
       LinkPath.external.open(SessionLink.url(for: "sxxxxx"), on: model)
 
-      #expect(model.pendingFocus == "sxxxxx")
+      #expect(model.pendingFocus == .id("sxxxxx"))
     }
   }
 

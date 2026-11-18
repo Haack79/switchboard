@@ -5,6 +5,7 @@ import SwitchboardCore
 enum SessionMenuAction: Hashable {
   case highlight
   case snooze
+  case copyLink
   case pause
   case resume
   case startNow
@@ -22,14 +23,12 @@ enum SessionMenu {
   /// nil otherwise. A row in a multi-selection offers to delete the selection instead of the row alone. A session
   /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep. A docket row offers Delete
   /// only in Done, because the confirmation describes a session that runs claude in a worktree.
-  /// `hasExtra` is true when the row shows items of its own before the destructive ones. The divider shows only
-  /// when an item comes before it. `movesAccount` is true when the session can move to another account.
-  static func actions(
-    for s: SessionSummary, selectionCount: Int?, hasExtra: Bool = false, movesAccount: Bool = false
-  ) -> [SessionMenuAction] {
+  /// `movesAccount` is true when the session can move to another account.
+  static func actions(for s: SessionSummary, selectionCount: Int?, movesAccount: Bool = false) -> [SessionMenuAction] {
     var safe: [SessionMenuAction] = []
     if HighlightMenuItem.title(for: s) != nil { safe.append(.highlight) }
     if s.canSnooze { safe.append(.snooze) }
+    safe.append(.copyLink)
     if s.pause != nil {
       safe.append(.resume)
     } else if s.canPause {
@@ -45,7 +44,7 @@ enum SessionMenu {
     } else if s.removal == nil && (s.isRemovableDone || (s.isRemovableWork && s.docket == nil)) {
       destructive.append(.delete("Delete \(BoardModel.deletePlan(s).summary)…"))
     }
-    return destructive.isEmpty || (safe.isEmpty && !hasExtra) ? safe + destructive : safe + [.divider] + destructive
+    return destructive.isEmpty ? safe : safe + [.divider] + destructive
   }
 
   /// The `selectionCount` that row `id` passes to `actions`. A row gets `removableSelection` back only when it
@@ -72,7 +71,7 @@ struct SessionMenuItems<Extra: View>: View {
       for: session.id, removableSelection: removableSelection, showsMultiSelection: model.showsMultiSelection,
       multiSelection: model.multiSelection)
     let actions = SessionMenu.actions(
-      for: session, selectionCount: selectionCount, hasExtra: Extra.self != EmptyView.self,
+      for: session, selectionCount: selectionCount,
       movesAccount: SessionAccountMenu.shows(session, accountCount: model.accounts.count))
     let split = actions.firstIndex(of: .divider) ?? actions.endIndex
     ForEach(actions[..<split], id: \.self, content: item)
@@ -87,6 +86,8 @@ struct SessionMenuItems<Extra: View>: View {
       HighlightMenuItem(session: session)
     case .snooze:
       SnoozeMenuItems(session: session)
+    case .copyLink:
+      CopyLinkMenuItem(session: session)
     case .pause:
       Button("Pause") { model.pause(id) }.help(PauseBanner.pauseHelp)
     case .resume:

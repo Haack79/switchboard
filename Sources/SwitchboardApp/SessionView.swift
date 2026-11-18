@@ -226,6 +226,7 @@ struct SessionView: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(session.name).font(.title3.bold())
+            .contextMenu { CopyLinkMenuItem(session: session) }
           StateBadge(state: session.state)
           Text(session.live ? "claude running" : "claude stopped")
             .font(.caption)

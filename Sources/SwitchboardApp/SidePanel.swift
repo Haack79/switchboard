@@ -59,6 +59,7 @@ struct SidePanel {
 }
 
 struct SidePanelView: View {
+  @Environment(\.sessionNames) private var names
   let session: SessionSummary
 
   var body: some View {
@@ -69,7 +70,7 @@ struct SidePanelView: View {
         if session.waits.isEmpty { Text(SidePanel.noWaits).foregroundStyle(.secondary) }
         ForEach(session.waits, id: \.id) { wait in
           VStack(alignment: .leading, spacing: 2) {
-            InlineText(plain: wait.line).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            InlineText(wait.lineText(names: names)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Text(wait.caption(age: ago(wait.created))).font(.caption).foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }

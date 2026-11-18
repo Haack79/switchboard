@@ -183,55 +183,11 @@ extension GitHubRef {
   }
 
   /// Where the URL whose `http://` or `https://` scheme starts at `i` ends,
-  /// read as cmark-gfm ends an autolink: at ASCII whitespace, `<`, or the end
-  /// of the run, and then without trailing `?!.,:*_~'"`, without a trailing
-  /// `)` while the URL holds more `)` than `(`, and without a trailing `;` or
-  /// `&entity;`. `cut` is true when the URL runs on into the next run, so
-  /// that its text in this run is not all of it. nil when no scheme starts at `i`.
+  /// by `TokenBoundary.autolinkEnd`. nil when no scheme starts at `i`.
   private static func urlEnd(at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> (end: Int, cut: Bool)? {
-    guard var http = spells("http", at: i, before: limit, s) else { return nil }
+    guard var http = TokenBoundary.spells("http", at: i, before: limit, s) else { return nil }
     if http < limit, s[http] == "s" || s[http] == "S" { http += 1 }
-    guard let schemeEnd = spells("://", at: http, before: limit, s) else { return nil }
-    var end = schemeEnd
-    var opening = 0
-    var closing = 0
-    while end < limit, !isASCIISpace(s[end]), s[end] != "<" {
-      if s[end] == "(" { opening += 1 } else if s[end] == ")" { closing += 1 }
-      end += 1
-    }
-    let cut = end == limit && limit < s.count && !isASCIISpace(s[limit]) && s[limit] != "<"
-    trimming: while end > schemeEnd {
-      switch s[end - 1] {
-      case ")":
-        guard closing > opening else { break trimming }
-        closing -= 1
-        end -= 1
-      case "?", "!", ".", ",", ":", "*", "_", "~", "'", "\"":
-        end -= 1
-      case ";":
-        var entity = end - 2
-        while entity > schemeEnd, s[entity].isASCII, s[entity].properties.isAlphabetic { entity -= 1 }
-        end = entity < end - 2 && s[entity] == "&" ? entity : end - 1
-      default:
-        break trimming
-      }
-    }
-    return (end, cut)
-  }
-
-  /// The index after `word` when `s` spells it at `i`, ignoring ASCII case.
-  private static func spells(_ word: String, at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> Int? {
-    var j = i
-    for c in word.unicodeScalars {
-      guard j < limit, s[j] == c || (s[j].value ^ 0x20 == c.value && s[j].properties.isAlphabetic) else {
-        return nil
-      }
-      j += 1
-    }
-    return j
-  }
-
-  private static func isASCIISpace(_ c: Unicode.Scalar) -> Bool {
-    c == " " || c == "\t" || c == "\n" || c == "\u{0B}" || c == "\u{0C}" || c == "\r"
+    guard let schemeEnd = TokenBoundary.spells("://", at: http, before: limit, s) else { return nil }
+    return TokenBoundary.autolinkEnd(after: schemeEnd, before: limit, s)
   }
 }

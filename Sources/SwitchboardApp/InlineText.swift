@@ -27,7 +27,27 @@ struct InlineText: View {
 
   var body: some View {
     let (segments, help) = Self.segments(text, names: names, repo: repo, links: links)
-    if let help { content(segments).help(help) } else { content(segments) }
+    let tooltip = opensSessionCard(segments) ? Self.removedOnly(help) : help
+    if let tooltip { content(segments).help(tooltip) } else { content(segments) }
+  }
+
+  private static let removedSuffix = ", removed"
+
+  /// The help lines of removed sessions. A removed session opens no card, so
+  /// its line stays in the tooltip when the text's live sessions open cards.
+  private static func removedOnly(_ help: String?) -> String? {
+    let lines = (help ?? "").split(separator: "\n").filter { $0.hasSuffix(removedSuffix) }
+    return lines.isEmpty ? nil : lines.joined(separator: "\n")
+  }
+
+  /// Whether the pointer can open the reference card on a session in the
+  /// text. The card shows the session's id, so the text then drops its
+  /// `name: id` help.
+  private func opensSessionCard(_ segments: [Segment]) -> Bool {
+    guard #available(macOS 15, *), card != nil else { return false }
+    return segments.contains {
+      if case .session? = $0.reference?.referent { true } else { false }
+    }
   }
 
   /// Only a text that can open a card, or that a test reads the rects of,
@@ -40,9 +60,9 @@ struct InlineText: View {
     }
   }
 
-  /// A stretch of the drawn text. `reference` is set only on a reference
-  /// that links, and its `part` is the reference's index among the text's
-  /// pieces.
+  /// A stretch of the drawn text. `reference` is set only on a reference,
+  /// live session name, or session link that links, and its `part` is its
+  /// index among the text's pieces.
   struct Segment {
     var text: AttributedString
     var reference: ReferenceAttribute?
@@ -56,9 +76,10 @@ struct InlineText: View {
   /// `links`, a live session's name links to the session, and `help` lists
   /// each swapped session as `name: id`, once each, in the order the text
   /// names them. A removed session's name never links. With `links`, a
-  /// reference links to its issue or pull request, and a bare `#123` refers
-  /// to `repo`. Without `links`, a reference has no link, even one that its
-  /// Markdown gave it.
+  /// reference links to its issue or pull request, a session link links to
+  /// its URL, and a bare `#123` refers to `repo`. Without `links`, a
+  /// reference or a session link has no link, even one that its Markdown
+  /// gave it.
   static func attributed(_ text: MarkdownText, names: SessionNames, repo: String?, links: Bool) -> (
     AttributedString, help: String?
   ) {
@@ -66,8 +87,9 @@ struct InlineText: View {
     return (joined(segments), help)
   }
 
-  /// `attributed`'s text, split so that each reference that links is a
-  /// segment of its own. Text between references joins into one segment.
+  /// `attributed`'s text, split so that each reference, live session name,
+  /// and session link that links is a segment of its own. Text between them
+  /// joins into one segment.
   static func segments(_ text: MarkdownText, names: SessionNames, repo: String?, links: Bool) -> (
     [Segment], help: String?
   ) {
@@ -79,12 +101,17 @@ struct InlineText: View {
       var reference: ReferenceAttribute?
       switch piece.mention {
       case .session(let match)? where links:
-        if !match.removed { part.link = SessionLink.url(for: match.id) }
-        if listed.insert(match.id).inserted {
-          lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
+        if !match.removed {
+          part.link = SessionLink.url(for: match.id)
+          reference = ReferenceAttribute(referent: .session(.id(match.id)), part: index)
         }
-      case .reference(let ref)? where links: reference = ReferenceAttribute(ref: ref, part: index)
-      case .reference?: part.link = nil
+        if listed.insert(match.id).inserted {
+          lines.append("\(match.name): \(match.id)" + (match.removed ? removedSuffix : ""))
+        }
+      case .reference(let ref)? where links: reference = ReferenceAttribute(referent: .github(ref), part: index)
+      case .sessionLink(let target)? where links:
+        reference = ReferenceAttribute(referent: .session(target), part: index)
+      case .reference?, .sessionLink?: part.link = nil
       case .session?, nil: break
       }
       if reference == nil, let last = segments.last, last.reference == nil {
@@ -189,7 +216,7 @@ extension View {
 
 /// Tags a reference's segment, so the renderer can find its runs.
 struct ReferenceAttribute: Hashable {
-  let ref: GitHubRef
+  let referent: Referent
   /// The reference's index among the text's pieces. The same reference
   /// written twice has two parts.
   let part: Int
@@ -204,11 +231,11 @@ extension ReferenceAttribute: TextAttribute {}
 /// no update.
 final class ReferenceRects: Sendable {
   struct Entry: Equatable, Sendable {
-    var ref: GitHubRef
+    var referent: Referent
     var part: Int
     var rect: CGRect
 
-    var key: String { ref.key }
+    var key: String { referent.key }
   }
 
   private let state = OSAllocatedUnfairLock(initialState: [Entry]())
@@ -282,7 +309,7 @@ private struct ReferenceRenderer: TextRenderer {
         if entries.count > lineStart, entries[entries.count - 1].part == tag.part {
           entries[entries.count - 1].rect = entries[entries.count - 1].rect.union(rect)
         } else {
-          entries.append(ReferenceRects.Entry(ref: tag.ref, part: tag.part, rect: rect))
+          entries.append(ReferenceRects.Entry(referent: tag.referent, part: tag.part, rect: rect))
         }
       }
     }
@@ -302,7 +329,9 @@ final class ReferenceHover {
   func moved(to point: CGPoint?, in entries: [ReferenceRects.Entry], card: HoverCard<ReferenceCardID>?) {
     guard let card, let view else { return }
     let next = point.flatMap { point in entries.first { $0.rect.contains(point) } }
-      .map { (id: ReferenceCardID(ref: $0.ref), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect)) }
+      .map {
+        (id: ReferenceCardID(referent: $0.referent), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect))
+      }
     if next?.anchor == current?.anchor { return }
     let previous = current
     current = next
@@ -362,7 +391,8 @@ final class ReferenceAnchorView: NSView {
       guard let self, self.window != nil, let card = self.card, card.shown == nil,
         let entry = self.rects?.entries.first(where: { $0.key == key })
       else { return }
-      card.pin(ReferenceCardID(ref: entry.ref), below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
+      card.pin(
+        ReferenceCardID(referent: entry.referent), below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
     }
   }
 }

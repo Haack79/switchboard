@@ -2,7 +2,8 @@ import Foundation
 import SwitchboardCore
 
 /// What a session's hover card says. It leaves out each fact the session
-/// lacks, and the facts that a tile already shows plainly, such as the state.
+/// lacks. A tile's card also leaves out the facts that the tile already shows
+/// plainly, such as the state. A session link's card adds the state and the id.
 struct HoverCardContent: Equatable {
   struct PRChip: Equatable {
     var text: String
@@ -16,14 +17,15 @@ struct HoverCardContent: Equatable {
   var pr: PRChip?
   /// What the session is doing or waits on, in one line of plain text.
   var summary: String?
+  /// Set only for a session link's card.
+  var state: AttentionState?
+  /// Set only for a session link's card.
+  var id: String?
 
   /// The account appears only when the session records an account other than
   /// `activeAccount`. A session without a recorded account runs under sbd's
   /// own account, which the app can't name.
-  init(
-    _ s: SessionSummary, activeAccount: String, names: SessionNames = .empty,
-    now: Int64 = nowMs()
-  ) {
+  init(_ s: SessionSummary, activeAccount: String, names: SessionNames = .empty, now: Int64 = nowMs()) {
     title = s.name
     let repo = s.pr?.repo ?? s.repoFolder.map { ($0 as NSString).lastPathComponent }
     let branch = s.branch == s.name ? nil : s.branch
@@ -42,6 +44,16 @@ struct HoverCardContent: Equatable {
     ].compactMap { $0 }
     pr = s.pr.map { PRChip(text: $0.line, status: $0.status) }
     summary = Self.summary(s, names: names)
+  }
+
+  /// A session link's card, which adds the state and the id.
+  static func link(
+    _ s: SessionSummary, activeAccount: String, names: SessionNames = .empty, now: Int64 = nowMs()
+  ) -> HoverCardContent {
+    var content = HoverCardContent(s, activeAccount: activeAccount, names: names, now: now)
+    content.state = s.state
+    content.id = s.id
+    return content
   }
 
   /// Every fact in one string, for VoiceOver, which reads no hover card.
