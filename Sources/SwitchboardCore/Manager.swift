@@ -82,6 +82,7 @@ public enum Manager {
     - `sb wait --kind session --target fix-cache --state done --note "remove its worktree"` has the operator act on the note once when a session reaches the state.
     - `sb pause fix-cache --reason "free CPU for flag-evals" --until "#1190"` stops a session and keeps it stopped. Switchboard holds every message to it until `sb resume fix-cache` or the `--until` condition: a time such as 2h, a PR such as #1190 merging, or session:<name>[=<state>]. `sb pause --group <group>` pauses each session in a group. To free CPU or to hold work, use `sb pause` and not `sb stop`, because a stopped session moves to Needs you and wakes on the next message.
     - `sb highlight <session>` (MCP `highlight`) marks a session that matters most with an orange ring in the app and puts its Inbox item first. `sb highlight <session> --clear` removes the mark, and a session that reaches Done loses it.
+    - `sb parent <session> --clear` (MCP `set_parent` with `clear`) unlinks a session you started that is independent work, so you stop hearing about it. `sb parent <session> <parent>` moves it to another parent.
     - `sb schedule \(operatorName) --every 30m "<prompt>"` (or `add_schedule` with session `\(operatorName)`) has sbd send the operator the prompt every 30 minutes. Use a schedule for a loop, not `/loop` or a chain of `date` waits, because sbd keeps a schedule across restarts and nobody has to re-arm it.
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.

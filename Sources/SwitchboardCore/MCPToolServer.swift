@@ -223,6 +223,16 @@ public struct MCPToolServer: Sendable {
       if let caller { request["caller"] = .string(caller) }
       if let scoped { request["scope"] = .string(scoped.group.id) }
       return try client.call("highlight", request)
+    case "set_parent":
+      var request: [String: JSON] = ["session": try sessionID(args, scoped), "by": MCPToolServer.byClaude]
+      if args["clear"]?.bool == true {
+        request["clear"] = true
+      } else if let parent = args["parent"]?.string, !parent.isEmpty {
+        request["parent"] = try sessionID(parent, scoped)
+      }
+      if let caller { request["caller"] = .string(caller) }
+      if let scoped { request["scope"] = .string(scoped.group.id) }
+      return try client.call("parent", request)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)

@@ -181,6 +181,12 @@ let usage = """
                                   shows: 123, #123, owner/name#123, or an issue
                                   URL. It replaces the issue that sbd finds in
                                   the PR body or the branch name
+    parent <session> [<parent> | --clear]
+                                  show the session's parent, move it to another
+                                  parent, or unlink it with --clear. The parent
+                                  stops hearing what changed in it. Its group,
+                                  account, host, and waits stay. Refuses the
+                                  session that runs it
     rm <session> [--worktree [--delete-branch [--delete-remote-branch]]] [--resolve <id>]...
                                   remove the session, and its worktree with --worktree, which refuses
                                   uncommitted files, unpushed commits, and a folder sbd didn't make.
@@ -971,6 +977,8 @@ case "issue":
   let clear = a.switches.contains("--clear")
   guard a.positional.count == (clear ? 1 : 2) else { die("issue needs a session and an issue, or --clear") }
   sessionCommand("issue", a, extra: clear ? ["clear": .bool(true)] : ["issue": .string(a.positional[1])])
+case "parent":
+  parentCommand(a)
 case "send" where a.values["--pending"] != nil:
   awaitGroupMessage(a, id: a.values["--pending"]!)
 case "send" where a.values["--group"] != nil:
