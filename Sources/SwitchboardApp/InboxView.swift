@@ -151,6 +151,7 @@ struct TriageRow: View {
     .contextMenu {
       HighlightMenuItem(session: session)
       SnoozeMenuItems(session: session)
+      MoveToAccountSubmenu(session: session)
     }
     .accessibilityElement(children: .combine)
     .accessibilityValue(session.state.title)

@@ -248,6 +248,8 @@ final class BoardModel: ObservableObject {
   /// A switch of the active account that waits for the user to say whether
   /// the sessions on the other accounts move too.
   @Published var switchingAccount: AccountSwitch?
+  /// A move of one session to another account that waits for the user to confirm it.
+  @Published var confirmingAccountMove: SessionAccountMove?
   @Published var showingAccounts = false
   /// The sessions that could move to the active account, read when the
   /// account menu opens.

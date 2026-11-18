@@ -46,6 +46,7 @@ struct ConversationsSection: View {
       .contextMenu {
         DeleteSelectedMenuItem(id: s.id, count: removableSelection)
         Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
+        MoveToAccountSubmenu(session: s)
       }
   }
 }

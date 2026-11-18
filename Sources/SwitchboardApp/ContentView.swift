@@ -248,6 +248,7 @@ struct Sidebar: View {
               SnoozeMenuItems(session: row.session)
               DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               PauseMenuItem(model: model, session: row.session)
+              MoveToAccountSubmenu(session: row.session)
               if row.session.queued == true {
                 Button("Start Now") { model.startNow(row.id) }
                   .disabled(model.startingNow.contains(row.id))
@@ -306,6 +307,15 @@ struct Sidebar: View {
     } message: { change in
       Text(accountSwitchMessage(change))
     }
+    .confirmationDialog(
+      model.confirmingAccountMove?.title ?? "", isPresented: isConfirmingAccountMove,
+      presenting: model.confirmingAccountMove
+    ) { move in
+      Button(move.button) { model.confirmAccountMove(move) }
+      Button("Cancel", role: .cancel) {}
+    } message: { move in
+      Text(move.message)
+    }
     // A sixth toolbar item pushes New Session into the overflow menu at the minimum window width, so search
     // sits here. It looks like a search field, and the panel holds the real one.
     .safeAreaInset(edge: .top) {
@@ -356,6 +366,10 @@ struct Sidebar: View {
         }
       }
     }
+  }
+
+  private var isConfirmingAccountMove: Binding<Bool> {
+    Binding(get: { model.confirmingAccountMove != nil }, set: { if !$0 { model.confirmingAccountMove = nil } })
   }
 
   private var isSwitchingAccount: Binding<Bool> {
@@ -673,6 +687,7 @@ struct BoardView: View {
                             HighlightMenuItem(session: s)
                             SnoozeMenuItems(session: s)
                             PauseMenuItem(model: model, session: s)
+                            MoveToAccountSubmenu(session: s)
                             if drops { moveMenu(s.id, from: lane.group?.id) }
                           }
                           .id(s.id)

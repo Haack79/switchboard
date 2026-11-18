@@ -235,6 +235,7 @@ struct SessionView: View {
               .font(.caption)
               .foregroundStyle(.secondary)
           }
+          SessionAccountControl(session: session)
         }
         InlineText(plain: session.reason).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
         if let pr = session.pr, let url = pr.link {

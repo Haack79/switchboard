@@ -10,6 +10,8 @@ struct AccountRow: Identifiable, Equatable {
 
   var title: String { "\(account.name) (\(account.sessions))" }
   var signedOut: Bool { usage?.signedOut == true }
+  /// The account's name in a menu that moves sessions to it, which names a signed-out account as such.
+  var choiceTitle: String { signedOut ? "\(account.name) (not signed in)" : account.name }
   /// A click on the row makes the account the one for new sessions.
   var canChoose: Bool { !account.active && !signedOut }
   var disabledReason: String? { signedOut ? "New sessions can't use it until it signs in." : nil }
