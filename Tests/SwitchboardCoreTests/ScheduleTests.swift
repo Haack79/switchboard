@@ -591,3 +591,678 @@ extension ScheduleTests {
     }
   }
 }
+
+private func run(_ t: Int64, _ outcome: Schedule.Run.Outcome = .pasted, skipped: Int = 0, error: String? = nil)
+  -> Schedule.Run
+{
+  Schedule.Run(t: t, outcome: outcome, skipped: skipped, error: error)
+}
+
+extension ScheduleTests {
+  /// `runs` keeps the last `maxRuns` runs, newest first, and `last` always equals `runs.first`.
+  @Suite struct Runs {
+    @Test func aScheduleKeepsAtMostTenRuns() {
+      #expect(Schedule.maxRuns == 10)
+    }
+
+    @Test func recordingOnAFreshScheduleSetsLastAndRuns() {
+      var s = due(at: now)
+      let r = run(now)
+
+      s.record(r)
+
+      #expect(s.last == r)
+      #expect(s.runs == [r])
+    }
+
+    @Test func runsListTheNewestFirst() {
+      var s = due(at: now)
+
+      for i in 0..<3 { s.record(run(now + Int64(i) * minute)) }
+
+      #expect(s.runs?.map(\.t) == [now + 2 * minute, now + minute, now])
+    }
+
+    @Test func theEleventhRunDropsTheOldest() {
+      var s = due(at: now)
+
+      for i in 0..<11 { s.record(run(now + Int64(i) * minute)) }
+
+      #expect(s.runs?.count == Schedule.maxRuns)
+      #expect(s.runs?.map(\.t) == (1..<11).reversed().map { now + Int64($0) * minute })
+    }
+
+    @Test func manyRunsNeverGrowPastTheCap() {
+      var s = due(at: now)
+
+      for i in 0..<25 { s.record(run(now + Int64(i) * minute)) }
+
+      #expect(s.runs?.count == Schedule.maxRuns)
+      #expect(s.runs?.first?.t == now + 24 * minute)
+    }
+
+    @Test func theFirstRunIsTheLastAfterEachRecord() {
+      var s = due(at: now)
+
+      for i in 0..<12 {
+        s.record(run(now + Int64(i) * minute, i % 3 == 0 ? .failed : .pasted, error: i % 3 == 0 ? "gone" : nil))
+        #expect(s.runs?.first == s.last, "after run \(i)")
+      }
+    }
+
+    /// A failed run stays in the history after a later run clears the failure from `last`.
+    @Test func aFailedRunFollowedByAPastedOneKeepsBoth() {
+      var s = due(at: now)
+      let failed = run(now, .failed, error: "the folder /tmp/a is gone")
+      let pasted = run(now + minute, .pasted, skipped: 2)
+
+      s.record(failed)
+      s.record(pasted)
+
+      #expect(s.last == pasted)
+      #expect(s.runs == [pasted, failed])
+    }
+
+    @Test func recordKeepsTheOtherFields() {
+      let before = due(at: now)
+      var s = before
+
+      s.record(run(now))
+
+      var expected = before
+      expected.last = s.last
+      expected.runs = s.runs
+      #expect(s == expected)
+    }
+
+    @Test func aNewScheduleHasNoRunsAndNoHistory() throws {
+      let s = try make()
+
+      #expect(s.runs == nil)
+      #expect(s.history.isEmpty)
+    }
+
+    @Test func historyIsTheRunsWhenThereAreRuns() {
+      var s = due(at: now)
+      for i in 0..<4 { s.record(run(now + Int64(i) * minute)) }
+
+      #expect(s.history == s.runs)
+    }
+
+    /// A row that an sbd from before the history stored has `last` and no `runs`.
+    @Test func aStoredRowWithoutRunsDecodesWithNoRunsAndItsLastAsTheHistory() throws {
+      let text = """
+        {"id": "rk3x9p", "prompt": "check the queue", "every": 1800000, "next": 1800000000000, "by": "you",
+         "created": 1799998200000, "last": {"t": 1799999000000, "outcome": "failed", "skipped": 1, "error": "gone"}}
+        """
+
+      let s = try JSONCoding.decode(Schedule.self, from: text)
+
+      #expect(s.runs == nil)
+      #expect(s.history == [run(1_799_999_000_000, .failed, skipped: 1, error: "gone")])
+    }
+
+    /// A row stored before the history has `last` and no `runs`. The first new run keeps that `last` behind it.
+    @Test func recordingOnARowWithOnlyLastKeepsTheOldLastInTheHistory() {
+      var s = due(at: now)
+      let old = run(now - hour, .failed, skipped: 1, error: "gone")
+      s.last = old
+      let new = run(now)
+
+      s.record(new)
+
+      #expect(s.last == new)
+      #expect(s.runs == [new, old])
+    }
+
+    @Test func aStoredRowWithNeitherLastNorRunsHasNoHistory() throws {
+      let text = """
+        {"id": "rk3x9p", "prompt": "check the queue", "every": 1800000, "next": 1800000000000, "by": "you",
+         "created": 1799998200000}
+        """
+
+      let s = try JSONCoding.decode(Schedule.self, from: text)
+
+      #expect(s.runs == nil)
+      #expect(s.last == nil)
+      #expect(s.history.isEmpty)
+    }
+
+    @Test func aScheduleWithRunsRoundTrips() throws {
+      var s = due(at: now)
+      s.record(run(now - minute, .failed, skipped: 3, error: "no folder"))
+      s.record(run(now, .queued))
+
+      let decoded = try JSONCoding.decode(Schedule.self, from: try JSONCoding.encode(s))
+
+      #expect(decoded == s)
+      #expect(decoded.runs?.count == 2)
+    }
+
+    /// `history` is computed. Only `runs` and `last` are stored.
+    @Test func aScheduleWithRunsEncodesRunsAndNoHistory() throws {
+      var s = due(at: now)
+      s.record(run(now))
+
+      let object = try #require(JSON.parse(try JSONCoding.encode(s))?.object)
+
+      #expect(object["runs"]?.array?.count == 1)
+      #expect(object["history"] == nil)
+    }
+
+    @Test func aSessionWithRunsRoundTrips() throws {
+      var s = try sessionWithSchedules()
+      s.schedules?[0].record(run(now, .resumed))
+      s.schedules?[0].record(run(now + minute, .pasted))
+
+      #expect(try JSONCoding.decode(Session.self, from: try JSONCoding.encode(s)) == s)
+    }
+  }
+}
+
+/// A schedule due at `now + ahead` (negative for one in the past), with an optional last run.
+private func status(
+  ahead: Int64, every: Int64 = 30 * minute, paused: Bool? = nil, last: Schedule.Run? = nil, hold: String? = nil,
+  at time: Int64 = now
+) -> ScheduleStatus {
+  var s = due(at: time + ahead, every: every, paused: paused)
+  s.last = last
+  return ScheduleStatus(s, hold: hold, now: time)
+}
+
+private let holds = ["the session is marked done", "the session is paused", "the session is being removed"]
+
+extension ScheduleTests {
+  /// Decision 3's rules, first match wins: paused, failed, active, held, overdue, due.
+  @Suite struct ScheduleStatusTests {
+    // MARK: Paused
+
+    @Test func aPausedScheduleIsPaused() {
+      let s = status(ahead: 10 * minute, paused: true)
+
+      #expect(s.state == .paused)
+      #expect(s.text == "paused")
+    }
+
+    /// The user stopped the loop, so a failure does not ask for attention.
+    @Test func aPausedScheduleWhoseLastRunFailedIsPaused() {
+      let s = status(ahead: -hour, paused: true, last: run(now - 2 * hour, .failed, error: "gone"))
+
+      #expect(s.state == .paused)
+    }
+
+    @Test(arguments: holds)
+    func aPausedScheduleOnAHeldSessionIsPaused(_ hold: String) {
+      #expect(status(ahead: -hour, paused: true, hold: hold).state == .paused)
+    }
+
+    /// Only `paused == true` pauses a schedule.
+    @Test func aScheduleWithPausedFalseIsNotPaused() {
+      #expect(status(ahead: 10 * minute, paused: false).state == .active)
+    }
+
+    // MARK: Failed
+
+    @Test func aFailedLastRunWithTheNextRunAheadIsFailed() {
+      let s = status(ahead: 25 * minute, last: run(now - 5 * minute, .failed, error: "the folder /tmp/a is gone"))
+
+      #expect(s.state == .failed)
+    }
+
+    @Test func theFailedTextNamesWhenAndTheErrorAndTheNextRun() {
+      let s = status(ahead: 25 * minute, last: run(now - 5 * minute, .failed, error: "the folder /tmp/a is gone"))
+
+      #expect(s.text.contains("failed 5m ago: the folder /tmp/a is gone"), "\(s.text)")
+      #expect(s.text.contains("next in 25m"), "\(s.text)")
+    }
+
+    @Test func aFailedLastRunThatIsDueAgainIsFailed() {
+      let s = status(ahead: -3 * minute, last: run(now - 33 * minute, .failed, error: "gone"))
+
+      #expect(s.state == .failed)
+      #expect(s.text.contains("failed 33m ago: gone"), "\(s.text)")
+    }
+
+    /// A failed run stays failed past the grace, so it never reads as overdue.
+    @Test func aFailedLastRunPastTheGraceIsFailed() {
+      #expect(status(ahead: -2 * hour, last: run(now - 3 * hour, .failed, error: "gone")).state == .failed)
+    }
+
+    @Test(arguments: holds)
+    func aFailedLastRunOnAHeldSessionIsFailed(_ hold: String) {
+      #expect(status(ahead: -3 * minute, last: run(now - hour, .failed, error: "gone"), hold: hold).state == .failed)
+    }
+
+    /// The next run that does not fail clears the failure.
+    @Test(arguments: [Schedule.Run.Outcome.pasted, .resumed, .queued])
+    func aLastRunThatDidNotFailIsNotFailed(_ outcome: Schedule.Run.Outcome) {
+      #expect(status(ahead: 25 * minute, last: run(now - 5 * minute, outcome)).state == .active)
+    }
+
+    // MARK: Active
+
+    @Test func aScheduleWithTheNextRunAheadIsActive() {
+      let s = status(ahead: 12 * minute)
+
+      #expect(s.state == .active)
+      #expect(s.text == "next in 12m")
+    }
+
+    @Test func aScheduleOneMsBeforeItsNextRunIsActive() {
+      #expect(status(ahead: 1).state == .active)
+    }
+
+    /// Rule 3 comes before rule 4: a held session's schedule that is not due yet is active.
+    @Test(arguments: holds)
+    func aScheduleNotDueOnAHeldSessionIsActive(_ hold: String) {
+      #expect(status(ahead: 12 * minute, hold: hold).state == .active)
+    }
+
+    // MARK: Held
+
+    @Test(arguments: holds)
+    func aDueScheduleOnAHeldSessionIsHeld(_ hold: String) {
+      let s = status(ahead: -3 * minute, hold: hold)
+
+      #expect(s.state == .held)
+      #expect(s.text == "held: \(hold)")
+    }
+
+    /// A held loop does not turn overdue, because the user marked the session done or paused it.
+    @Test(arguments: holds)
+    func aScheduleHeldPastTheGraceIsHeld(_ hold: String) {
+      #expect(status(ahead: -2 * hour, hold: hold).state == .held)
+    }
+
+    // MARK: Due and overdue
+
+    /// `isDue` counts a schedule whose next run is now as due, and so does the status.
+    @Test func aScheduleWhoseNextRunIsNowIsDue() {
+      #expect(status(ahead: 0).state == .due)
+    }
+
+    @Test func aScheduleDueInsideTheGraceIsDue() {
+      let s = status(ahead: -3 * minute)
+
+      #expect(s.state == .due)
+      #expect(s.text == "due 3m ago, runs when the session is free")
+    }
+
+    @Test func aScheduleDueExactlyTheGraceAgoIsOverdue() {
+      #expect(status(ahead: -30 * minute).state == .overdue)
+    }
+
+    @Test func aScheduleDueOneMsShortOfTheGraceIsDue() {
+      #expect(status(ahead: -30 * minute + 1).state == .due)
+    }
+
+    @Test(arguments: [minute, 10 * minute, 30 * minute, hour, day, week])
+    func theOverdueEdgeIsTheGraceOfTheInterval(_ every: Int64) {
+      let grace = Schedule.overdueGrace(every)
+
+      #expect(status(ahead: -grace, every: every).state == .overdue)
+      #expect(status(ahead: -grace + 1, every: every).state == .due)
+    }
+
+    /// The text counts from the due time.
+    @Test func theOverdueTextSaysHowLongPastTheDueTime() {
+      let s = status(ahead: -42 * minute)
+
+      #expect(s.state == .overdue)
+      #expect(s.text == "overdue by 42m, runs when the session is free")
+    }
+
+    /// A 1m loop held through an ordinary turn stays calm for 10 minutes.
+    @Test func aOneMinuteLoopDueNineMinutesAgoIsDue() {
+      #expect(status(ahead: -9 * minute, every: minute).state == .due)
+    }
+
+    /// A daily loop stuck for an hour asks for attention.
+    @Test func aDailyLoopDueAnHourAgoIsOverdue() {
+      #expect(status(ahead: -hour, every: day).state == .overdue)
+    }
+
+    // MARK: The grace
+
+    @Test(arguments: [
+      (minute, 10 * minute),
+      (5 * minute, 10 * minute),
+      (10 * minute, 10 * minute),
+      (30 * minute, 30 * minute),
+      (hour, hour),
+      (2 * hour, hour),
+      (day, hour),
+      (week, hour),
+    ])
+    func theGraceIsTheIntervalBetweenTenMinutesAndAnHour(_ every: Int64, _ grace: Int64) {
+      #expect(Schedule.overdueGrace(every) == grace)
+    }
+
+    // MARK: Attention
+
+    @Test func onlyFailedAndOverdueNeedAttention() {
+      let cases: [(ScheduleStatus, Bool)] = [
+        (status(ahead: 10 * minute, paused: true), false),
+        (status(ahead: 25 * minute, last: run(now - 5 * minute, .failed, error: "gone")), true),
+        (status(ahead: 12 * minute), false),
+        (status(ahead: -3 * minute, hold: holds[0]), false),
+        (status(ahead: -42 * minute), true),
+        (status(ahead: -3 * minute), false),
+      ]
+
+      #expect(cases.map(\.0.state) == [.paused, .failed, .active, .held, .overdue, .due])
+      for (s, attention) in cases {
+        #expect(s.needsAttention == attention, "\(s.state)")
+      }
+    }
+
+    // MARK: Coding
+
+    /// Agents read these raw values in `sb schedule ls --json`.
+    @Test func eachStateEncodesItsName() throws {
+      let cases: [(ScheduleStatus, String)] = [
+        (status(ahead: 12 * minute), "active"),
+        (status(ahead: -3 * minute), "due"),
+        (status(ahead: -42 * minute), "overdue"),
+        (status(ahead: 25 * minute, last: run(now - 5 * minute, .failed, error: "gone")), "failed"),
+        (status(ahead: -3 * minute, hold: holds[0]), "held"),
+        (status(ahead: 10 * minute, paused: true), "paused"),
+      ]
+
+      for (s, name) in cases {
+        let object = try #require(JSON.parse(try JSONCoding.encode(s))?.object)
+        #expect(object["state"]?.string == name)
+      }
+    }
+
+    /// `needsAttention` is computed, so it is not on the wire.
+    @Test func aStatusEncodesOnlyItsStateAndText() throws {
+      let s = status(ahead: -42 * minute)
+
+      let object = try #require(JSON.parse(try JSONCoding.encode(s))?.object)
+
+      #expect(Set(object.keys) == ["state", "text"])
+      #expect(object["text"]?.string == s.text)
+    }
+
+    @Test func aStatusRoundTrips() throws {
+      let s = status(ahead: -3 * minute, hold: holds[1])
+
+      #expect(try JSONCoding.decode(ScheduleStatus.self, from: try JSONCoding.encode(s)) == s)
+    }
+
+    /// A newer sb reads the rows that an sbd from before the status sends.
+    @Test func aRowWithoutAStatusDecodesWithNone() throws {
+      var row = ScheduleRow(session: "s1", name: "manager", schedule: try make())
+      row.status = status(ahead: 12 * minute)
+
+      let decoded = try JSONCoding.decode(ScheduleRow.self, from: try encoded(row, without: "status"))
+
+      #expect(decoded.status == nil)
+      #expect(decoded.schedule == row.schedule)
+    }
+
+    @Test func aRowWithAStatusRoundTrips() throws {
+      var row = ScheduleRow(session: "s1", name: "manager", schedule: try make())
+      row.status = status(ahead: -42 * minute)
+
+      let decoded = try JSONCoding.decode(ScheduleRow.self, from: try JSONCoding.encode(row))
+
+      #expect(decoded.status == row.status)
+    }
+  }
+}
+
+/// A row on the session whose status is the one that the rules give at `now`.
+private func row(
+  _ id: String, session: String, ahead: Int64, paused: Bool? = nil, failed: Bool = false, hold: String? = nil
+) -> ScheduleRow {
+  var s = due(at: now + ahead, paused: paused)
+  s.id = id
+  if failed { s.last = run(now - hour, .failed, error: "gone") }
+  var r = ScheduleRow(session: session, name: session, schedule: s)
+  r.status = ScheduleStatus(s, hold: hold, now: now)
+  return r
+}
+
+extension ScheduleTests {
+  /// The Loops tab's order: failed, overdue, due, active, held, paused, then by `next`, then id.
+  @Suite struct AttentionOrder {
+    /// Two rows of each state on two sessions. `ra1` and `rb1` tie on `next`, and so do `rc3` and `rd3`.
+    static let sorted: [ScheduleRow] = [
+      row("ra1", session: "s2", ahead: -2 * hour, failed: true),
+      row("rb1", session: "s1", ahead: -2 * hour, failed: true),
+      row("ra2", session: "s1", ahead: 20 * minute, failed: true),
+      row("rc3", session: "s2", ahead: -50 * minute),
+      row("rd3", session: "s1", ahead: -50 * minute),
+      row("ra4", session: "s1", ahead: -40 * minute),
+      row("ra5", session: "s2", ahead: -5 * minute),
+      row("ra6", session: "s1", ahead: -minute),
+      row("ra7", session: "s1", ahead: 2 * minute),
+      row("rb7", session: "s2", ahead: 2 * minute),
+      row("ra8", session: "s2", ahead: 20 * minute),
+      row("ra9", session: "s2", ahead: -2 * hour, hold: holds[0]),
+      row("rb9", session: "s1", ahead: -minute, hold: holds[1]),
+      row("raa", session: "s1", ahead: -3 * hour, paused: true),
+      row("rab", session: "s2", ahead: 5 * minute, paused: true, failed: true),
+    ]
+
+    @Test func theFixtureHasEveryStateInOrder() {
+      let states = AttentionOrder.sorted.compactMap(\.status?.state)
+
+      #expect(states.count == AttentionOrder.sorted.count)
+      #expect(
+        states == [
+          .failed, .failed, .failed, .overdue, .overdue, .overdue, .due, .due, .active, .active, .active, .held, .held,
+          .paused, .paused,
+        ])
+    }
+
+    @Test func reversedRowsSortIntoTheAttentionOrder() {
+      let ids = AttentionOrder.sorted.reversed().sorted(by: ScheduleRow.attentionOrder).map(\.schedule.id)
+
+      #expect(ids == AttentionOrder.sorted.map(\.schedule.id))
+    }
+
+    @Test(arguments: 0..<5)
+    func shuffledRowsSortIntoTheAttentionOrder(_ seed: Int) {
+      var rng = SeededGenerator(seed: UInt64(seed + 1))
+      let shuffled = AttentionOrder.sorted.shuffled(using: &rng)
+
+      let ids = shuffled.sorted(by: ScheduleRow.attentionOrder).map(\.schedule.id)
+
+      #expect(ids == AttentionOrder.sorted.map(\.schedule.id))
+    }
+
+    /// A strict order: no row comes before itself.
+    @Test func noRowComesBeforeItself() {
+      for r in AttentionOrder.sorted {
+        #expect(!ScheduleRow.attentionOrder(r, r), "\(r.schedule.id)")
+      }
+    }
+
+    /// A failed loop due later still comes before an overdue one due long ago.
+    @Test func attentionComesBeforeTheNextRun() {
+      let failed = row("rz", session: "s1", ahead: 20 * minute, failed: true)
+      let overdue = row("ra", session: "s1", ahead: -2 * hour)
+
+      #expect(ScheduleRow.attentionOrder(failed, overdue))
+      #expect(!ScheduleRow.attentionOrder(overdue, failed))
+    }
+  }
+}
+
+/// A fixed sequence of random numbers, so a shuffled test case is the same on every run.
+private struct SeededGenerator: RandomNumberGenerator {
+  var state: UInt64
+
+  init(seed: UInt64) { state = seed }
+
+  mutating func next() -> UInt64 {
+    state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+    return state
+  }
+}
+
+extension ScheduleTests {
+  @Suite struct CleanPrompt {
+    @Test func trimsSpacesAndNewlinesAtTheEnds() throws {
+      #expect(try Schedule.cleanPrompt("  \n check the queue \t\n") == "check the queue")
+    }
+
+    @Test func keepsTheLinesInside() throws {
+      #expect(try Schedule.cleanPrompt(" first line\nsecond line ") == "first line\nsecond line")
+    }
+
+    @Test func keepsASlashCommandVerbatim() throws {
+      #expect(try Schedule.cleanPrompt("/audit-waiting --all") == "/audit-waiting --all")
+    }
+
+    @Test(arguments: [nil, "", "   ", " \n\t "] as [String?])
+    func refusesAnEmptyPrompt(_ prompt: String?) {
+      #expect(message { try Schedule.cleanPrompt(prompt) }.contains("a schedule needs a prompt"))
+    }
+
+    /// `makeSchedule` refuses with the same words, through `cleanPrompt`.
+    @Test(arguments: [nil, "", "   "] as [String?])
+    func makeScheduleRefusesWithTheSameWords(_ prompt: String?) {
+      #expect(message { try make(prompt: prompt) }.contains(message { try Schedule.cleanPrompt(prompt) }))
+    }
+  }
+}
+
+/// An active schedule made at `now - 10m` with a 1h interval, whose next run is 50 minutes away.
+private func hourly(next: Int64 = now + 50 * minute, paused: Bool? = nil) -> Schedule {
+  var s = Schedule(
+    id: "rk3x9p", prompt: "check the queue", every: hour, next: next, paused: paused, by: .claude,
+    created: now - 10 * minute)
+  s.record(run(now - 10 * minute, .failed, skipped: 1, error: "gone"))
+  return s
+}
+
+extension ScheduleTests {
+  /// `edited` changes only `every`, `prompt`, and `next`. A new interval sets `next = min(next, now + every)`.
+  @Suite struct ScheduleEditTests {
+    @Test func shorteningTheIntervalBringsTheNextRunCloser() throws {
+      let before = hourly()
+
+      let after = try before.edited(every: "10m", prompt: nil, now: now)
+
+      var expected = before
+      expected.every = 10 * minute
+      expected.next = now + 10 * minute
+      #expect(after == expected)
+    }
+
+    @Test func lengtheningTheIntervalKeepsASoonerNextRun() throws {
+      var before = hourly(next: now + 5 * minute)
+      before.every = 10 * minute
+
+      let after = try before.edited(every: "1d", prompt: nil, now: now)
+
+      var expected = before
+      expected.every = day
+      #expect(after == expected)
+    }
+
+    @Test(arguments: ["1m", "10m", "1h", "1d"])
+    func aDueScheduleStaysDueAfterAnIntervalChange(_ every: String) throws {
+      let before = hourly(next: now - 5 * minute)
+
+      let after = try before.edited(every: every, prompt: nil, now: now)
+
+      #expect(after.next == before.next)
+      #expect(after.isDue(now: now))
+    }
+
+    @Test func aPromptOnlyEditKeepsTheIntervalAndTheNextRun() throws {
+      let before = hourly()
+
+      let after = try before.edited(every: nil, prompt: "look at the flags", now: now)
+
+      var expected = before
+      expected.prompt = "look at the flags"
+      #expect(after == expected)
+    }
+
+    @Test func anEditOfBothChangesBoth() throws {
+      let before = hourly()
+
+      let after = try before.edited(every: "10m", prompt: "look at the flags", now: now)
+
+      var expected = before
+      expected.every = 10 * minute
+      expected.prompt = "look at the flags"
+      expected.next = now + 10 * minute
+      #expect(after == expected)
+    }
+
+    /// Resume sets the next run of a paused schedule, so an edit leaves it.
+    @Test func aPausedScheduleKeepsItsNextRun() throws {
+      let before = hourly(paused: true)
+
+      let after = try before.edited(every: "10m", prompt: nil, now: now)
+
+      var expected = before
+      expected.every = 10 * minute
+      #expect(after == expected)
+      #expect(after.paused == true)
+    }
+
+    @Test func anEditToTheSameValuesChangesNothing() throws {
+      let before = hourly()
+
+      let after = try before.edited(every: "1h", prompt: "check the queue", now: now)
+
+      #expect(after == before)
+    }
+
+    @Test func theNewPromptIsTrimmed() throws {
+      let after = try hourly().edited(every: nil, prompt: "  \n look at the flags \t", now: now)
+
+      #expect(after.prompt == "look at the flags")
+    }
+
+    @Test func theAuthorDoesNotChange() throws {
+      #expect(try hourly().edited(every: "10m", prompt: "new words", now: now).by == .claude)
+    }
+
+    @Test(arguments: ["29s", "1h30m", "soon", "59s", "99999999999999w"])
+    func refusesAnIntervalThatParseIntervalRefuses(_ every: String) {
+      let parse = message { try Schedule.parseInterval(every) }
+
+      let error = message { try hourly().edited(every: every, prompt: nil, now: now) }
+
+      #expect(parse != "no error")
+      #expect(error.contains(parse), "\(error)")
+    }
+
+    @Test(arguments: ["", "   ", " \n\t "])
+    func refusesAnEmptyPrompt(_ prompt: String) {
+      let error = message { try hourly().edited(every: nil, prompt: prompt, now: now) }
+
+      #expect(error.contains("a schedule needs a prompt"), "\(error)")
+    }
+
+    /// A good interval does not save an empty prompt, and a good prompt does not save a bad interval.
+    @Test func refusesWhenEitherFieldIsBad() {
+      #expect(throws: (any Error).self) { try hourly().edited(every: "10m", prompt: " ", now: now) }
+      #expect(throws: (any Error).self) { try hourly().edited(every: "soon", prompt: "fine", now: now) }
+    }
+
+    /// `makeSchedule` refuses this interval, so an edit does too, even on a paused schedule whose next run stays.
+    @Test(arguments: [nil, true] as [Bool?])
+    func refusesAnIntervalWhoseNextRunIsPastTheEndOfTheClock(_ paused: Bool?) {
+      let every = "9223372036854775s"
+
+      let error = message { try hourly(paused: paused).edited(every: every, prompt: nil, now: now) }
+
+      #expect(error.contains("past the end of the clock"), "\(error)")
+      #expect(message { try make(every: every) }.contains("past the end of the clock"))
+    }
+
+    @Test func refusesAnEditOfNeitherField() {
+      #expect(throws: (any Error).self) { try hourly().edited(every: nil, prompt: nil, now: now) }
+    }
+  }
+}

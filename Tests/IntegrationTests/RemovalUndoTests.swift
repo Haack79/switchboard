@@ -65,6 +65,30 @@ extension RemovalJobTests {
     try sbd.waitFor(s.id, "the reply to the run") { $0.lastReply == "Done: tick one" }
   }
 
+  /// The row of a due loop on a session that the job holds says why it waits, and Run now refuses the session
+  /// with the same reason, because the tick would skip it.
+  @Test func aHeldSessionsLoopIsHeldAndRunNowRefusesIt() throws {
+    let sbd = try undoInstance()
+    let s = try sbd.idleSession()
+    let made = try JSONCoding.decode(
+      ScheduleRow.self, from: sbd.sb("schedule", s.id, "--every", "1m", "tick held", "--json")
+    ).schedule
+    #expect(queued(try sbd.queueRemoval([s.id], scope: "work", worktree: false)) == [s.id])
+    try sbd.advanceClock(61_000)
+
+    let rows = try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+    let refused = try sbd.run(["schedule", "run", made.id])
+
+    let status = try #require(rows.first { $0.schedule.id == made.id }?.status)
+    #expect(status.state == .held)
+    #expect(status.text == "held: the session is being removed")
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("\(made.id) can't run, because the session is being removed"), "\(refused.stderr)")
+    #expect(try sbd.get(s.id).schedules == [made])
+    #expect(try sbd.events(s.id, kind: "schedule-run-requested").isEmpty)
+    #expect(try sbd.events(s.id, "sent", text: "tick held").isEmpty)
+  }
+
   // MARK: Undo window
 
   /// sbd reads a null `removalDelaySeconds` as absent, so the window is the default 5 s. Both times come from sbd's clock.

@@ -38,6 +38,7 @@ public struct Schedule: Codable, Equatable, Sendable {
   }
 
   public static let maxPerSession = 10
+  public static let maxRuns = 10
   /// One minute, in ms.
   public static let minInterval: Int64 = 60_000
 
@@ -55,11 +56,15 @@ public struct Schedule: Codable, Equatable, Sendable {
   public var by: Author
   /// Milliseconds since the epoch.
   public var created: Int64
+  /// Always equals `runs.first` once `record(_:)` wrote it.
   public var last: Run?
+  /// The recent runs, newest first, at most `maxRuns`. Nil before the first
+  /// recorded run and in a row stored before sbd kept the history.
+  public var runs: [Run]?
 
   public init(
     id: String, prompt: String, every: Int64, next: Int64, paused: Bool? = nil, by: Author, created: Int64,
-    last: Run? = nil
+    last: Run? = nil, runs: [Run]? = nil
   ) {
     self.id = id
     self.prompt = prompt
@@ -69,6 +74,50 @@ public struct Schedule: Codable, Equatable, Sendable {
     self.by = by
     self.created = created
     self.last = last
+    self.runs = runs
+  }
+
+  /// The known runs, newest first. A row stored before sbd kept the history shows its `last`.
+  public var history: [Run] { runs ?? last.map { [$0] } ?? [] }
+
+  /// Saves the run as `last` and as the newest of `runs`, so the two can't drift.
+  public mutating func record(_ run: Run) {
+    // `history` falls back to `last`, so `runs` changes before `last` does.
+    runs = Array(([run] + history).prefix(Schedule.maxRuns))
+    last = run
+  }
+
+  /// How long a due schedule waits before it counts as overdue: one interval,
+  /// but at least 10 minutes and at most an hour.
+  public static func overdueGrace(_ every: Int64) -> Int64 { min(max(every, 600_000), 3_600_000) }
+
+  /// The prompt without the spaces and newlines at its ends. It refuses a prompt with nothing else.
+  public static func cleanPrompt(_ text: String?) throws -> String {
+    guard let prompt = text?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
+      throw APIError("a schedule needs a prompt")
+    }
+    return prompt
+  }
+
+  /// The schedule with a new interval, a new prompt, or both. A new interval
+  /// moves the next run to one interval from now when that is sooner, and a
+  /// paused schedule keeps its next run, because resume sets it.
+  public func edited(every: String?, prompt: String?, now: Int64) throws -> Schedule {
+    guard every != nil || prompt != nil else {
+      throw APIError("an edit needs every, an interval such as 30m, or a prompt")
+    }
+    var edited = self
+    if let every {
+      do {
+        edited.every = try Schedule.parseInterval(every)
+        let soonest = try Schedule.next(after: now, every: edited.every)
+        if paused != true { edited.next = min(next, soonest) }
+      } catch {
+        throw APIError("every \(every): \(error)")
+      }
+    }
+    if let prompt { edited.prompt = try Schedule.cleanPrompt(prompt) }
+    return edited
   }
 
   /// Reads one whole number and one unit, `s`, `m`, `h`, `d`, or `w`, such as
@@ -150,9 +199,9 @@ public struct Schedule: Codable, Equatable, Sendable {
     return (next, Int(max(0, now - self.next) / every))
   }
 
-  /// The interval and the next run, such as `every 30m · next in 12m`. `sb schedule ls` and the app show it.
-  public func timingText(now: Int64 = nowMs()) -> String {
-    "every \(Schedule.intervalText(every)) · \(nextText(now: now))"
+  /// The interval and the status text, such as `every 30m · next in 12m`. `sb schedule ls` and the app show it.
+  public func timingText(_ status: String) -> String {
+    "every \(Schedule.intervalText(every)) · \(status)"
   }
 
   /// When the schedule runs next, such as `next in 12m`, `paused`, or `due, runs when the session is free`.
@@ -198,10 +247,9 @@ public struct ScheduleRequest: Codable, Equatable, Sendable {
     } catch {
       throw APIError("every \(every): \(error)")
     }
-    guard let prompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
-      throw APIError("a schedule needs a prompt")
-    }
-    return Schedule(id: id, prompt: prompt, every: ms, next: next, by: try Author(parsing: by), created: now)
+    return Schedule(
+      id: id, prompt: try Schedule.cleanPrompt(prompt), every: ms, next: next, by: try Author(parsing: by), created: now
+    )
   }
 }
 
@@ -210,10 +258,78 @@ public struct ScheduleRow: Codable, Equatable, Sendable {
   public var session: String
   public var name: String
   public var schedule: Schedule
+  /// Computed when sbd answers, never stored. Nil from an sbd older than the status.
+  public var status: ScheduleStatus?
 
-  public init(session: String, name: String, schedule: Schedule) {
+  public init(session: String, name: String, schedule: Schedule, status: ScheduleStatus? = nil) {
     self.session = session
     self.name = name
     self.schedule = schedule
+    self.status = status
+  }
+
+  /// The Loops tab's order: failed, overdue, due, active, held, then paused,
+  /// then by the next run, then by id. A row without a status comes last.
+  public static func attentionOrder(_ a: ScheduleRow, _ b: ScheduleRow) -> Bool {
+    func key(_ r: ScheduleRow) -> (Int, Int64, String) { (r.status?.state.rank ?? 6, r.schedule.next, r.schedule.id) }
+    return key(a) < key(b)
+  }
+}
+
+/// Whether a schedule runs, waits, or needs the user, with a line that says so.
+public struct ScheduleStatus: Codable, Equatable, Sendable {
+  /// Agents read these raw values in `sb schedule ls --json`.
+  public enum State: String, Codable, Sendable {
+    case active
+    case due
+    case overdue
+    case failed
+    case held
+    case paused
+
+    fileprivate var rank: Int {
+      switch self {
+      case .failed: 0
+      case .overdue: 1
+      case .due: 2
+      case .active: 3
+      case .held: 4
+      case .paused: 5
+      }
+    }
+  }
+
+  public var state: State
+  public var text: String
+
+  /// `hold` is `Schedule.hold` for the schedule's session, the reason that
+  /// sbd's tick runs none of the session's schedules. The first rule that
+  /// matches wins: paused, failed, active, held, overdue, then due.
+  public init(_ schedule: Schedule, hold: String?, now: Int64) {
+    if schedule.paused == true {
+      state = .paused
+      text = "paused"
+      return
+    }
+    let (state, text) = ScheduleStatus.timing(schedule, hold: hold, now: now)
+    if let last = schedule.last, last.outcome == .failed {
+      self.state = .failed
+      self.text = "failed \(ago(last.t, now: now)) ago\(last.error.map { ": \($0)" } ?? "") · \(text)"
+    } else {
+      self.state = state
+      self.text = text
+    }
+  }
+
+  public var needsAttention: Bool { state == .failed || state == .overdue }
+
+  /// The state and text of an active schedule from its next run alone.
+  private static func timing(_ schedule: Schedule, hold: String?, now: Int64) -> (State, String) {
+    if schedule.next > now { return (.active, "next \(fromNow(schedule.next, now: now))") }
+    if let hold { return (.held, "held: \(hold)") }
+    if now - schedule.next >= Schedule.overdueGrace(schedule.every) {
+      return (.overdue, "overdue by \(ago(schedule.next, now: now)), runs when the session is free")
+    }
+    return (.due, "due \(ago(schedule.next, now: now)) ago, runs when the session is free")
   }
 }

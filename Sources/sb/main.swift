@@ -168,6 +168,12 @@ let usage = """
     schedule rm <id>              remove a schedule
     schedule pause|resume <id>    pause a schedule, or resume it one interval
                                   from now
+    schedule edit <id> [--every <interval>] [<prompt>]
+                                  change a schedule's interval, its prompt, or
+                                  both. A new interval brings the next run to
+                                  one interval from now when that is sooner
+    schedule run <id>             run a schedule now, or once its session is
+                                  free
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
     note <session> --todo <text>  add a to-do, a task for you that blocks

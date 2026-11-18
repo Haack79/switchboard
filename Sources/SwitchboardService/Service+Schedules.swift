@@ -3,17 +3,19 @@ import SwitchboardCore
 
 /// Schedules: prompts that sbd sends to a session on an interval.
 extension Service {
-  /// The `schedule`, `schedules`, `remove-schedule`, and `pause-schedule`
-  /// requests. Each takes an optional `group` and `caller`, which a scoped MCP
-  /// server sends. With `group`, a request acts only on the group's sessions
-  /// and on the caller. It runs on the state queue, so the scope check and the
-  /// change happen in one step.
+  /// The `schedule`, `schedules`, `remove-schedule`, `pause-schedule`,
+  /// `edit-schedule`, and `run-schedule` requests. Each takes an optional
+  /// `group` and `caller`, which a scoped MCP server sends. With `group`, a
+  /// request acts only on the group's sessions and on the caller. It runs on
+  /// the state queue, so the scope check and the change happen in one step.
   func scheduleRequest(_ op: String, _ args: JSON) throws -> JSON {
     switch op {
     case "schedule": return try addSchedule(args)
     case "schedules": return try listSchedules(args)
     case "remove-schedule": return try removeSchedule(args)
     case "pause-schedule": return try pauseSchedule(args)
+    case "edit-schedule": return try editSchedule(args)
+    case "run-schedule": return try runSchedule(args)
     default: throw APIError("unknown request \(op)")
     }
   }
@@ -81,6 +83,34 @@ extension Service {
     return try JSON(encoding: scheduleRow(id, schedule))
   }
 
+  /// Changes the interval, the prompt, or both. It sends nothing: a next run
+  /// that the edit makes due fires through `fireDueSchedules`.
+  private func editSchedule(_ args: JSON) throws -> JSON {
+    let (id, found) = try ownedSchedule(args)
+    let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
+    let schedule = try found.edited(every: request.every, prompt: request.prompt, now: nowMs())
+    guard schedule != found else { return try JSON(encoding: scheduleRow(id, found)) }
+    try changeSchedule(id, schedule.id) { $0 = schedule }
+    record(id, "schedule-edited", ["schedule": try JSON(encoding: schedule), "before": try JSON(encoding: found)])
+    return try JSON(encoding: scheduleRow(id, schedule))
+  }
+
+  /// Run now: makes the schedule due and sends nothing. The next tick fires it
+  /// through `fireDueSchedules`, so a busy session gets the prompt once it is
+  /// free. It refuses a paused schedule and a session that the tick skips.
+  private func runSchedule(_ args: JSON) throws -> JSON {
+    let (id, found) = try ownedSchedule(args)
+    guard found.paused != true else { throw APIError("schedule \(found.id) is paused. Resume it first") }
+    if let hold = scheduleHold(entries[id]!.session) { throw APIError("\(found.id) can't run, because \(hold)") }
+    let now = nowMs()
+    guard found.next > now else { return try JSON(encoding: scheduleRow(id, found)) }
+    var schedule = found
+    schedule.next = now
+    try changeSchedule(id, schedule.id) { $0.next = now }
+    record(id, "schedule-run-requested", ["schedule": try JSON(encoding: schedule)])
+    return try JSON(encoding: scheduleRow(id, schedule))
+  }
+
   /// Sends each due schedule's prompt to its session when the session is
   /// free. A schedule whose session is busy stays due and runs once when the
   /// session is free. The tick calls it after it resolves due waits. A
@@ -91,10 +121,7 @@ extension Service {
   /// stay due, so Undo lets them run.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
-      Schedule.hold(
-        done: e.session.done, paused: Pause.blocker(e.session) != nil, removing: e.session.removal?.holdsSession == true
-      )
-        == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
+      scheduleHold(e.session) == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
     }
     for id in ids.sorted() {
       guard let session = entries[id]?.session else { continue }
@@ -132,9 +159,9 @@ extension Service {
       logLine("can't run schedule \(schedule.id) of \(id): \(error)")
       run = Schedule.Run(t: now, outcome: .failed, skipped: skipped, error: "\(error)")
     }
-    ran.last = run
+    ran.record(run)
     do {
-      try changeSchedule(id, schedule.id) { $0.last = run }
+      try changeSchedule(id, schedule.id) { $0.record(run) }
     } catch {
       logLine("can't save the run of schedule \(schedule.id) of \(id): \(error)")
     }
@@ -155,8 +182,19 @@ extension Service {
     }
   }
 
+  /// Why the tick runs none of the session's schedules, or nil. The status
+  /// of each returned row reads it too, so a row says `held` exactly when the
+  /// tick skips its session.
+  private func scheduleHold(_ session: Session) -> String? {
+    Schedule.hold(
+      done: session.done, paused: Pause.blocker(session) != nil, removing: session.removal?.holdsSession == true)
+  }
+
   private func scheduleRow(_ id: String, _ schedule: Schedule) -> ScheduleRow {
-    ScheduleRow(session: id, name: entries[id]!.session.name, schedule: schedule)
+    let session = entries[id]!.session
+    return ScheduleRow(
+      session: id, name: session.name, schedule: schedule,
+      status: ScheduleStatus(schedule, hold: scheduleHold(session), now: nowMs()))
   }
 
   /// The schedule that the request's `schedule` names, with its session. It

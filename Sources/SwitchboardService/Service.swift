@@ -685,7 +685,7 @@ public final class Service {
       return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
       return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
