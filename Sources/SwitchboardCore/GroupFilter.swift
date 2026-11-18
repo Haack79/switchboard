@@ -19,11 +19,13 @@ public struct GroupFilter: KeyFilter {
   /// The group that a session belongs to, or nil for the Manager and the
   /// operator, which span every group. A group chat belongs to the group it
   /// manages. `known` holds the ids that sbd last listed, or is nil before it
-  /// answers. Once it answers, an id that it no longer lists counts as
-  /// ungrouped, as the Board's Ungrouped lane counts it.
+  /// answers. Once it answers, a work session whose id it no longer lists
+  /// counts as ungrouped, as the Board's Ungrouped lane counts it. A chat
+  /// whose group it no longer lists gets nil, so it shows under every filter.
   public static func key(of s: SessionSummary, known: Set<String>?) -> String? {
     guard s.kind != .manager && s.kind != .operator else { return nil }
-    guard let group = group(of: s), known?.contains(group) ?? true else { return ungroupedKey }
+    guard let group = group(of: s) else { return ungroupedKey }
+    if let known, !known.contains(group) { return s.kind == .chat ? nil : ungroupedKey }
     return group
   }
 

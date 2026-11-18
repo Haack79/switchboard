@@ -74,7 +74,7 @@ private let operatorSession = session("o", kind: .operator)
     KeyCase(name: "stale group id before groups load", session: stale, known: nil, key: "gone"),
     KeyCase(name: "a group chat", session: chatG1, known: known, key: "g1"),
     KeyCase(name: "a group chat before groups load", session: chatG1, known: nil, key: "g1"),
-    KeyCase(name: "the chat of a deleted group", session: chatOfDeleted, known: known, key: ungrouped),
+    KeyCase(name: "the chat of a deleted group", session: chatOfDeleted, known: known, key: nil),
     KeyCase(name: "the chat of a deleted group before groups load", session: chatOfDeleted, known: nil, key: "gone"),
     KeyCase(name: "the Manager", session: manager, known: known, key: nil),
     KeyCase(name: "the Manager before groups load", session: manager, known: nil, key: nil),
@@ -151,15 +151,15 @@ private let operatorSession = session("o", kind: .operator)
   }
 
   @Test(arguments: [
-    ShowsCase(name: "one group", filter: GroupFilter(keys: ["g1"]), known: known, shown: ["a", "c1", "m", "o"]),
+    ShowsCase(name: "one group", filter: GroupFilter(keys: ["g1"]), known: known, shown: ["a", "c1", "cd", "m", "o"]),
     ShowsCase(
       name: "Ungrouped", filter: GroupFilter(keys: [ungrouped]), known: known, shown: ["u", "s", "cd", "m", "o"]),
     ShowsCase(
       name: "a group and Ungrouped", filter: GroupFilter(keys: ["g1", ungrouped]), known: known,
       shown: ["a", "c1", "u", "s", "cd", "m", "o"]),
-    ShowsCase(name: "an unknown group id", filter: GroupFilter(keys: ["gx"]), known: known, shown: ["m", "o"]),
+    ShowsCase(name: "an unknown group id", filter: GroupFilter(keys: ["gx"]), known: known, shown: ["cd", "m", "o"]),
     ShowsCase(
-      name: "a stale id once groups load", filter: GroupFilter(keys: ["gone"]), known: known, shown: ["m", "o"]),
+      name: "a stale id once groups load", filter: GroupFilter(keys: ["gone"]), known: known, shown: ["cd", "m", "o"]),
     ShowsCase(
       name: "one group before groups load", filter: GroupFilter(keys: ["g1"]), known: nil, shown: ["a", "c1", "m", "o"]),
     ShowsCase(
