@@ -43,12 +43,13 @@ extension Service {
     ]
   }
 
-  /// The children of `id` in Needs you with an open Inbox item, sorted by name. It leaves out a Ready to merge
-  /// child, because whether to merge is the parent's own decision.
+  /// The children of `id` that ask the user in their Inbox item, sorted by name. A child asks when it is in Needs
+  /// you, or when its item is the card that it wrote. The list leaves out a Ready to merge child that shows only
+  /// sbd's merge item, because whether to merge is the parent's own decision.
   private func childItems(of id: String, for origin: RequestOrigin) -> [JSON] {
     entries.values.filter { parentOf($0.session) == id }
       .map { summary($0.session.id, for: origin) }
-      .filter { $0.state == .needsYou }
+      .filter { $0.state == .needsYou || $0.triage?.source == .session }
       .sorted { $0.name < $1.name }
       .compactMap { child in
         child.triage.map {

@@ -140,6 +140,28 @@ extension Instance {
     #expect(!own.contains("These sessions you started"), "\(own)")
   }
 
+  /// A Ready to merge child that shows its own card still asks the user, so its parent's card names it.
+  @Test func aParentsCardListsAReadyToMergeChildThatShowsItsOwnCard() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    let parent = try ManagerTests().idle(sbd, name: "p")
+    let kid = try sbd.session(
+      in: BoardColumnTests.charts, branch: BoardColumnTests.branch, parent: parent.id, name: "kid")
+    try sbd.poll()
+    try sbd.waitFor(kid.id, "the ready PR") { $0.state == .readyToMerge }
+    let asking = cardText([["label": "Merge"], ["label": "Wait"]])
+    let before = try sbd.setSummary(parent.id, asking).stdout
+
+    try sbd.setSummary(
+      kid.id, cardText([["label": "Small"], ["label": "Large"]], summary: "Sized the cache.\nPick one."))
+    let carded = try sbd.waitFor(kid.id, "the child's card") { $0.triage?.source == .session }
+    let after = try sbd.setSummary(parent.id, asking).stdout
+
+    #expect(carded.state == .readyToMerge)
+    #expect(!before.contains("These sessions you started"), "\(before)")
+    #expect(after.contains("[kid](switchboard://session/\(kid.id))"), "\(after)")
+  }
+
   @Test func aNewTurnDropsTheSessionsCard() throws {
     let sbd = try Instance()
     try sbd.writeCard("c1", specCard)
