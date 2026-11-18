@@ -84,7 +84,7 @@ struct InlineTextHoverTests {
 
     let entries = await drawn.recorded()
 
-    #expect(entries.map(\.key) == ["o/r#1", "o/r#2"])
+    #expect(entries.map(\.key) == ["github:o/r#1", "github:o/r#2"])
   }
 
   /// `inlineLinks` gives the text the model's reference card. No rects are injected here, so the card alone turns on
@@ -111,7 +111,7 @@ struct InlineTextHoverTests {
 
     let entries = await drawn.recorded()
 
-    #expect(entries.map(\.key) == ["o/r#1", "o/r#2"])
+    #expect(entries.map(\.key) == ["github:o/r#1", "github:o/r#2"])
   }
 
   /// (b) The same, with the selection set on a container, as `MarkdownView` sets it.
@@ -120,7 +120,7 @@ struct InlineTextHoverTests {
 
     let entries = await drawn.recorded()
 
-    #expect(entries.map(\.key) == ["o/r#1", "o/r#2"])
+    #expect(entries.map(\.key) == ["github:o/r#1", "github:o/r#2"])
   }
 
   @Test(arguments: [false, true])
@@ -178,7 +178,7 @@ struct InlineTextHoverTests {
     let entries = await drawn.recorded()
 
     #expect(entries.count >= 2)
-    #expect(Set(entries.map(\.key)) == ["o/r#1"])
+    #expect(Set(entries.map(\.key)) == ["github:o/r#1"])
     #expect(Set(entries.map(\.part)).count == 1)
     #expect(Set(entries.map { $0.rect.minY.rounded() }).count == entries.count)
   }
@@ -194,7 +194,7 @@ struct InlineTextHoverTests {
     let entries = await drawn.recorded()
 
     let firsts = entries.indices.filter { $0 == 0 || entries[$0 - 1].part != entries[$0].part }
-    #expect(firsts.map { entries[$0].key } == ["o/r#12", "o/r#34"])
+    #expect(firsts.map { entries[$0].key } == ["github:o/r#12", "github:o/r#34"])
     #expect(entries.allSatisfy { drawn.bounds.insetBy(dx: -1, dy: -1).contains($0.rect) })
   }
 
@@ -207,7 +207,7 @@ struct InlineTextHoverTests {
 
     let entries = await drawn.recorded()
 
-    #expect(entries.first?.key == "o/r#1")
+    #expect(entries.first?.key == "github:o/r#1")
     #expect(entries.allSatisfy { drawn.bounds.insetBy(dx: -1, dy: -1).contains($0.rect) })
   }
 
@@ -226,7 +226,7 @@ struct InlineTextHoverTests {
 
     let entries = await drawn.recorded()
 
-    #expect(entries.map(\.key) == ["o/r#1"])
+    #expect(entries.map(\.key) == ["github:o/r#1"])
   }
 
   // MARK: Guards: text with no hover target records nothing.

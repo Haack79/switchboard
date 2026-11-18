@@ -83,7 +83,7 @@ struct InlineText: View {
         if listed.insert(match.id).inserted {
           lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
         }
-      case .reference(let ref)? where links: reference = ReferenceAttribute(ref: ref, part: index)
+      case .reference(let ref)? where links: reference = ReferenceAttribute(referent: .github(ref), part: index)
       case .reference?: part.link = nil
       case .session?, nil: break
       }
@@ -189,7 +189,7 @@ extension View {
 
 /// Tags a reference's segment, so the renderer can find its runs.
 struct ReferenceAttribute: Hashable {
-  let ref: GitHubRef
+  let referent: Referent
   /// The reference's index among the text's pieces. The same reference
   /// written twice has two parts.
   let part: Int
@@ -204,11 +204,11 @@ extension ReferenceAttribute: TextAttribute {}
 /// no update.
 final class ReferenceRects: Sendable {
   struct Entry: Equatable, Sendable {
-    var ref: GitHubRef
+    var referent: Referent
     var part: Int
     var rect: CGRect
 
-    var key: String { ref.key }
+    var key: String { referent.key }
   }
 
   private let state = OSAllocatedUnfairLock(initialState: [Entry]())
@@ -282,7 +282,7 @@ private struct ReferenceRenderer: TextRenderer {
         if entries.count > lineStart, entries[entries.count - 1].part == tag.part {
           entries[entries.count - 1].rect = entries[entries.count - 1].rect.union(rect)
         } else {
-          entries.append(ReferenceRects.Entry(ref: tag.ref, part: tag.part, rect: rect))
+          entries.append(ReferenceRects.Entry(referent: tag.referent, part: tag.part, rect: rect))
         }
       }
     }
@@ -302,7 +302,9 @@ final class ReferenceHover {
   func moved(to point: CGPoint?, in entries: [ReferenceRects.Entry], card: HoverCard<ReferenceCardID>?) {
     guard let card, let view else { return }
     let next = point.flatMap { point in entries.first { $0.rect.contains(point) } }
-      .map { (id: ReferenceCardID(ref: $0.ref), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect)) }
+      .map {
+        (id: ReferenceCardID(referent: $0.referent), anchor: HoverAnchor(view: view, part: $0.part, rect: $0.rect))
+      }
     if next?.anchor == current?.anchor { return }
     let previous = current
     current = next
@@ -362,7 +364,8 @@ final class ReferenceAnchorView: NSView {
       guard let self, self.window != nil, let card = self.card, card.shown == nil,
         let entry = self.rects?.entries.first(where: { $0.key == key })
       else { return }
-      card.pin(ReferenceCardID(ref: entry.ref), below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
+      card.pin(
+        ReferenceCardID(referent: entry.referent), below: HoverAnchor(view: self, part: entry.part, rect: entry.rect))
     }
   }
 }

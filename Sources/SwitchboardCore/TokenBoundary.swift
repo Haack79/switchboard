@@ -37,4 +37,43 @@ enum TokenBoundary {
     }
     return !isWordScalar(c) && !forbiddenAfter.contains(c)
   }
+
+  /// Where the URL whose scheme ends at `schemeEnd` ends, read as cmark-gfm
+  /// ends an autolink: at ASCII whitespace, `<`, or `limit`, the end of the
+  /// run, and then without trailing `?!.,:*_~'"`, without a trailing `)`
+  /// while the URL holds more `)` than `(`, and without a trailing `;` or
+  /// `&entity;`. The trim never reaches back past `schemeEnd`. `cut` is true
+  /// when the URL runs on into the next run, so that its text in this run is
+  /// not all of it.
+  static func autolinkEnd(after schemeEnd: Int, before limit: Int, _ s: [Unicode.Scalar]) -> (end: Int, cut: Bool) {
+    var end = schemeEnd
+    var opening = 0
+    var closing = 0
+    while end < limit, !isASCIISpace(s[end]), s[end] != "<" {
+      if s[end] == "(" { opening += 1 } else if s[end] == ")" { closing += 1 }
+      end += 1
+    }
+    let cut = end == limit && limit < s.count && !isASCIISpace(s[limit]) && s[limit] != "<"
+    trimming: while end > schemeEnd {
+      switch s[end - 1] {
+      case ")":
+        guard closing > opening else { break trimming }
+        closing -= 1
+        end -= 1
+      case "?", "!", ".", ",", ":", "*", "_", "~", "'", "\"":
+        end -= 1
+      case ";":
+        var entity = end - 2
+        while entity > schemeEnd, s[entity].isASCII, s[entity].properties.isAlphabetic { entity -= 1 }
+        end = entity < end - 2 && s[entity] == "&" ? entity : end - 1
+      default:
+        break trimming
+      }
+    }
+    return (end, cut)
+  }
+
+  private static func isASCIISpace(_ c: Unicode.Scalar) -> Bool {
+    c == " " || c == "\t" || c == "\n" || c == "\u{0B}" || c == "\u{0C}" || c == "\r"
+  }
 }

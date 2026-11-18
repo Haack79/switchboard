@@ -98,7 +98,16 @@ private typealias Fixture = CardFixture<String>
 /// The reference card's fixture.
 private typealias ReferenceFixture = CardFixture<ReferenceCardID>
 
-private func cardID(_ text: String) -> ReferenceCardID { ReferenceCardID(ref: GitHubRef(parsing: text)!) }
+private func cardID(_ text: String) -> ReferenceCardID { ReferenceCardID(referent: .github(GitHubRef(parsing: text)!)) }
+
+extension ReferenceCardID {
+  /// The GitHub reference that the card shows, or nil for another kind of card.
+  fileprivate var github: GitHubRef? {
+    switch referent {
+    case .github(let ref): ref
+    }
+  }
+}
 
 extension CardFixture where ID == String {
   /// Rests the pointer on tile A until its card shows.
@@ -922,9 +931,10 @@ extension CardFixture where ID == String {
     private let view = ReferenceAnchorView()
     private let hover = ReferenceHover()
     private let entries = [
-      ReferenceRects.Entry(ref: GitHubRef(parsing: "o/r#1")!, part: 1, rect: CGRect(x: 0, y: 0, width: 40, height: 14)),
       ReferenceRects.Entry(
-        ref: GitHubRef(parsing: "O/R#2")!, part: 3, rect: CGRect(x: 60, y: 0, width: 40, height: 14)),
+        referent: .github(GitHubRef(parsing: "o/r#1")!), part: 1, rect: CGRect(x: 0, y: 0, width: 40, height: 14)),
+      ReferenceRects.Entry(
+        referent: .github(GitHubRef(parsing: "O/R#2")!), part: 3, rect: CGRect(x: 60, y: 0, width: 40, height: 14)),
     ]
 
     init() { hover.view = view }
@@ -949,7 +959,7 @@ extension CardFixture where ID == String {
       move(f, 5)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown?.ref.key == "o/r#1")
+      #expect(f.card.shown?.github?.key == "o/r#1")
       #expect(f.presenter.shows.first?.anchor.part == 1)
     }
 
@@ -962,8 +972,8 @@ extension CardFixture where ID == String {
       move(f, 70)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown?.ref.repo == "O/R")
-      #expect(f.card.shown?.ref.number == 2)
+      #expect(f.card.shown?.github?.repo == "O/R")
+      #expect(f.card.shown?.github?.number == 2)
     }
 
     /// The card's header links to the URL's kind of page, so the card keeps the form of the reference.
@@ -971,14 +981,14 @@ extension CardFixture where ID == String {
       let f = ReferenceFixture()
       let pull = [
         ReferenceRects.Entry(
-          ref: GitHubRef(parsing: "https://github.com/o/r/pull/9")!, part: 0,
+          referent: .github(GitHubRef(parsing: "https://github.com/o/r/pull/9")!), part: 0,
           rect: CGRect(x: 0, y: 0, width: 40, height: 14))
       ]
 
       move(f, 5, in: pull)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown?.ref.isPull == true)
+      #expect(f.card.shown?.github?.isPull == true)
     }
 
     /// Two references to one item, in another case or form, are one card, so moving between them keeps it open.
@@ -986,9 +996,9 @@ extension CardFixture where ID == String {
       let f = ReferenceFixture()
       let same = [
         ReferenceRects.Entry(
-          ref: GitHubRef(parsing: "o/r#1")!, part: 0, rect: CGRect(x: 0, y: 0, width: 40, height: 14)),
+          referent: .github(GitHubRef(parsing: "o/r#1")!), part: 0, rect: CGRect(x: 0, y: 0, width: 40, height: 14)),
         ReferenceRects.Entry(
-          ref: GitHubRef(parsing: "https://github.com/O/R/pull/1")!, part: 1,
+          referent: .github(GitHubRef(parsing: "https://github.com/O/R/pull/1")!), part: 1,
           rect: CGRect(x: 60, y: 0, width: 40, height: 14)),
       ]
       move(f, 5, in: same)
@@ -1041,7 +1051,7 @@ extension CardFixture where ID == String {
       move(f, 5)
       f.scheduler.fire(delay)
 
-      #expect(f.card.shown?.ref.key == "o/r#1")
+      #expect(f.card.shown?.github?.key == "o/r#1")
     }
   }
 }

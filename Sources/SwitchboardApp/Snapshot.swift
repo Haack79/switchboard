@@ -22,7 +22,7 @@ enum Snapshot {
   static let opensRepoPicker = ProcessInfo.processInfo.environment["SB_REPO_PICKER"] == "open"
   static let hoverSession = ProcessInfo.processInfo.environment["SB_HOVER"]
   static let hoverReference = ProcessInfo.processInfo.environment["SB_HOVER_REF"].flatMap {
-    GitHubRef(parsing: $0)?.key
+    GitHubRef(parsing: $0).map { Referent.github($0).key }
   }
   static let searchQuery = ProcessInfo.processInfo.environment["SB_SEARCH"]
 

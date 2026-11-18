@@ -186,13 +186,26 @@ extension ReferenceCardContent.Tone {
   }
 }
 
+/// What a link in text refers to, for its hover card.
+enum Referent: Hashable, Sendable {
+  case github(GitHubRef)
+
+  /// One key per item, whatever case or form the text wrote it in. Each case's keys start with the case's name, so
+  /// two kinds never share a key.
+  var key: String {
+    switch self {
+    case .github(let ref): "github:\(ref.key)"
+    }
+  }
+}
+
 /// The reference card's id. Two references to one item are one card, whatever case or form each was written in. The
 /// card shows the reference that opened it.
 struct ReferenceCardID: Hashable, Sendable {
-  let ref: GitHubRef
+  let referent: Referent
 
-  static func == (a: ReferenceCardID, b: ReferenceCardID) -> Bool { a.ref.key == b.ref.key }
-  func hash(into hasher: inout Hasher) { hasher.combine(ref.key) }
+  static func == (a: ReferenceCardID, b: ReferenceCardID) -> Bool { a.referent.key == b.referent.key }
+  func hash(into hasher: inout Hasher) { hasher.combine(referent.key) }
 }
 
 /// `opened <ago> ago` and `updated <ago> ago`, each left out when its ISO 8601 time is missing or doesn't parse.

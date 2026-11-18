@@ -532,3 +532,87 @@ extension InlineTextTests {
     }
   }
 }
+
+// MARK: - Markdown session links
+
+/// The one paragraph that cmark makes of `markdown`.
+private func paragraph(_ markdown: String) throws -> MarkdownText {
+  let blocks = MarkdownBlock.parse(markdown)
+  try #require(blocks.count == 1, "\(markdown) parses to \(blocks)")
+  guard case .paragraph(let text) = blocks[0] else {
+    Issue.record("\(markdown) parses to \(blocks[0]), not a paragraph")
+    return MarkdownText()
+  }
+  return text
+}
+
+/// The segment whose text reads `text`.
+private func segment(reading text: String, in markdown: MarkdownText) throws -> InlineText.Segment {
+  let (segments, _) = InlineText.segments(markdown, names: names, repo: nil, links: true)
+  return try #require(segments.first { String($0.text.characters) == text }, "segments: \(segments)")
+}
+
+private let sessionLinkMarkdown = "[x](switchboard://session/\(liveID))"
+
+extension InlineTextTests {
+  /// A Markdown link to `switchboard://session/<id>` that cmark parses keeps its URL, and a click on it reaches
+  /// `openSessionLink`.
+  @Suite struct MarkdownSessionLinks {
+    /// `SessionNames` never rewrites a link run, so the label stays as written even though the URL names a live id.
+    @Test func aSessionLinkGivesASegmentThatReadsItsLabel() throws {
+      let text = try paragraph(sessionLinkMarkdown)
+
+      _ = try segment(reading: "x", in: text)
+    }
+
+    @Test func aSessionLinkSegmentLinksToTheSessionURL() throws {
+      let text = try paragraph(sessionLinkMarkdown)
+
+      let found = try segment(reading: "x", in: text)
+
+      #expect(Set(found.text.runs.map(\.link)) == [SessionLink.url(for: liveID)])
+    }
+
+    @Test func theTextAroundASessionLinkHasNoLink() throws {
+      let text = try paragraph("Ask \(sessionLinkMarkdown) to rebase.")
+
+      let result = render(text)
+
+      #expect(String(result.text.characters) == "Ask x to rebase.")
+      #expect(try links(in: result.text, of: "Ask ") == [nil])
+      #expect(try links(in: result.text, of: " to rebase.") == [nil])
+    }
+
+    /// A label that is a session's id or name stays as written and keeps the link's own target.
+    @Test(arguments: [liveName, otherID, otherName, removedID])
+    func aSessionLinkLabelStaysAsWrittenAndKeepsItsURL(_ label: String) throws {
+      let text = try paragraph("[\(label)](switchboard://session/\(liveID))")
+
+      let found = try segment(reading: label, in: text)
+
+      #expect(Set(found.text.runs.map(\.link)) == [SessionLink.url(for: liveID)])
+    }
+
+    @Test func theParsedLinkDrawsLikeAHandBuiltLinkRun() throws {
+      let parsed = try paragraph(sessionLinkMarkdown)
+      let built = MarkdownText([MarkdownText.Run("x", link: "switchboard://session/\(liveID)")])
+
+      #expect(render(parsed).text == render(built).text)
+    }
+
+    /// The click uses the URL that the drawn segment carries, so the test ties the render to the click.
+    @MainActor
+    @Test func openingTheSegmentsLinkSelectsTheSession() throws {
+      var live = needsItem(liveID)
+      live.name = liveName
+      let model = appliedModel([live, needsItem(otherID)])
+      let found = try segment(reading: "x", in: try paragraph(sessionLinkMarkdown))
+      let url = try #require(found.text.runs.first?.link)
+
+      let handled = model.openSessionLink(url)
+
+      #expect(handled)
+      #expect(model.selection == liveID)
+    }
+  }
+}

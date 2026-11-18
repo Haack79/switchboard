@@ -405,9 +405,11 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let anchor = NSView(frame: NSRect(x: 20, y: 250, width: 40, height: 14))
     window.contentView?.addSubview(anchor)
     let presenter = HoverCardPanel<ReferenceCardID>(clickable: true) { id in
-      AnyView(ReferenceCardView(model: model, ref: id.ref))
+      switch id.referent {
+      case .github(let ref): AnyView(ReferenceCardView(model: model, ref: ref))
+      }
     }
-    presenter.show(ReferenceCardID(ref: ref), below: HoverAnchor(view: anchor))
+    presenter.show(ReferenceCardID(referent: .github(ref)), below: HoverAnchor(view: anchor))
     defer { presenter.hide() }
     let panel = try #require(presenter.panel)
     let loading = panel.frame.height
@@ -439,7 +441,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let anchor = NSView(frame: NSRect(x: 20, y: 250, width: 40, height: 14))
     window.contentView?.addSubview(anchor)
 
-    model.referenceCard?.pin(ReferenceCardID(ref: ref), below: HoverAnchor(view: anchor))
+    model.referenceCard?.pin(ReferenceCardID(referent: .github(ref)), below: HoverAnchor(view: anchor))
     model.hoverCard?.pin("A", below: HoverAnchor(view: anchor))
     defer {
       model.referenceCard?.interrupt()

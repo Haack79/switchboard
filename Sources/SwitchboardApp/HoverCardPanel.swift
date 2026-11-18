@@ -226,7 +226,10 @@ extension BoardModel {
       self.map { AnyView(HoverCardView(model: $0, id: id)) } ?? AnyView(EmptyView())
     }
     referenceCard = HoverCard<ReferenceCardID>.panel(clickable: true) { [weak self] id in
-      self.map { AnyView(ReferenceCardView(model: $0, ref: id.ref).inlineLinks($0)) } ?? AnyView(EmptyView())
+      guard let self else { return AnyView(EmptyView()) }
+      switch id.referent {
+      case .github(let ref): return AnyView(ReferenceCardView(model: self, ref: ref).inlineLinks(self))
+      }
     }
   }
 }

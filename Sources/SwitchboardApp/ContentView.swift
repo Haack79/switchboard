@@ -244,8 +244,7 @@ struct Sidebar: View {
             .highlightRing(row.session.isHighlighted, cornerRadius: 4, outset: 2)
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
             .contextMenu {
-              HighlightMenuItem(session: row.session)
-              SnoozeMenuItems(session: row.session)
+              SessionMenuItems(session: row.session)
               DeleteSelectedMenuItem(id: row.id, count: removableSelection)
               PauseMenuItem(model: model, session: row.session)
               if row.session.queued == true {
@@ -670,8 +669,7 @@ struct BoardView: View {
                             }
                           }
                           .contextMenu {
-                            HighlightMenuItem(session: s)
-                            SnoozeMenuItems(session: s)
+                            SessionMenuItems(session: s)
                             PauseMenuItem(model: model, session: s)
                             if drops { moveMenu(s.id, from: lane.group?.id) }
                           }
