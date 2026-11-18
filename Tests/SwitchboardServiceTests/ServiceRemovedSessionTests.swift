@@ -40,7 +40,7 @@ extension Service {
       let first = service.sessionID(seed: seed)
 
       #expect(service.sessionID(seed: seed) == first)
-      #expect(first.count == 6 && first.hasPrefix("s"), "\(first)")
+      #expect(SessionID.isValid(first) && first.hasPrefix(SessionID.prefix), "\(first)")
     }
   }
 
@@ -61,7 +61,7 @@ extension Service {
       let next = service.sessionID(seed: seed)
 
       #expect(next != first)
-      #expect(next.count == 6 && next.hasPrefix("s"), "\(next)")
+      #expect(SessionID.isValid(next) && next.hasPrefix(SessionID.prefix), "\(next)")
     }
   }
 
@@ -81,6 +81,21 @@ extension Service {
 
       #expect(first != second)
       #expect(![first, second].contains(next), "\(next) is \(removedFirst ? "first" : "second")'s candidate")
+    }
+  }
+
+  /// A session made before `swb_` ids keeps its `s` id, and lookup still finds it by id and by id prefix.
+  @Test func anOldFormIdStillResolvesNextToANewOne() throws {
+    try withService { service, _ in
+      try service.addLive("seb4ec", name: "old")
+      let new = service.sessionID(seed: seed)
+      try service.addLive(new, name: "new")
+
+      let found = try service.queue.sync {
+        try ["seb4ec", "seb4", new].map { try service.lookup(["session": .string($0)]) }
+      }
+
+      #expect(found == ["seb4ec", "seb4ec", new])
     }
   }
 
@@ -176,9 +191,9 @@ extension Service {
 
   // MARK: Source audit
 
-  /// Each `shortId("s"` in `Sources`, with the name of the nearest `func` above it.
+  /// Each `shortId(SessionID.prefix` or `shortId("s` in `Sources`, with the name of the nearest `func` above it.
   static func sessionIdDraws() throws -> [(file: String, function: String?)] {
-    let pattern = try Regex(#"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)|shortId\(\s*"s""#)
+    let pattern = try Regex(#"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)|shortId\(\s*(?:"s|SessionID\.prefix)"#)
     return try SourceAudit.sourceFiles().flatMap { source -> [(file: String, function: String?)] in
       let (file, text) = source
       var function: String?
@@ -201,6 +216,6 @@ extension Service {
 
     #expect(!draws.isEmpty)
     let elsewhere = draws.filter { $0.function != "newSessionID" }
-    #expect(elsewhere.isEmpty, "shortId(\"s\" is called outside newSessionID at \(elsewhere)")
+    #expect(elsewhere.isEmpty, "a session id is drawn outside newSessionID at \(elsewhere)")
   }
 }

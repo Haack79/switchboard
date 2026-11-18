@@ -124,7 +124,7 @@ extension MCPToolServerSuite {
   func name(_ id: String, _ name: String, _ how: Naming) -> String {
     switch how {
     case .id: id
-    case .idPrefix: String(id.prefix(4))
+    case .idPrefix: String(id.prefix(id.count - 1))
     case .name: name
     }
   }

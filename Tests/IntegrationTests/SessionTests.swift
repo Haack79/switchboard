@@ -17,6 +17,31 @@ import Testing
     #expect(try sbd.sb("screen", s.id).contains("⏺ Done: hello there"))
   }
 
+  /// A new session's id is `swb_` and 5 characters from the id alphabet, and the id names each thing sbd makes for
+  /// the session: the tmux sessions, the pane's `SB_SESSION_ID`, the launcher folder, and the link.
+  @Test func newSessionsGetSwbIds() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(prompt: "hello")
+    try sbd.waitFor(s.id, "claude to start") { $0.live }
+    let id = s.id
+
+    #expect(SessionID.isValid(id) && id.hasPrefix(SessionID.prefix), "\(id)")
+    let byId = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("get", "--json", id))
+    #expect(byId.id == id)
+    #expect(byId.url == "switchboard://session/\(id)")
+    let prefix = String(id.prefix(7))
+    #expect(try JSONCoding.decode(SessionSummary.self, from: sbd.sb("get", "--json", prefix)).id == id, "\(prefix)")
+    let t = try sbd.client.terminals(id)
+    #expect(t.claude == "\(id)-claude")
+    #expect(t.shell == "\(id)-shell")
+    for pane in [t.claude, t.shell] {
+      #expect(try tmux(t, "has-session", "-t", "=\(pane)").status == 0, "\(pane)")
+    }
+    let env = try tmux(t, "show-environment", "-t", "=\(t.claude)", "SB_SESSION_ID")
+    #expect(env.stdout == "SB_SESSION_ID=\(id)\n", "\(text(env))")
+    #expect(FileManager.default.fileExists(atPath: "\(sbd.home.sessionFolder(id))/claude.sh"))
+  }
+
   @Test func sortsRepliesIntoQuestionsAndOffers() throws {
     let sbd = try Instance()
     let s = try sbd.new(prompt: "hello")

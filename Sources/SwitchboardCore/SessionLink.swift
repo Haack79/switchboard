@@ -33,7 +33,7 @@ public enum SessionLink {
   /// The guidance that the Manager guide, the chat guide, and the default
   /// system prompt give every agent.
   public static let guidance =
-    "When you name a Switchboard session in a reply, write it as a Markdown link to its id URL, such as [fix-cache](switchboard://session/seb4ec). Copy the URL from the `url` field of `sb get --json`, `sb ls --json`, or the `get_session` and `list_sessions` tools. Never build the URL yourself: if you don't have it, look the session up first."
+    "When you name a Switchboard session in a reply, write it as a Markdown link to its id URL, such as [fix-cache](switchboard://session/swb_eb4ec). Copy the URL from the `url` field of `sb get --json`, `sb ls --json`, or the `get_session` and `list_sessions` tools. Never build the URL yourself: if you don't have it, look the session up first."
 
   /// `id` is a session id, so the string always parses as a URL.
   public static func url(for id: String) -> URL { URL(string: prefix + id)! }
@@ -44,7 +44,7 @@ public enum SessionLink {
   public static func url(forName name: String) -> URL {
     // Every id character is unreserved. Without the escape, an id-shaped name
     // would give the id link of the session that has that id.
-    if SessionNames.isSessionID(name) { return URL(string: prefix + "%73" + name.dropFirst())! }
+    if SessionID.isValid(name) { return URL(string: prefix + "%73" + name.dropFirst())! }
     return URL(string: prefix + name.addingPercentEncoding(withAllowedCharacters: unreserved)!)!
   }
 
@@ -58,7 +58,7 @@ public enum SessionLink {
     guard string.hasPrefix(prefix) else { return nil }
     let segment = String(string.dropFirst(prefix.count))
     guard segment.unicodeScalars.allSatisfy(segmentScalars.contains) else { return nil }
-    if SessionNames.isSessionID(segment) { return .id(segment) }
+    if SessionID.isValid(segment) { return .id(segment) }
     guard let name = segment.removingPercentEncoding, isName(name) else { return nil }
     return .name(name)
   }
@@ -192,6 +192,6 @@ public enum SessionLink {
       && !scalars.contains { [.control, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) }
       && scalars.count <= maxNameScalars
       && name != "." && name != ".."
-      && !SessionNames.isSessionID(name)
+      && !SessionID.isValid(name)
   }
 }

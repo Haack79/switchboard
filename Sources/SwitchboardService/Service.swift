@@ -1200,7 +1200,7 @@ public final class Service {
   }
 
   func newSessionID(using generator: inout some RandomNumberGenerator) -> String {
-    shortId("s", taken: Set(entries.keys).union(removedNames.keys), using: &generator)
+    shortId(SessionID.prefix, taken: Set(entries.keys).union(removedNames.keys), using: &generator)
   }
 
   /// `configure` changes the session before its first launch. A session that host h asked for takes a parent only
