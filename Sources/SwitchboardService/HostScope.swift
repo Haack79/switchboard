@@ -231,8 +231,11 @@ extension Service {
   /// What sbd derives from these facts, such as the state, the reason, the Inbox item, and the board column, then
   /// derives from no PR. It runs on the state queue.
   func shownFacts(_ id: String, for origin: RequestOrigin) -> SessionFacts {
-    let facts = entries[id]!.facts
-    return showsGitHub(id, to: origin) ? facts : facts.withoutGitHub
+    var facts = entries[id]!.facts
+    guard showsGitHub(id, to: origin) else { return facts.withoutGitHub }
+    // `prNumbers` keeps no repo, so a host keeps only the current PR's number, whose repo `showsGitHub` checked.
+    if origin != .mac { facts.prNumbers = facts.pr.map { [$0.number] } ?? [] }
+    return facts
   }
 
   /// The event as host `host` may read it. An event of `gitHubEventKinds`, or a `wait-resolved` of a wait that
