@@ -141,7 +141,7 @@ extension Service {
 
   /// A scoped MCP server sends `scope`, its group, and `caller`, its own session. Such a request may act only on
   /// a session in that group, on the caller itself, or on that group.
-  private func requireInScope(_ target: PauseTarget, _ args: JSON) throws {
+  func requireInScope(_ target: PauseTarget, _ args: JSON) throws {
     guard let scope = try scope(args) else { return }
     let name = groups[scope]?.name ?? scope
     switch target {

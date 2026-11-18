@@ -3,10 +3,14 @@ import SwitchboardCore
 import Testing
 
 extension Instance {
+  /// The rows of `sb ls --json`.
+  func lsRows() throws -> [JSON] {
+    try #require(JSON.parse(try sb("ls", "--json"))?.array)
+  }
+
   /// The session's row in `sb ls --json`.
   func listed(_ id: String) throws -> JSON {
-    let rows = try #require(JSON.parse(try sb("ls", "--json"))?.array)
-    return try #require(rows.first { $0["id"]?.string == id })
+    try #require(try lsRows().first { $0["id"]?.string == id })
   }
 
   /// The number of the session's events of the kind.

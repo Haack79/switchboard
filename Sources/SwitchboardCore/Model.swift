@@ -93,6 +93,8 @@ public struct Session: Codable, Equatable, Sendable {
   public var chat: String?
   /// True for a Manager conversation that the user pinned to the top of the sidebar.
   public var pinned: Bool?
+  /// True while the user or a session highlighted it. sbd clears it when the session reaches Done.
+  public var highlighted: Bool?
   /// True when every launch starts claude in auto mode, so a resumed session
   /// keeps it. Otherwise sbd passes no permission mode, and Claude's settings
   /// choose one. Nil in a session that an older sbd stored.
@@ -295,6 +297,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var activity: ChatActivity?
   /// True for a pinned Manager conversation.
   public var pinned: Bool?
+  /// True while the session is highlighted. Nil otherwise.
+  public var highlighted: Bool?
   public var followup: Followup?
   /// When the session was added, in ms since the epoch. An imported
   /// follow-up was added on the date of its line.

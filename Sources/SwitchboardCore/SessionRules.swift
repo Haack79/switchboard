@@ -12,6 +12,11 @@ extension SessionSummary {
   /// Whether sbd accepts a snooze of the session: a work session that isn't marked done.
   public var canSnooze: Bool { kind == .work && !markedDone }
 
+  /// Whether sbd accepts a highlight of the session: a work session that isn't Done.
+  public var canHighlight: Bool { kind == .work && state != .done }
+
+  public var isHighlighted: Bool { highlighted == true }
+
   /// False for a follow-up that hasn't started, a docket row, and a session whose worktree the cleanup removed.
   public var hasTerminals: Bool { runsClaude && cleanup?.state != .removed }
 }

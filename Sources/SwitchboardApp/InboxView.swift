@@ -91,14 +91,11 @@ struct TriageList: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 2) {
-          ForEach(AttentionState.inbox, id: \.self) { state in
-            let group = items.filter { $0.state == state }
-            if !group.isEmpty {
-              ListSectionHeader(title: state.title, count: group.count)
-              ForEach(group) { s in
-                TriageRow(session: s, repo: repos[s.id], current: s.id == current).id(s.id)
-                  .simultaneousGesture(TapGesture().onEnded { focused = true })
-              }
+          ForEach(Triage.sections(items)) { section in
+            ListSectionHeader(title: section.title, count: section.sessions.count)
+            ForEach(section.sessions) { s in
+              TriageRow(session: s, repo: repos[s.id], current: s.id == current).id(s.id)
+                .simultaneousGesture(TapGesture().onEnded { focused = true })
             }
           }
         }
@@ -132,6 +129,7 @@ struct TriageRow: View {
         .fill(session.state.color)
         .frame(width: 8, height: 8)
         .padding(.top, 5)
+        .help(session.state.title)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         InlineText(plain: session.inboxTitle, links: false).fontWeight(.medium).lineLimit(2)
@@ -147,11 +145,16 @@ struct TriageRow: View {
       IssueBadge(session: session)
       NotesButton(session: session)
     }
-    .listRowChrome(current: current)
+    .listRowChrome(current: current, highlighted: session.isHighlighted)
     .hoverCard(session, activeAccount: model.activeAccountFolder, card: model.hoverCard)
     .onTapGesture { model.inboxFocus = session.id }
-    .contextMenu { SnoozeMenuItems(session: session) }
+    .contextMenu {
+      HighlightMenuItem(session: session)
+      SnoozeMenuItems(session: session)
+    }
     .accessibilityElement(children: .combine)
+    .accessibilityValue(session.state.title)
+    .highlightAccessibility(session.isHighlighted)
     .accessibilityAddTraits(current ? .isSelected : [])
   }
 }
