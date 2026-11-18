@@ -113,15 +113,27 @@ extension Instance {
     let parent = try ManagerTests().idle(sbd, name: "p")
     let kid = try ManagerTests().child(sbd, of: parent.id, name: "kid", prompt: "card c1")
     try sbd.waitFor(kid.id, "the child's card") { $0.triage?.source == .session }
+    let busy = try ManagerTests().child(sbd, of: parent.id, name: "busy", prompt: "slow held")
+    try sbd.waitFor(busy.id, "its turn") { $0.state == .working }
 
     let asking = cardText([["label": "Merge"], ["label": "Wait"]])
+    // TriageCard.clean turns a lone decision into options, so the card needs two.
+    let deciding = JSON.object([
+      "summary": "It planned it.\nIt needs some decisions.",
+      "decisions": [
+        ["number": 1, "header": "Merge", "question": "Merge it?", "options": [["label": "Yes"], ["label": "No"]]],
+        ["number": 2, "header": "Clean", "question": "Remove it?", "options": [["label": "Yes"], ["label": "No"]]],
+      ],
+    ]).text
     let text = try sbd.setSummary(parent.id, asking).stdout
+    let decided = try sbd.setSummary(parent.id, deciding).stdout
     let json = try #require(JSON.parse(try sbd.setSummary(["--json", parent.id], asking).stdout))
     let review = try sbd.setSummary(parent.id, cardText([])).stdout
     let own = try sbd.setSummary(kid.id, asking).stdout
 
     #expect(text.contains("already ask the user in their own Inbox items"), "\(text)")
     #expect(text.contains("[kid](switchboard://session/\(kid.id)): Pick how to land #98"), "\(text)")
+    #expect(decided.contains("[kid](switchboard://session/\(kid.id)): Pick how to land #98"), "\(decided)")
     #expect(json["childItems"]?.array?.map { $0["session"]?.string } == [kid.id], "\(json)")
     #expect(!review.contains("These sessions you started"), "\(review)")
     #expect(!own.contains("These sessions you started"), "\(own)")

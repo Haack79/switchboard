@@ -61,7 +61,7 @@ private func bullets(_ text: String) -> [String] {
     #expect(lower.contains("link"), "\(bullet)")
     #expect(lower.contains("one line") || lower.contains("one-line"), "\(bullet)")
     #expect(bullet.contains("`needsYou`"), "\(bullet)")
-    #expect(["don't", "do not", "without", "never"].contains { lower.contains($0) }, "\(bullet)")
+    #expect(bullet.contains("Don't set `needsYou`"), "\(bullet)")
   }
 
   @Test func theOperatorPromptKeepsNeedsYouForTheOperatorsOwnDecision() throws {
