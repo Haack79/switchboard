@@ -179,6 +179,7 @@ extension GitHubPoller {
     let verdict = wait.kind == .ci && pr.ciFailed ? "failed" : outcome
     guard let first = confirming[wait.id], first.sha == pr.headSha, first.outcome == verdict else {
       confirming[wait.id] = (pr.headSha, verdict, s.polled)
+      if let after = confirmReadAfter { requestRead([s.prId], after: after) }
       return false
     }
     return s.polled > first.polled
