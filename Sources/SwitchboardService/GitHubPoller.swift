@@ -60,9 +60,12 @@ final class GitHubPoller {
   /// outside the queue means the queue dropped it.
   var queuedWaits: Set<String> = []
   var deploys = Deploys()
-  /// The PRs of edges that left a session's list before the poller read
-  /// their PR again. The next poll reads them whether or not they are due.
-  var recheck: Set<String> = []
+  /// The PRs that a poll reads whether or not they are due. `requestRead` adds reads at a set time. The PRs of
+  /// edges that left a session's list before the poller read their PR again are read at the next poll.
+  var readRequests = ReadRequests()
+  private var readTimer: DispatchSourceTimer?
+  /// Schedules `readWake` at a time in ms, in place of the one scheduled before. Tests replace it.
+  lazy var scheduleWake: (Int64) -> Void = { [unowned self] at in armReadTimer(at: at) }
   /// What the poller knows about each plan document, by plan id.
   var trackedPlans: [String: TrackedPlan] = [:]
   var codeOwners = CodeOwnerReads()
@@ -219,6 +222,34 @@ final class GitHubPoller {
     timer = t
   }
 
+  /// Reads the PRs, whether or not they are due, at a poll `after` ms from now or later. The requests that come
+  /// before that poll share it. A PR that no session, wait, or merge trigger names is not read. It runs on `queue`.
+  func requestRead(_ ids: some Sequence<String>, after: Int64) {
+    dispatchPrecondition(condition: .onQueue(queue))
+    if let at = readRequests.request(ids, at: nowMs() + after) { scheduleWake(at) }
+  }
+
+  /// Runs the poll that a request scheduled, unless an earlier poll read every due request. Then it schedules a
+  /// wake for the requests that remain.
+  func readWake() {
+    dispatchPrecondition(condition: .onQueue(queue))
+    if readRequests.fire(now: nowMs()) { _ = cycle(all: false) }
+    if let at = readRequests.rearm() { scheduleWake(at) }
+  }
+
+  private func armReadTimer(at: Int64) {
+    let t =
+      readTimer
+      ?? {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.setEventHandler { [weak self] in self?.readWake() }
+        t.resume()
+        readTimer = t
+        return t
+      }()
+    t.schedule(deadline: .now() + .milliseconds(Int(max(0, at - nowMs()))))
+  }
+
   /// Sends one HTTP request and returns the status, the headers, and the body. Tests replace it.
   var transport: (URLRequest) throws -> (Int, [String: String], Data) = httpRequest
 
@@ -257,6 +288,7 @@ final class GitHubPoller {
       }
     }
     let now = nowMs()
+    let requested = readRequests.take(now: now)
     let ids = Set(sessions.map(\.id))
     tracked = tracked.filter { ids.contains($0.key) }
     var shared = Shared()
@@ -268,9 +300,9 @@ final class GitHubPoller {
     targets = targets.filter { interest.keys.contains($0.key) }
     do {
       try lookUp(all: all, now: now, interest: interest, stats: &stats)
-      // An edge that `recordDependencies` kept reads its PR at once, as a new wait does.
+      // A requested PR, such as an edge that `recordDependencies` kept, is read at once, as a new wait's PR is.
       var waited = waitedOn(interest)
-      for id in recheck { waited.created[id] = max(waited.created[id] ?? 0, now) }
+      for id in requested { waited.created[id] = max(waited.created[id] ?? 0, now) }
       // A request's hold ends `readMs` after a turn ends. The PR reads once after each such turn, so the hold sees
       // a push that the turn made even when the PR polls at the idle rate.
       for s in sessions {

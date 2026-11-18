@@ -47,7 +47,6 @@ extension GitHubPoller {
   /// poll therefore stays one more poll, which reads that PR at once.
   func recordDependencies(_ sessions: [Watched], now: Int64, stats: inout Stats) {
     let owned = sessions.compactMap { s in currentPR(s).map { (id: s.id, pr: $0) } }
-    recheck = []
     for s in sessions {
       let pr = currentPR(s)
       let old = s.facts.dependencies
@@ -64,7 +63,7 @@ extension GitHubPoller {
             continue
           }
           edges.append(before)
-          recheck.insert(read.pr.id)
+          readRequests.readAtNextPoll([read.pr.id])
         }
       }
       guard edges != old else { continue }
