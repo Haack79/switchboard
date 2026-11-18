@@ -336,6 +336,31 @@ let everyGroupShape = [
     #expect(model.groupFilter == GroupFilter(keys: ["g1"]))
   }
 
+  /// Accepting a suggestion can answer with a group that sbd already listed. Deleting that group drops it.
+  @Test func anAnsweredGroupThatSbdAlreadyListedLeavesTheFilterWhenItIsDeleted() {
+    let model = model(GroupFilter(keys: [Self.ungrouped]))
+    model.showAnsweredGroup(["id": "g1"])
+    #expect(model.groupFilter == GroupFilter(keys: ["g1", Self.ungrouped]))
+
+    model.applyGroups([Self.groups[1], Self.groups[2]])
+
+    #expect(model.groupFilter == GroupFilter(keys: [Self.ungrouped]))
+  }
+
+  /// A group that the user made and that sbd deleted before any answer listed it leaves the filter after the
+  /// answers that could predate it.
+  @Test func aNewGroupThatNoAnswerListsLeavesTheFilterAfterTwoAnswers() {
+    let model = model(GroupFilter(keys: [Self.ungrouped]))
+    model.showAnsweredGroup(["id": "g9"])
+
+    model.applyGroups(Self.groups)
+    model.applyGroups(Self.groups)
+    #expect(model.groupFilter.keys.contains("g9"))
+
+    model.applyGroups(Self.groups)
+    #expect(model.groupFilter == GroupFilter(keys: [Self.ungrouped]))
+  }
+
   /// The first answer equals the model's initial empty `groups`, and it still prunes.
   @Test func anEmptyFirstAnswerPrunesTheSelection() {
     let model = model(GroupFilter(keys: ["g1"]), groups: nil)
@@ -761,6 +786,22 @@ let everyGroupShape = [
     model.apply(.success(next), followups: nil, groups: listed)
 
     #expect(notified.isEmpty)
+  }
+
+  /// A merge moves the open session into an unselected group in the same refresh that it starts needing the
+  /// user. The filter widens to keep it in sight, so it notifies.
+  @Test func theOpenSessionNotifiesWhenAMergeMovesItIntoAnUnselectedGroup() {
+    let model = model(GroupFilter(keys: ["g1", "g3"]), [groupedSession("i1", group: "g1")], followups: nil)
+    model.selection = "i1"
+    let next = [groupedSession("i1", group: "g2", state: .needsYou)]
+    let listed = [Self.group("g2", "Web", ["i1"]), Self.groups[2]]
+    var notified: [String] = []
+    model.notifier = { notified.append($0.id) }
+
+    model.apply(.success(next), followups: nil, groups: listed)
+
+    #expect(notified == ["i1"])
+    #expect(model.selection == "i1")
   }
 
   @Test func aSessionInAShownGroupThatStartsNeedingYouNotifies() {

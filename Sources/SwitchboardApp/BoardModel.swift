@@ -47,9 +47,10 @@ final class BoardModel: ObservableObject {
     get { filter.group }
     set { filter.group = newValue }
   }
-  /// The groups that the user made while the group filter was on, until a `group-ls` answer lists them. An
-  /// answer read before the creation lacks them, and it must not drop them from the filter.
-  private var unlistedNewGroups: Set<String> = []
+  /// The groups that the user made while the group filter was on, with how many more `group-ls` answers may lack
+  /// them before they leave the filter. An answer read before the creation lacks them, and it must not drop them.
+  /// An answer that lists a group, or the last one allowed to lack it, ends its exemption.
+  private var unlistedNewGroups: [String: Int] = [:]
   @Published var showingFilter = false
   /// Decides when a session tile's hover card shows. Tests replace it.
   var hoverCard: HoverCard<String>?
@@ -445,18 +446,20 @@ final class BoardModel: ObservableObject {
   /// the answer moves it out of the selected groups, as a merge or a delete does.
   func applyGroups(_ listed: [GroupSummary]) {
     if groups != listed { groups = listed }
-    unlistedNewGroups.subtract(listed.map(\.id))
-    var next = filter(after: listed)
-    if let id = selection { next = widened(next, toShow: id) }
+    let next = filter(after: listed, sessions: listedBoard)
+    let ids = Set(listed.map(\.id))
+    unlistedNewGroups = unlistedNewGroups.filter { !ids.contains($0.key) && $0.value > 1 }.mapValues { $0 - 1 }
     if next != filter { filter = next }
   }
 
-  /// The filter once it takes sbd's `group-ls` answer `listed`.
-  func filter(after listed: [GroupSummary]) -> SessionFilter {
+  /// The filter once it takes sbd's `group-ls` answer `listed`, widened to keep the selected session in sight
+  /// as `sessions` lists it.
+  func filter(after listed: [GroupSummary], sessions: [SessionSummary]) -> SessionFilter {
     let ids = Set(listed.map(\.id))
     var next = filter
     next.knownGroups = ids
-    next.group = filter.group.pruned(known: ids.union(unlistedNewGroups))
+    next.group = filter.group.pruned(known: ids.union(unlistedNewGroups.keys))
+    if let id = selection, let s = sessions.first(where: { $0.id == id }) { next = widened(next, toShow: s) }
     return next
   }
 
@@ -464,7 +467,7 @@ final class BoardModel: ObservableObject {
   /// stays in sight.
   func showAnsweredGroup(_ answer: JSON) {
     guard !groupFilter.isAll, let id = answer["id"]?.string else { return }
-    unlistedNewGroups.insert(id)
+    if filter.knownGroups?.contains(id) != true { unlistedNewGroups[id] = 2 }
     groupFilter.insert(id)
   }
 
@@ -485,13 +488,14 @@ final class BoardModel: ObservableObject {
   /// that the app opens never stays out of sight.
   func showHidden(_ id: String) {
     // An insert of a key that the filter already holds still publishes. `apply` calls this every second.
-    let next = widened(filter, toShow: id)
+    guard let s = listedBoard.first(where: { $0.id == id }) else { return }
+    let next = widened(filter, toShow: s)
     if next != filter { filter = next }
   }
 
   /// `filter` with the keys added that it needs to show the listed session `id`.
-  private func widened(_ filter: SessionFilter, toShow id: String) -> SessionFilter {
-    guard !filter.isAll, let s = listedBoard.first(where: { $0.id == id }), !filter.shows(s) else { return filter }
+  private func widened(_ filter: SessionFilter, toShow s: SessionSummary) -> SessionFilter {
+    guard !filter.isAll, !filter.shows(s) else { return filter }
     var next = filter
     if !filter.org.shows(s), let key = OrgFilter.key(of: s) { next.org.insert(key) }
     if !filter.groupShows(s), let key = filter.groupKey(of: s) { next.group.insert(key) }
@@ -672,7 +676,8 @@ final class BoardModel: ObservableObject {
       updateSessionNames(list + allFollowups, removed: removed)
       // Only shown sessions notify. The last seen sessions cover every session.
       // Widening the filter later therefore sends nothing for a change that happened while the session was hidden.
-      if loaded { sessionsToNotify(list, filter: groups.map(filter(after:)) ?? filter).forEach(notifier) }
+      let filterAfter = groups.map { filter(after: $0, sessions: list) } ?? filter
+      if loaded { sessionsToNotify(list, filter: filterAfter).forEach(notifier) }
       // A hidden session keeps its drafts.
       let open = Set(list.flatMap { $0.cards.map(\.id) })
       drafts = drafts.filter { open.contains($0.key) }
