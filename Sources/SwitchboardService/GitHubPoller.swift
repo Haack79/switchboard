@@ -527,13 +527,13 @@ final class GitHubPoller {
     // A PR in `waited.pending` or in Trunk's queue polls at the pending rate. A
     // PR with any open wait also polls at once when the wait is newer than the
     // last read. That read can't show what happened after the wait was set.
-    var triggers: [String: ReadTrigger] = [:]
+    var candidates: [String: ReadCandidate] = [:]
     for id in Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)) {
-      triggers[id] = GitHub.readTrigger(
-        prs[id]?.pr, lastPolled: prs[id]?.polled, waitedAt: waited.created[id], all: all,
-        pendingRate: waited.pending.contains(id) || queued.contains(id), now: now, pendingMs: settings.pendingMs,
-        idleMs: settings.idleMs)
+      candidates[id] = ReadCandidate(
+        pr: prs[id]?.pr, lastPolled: prs[id]?.polled, waitedAt: waited.created[id],
+        pendingRate: waited.pending.contains(id) || queued.contains(id))
     }
+    let triggers = GitHub.dueReads(candidates, all: all, now: now, policy: settings.pollPolicy)
     let ids = triggers.keys.sorted()
     // A request's cost goes to its PRs after the request returns, because a PR's repo is known only after its first read.
     func count(_ prIds: [String], from before: Stats, to after: Stats, countsReads: Bool) {
