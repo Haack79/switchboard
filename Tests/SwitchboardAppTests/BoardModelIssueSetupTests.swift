@@ -170,4 +170,19 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
     #expect(sent.args["backlog"] == .array(backlog.map(JSON.string)))
     #expect(sent.args["labels"] == .array(["team/billing"]))
   }
+
+  /// A label set from `sb issues team` or config.json can hold a comma. A field that still shows the loaded text
+  /// gives the loaded list back, so Save leaves that label whole.
+  @Test(arguments: [["backlog,icebox"], ["team/billing, west", "ops"], ["ana-m"], []] as [[String]])
+  func anUnchangedFieldKeepsTheLoadedList(_ loaded: [String]) {
+    #expect(IssueSetupView.list(IssueSetupView.text(loaded), loaded: loaded) == loaded)
+  }
+
+  @Test func anEditedFieldSplitsOnCommas() {
+    #expect(IssueSetupView.list("backlog, icebox ,, ", loaded: ["backlog,icebox"]) == ["backlog", "icebox"])
+  }
+
+  @Test func beforeTheListLoadsAFieldSplitsOnCommas() {
+    #expect(IssueSetupView.list("backlog,icebox", loaded: nil) == ["backlog", "icebox"])
+  }
 }
