@@ -4,15 +4,18 @@ import Testing
 
 private func summary(
   state: AttentionState = .working, cwd: String = "/tmp/w", mergeMethod: MergeMethod? = nil, hasPR: Bool = true,
-  acknowledged: Bool? = nil, cleanup: CleanupStatus.State? = nil
+  acknowledged: Bool? = nil, cleanup: CleanupStatus.State? = nil, kind: SessionKind = .work, markedDone: Bool = false,
+  prState: PRState = .open
 ) -> SessionSummary {
   var pr = PRSummary(PullRequest(id: "PR_1", number: 1, url: "https://github.com/o/r/pull/1", repo: "o/r", title: ""))
   pr.mergeMethod = mergeMethod
+  pr.state = prState
   var s = SessionSummary(
     id: "s1", name: "s1", cwd: cwd, repo: "o/r", branch: "b", claudeSessionId: "c1", state: state, reason: "",
     since: 0, lastActivity: 0, live: true, claudePid: nil, attached: false, lastReply: nil, waits: [], notes: [],
-    pr: hasPR ? pr : nil)
+    pr: hasPR ? pr : nil, markedDone: markedDone)
   s.acknowledged = acknowledged
+  s.kind = kind
   s.cleanup = cleanup.map { CleanupStatus(state: $0) }
   return s
 }
@@ -56,6 +59,33 @@ private func usage(_ limits: [(String, Double)]) -> AccountUsage {
   @Test(arguments: AttentionState.allCases)
   func anAcknowledgedSessionCanUndoInAnyState(_ state: AttentionState) {
     #expect(summary(state: state, acknowledged: true).canAcknowledge)
+  }
+
+  // MARK: canHighlight
+
+  @Test(arguments: AttentionState.allCases.filter { $0 != .done })
+  func aWorkSessionCanBeHighlightedInEveryStateButDone(_ state: AttentionState) {
+    #expect(summary(state: state).canHighlight)
+  }
+
+  /// Its state is Needs you, so it keeps its highlight although the Board shows it in the Done footer.
+  @Test func aMergedPRWithUncommittedChangesCanBeHighlighted() {
+    #expect(summary(state: .needsYou, prState: .merged).canHighlight)
+  }
+
+  @Test func aWorkSessionMarkedDoneCannotBeHighlighted() {
+    #expect(!summary(state: .done, markedDone: true).canHighlight)
+  }
+
+  /// A merged or closed PR with a clean folder puts the session in Done without marking it done.
+  @Test(arguments: [PRState.merged, .closed])
+  func aWorkSessionDoneThroughItsPRCannotBeHighlighted(_ prState: PRState) {
+    #expect(!summary(state: .done, markedDone: false, prState: prState).canHighlight)
+  }
+
+  @Test(arguments: [SessionKind.manager, .chat, .operator], AttentionState.allCases)
+  func onlyAWorkSessionCanBeHighlighted(_ kind: SessionKind, _ state: AttentionState) {
+    #expect(!summary(state: state, kind: kind).canHighlight)
   }
 
   // MARK: hasTerminals

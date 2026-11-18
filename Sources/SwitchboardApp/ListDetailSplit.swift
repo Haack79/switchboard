@@ -55,12 +55,13 @@ struct ListSectionHeader: View {
 }
 
 extension View {
-  /// A list row's padding, and the accent background that marks the current row.
-  func listRowChrome(current: Bool) -> some View {
+  /// A list row's padding, the accent background that marks the current row, and the ring of a highlighted session.
+  func listRowChrome(current: Bool, highlighted: Bool = false) -> some View {
     padding(.horizontal, 12)
       .padding(.vertical, 6)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(RoundedRectangle(cornerRadius: 8).fill(current ? Color.accentColor.opacity(0.14) : Color.clear))
+      .highlightRing(highlighted, cornerRadius: 8, outset: 0)
       .padding(.horizontal, 6)
       .contentShape(Rectangle())
   }

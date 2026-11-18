@@ -293,6 +293,11 @@ enum Snapshot {
           layer.backgroundColor = apply(matrix, to: color)
           restores.append { layer.backgroundColor = color }
         }
+        // SwiftUI draws a rounded rectangle's stroke, such as a highlight ring, as the layer's border.
+        if layer.borderWidth > 0, let color = layer.borderColor {
+          layer.borderColor = apply(matrix, to: color)
+          restores.append { layer.borderColor = color }
+        }
         if let contents = layer.contents as? NSObject, let image = tinted(contents, through: matrix) {
           layer.contents = image
           restores.append { layer.contents = contents }
