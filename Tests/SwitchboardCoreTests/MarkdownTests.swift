@@ -201,6 +201,15 @@ private func alert(_ kind: MarkdownBlock.AlertKind, _ blocks: [MarkdownBlock]) -
       MarkdownBlock.parse("> [!NOTE] `code`\n> text") == [
         .quote([.paragraph(text(Run("[!NOTE] "), Run("code", .code), Run("\ntext")))])
       ])
+    // HTML after the marker on its line stays a quote, even when the HTML draws a line break.
+    for html in ["<br>", "<br/>", "<div>", "<p>", "<b>x</b>", "<span>x</span>"] {
+      let blocks = MarkdownBlock.parse("> [!NOTE]\(html)Body\n> more")
+      #expect(blocks.count == 1, "\(html)")
+      if case .quote(_, let alert) = blocks.first { #expect(alert == nil, "\(html)") } else { Issue.record("\(html)") }
+    }
+    // A hard line break after the marker ends its line, as a soft one does.
+    #expect(MarkdownBlock.parse("> [!NOTE]  \n> Body") == [alert(.note, [.paragraph("Body")])])
+    #expect(MarkdownBlock.parse("> [!NOTE]\\\n> Body") == [alert(.note, [.paragraph("Body")])])
     #expect(MarkdownBlock.parse("> [!NOTE]") == [.quote([.paragraph("[!NOTE]")])])
     #expect(MarkdownBlock.parse("> [!DANGER]\n> text") == [.quote([.paragraph("[!DANGER]\ntext")])])
     #expect(

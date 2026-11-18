@@ -219,7 +219,7 @@ public enum MarkdownBlock: Equatable, Sendable {
     case "block_quote":
       let blocks = blocks(of: node, depth: depth + 1)
       // GitHub reads an alert only at the top level of the document.
-      return cmark_node_get_type(cmark_node_parent(node)) == CMARK_NODE_DOCUMENT
+      return cmark_node_get_type(cmark_node_parent(node)) == CMARK_NODE_DOCUMENT && firstLineIsPlainText(node)
         ? quote(alerting: blocks) : .quote(blocks)
     case "thematic_break":
       return .rule
@@ -230,18 +230,23 @@ public enum MarkdownBlock: Equatable, Sendable {
     }
   }
 
-  /// A quote is an alert when its first line is a marker such as `[!WARNING]`. As on GitHub, the
-  /// marker is plain text on a line of its own, and some text follows it.
+  /// Whether the quote's first paragraph opens with a line of plain text, which a line break or the paragraph's end
+  /// follows. The line is read from cmark-gfm's tree, so styled text or HTML after the text on the same line,
+  /// such as `<br>`, makes it false.
+  private static func firstLineIsPlainText(_ quote: Node) -> Bool {
+    guard let paragraph = cmark_node_first_child(quote), kind(paragraph) == "paragraph" else { return false }
+    var child = cmark_node_first_child(paragraph)
+    while let node = child, kind(node) == "text" { child = cmark_node_next(node) }
+    return child.map { ["softbreak", "linebreak"].contains(kind($0)) } ?? true
+  }
+
+  /// A quote whose first line is a marker such as `[!WARNING]` is an alert, when some text follows the marker.
+  /// The caller checks that the first line is plain text, as GitHub requires.
   private static func quote(alerting blocks: [MarkdownBlock]) -> MarkdownBlock {
-    guard case .paragraph(let text)? = blocks.first, let first = text.runs.first,
-      first.style.isEmpty, first.link == nil, first.image == nil
-    else { return .quote(blocks) }
+    guard case .paragraph(let text)? = blocks.first, let first = text.runs.first else { return .quote(blocks) }
     let line = first.text.prefix { $0 != "\n" }
     let marker = line.trimmingCharacters(in: .whitespaces)
-    // Styled text after the marker starts a new run. The marker ends its line only when its run goes on past the
-    // line or when the paragraph has no other run.
-    guard line.endIndex != first.text.endIndex || text.runs.count == 1,
-      marker.hasPrefix("[!"), marker.hasSuffix("]"),
+    guard marker.hasPrefix("[!"), marker.hasSuffix("]"),
       let kind = AlertKind(rawValue: marker.dropFirst(2).dropLast().lowercased())
     else { return .quote(blocks) }
     var rest = text
