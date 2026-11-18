@@ -7,7 +7,9 @@ import Testing
 /// `.name` when the single path segment after `switchboard://session/` percent-decodes to a valid name. Any app or
 /// web page can open the scheme, so each refused case changes one thing about `switchboard://session/seb4ec`.
 @Suite struct SessionLinkTests {
-  private static let ids = ["seb4ec", "sgcctv", "s23456", "szzzzz", "sebc4e"]
+  private static let ids = [
+    "seb4ec", "sgcctv", "s23456", "szzzzz", "sebc4e", "swb_eb4ec", "swb_23456", "swb_zzzzz", "swb_s2abc",
+  ]
 
   private func target(_ string: String) throws -> SessionLink.Target? {
     SessionLink.target(from: try #require(URL(string: string), "\(string) is not a URL"))
@@ -15,8 +17,9 @@ import Testing
 
   // MARK: Id targets
 
-  @Test func urlForAnIdIsTheSchemeTheHostAndTheId() {
-    #expect(SessionLink.url(for: "seb4ec").absoluteString == "switchboard://session/seb4ec")
+  @Test(arguments: ["seb4ec", "swb_eb4ec"])
+  func urlForAnIdIsTheSchemeTheHostAndTheId(_ id: String) {
+    #expect(SessionLink.url(for: id).absoluteString == "switchboard://session/\(id)")
   }
 
   /// Launch Services hands the app a URL parsed from text, so the round trip goes through the text.
@@ -150,6 +153,11 @@ import Testing
     "switchboard://session/seb4e%63",
     "switchboard://session/%73%65%62%34%65%63",
     "switchboard://session/s%67cctv",
+    "switchboard://session/swb%5Feb4ec",
+    "switchboard://session/swb%5feb4ec",
+    "switchboard://session/%73wb_eb4ec",
+    "switchboard://session/swb_eb4e%63",
+    "switchboard://session/%73%77%62%5F%65%62%34%65%63",
   ])
   func aPercentEncodedIdIsNotASessionLink(_ string: String) throws {
     #expect(try target(string) == nil)
@@ -271,6 +279,17 @@ import Testing
       // Whitespace around an id is not whitespace only, so it is a name, not the id
       ("switchboard://session/seb4ec%20", "seb4ec "),
       ("switchboard://session/%20seb4ec", " seb4ec"),
+      // The same for the new form, and the new prefix alone
+      ("switchboard://session/swb_", "swb_"),
+      ("switchboard://session/swb_eb4e", "swb_eb4e"),
+      ("switchboard://session/swb_eb4ec1", "swb_eb4ec1"),
+      ("switchboard://session/swb_eb4eC", "swb_eb4eC"),
+      ("switchboard://session/SWB_eb4ec", "SWB_eb4ec"),
+      ("switchboard://session/swb-eb4ec", "swb-eb4ec"),
+      ("switchboard://session/swb__eb4e", "swb__eb4e"),
+      ("switchboard://session/swbeb4ec", "swbeb4ec"),
+      ("switchboard://session/swb_eb4e1", "swb_eb4e1"),
+      ("switchboard://session/swb_eb4ec%20", "swb_eb4ec "),
     ] as [(String, String)])
   func aPathThatIsNotTheIdTextIsANameTarget(_ string: String, _ name: String) throws {
     #expect(try target(string) == .name(name))
@@ -357,7 +376,8 @@ import Testing
   private static let roundTripNames = [
     "fix-cache", "Fix CI chat", "posthog-code/flag-evaluations-table", "100%", "a+b", "a%2Fb", "café", "日本語",
     "naïve ümlaut", "Fix `sb ls` *now* <x>", "a]b[c\\d", "snake_case_name", "a;b", "a?b#c", "Manager", "session",
-    "SEB4EC", "seb4e", "seb4ec ", " seb4ec", "~tilde", ".hidden", "emoji 🚀", "e\u{301}",
+    "SEB4EC", "seb4e", "seb4ec ", " seb4ec", "~tilde", ".hidden", "emoji 🚀", "e\u{301}", "swb_", "swb_eb4e",
+    "swb_eb4ec1", "SWB_eb4ec", "swb-eb4ec", "swb_eb4ec ",
     String(repeating: "é", count: 200),
   ]
 
@@ -406,6 +426,7 @@ import Testing
     (id: "seb4ec", name: "fix-cache"),
     (id: "sgcctv", name: "Fix CI chat"),
     (id: "s23456", name: "posthog-code/flag-evaluations-table"),
+    (id: "swb_eb4ec", name: "new-id-form"),
   ]
 
   @Test func anIdTargetResolvesToTheSessionWithThatId() {
@@ -470,7 +491,7 @@ import Testing
   }
 
   /// Q4: no id prefixes, and a name never matches an id.
-  @Test(arguments: ["seb4e", "seb4", "s", "seb4ec", "SEB4EC", "sgcc"])
+  @Test(arguments: ["seb4e", "seb4", "s", "seb4ec", "SEB4EC", "sgcc", "swb_", "swb_eb4", "swb_eb4ec"])
   func aNameTargetNeverMatchesAnIdOrAnIdPrefix(_ name: String) {
     #expect(SessionLink.resolve(.name(name), in: Self.sessions) == .unknown)
   }
@@ -488,6 +509,8 @@ import Testing
       ("switchboard://session/seb4ec", "seb4ec"),
       ("switchboard://session/Fix%20CI%20chat", "sgcctv"),
       ("switchboard://session/posthog-code%2Fflag-evaluations-table", "s23456"),
+      ("switchboard://session/swb_eb4ec", "swb_eb4ec"),
+      ("switchboard://session/new-id-form", "swb_eb4ec"),
     ] as [(String, String)])
   func aParsedLinkResolvesToItsSession(_ string: String, _ id: String) throws {
     let parsed = try #require(try target(string))
@@ -557,12 +580,14 @@ import Testing
   }
 
   /// The Copy Link URL selects the session by its id, whatever the name says.
-  @Test(arguments: ["fix-cache", "a]b[c\\d", "Fix `sb ls` *now* <x>", "sgcctv"])
-  func theLinkThatMarkdownWritesParsesAsTheIdTarget(_ name: String) throws {
-    let read = try paragraph(SessionLink.markdown(name: name, id: "seb4ec"))
+  @Test(
+    arguments: ["fix-cache", "a]b[c\\d", "Fix `sb ls` *now* <x>", "sgcctv", "snake_case_name", "swb_eb4ec"],
+    ["seb4ec", "swb_eb4ec"])
+  func theLinkThatMarkdownWritesParsesAsTheIdTarget(_ name: String, _ id: String) throws {
+    let read = try paragraph(SessionLink.markdown(name: name, id: id))
     let link = try #require(read.runs.first?.link)
 
-    #expect(try target(link) == .id("seb4ec"))
+    #expect(try target(link) == .id(id))
   }
 
   // MARK: Guidance
@@ -573,6 +598,11 @@ import Testing
 
   @Test func theGuidanceShowsASessionLink() {
     #expect(SessionLink.guidance.contains("](switchboard://session/"), "\(SessionLink.guidance)")
+  }
+
+  /// An agent copies the example, so it shows the form that new sessions get.
+  @Test func theGuidanceExampleLinksANewFormId() {
+    #expect(SessionLink.guidance.contains("](switchboard://session/swb_eb4ec)"), "\(SessionLink.guidance)")
   }
 
   /// An agent copies the example, so each link in it must parse as an id target.

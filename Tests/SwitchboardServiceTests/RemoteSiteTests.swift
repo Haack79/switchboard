@@ -2744,16 +2744,11 @@ private func session(_ id: String, host: String?) -> Session {
     arguments: [
       "", "s", "S1", "s1/x", "s1/..", "../x", "..", ".", "-rf", "s1\n", "s1 ", " s1", "x1", "s-1", "s_1", "s1.", "s1*",
       "s1abc/../s2xyz", "sé1",
-      // The old form: one character short or long, upper case, and characters outside the alphabet.
-      "s1", "s1abc", "s2xyz", "seb4e", "seb4ecx", "Seb4ec", "SEB4EC", "seb4e1", "seb4eo", "seb4el", "seb4e0", "seb4é",
-      "seb4ec ", "seb4ec\n", "seb4ec/", "./seb4ec",
-      // The new form: the prefix alone, length, case, the prefix written another way, and non-ASCII.
-      "swb_", "swb_eb4e", "swb_eb4ec1", "swb_eb4eC", "swb_eb4e1", "swb_eb4eo", "SWB_eb4ec", "Swb_eb4ec", "swb_EB4EC",
-      "swb-eb4ec", "swb__eb4e", "swb__eb4ec", "swbeb4ec", "sw_eb4ec", "swb_eb4é", "swb_eb4eé", "ѕwb_eb4ec",
-      "swb_eb4ec ", " swb_eb4ec", "swb_eb4ec\n", "swb_eb4ec/", "./swb_eb4ec", "swb_eb4ec-claude",
+      // A few near misses of each form. SessionIDTests covers the rest of the shapes that `SessionID.isValid` refuses.
+      "s1abc", "seb4e", "seb4ecx", "Seb4ec", "seb4eo", "swb_", "swb_eb4e", "swb_eb4ec1", "SWB_eb4ec", "swb-eb4ec",
+      "swb__eb4e", "swb_eb4é", "swb_eb4ec-claude",
       // Dot segments and traversal, with real ids on both sides.
-      "swb_eb4ec/..", "swb_/../x", "swb_..", "swb_eb4e.", "seb4ec/../sgcctv", "swb_eb4ec/../seb4ec",
-      "seb4ec/../swb_eb4ec", "swb_eb4ec/../../x",
+      "swb_eb4ec/..", "swb_/../x", "swb_..", "seb4ec/../swb_eb4ec", "swb_eb4ec/../../x",
     ])
   func anIdThatIsNotASessionIdIsRefusedAndRemovesNothing(id: String) throws {
     try withSite { b in

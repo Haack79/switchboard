@@ -80,7 +80,7 @@ public struct SessionNames: Equatable, Sendable {
     }
     var candidates: [Span] = []
     var i = range.lowerBound
-    while i + SessionID.minLength <= range.upperBound {
+    while i < range.upperBound {
       if let (match, length) = match(at: i, before: range.upperBound, s) {
         let bare = i..<i + length
         let wide = collapsed(bare, match, within: range, s)

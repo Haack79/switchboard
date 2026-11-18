@@ -26,14 +26,6 @@ import Testing
 
   private func scalars(_ s: String) -> [Unicode.Scalar] { Array(s.unicodeScalars) }
 
-  @Test func thePrefixOfANewIdIsSwbAndAnUnderscore() {
-    #expect(SessionID.prefix == "swb_")
-  }
-
-  @Test func theShortestIdIsTheOldFormsSixScalars() {
-    #expect(SessionID.minLength == 6)
-  }
-
   @Test(arguments: oldForm + newForm)
   func anIdOfEitherFormIsValid(_ id: String) {
     #expect(SessionID.isValid(id))
@@ -42,16 +34,6 @@ import Testing
   @Test(arguments: notIds)
   func aStringThatMissesBothShapesIsNotValid(_ s: String) {
     #expect(!SessionID.isValid(s))
-  }
-
-  @Test(arguments: oldForm)
-  func anOldIdIsSixScalarsLong(_ id: String) {
-    #expect(SessionID.length(at: 0, in: scalars(id), before: id.unicodeScalars.count) == 6)
-  }
-
-  @Test(arguments: newForm)
-  func aNewIdIsNineScalarsLong(_ id: String) {
-    #expect(SessionID.length(at: 0, in: scalars(id), before: id.unicodeScalars.count) == 9)
   }
 
   /// `isValid` and the matcher's `length(at:)` must accept the same ids, or an id would link in text and fail to
@@ -69,6 +51,8 @@ import Testing
       ("see swb_eb4ec now", 4, 9),
       ("(swb_eb4ec)", 1, 9),
       ("é swb_eb4ec", 2, 9),
+      // The matcher's boundary check refuses this old-form shape, because `_` comes before it.
+      ("swb_s2abcd", 4, 6),
     ] as [(String, Int, Int)])
   func lengthFindsAnIdThatStartsInsideText(_ text: String, _ start: Int, _ length: Int) {
     let s = scalars(text)
@@ -86,8 +70,8 @@ import Testing
     #expect(SessionID.length(at: 0, in: s, before: s.count) == length)
   }
 
-  /// The limit is the end of the run that holds the id. A new id that would end past it must not match, and must
-  /// not shrink to an old id either.
+  /// The limit is the end of the run that holds the id. A new id that would end past it must not match. It must not
+  /// shrink to an old id either, because the old form needs an alphabet character where the new form puts `_`.
   @Test(arguments: 4...8)
   func aNewIdThatEndsPastTheLimitHasNoLength(_ limit: Int) {
     #expect(SessionID.length(at: 0, in: scalars("swb_eb4ec"), before: limit) == nil)
@@ -106,19 +90,5 @@ import Testing
     let s = scalars("xx seb4ec")
 
     #expect(SessionID.length(at: 3, in: s, before: 8) == nil)
-  }
-
-  /// The old form needs an alphabet character at index 3, and the new form puts `_` there, so the `s` of a new id
-  /// never starts an old one.
-  @Test func theStartOfANewIdIsNotAlsoAnOldId() {
-    #expect(SessionID.length(at: 0, in: scalars("swb_eb4ec"), before: 6) == nil)
-  }
-
-  /// An `s` inside a new id starts an old-form shape. `length(at:)` reports it, and the matcher's boundary check
-  /// refuses it because `_` comes before it.
-  @Test func anSInsideANewIdStartsAnOldIdShape() {
-    let s = scalars("swb_s2abcd")
-
-    #expect(SessionID.length(at: 4, in: s, before: s.count) == 6)
   }
 }

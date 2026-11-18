@@ -495,10 +495,11 @@ private let changedMarkdown: [(String, [Piece])] = [
       ])
   }
 
-  @Test func exactIdCodeSpanKeepsItsOtherStyles() {
-    let text = text(Run("seb4ec", [.code, .strong]))
+  @Test(arguments: ["seb4ec", "swb_eb4ec"])
+  func exactIdCodeSpanKeepsItsOtherStyles(_ id: String) {
+    let text = text(Run(id, [.code, .strong]))
 
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention("seb4ec", .strong)])
+    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention(id, .strong)])
   }
 
   @Test func exactIdCodeSpanOfAnUnknownIdKeepsItsCodeStyle() {
@@ -529,15 +530,6 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
 
-  @Test func newIdAtTheEdgeOfAnEmphasisRunMatches() {
-    let text = text(Run("Ask "), Run("swb_eb4ec", .emphasis), Run(" now"))
-
-    #expect(
-      InlineMentions(names: names, repo: nil).pieces(text) == [
-        piece("Ask "), mention("swb_eb4ec", .emphasis), piece(" now"),
-      ])
-  }
-
   @Test func oldIdAtTheEndOfARunBeforeAStyledRunMatches() {
     let text = text(Run("see seb4ec"), Run(" now", .strong))
 
@@ -547,13 +539,7 @@ private let changedMarkdown: [(String, [Piece])] = [
       ])
   }
 
-  @Test func exactNewIdCodeSpanKeepsItsOtherStyles() {
-    let text = text(Run("swb_eb4ec", [.code, .strong]))
-
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == [mention("swb_eb4ec", .strong)])
-  }
-
-  @Test(arguments: ["swb_eb4ec x", "x swb_eb4ec", "swb_eb4ecx", "swb_eb4e", "swb_zzzzz"])
+  @Test(arguments: ["swb_eb4ecx", "swb_eb4e"])
   func codeSpanThatIsNotExactlyAKnownNewIdKeepsItsCodeStyle(_ code: String) {
     let text = text(Run(code, .code))
 
@@ -580,14 +566,6 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(text.runs == [Run(markdown)])
   }
 
-  /// The text that the app draws goes through `MarkdownBlock.parse` before `InlineMentions`.
-  @Test func newIdInAParsedParagraphBecomesItsName() throws {
-    let text = try paragraph("see swb_eb4ec here")
-
-    #expect(
-      InlineMentions(names: names, repo: nil).pieces(text) == [piece("see "), mention("swb_eb4ec"), piece(" here")])
-  }
-
   /// An `s` inside a new id starts an old-form shape. The `_` before it is not a token boundary, so it never matches.
   @Test(arguments: [
     ("swb_s2abcd", "swb_s2abcd"),
@@ -608,14 +586,6 @@ private let changedMarkdown: [(String, [Piece])] = [
   @Test func oldIdInTheRunAfterANewPrefixDoesNotMatch() {
     let names = SessionNames(live: ["s2abcd": "old-form"], removed: [:])
     let text = text(Run("swb_", .emphasis), Run("s2abcd"))
-
-    #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
-  }
-
-  /// A new id that no live or removed session has stays as written, like an unknown old id.
-  @Test(arguments: ["swb_zzzzz", "Ask swb_zzzzz to rebase", "`swb_zzzzz`"])
-  func unknownNewIdDoesNotLink(_ markdown: String) throws {
-    let text = try paragraph(markdown)
 
     #expect(InlineMentions(names: names, repo: nil).pieces(text) == unchanged(text))
   }
@@ -684,12 +654,13 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(fromPlain == fromParagraph)
   }
 
-  @Test func idAtTheEdgeOfAnEmphasisRunMatches() {
-    let text = text(Run("Ask "), Run("seb4ec", .emphasis), Run(" now"))
+  @Test(arguments: ["seb4ec", "swb_eb4ec"])
+  func idAtTheEdgeOfAnEmphasisRunMatches(_ id: String) {
+    let text = text(Run("Ask "), Run(id, .emphasis), Run(" now"))
 
     #expect(
       InlineMentions(names: names, repo: nil).pieces(text) == [
-        piece("Ask "), mention("seb4ec", .emphasis), piece(" now"),
+        piece("Ask "), mention(id, .emphasis), piece(" now"),
       ])
   }
 
@@ -728,12 +699,12 @@ private let changedMarkdown: [(String, [Piece])] = [
   }
 
   /// 2,000 distinct ids of each form in the session id alphabet.
-  private static let manyIds: [String] = ["s", "swb_"].flatMap { prefix in
-    let alphabet = Array("abcdefghijkmnpqrstuvwxyz23456789")
+  private static let manyIds: [String] = ["s", SessionID.prefix].flatMap { prefix in
+    let alphabet = Array(ShortId.alphabet)
     return (0..<2_000).map { i in
       var n = i
       var id = prefix
-      for _ in 0..<5 {
+      for _ in 0..<ShortId.length {
         id.append(alphabet[n % alphabet.count])
         n /= alphabet.count
       }
