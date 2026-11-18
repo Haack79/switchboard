@@ -2606,9 +2606,13 @@ public final class Service {
       openPrompt: facts.openPermission != nil || facts.openQuestion != nil, pr: facts.pr.map(PRSummary.init),
       markedDone: s.done)
     out.url = SessionLink.url(for: id).absoluteString
-    out.startBranch = BranchSwitch.startBranch(s, facts)
-    let earlier = facts.earlierPRNumbers
-    if !earlier.isEmpty { out.earlierPRs = earlier }
+    // `prNumbers` keeps no repo, so a host could read the number of an earlier PR in a repo that it may not read.
+    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip notices a parent already got.
+    if origin == .mac {
+      out.startBranch = BranchSwitch.startBranch(s, facts)
+      let earlier = facts.earlierPRNumbers
+      if !earlier.isEmpty { out.earlierPRs = earlier }
+    }
     if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)

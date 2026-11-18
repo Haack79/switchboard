@@ -1060,6 +1060,42 @@ private func text(_ answer: Response) -> String {
     }
   }
 
+  /// sbd remembers every PR that a child had across a restart, so the child's return to an earlier PR tells its
+  /// parent on the host nothing new.
+  @Test(.timeLimit(.minutes(1)))
+  func aParentOnTheHostHearsNothingWhenItsChildReturnsToAnEarlierPRAfterARestart() throws {
+    try withSessions(hosts: listedHosts) { service in
+      service.queue.sync {
+        var child = session("m3", host: "mini")
+        child.parent = "m1"
+        service.entries["m3"] = Service.Entry(session: child)
+      }
+      func give(_ number: Int) throws {
+        let pr = try JSON(
+          encoding: PullRequest(
+            id: "PR_\(number)", number: number, url: "https://github.com/secret/listed/pull/\(number)",
+            repo: "secret/listed", title: "Listed \(number)"))
+        service.queue.sync {
+          service.entries["m3"]?.facts.prompts = 1
+          _ = service.record("m3", "pr", ["pr": pr, "comments": []])
+        }
+      }
+      try give(77)
+      try give(78)
+      service.queue.sync { service.seedParentMarks(now: nowMs()) }
+      try give(77)
+      let heard = service.queue.sync { () -> [String] in
+        service.notifyParents(now: nowMs())
+        return service.parentNotices.unsent["m1"] ?? []
+      }
+      let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
+        $0.data["text"]?.string
+      }
+
+      #expect(!(sent + heard).joined(separator: "\n").contains("opened PR #77"), "\(sent + heard)")
+    }
+  }
+
   // MARK: Messages to the host's session
 
   @Test(.timeLimit(.minutes(1)))
