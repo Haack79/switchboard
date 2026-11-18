@@ -107,12 +107,17 @@ private struct IssueListHeader: View {
         }
         .pickerStyle(.inline)
         Toggle("Group by Repo", isOn: $model.issuesByRepo)
+        if model.showsBacklogToggle { Toggle("Hide Backlog", isOn: $model.hidesBacklog) }
       } label: {
         Image(systemName: "arrow.up.arrow.down")
       }
       .menuIndicator(.hidden)
       .fixedSize()
-      .help("Sort the issues, or group them by repository")
+      .help(
+        model.showsBacklogToggle
+          ? "Sort the issues, group them by repository, or hide the backlog"
+          : "Sort the issues, or group them by repository"
+      )
       .accessibilityLabel("Sort and group")
       Button {
         model.showingIssueSetup = true
@@ -141,15 +146,15 @@ private struct IssueRows: View {
         LazyVStack(alignment: .leading, spacing: 2) {
           ForEach(sections) { section in
             let collapsed = model.collapsedIssueSections.contains(section.id)
-            Button {
-              model.toggleIssueSection(section.id)
-            } label: {
-              ListSectionHeader(title: section.title, count: section.issues.count, collapsed: collapsed)
-                .contentShape(Rectangle())
+            if section.id == IssueSection.backlogID { Divider().padding(.top, 6) }
+            if let hidden = section.hiddenCount {
+              header("Backlog hidden", count: hidden, collapsed: true) { model.showBacklog() }
+                .help("Show the issues with a backlog label")
+            } else {
+              header(section.title, count: section.issues.count, collapsed: collapsed) {
+                model.toggleIssueSection(section.id)
+              }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-              ListSectionHeader.spoken(title: section.title, count: section.issues.count, collapsed: collapsed))
             if !collapsed {
               ForEach(section.issues) { row in
                 IssueRow(row: row, current: row.id == current).id(row.id)
@@ -169,6 +174,14 @@ private struct IssueRows: View {
         if let id = model.currentIssue?.id { withAnimation { proxy.scrollTo(id) } }
       }
     }
+  }
+
+  private func header(_ title: String, count: Int, collapsed: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      ListSectionHeader(title: title, count: count, collapsed: collapsed).contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(ListSectionHeader.spoken(title: title, count: count, collapsed: collapsed))
   }
 }
 
@@ -200,7 +213,7 @@ private struct IssueRow: View {
           .help(issue.assignees.joined(separator: ", "))
       }
     }
-    .opacity(worked ? 0.55 : 1)
+    .opacity(worked || row.backlog ? 0.55 : 1)
     .listRowChrome(current: current)
     .onTapGesture {
       model.issueFocus = row.id
@@ -370,7 +383,7 @@ private struct IssuesNothingMatches: View {
   let list: IssueList
 
   var body: some View {
-    let teamUnassigned = model.issues.filter { $0.bucket == .teamUnassigned }.count
+    let teamUnassigned = model.issues.filter { $0.bucket == .teamUnassigned && !$0.backlog }.count
     let checked =
       list.polledAt.map { "\(list.sources.count) sources checked \(ago($0)) ago." }
       ?? "Checking \(list.sources.count) sources."

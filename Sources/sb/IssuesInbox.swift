@@ -8,7 +8,16 @@ func issues(_ a: Args) {
   case nil:
     var list = decode(call("issues"), as: IssueList.self)
     if a.switches.contains("--mine") { list.issues.removeAll { $0.bucket != .mine } }
-    if a.json { printJSON((try? JSON(encoding: list)) ?? .null) } else { printIssues(list) }
+    var hiddenBacklog = 0
+    if a.switches.contains("--no-backlog") {
+      hiddenBacklog = list.issues.filter(\.backlog).count
+      list.issues.removeAll(where: \.backlog)
+    }
+    if a.json {
+      printJSON((try? JSON(encoding: list)) ?? .null)
+    } else {
+      printIssues(list, hiddenBacklog: hiddenBacklog)
+    }
   case "start":
     guard let ref = words.first else { die("usage: sb issues start <owner/name#N> [--preset P] [--group G]") }
     var args: [String: JSON] = ["issue": .string(ref)]
@@ -23,15 +32,17 @@ func issues(_ a: Args) {
     var args: [String: JSON] = [:]
     if let labels = a.allValues["--label"] { args["labels"] = .array(labels.map(JSON.string)) }
     if let people = a.allValues["--person"] { args["people"] = .array(people.map(JSON.string)) }
+    if let backlog = a.allValues["--backlog"] { args["backlog"] = .array(backlog.map(JSON.string)) }
     let team = decode(call(args.isEmpty ? "issues" : "issues-settings", args), as: IssueList.self).team
     if a.json {
       printJSON((try? JSON(encoding: team)) ?? .null)
     } else {
       print("labels: \(team.labels.isEmpty ? "none" : team.labels.joined(separator: ", "))")
       print("people: \(team.people.isEmpty ? "none" : team.people.joined(separator: ", "))")
+      if !team.backlog.isEmpty { print("backlog: \(team.backlog.joined(separator: ", "))") }
     }
   default:
-    die("usage: sb issues [--mine] | start | source add|rm|ls | team")
+    die("usage: sb issues [--mine] [--no-backlog] | start | source add|rm|ls | team")
   }
 }
 
@@ -59,22 +70,30 @@ private func issueSource(_ a: Args, _ words: [String]) {
   }
 }
 
-private func printIssues(_ list: IssueList) {
+/// Prints the buckets, then the backlog under its own heading. `hiddenBacklog` counts the backlog issues that
+/// `--no-backlog` left out.
+private func printIssues(_ list: IssueList, hiddenBacklog: Int) {
   if list.sources.isEmpty {
     print(noSources)
     return
   }
   if let error = list.error { warn(error) }
+  let shown = list.issues.filter { !$0.backlog }
   for bucket in IssueBucket.allCases {
-    let rows = list.issues.filter { $0.bucket == bucket }
-    guard !rows.isEmpty else { continue }
-    print("\(bucket.title) (\(rows.count))")
-    for row in IssueSort.updated.sorted(rows.map(\.issue)) {
-      let assignees = row.assignees.isEmpty ? "" : "  @\(row.assignees.joined(separator: " @"))"
-      print("  \(row.repo)#\(row.number)  \(row.title)\(assignees)")
-    }
+    printIssueSection(bucket.title, shown.filter { $0.bucket == bucket })
   }
-  if list.issues.isEmpty { print("No open issues from \(list.sources.count) sources.") }
+  printIssueSection("Backlog", list.issues.filter(\.backlog))
+  if hiddenBacklog > 0 { print("Backlog (\(hiddenBacklog)) hidden") }
+  if list.issues.isEmpty && hiddenBacklog == 0 { print("No open issues from \(list.sources.count) sources.") }
+}
+
+private func printIssueSection(_ title: String, _ rows: [ListedIssue]) {
+  guard !rows.isEmpty else { return }
+  print("\(title) (\(rows.count))")
+  for row in IssueSort.updated.sorted(rows.map(\.issue)) {
+    let assignees = row.assignees.isEmpty ? "" : "  @\(row.assignees.joined(separator: " @"))"
+    print("  \(row.repo)#\(row.number)  \(row.title)\(assignees)")
+  }
 }
 
 private let noSources = "No sources. Add one with: sb issues source add <org|owner/name> [--label L]"

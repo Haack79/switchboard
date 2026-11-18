@@ -49,7 +49,7 @@ func offlineModel() -> BoardModel {
 @MainActor
 func orgFilterModel(_ filter: OrgFilter = OrgFilter(), store: UserDefaults? = nil) -> BoardModel {
   _ = NSApplication.shared
-  return BoardModel(client: offlineClient(), orgFilterStore: store, orgFilter: filter)
+  return BoardModel(client: offlineClient(), viewSettingsStore: store, orgFilter: filter)
 }
 
 let posthogOnly = OrgFilter(keys: ["posthog"])
