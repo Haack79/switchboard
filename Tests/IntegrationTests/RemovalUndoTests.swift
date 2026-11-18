@@ -44,7 +44,7 @@ extension RemovalJobTests {
     let sbd = try undoInstance()
     let s = try sbd.idleSession()
     _ = try sbd.sb("schedule", s.id, "--every", "1m", "tick one", "--json")
-    #expect(queued(try sbd.queueRemoval([s.id], scope: "work", worktree: false)) == [s.id])
+    try sbd.holdForRemoval(s.id)
 
     try sbd.advanceClock(61_000)
     try sbd.giveTheWorkerTime()
