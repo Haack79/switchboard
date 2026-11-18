@@ -414,14 +414,19 @@ enum SourceAudit {
     ("  Text(LocalizedStringKey(note.text))", "LocalizedStringKey("),
   ])
   func markdownDrawnOutsideMarkdownViewFails(line: String, rule: String) {
-    let rules = SourceAudit.scan(file: "SwitchboardApp/Notes.swift", text: line).map(\.rule)
+    let file = SourceAudit.app + "Notes.swift"
 
-    #expect(rules.contains(rule), "\(line)")
+    let findings = SourceAudit.scan(file: file, text: line)
+
+    #expect(findings == [SourceAudit.Finding(file: file, line: 1, rule: rule)])
   }
 
-  @Test func theMarkdownRulesPassInTheirAllowedFilesAndOutsideTheApp() {
-    #expect(SourceAudit.scan(file: "SwitchboardApp/MarkdownView.swift", text: "  MarkdownBlock.parse(text)").isEmpty)
-    #expect(SourceAudit.scan(file: "SwitchboardApp/InlineText.swift", text: "  LocalizedStringKey(s)").isEmpty)
-    #expect(SourceAudit.scan(file: "SwitchboardCore/Markdown.swift", text: "  cmark_parser_new(0)").isEmpty)
+  @Test(arguments: [
+    (SourceAudit.app + "MarkdownView.swift", "  MarkdownBlock.parse(text)"),
+    (SourceAudit.app + "InlineText.swift", "  LocalizedStringKey(s)"),
+    ("SwitchboardCore/Markdown.swift", "  cmark_parser_new(0)"),
+  ])
+  func aMarkdownRuleNameInItsAllowedFileOrOutsideTheAppPasses(file: String, line: String) {
+    #expect(SourceAudit.scan(file: file, text: line).isEmpty)
   }
 }
