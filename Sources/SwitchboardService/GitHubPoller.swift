@@ -55,6 +55,9 @@ final class GitHubPoller {
   /// when a later read shows the same head commit and outcome. `outcome` is
   /// "failed" for any failure.
   var confirming: [String: (sha: String, outcome: String, polled: Int64)] = [:]
+  /// How long after the poll that records a read in `confirming` the confirming read comes, in ms. With nil, the
+  /// PR's next due poll reads it.
+  var confirmReadAfter: Int64?
   /// The `queue` waits whose PR a read showed in GitHub's merge queue.
   /// GitHub reports no removal state, so a later read that shows the open PR
   /// outside the queue means the queue dropped it.

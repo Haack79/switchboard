@@ -14,7 +14,7 @@ private final class RequestedReads {
   /// The times at which the poller scheduled a wake, in order.
   let wakes = OSAllocatedUnfairLock(initialState: [Int64]())
 
-  init(fakeWakes: Bool = true) throws {
+  init(fakeWakes: Bool = true, waits: [Wait] = []) throws {
     h = try PollerHarness()
     var pr = cachePR()
     pr.reviewDecision = .approved
@@ -23,6 +23,7 @@ private final class RequestedReads {
     h.service.queue.sync {
       var s = Session(id: "s1", name: "s1", cwd: h.home.path, claudeSessionId: "uuid-s1", created: 0)
       s.started = true
+      s.waits = waits
       var entry = Service.Entry(session: s)
       entry.facts.pr = pr
       h.service.entries["s1"] = entry
@@ -102,5 +103,30 @@ private final class RequestedReads {
     let deadline = Date().addingTimeInterval(30)
     while r.count == 0 && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
     #expect(r.count == 1)
+  }
+}
+
+/// `confirmReadAfter` asks for the read that confirms a `ci` wait's outcome at a set time.
+@Suite struct GitHubPollerConfirmReadTests {
+  /// A `ci` wait at the harness PR's head, set before the PR's last read, which shows the checks passed.
+  static func ciWait() -> Wait { Wait(id: "w1", kind: .ci, headSha: "head1", created: nowMs() - 2_000) }
+
+  @Test func withoutADelayTheConfirmingReadWaitsForTheNextDuePoll() throws {
+    let r = try RequestedReads(waits: [Self.ciWait()])
+    _ = r.poller.poll(all: false)
+    #expect(r.poller.queue.sync { r.poller.confirming["w1"] } != nil)
+    #expect(r.scheduled.isEmpty)
+  }
+
+  @Test func aDelaySchedulesTheConfirmingReadThatLongAfterTheFirstRead() throws {
+    let r = try RequestedReads(waits: [Self.ciWait()])
+    r.poller.confirmReadAfter = 10_000
+    let before = nowMs()
+    _ = r.poller.poll(all: false)
+    #expect(r.poller.queue.sync { r.poller.confirming["w1"] } != nil)
+    let wakes = r.scheduled
+    try #require(wakes.count == 1)
+    #expect(wakes[0] >= before + 10_000)
+    #expect(r.poller.queue.sync { r.poller.readRequests.timed.keys.sorted() } == ["PR_7"])
   }
 }
