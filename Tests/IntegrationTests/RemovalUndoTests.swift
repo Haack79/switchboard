@@ -20,11 +20,6 @@ private func doneSession(_ sbd: Instance, _ repo: String, branch: String) throws
 }
 
 extension Instance {
-  /// The `rm-cancel` op with every id in one request.
-  fileprivate func cancelRemoval(_ ids: [String]) throws -> JSON {
-    try client.call("rm-cancel", ["sessions": .array(ids.map(JSON.string))])
-  }
-
   /// Moves sbd's clock past every `notBefore` that `rm-queue` has set so far.
   fileprivate func passTheUndoWindow() throws { try advanceClock(Int64(undoWindowSeconds + 1) * 1000) }
 
@@ -34,9 +29,6 @@ extension Instance {
     try advanceClock(1)
   }
 }
-
-/// The ids in an `rm-cancel` result's `cancelled`.
-private func cancelled(_ result: JSON) -> [String] { result["cancelled"]?.array?.compactMap(\.string) ?? [] }
 
 /// The `refused` entries of an `rm-cancel` result, by id.
 private func refusals(_ result: JSON) -> [String: JSON] {
