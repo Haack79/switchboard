@@ -179,6 +179,57 @@ import Testing
   }
 }
 
+/// How the Summary section lays out the item's summary and callouts.
+@Suite struct DecisionCardSummaryLayout {
+  static let callouts = [Callout(kind: .warning, title: "CI is red", body: "The lint job fails.")]
+
+  func item(
+    summary: String = "Two review items are open.\nThe parser changed.",
+    callouts: [Callout] = DecisionCardSummaryLayout.callouts
+  )
+    -> TriageItem
+  {
+    TriageItem(title: "Pick how to land #98", kind: .decision, summary: summary, callouts: callouts, source: .session)
+  }
+
+  /// The step view moves the callouts into Details, so the Summary keeps only its first line.
+  @Test func anOpenDecisionListShowsTheFirstLine() {
+    #expect(DecisionCard.summaryLayout(item: item(), listOpen: true) == .firstLine)
+  }
+
+  @Test func anOpenDecisionListShowsTheFirstLineOfAnEmptySummary() {
+    #expect(DecisionCard.summaryLayout(item: item(summary: "", callouts: []), listOpen: true) == .firstLine)
+  }
+
+  @Test func aSummaryWithCalloutsShowsColumns() {
+    #expect(DecisionCard.summaryLayout(item: item(), listOpen: false) == .columns)
+  }
+
+  @Test func aSummaryWithoutCalloutsStacks() {
+    #expect(DecisionCard.summaryLayout(item: item(callouts: []), listOpen: false) == .stack)
+  }
+
+  @Test func calloutsWithoutASummaryStack() {
+    #expect(DecisionCard.summaryLayout(item: item(summary: ""), listOpen: false) == .stack)
+  }
+
+  @Test func anItemWithNeitherStacks() {
+    #expect(DecisionCard.summaryLayout(item: item(summary: "", callouts: []), listOpen: false) == .stack)
+  }
+
+  /// The columns layout and `splitsSummary` must not disagree about a closed list.
+  @Test(
+    arguments: [("Two review items are open.", callouts), ("Two review items are open.", []), ("", callouts), ("", [])]
+      as [(String, [Callout])])
+  func columnsShowExactlyWhenTheSummarySplits(summary: String, callouts: [Callout]) {
+    let shown = item(summary: summary, callouts: callouts)
+
+    let layout = DecisionCard.summaryLayout(item: shown, listOpen: false)
+
+    #expect((layout == .columns) == DecisionCard.splitsSummary(shown))
+  }
+}
+
 /// "No summary yet. Details holds the last reply." shows only for a fallback
 /// with no options and no summary.
 @Suite struct DecisionCardMissingSummary {

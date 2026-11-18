@@ -24,14 +24,15 @@ struct DecisionCard: View {
       header
       VStack(alignment: .leading, spacing: 8) {
         SectionTitle(text: "Summary")
-        if list != nil {
+        switch Self.summaryLayout(item: item, listOpen: list != nil) {
+        case .firstLine:
           if let line = item.summary.split(separator: "\n").first { summary(String(line)) }
-        } else if Self.splitsSummary(item) {
+        case .columns:
           SummaryCalloutColumns {
             summary(item.summary)
             callouts
           }
-        } else {
+        case .stack:
           if !item.summary.isEmpty { summary(item.summary) }
           if !item.callouts.isEmpty { callouts }
         }
@@ -55,6 +56,19 @@ struct DecisionCard: View {
         actions
       }
     }
+  }
+
+  /// How the Summary shows the item's summary and callouts.
+  enum SummaryLayout {
+    /// The summary's first line only, because the step view moves the callouts into Details.
+    case firstLine
+    case columns
+    case stack
+  }
+
+  static func summaryLayout(item: TriageItem, listOpen: Bool) -> SummaryLayout {
+    if listOpen { return .firstLine }
+    return splitsSummary(item) ? .columns : .stack
   }
 
   /// Whether the card shows its summary and its callouts as two columns
@@ -370,39 +384,68 @@ struct CardDetails: View {
     return reply
   }
 
+  enum Part: Hashable {
+    case toolInput, targets, callouts, transcript, pullRequest, waits, lastReply, recentEvents
+  }
+
+  /// The parts that Details shows, in order. `context` must already belong to the item.
+  /// `showsRecentEvents` is true only when the setting is on and the loaded events are not empty.
+  static func parts(
+    details: TriageDetails, callouts: [Callout], context: ItemContext?, reply: String?, session: SessionSummary,
+    showsRecentEvents: Bool
+  ) -> [Part] {
+    var parts: [Part] = []
+    if details.toolInput != nil { parts.append(.toolInput) }
+    if !details.targets.isEmpty { parts.append(.targets) }
+    if !callouts.isEmpty { parts.append(.callouts) }
+    if let context, !context.steps.isEmpty { parts.append(.transcript) }
+    if session.pr != nil { parts.append(.pullRequest) }
+    if !session.waits.isEmpty { parts.append(.waits) }
+    if lastReply(context: context, reply: reply) != nil { parts.append(.lastReply) }
+    if showsRecentEvents { parts.append(.recentEvents) }
+    return parts
+  }
+
   var body: some View {
     let context = Self.context(for: ref, in: model.itemContexts[session.id])
+    let reply = model.replies[session.id] ?? session.lastReply
+    let events = showsRecentEvents ? model.recentEvents[session.id] ?? [] : []
+    let parts = Self.parts(
+      details: details, callouts: callouts, context: context, reply: reply, session: session,
+      showsRecentEvents: !events.isEmpty)
     DisclosureGroup(isExpanded: $open) {
       VStack(alignment: .leading, spacing: 12) {
-        if let input = details.toolInput {
-          section(details.targets.isEmpty ? "Tool call: \(input.tool)" : "Message") {
-            CardView.textBox(input.text, maxHeight: 200)
-          }
-        }
-        if !details.targets.isEmpty {
-          section("Sends to") { ForEach(details.targets, id: \.self) { InlineText(plain: $0) } }
-        }
-        if !callouts.isEmpty {
-          section("Callouts") {
-            ForEach(Array(callouts.enumerated()), id: \.offset) { CalloutView(callout: $1) }
-          }
-        }
-        if let context, !context.steps.isEmpty { transcript(context) }
-        if let pr = session.pr {
-          section("Pull request") {
-            if let url = pr.link { Link("\(pr.line): \(pr.title)", destination: url) } else { Text(pr.line) }
-          }
-        }
-        if !session.waits.isEmpty {
-          section("Waits") { ForEach(session.waits, id: \.id) { InlineText(plain: $0.line) } }
-        }
-        if let text = Self.lastReply(context: context, reply: model.replies[session.id] ?? session.lastReply) {
-          section("Last reply") { MarkdownView(text: text) }
-        }
-        if showsRecentEvents, let events = model.recentEvents[session.id], !events.isEmpty {
-          section("Recent events") {
-            ForEach(events, id: \.id) { e in
-              Text("\(ago(e.t)) · \(e.kind)").font(.caption.monospaced()).foregroundStyle(.secondary)
+        ForEach(parts, id: \.self) { part in
+          switch part {
+          case .toolInput:
+            if let input = details.toolInput {
+              section(details.targets.isEmpty ? "Tool call: \(input.tool)" : "Message") {
+                CardView.textBox(input.text, maxHeight: 200)
+              }
+            }
+          case .targets:
+            section("Sends to") { ForEach(details.targets, id: \.self) { InlineText(plain: $0) } }
+          case .callouts:
+            section("Callouts") {
+              ForEach(Array(callouts.enumerated()), id: \.offset) { CalloutView(callout: $1) }
+            }
+          case .transcript:
+            if let context { transcript(context) }
+          case .pullRequest:
+            if let pr = session.pr {
+              section("Pull request") {
+                if let url = pr.link { Link("\(pr.line): \(pr.title)", destination: url) } else { Text(pr.line) }
+              }
+            }
+          case .waits:
+            section("Waits") { ForEach(session.waits, id: \.id) { InlineText(plain: $0.line) } }
+          case .lastReply:
+            if let text = Self.lastReply(context: context, reply: reply) { LastReplySection(text: text) }
+          case .recentEvents:
+            section("Recent events") {
+              ForEach(events, id: \.id) { e in
+                Text("\(ago(e.t)) · \(e.kind)").font(.caption.monospaced()).foregroundStyle(.secondary)
+              }
             }
           }
         }
@@ -463,6 +506,18 @@ struct CardDetails: View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.caption.bold()).foregroundStyle(.secondary)
       content()
+    }
+  }
+}
+
+/// The session's last reply as Markdown, under a "Last reply" caption.
+struct LastReplySection: View {
+  let text: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("Last reply").font(.caption.bold()).foregroundStyle(.secondary)
+      MarkdownView(text: text)
     }
   }
 }

@@ -131,11 +131,7 @@ struct TriageDetail: View {
   @ViewBuilder
   private var reply: some View {
     if let text = model.replies[session.id] ?? session.lastReply, !text.isEmpty {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Last reply").font(.caption.bold()).foregroundStyle(.secondary)
-        MarkdownView(text: text)
-      }
-      .padding(.top, 4)
+      LastReplySection(text: text).padding(.top, 4)
     }
   }
 }
