@@ -594,7 +594,7 @@ let everyGroupShape = [
   @Test func moveToGroupIntoAnUnselectedGroupAddsIt() {
     let model = answering(model(GroupFilter(keys: ["g1"])))
 
-    let moved = model.moveToGroup("i1", "g2")
+    let moved = model.moveToGroup(["i1"], "g2")
 
     #expect(moved)
     #expect(model.groupFilter == GroupFilter(keys: ["g1", "g2"]))
@@ -604,7 +604,7 @@ let everyGroupShape = [
   @Test func moveToNoGroupUnderAGroupFilterAddsUngrouped() {
     let model = answering(model(GroupFilter(keys: ["g1"])))
 
-    model.moveToGroup("i1", nil)
+    model.moveToGroup(["i1"], nil)
 
     #expect(model.groupFilter == GroupFilter(keys: ["g1", Self.ungrouped]))
     #expect(model.sessions.contains { $0.id == "i1" })
@@ -613,7 +613,7 @@ let everyGroupShape = [
   @Test func moveToGroupUnderAllGroupsLeavesTheFilterAll() {
     let model = answering(model(GroupFilter()))
 
-    model.moveToGroup("i1", "g2")
+    model.moveToGroup(["i1"], "g2")
 
     #expect(model.groupFilter.isAll)
   }

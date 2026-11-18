@@ -57,8 +57,11 @@ enum NavKey {
     }
   }
 
-  static func isPlain(_ modifiers: EventModifiers) -> Bool {
-    modifiers.isDisjoint(with: [.command, .option, .control, .shift])
+  static func isPlain(_ modifiers: EventModifiers) -> Bool { Self.modifiers(modifiers).isEmpty }
+
+  /// The modifiers that change what a key does. The function and numeric pad flags are left out.
+  static func modifiers(_ modifiers: EventModifiers) -> EventModifiers {
+    modifiers.intersection([.command, .option, .control, .shift])
   }
 }
 

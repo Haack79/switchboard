@@ -69,9 +69,14 @@ final class BoardModel: ObservableObject {
       navigate { if let selection, selection != oldValue { showHidden(selection) } }
     }
   }
-  /// The sessions that the sidebar selects with ⌘-click or ⇧-click: two or more ids, or none. `selection` stays
-  /// the one session that history records. `sidebarSelection` sets it.
-  @Published var multiSelection: Set<String> = []
+  /// The sessions that the sidebar selects with ⌘-click or ⇧-click, or the Board with a click or a rectangle:
+  /// two or more ids, or none. While the Board shows, it can also hold one id. `selection` stays the one
+  /// session that history records, and stays nil while the Board shows a selection. `sidebarSelection` sets it.
+  @Published var multiSelection: Set<String> = [] {
+    didSet { if multiSelection.isEmpty { boardSelectionAnchor = nil } }
+  }
+  /// The card that a Board ⇧-click extends the selection from: the last card clicked or ⌘-clicked.
+  var boardSelectionAnchor: String?
   /// The New Session sheet's opening, or nil while it is closed.
   @Published var newSession: NewSessionRequest?
   @Published var showingImport = false
@@ -115,8 +120,12 @@ final class BoardModel: ObservableObject {
   /// Counts ⌘J presses in the Inbox. Each one scrolls to the current item,
   /// even when ⌘J lands on the item it reached last time.
   @Published var inboxJumps = 0
-  /// The Board card that the arrow keys or Next and Previous Session last moved to.
+  /// The Board card that a click, the arrow keys, or Next and Previous Session last moved to.
   @Published var boardFocus: String?
+  /// Counts the focus moves that scroll the Board to the focused card: the arrow keys and Next and Previous
+  /// Session. A click moves the focus without a scroll, which would put another card under a double click's
+  /// second click.
+  @Published var boardJumps = 0
   /// Counts ⌘L presses and session steps. The list that `listFocusTarget` names takes keyboard focus on each one.
   @Published var listFocusRequests = 0
   /// The session whose Claude terminal takes keyboard focus when it shows. The terminal clears it.
@@ -374,10 +383,11 @@ final class BoardModel: ObservableObject {
   private func clearHiddenSelectionAndUpdateBadge() {
     let listed = shownIDs
     navigate(.replace) {
-      // Clearing `selection` ends the multi-selection, so the listed rest is read first.
+      // Clearing `selection` ends the multi-selection and can show the Board, so both are read first.
       let multi = multiSelection.intersection(listed)
+      let onBoard = visibleView == .board
       if let id = selection, id != pendingSelection, !listed.contains(id) { selection = nil }
-      keepMultiSelection(multi)
+      keepMultiSelection(multi, onBoard: onBoard)
     }
     hoverCard?.sessionsChanged(shown: listed)
     if NSApp != nil { NSApp.dockTile.badgeLabel = needsUser.isEmpty ? nil : "\(needsUser.count)" }
@@ -942,20 +952,29 @@ final class BoardModel: ObservableObject {
     }
     return true
   }
-  /// Moves a work session to a group, or to no group when `group` is nil.
-  /// The Board shows the card in its new lane before sbd answers. It sends
-  /// nothing for an id that names no work session on the Board, for a group
-  /// that sbd didn't list, or when the session is already in that lane. It
-  /// returns whether it sent the move.
-  @discardableResult
-  func moveToGroup(_ id: String, _ group: String?) -> Bool {
+  /// The ids, in the given order, that `moveToGroup` would move to `group`: each names a work session on the
+  /// Board that is not already in that lane. None qualify when sbd didn't list `group`.
+  func movableIDs(_ ids: [String], to group: String?) -> [String] {
     let known = Set(groups.map(\.id))
-    guard let session = workBoard.first(where: { $0.id == id }), group.map(known.contains) ?? true,
-      BoardRows.group(of: session, known: known) != group
-    else { return false }
-    update(id) { $0.group = group }
-    showHidden(id)
-    var args: [String: JSON] = ["sessions": [.string(id)]]
+    guard group.map(known.contains) ?? true else { return [] }
+    let work = Dictionary(workBoard.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    var seen = Set<String>()
+    return ids.filter { id in
+      guard let session = work[id], seen.insert(id).inserted else { return false }
+      return BoardRows.group(of: session, known: known) != group
+    }
+  }
+
+  /// Moves work sessions to a group, or to no group when `group` is nil, in one request. The Board shows the
+  /// cards in their new lane before sbd answers. Only the ids that `movableIDs` returns move. It returns whether
+  /// it sent the move.
+  @discardableResult
+  func moveToGroup(_ ids: [String], _ group: String?) -> Bool {
+    let moving = movableIDs(ids, to: group)
+    guard !moving.isEmpty else { return false }
+    for id in moving { update(id) { $0.group = group } }
+    for id in moving { showHidden(id) }
+    var args: [String: JSON] = ["sessions": .array(moving.map { .string($0) })]
     if let group { args["group"] = .string(group) } else { args["ungrouped"] = true }
     perform("group-move", args)
     return true
