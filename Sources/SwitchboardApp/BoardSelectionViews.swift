@@ -13,6 +13,9 @@ final class BoardGeometry {
   var header: CGRect = .zero
   /// A view inside the Board's scroll view, which finds the scroll view.
   weak var anchor: NSView?
+  /// Where the last event of a rectangle drag put the pointer, in window coordinates. The pointer rests there
+  /// until the next drag event, so autoscroll reads it instead of the system cursor.
+  var pointer: NSPoint?
   /// Frames whose card views went away while a rectangle was drawn.
   private var pendingDrops: [String: CGRect] = [:]
   /// True while a selection rectangle is drawn. When it turns false, the frames in `pendingDrops` that no view
@@ -44,10 +47,10 @@ final class BoardGeometry {
   /// Scrolls toward the edge of the visible area that the pointer is near or past. It returns how far the
   /// content moved under the pointer, in content coordinates, or nil when it did not move.
   func autoscrollStep() -> CGVector? {
-    guard let scrollView = anchor?.enclosingScrollView, let window = scrollView.window,
-      let document = scrollView.documentView
+    guard let scrollView = anchor?.enclosingScrollView, let document = scrollView.documentView,
+      let windowPointer = self.pointer
     else { return nil }
-    var pointer = scrollView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    var pointer = scrollView.convert(windowPointer, from: nil)
     if !scrollView.isFlipped { pointer.y = scrollView.bounds.height - pointer.y }
     let delta = BoardRect.autoscrollDelta(
       pointer: pointer, visible: scrollView.bounds.size, headerHeight: header.height + BoardView.boardPadding)
@@ -121,9 +124,13 @@ struct BoardMarqueeSelection: ViewModifier {
           focus()
         }
         marquee?.current = value.location
+        if let event = NSApp.currentEvent, event.type == .leftMouseDragged { geometry.pointer = event.locationInWindow }
         select()
       }
-      .onEnded { _ in marquee = nil }
+      .onEnded { _ in
+        marquee = nil
+        geometry.pointer = nil
+      }
   }
 
   private func onEmptySpace(_ point: CGPoint) -> Bool {
