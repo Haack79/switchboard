@@ -218,7 +218,7 @@ extension GitHubPoller {
       + d.deployEnvironments.map(\.rawValue).joined(separator: ",")
   }
 
-  private func lastRead(_ edge: Dependency) -> (pr: PullRequest, comments: [PRComment], polled: Int64)? {
+  private func lastRead(_ edge: Dependency) -> CachedPR? {
     prs.values.first { edge.same(repo: $0.pr.repo, number: $0.pr.number) }
   }
 

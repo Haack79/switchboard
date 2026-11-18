@@ -33,9 +33,8 @@ final class GitHubPoller {
 
   var graphQLPausedUntil: Int64 { http.withLock { $0.graphQLPausedUntil } }
   var tracked: [String: Tracked] = [:]
-  /// The PRs that this sbd has read, by node id, with their comments from
-  /// `GitHub.bodyAuthors`.
-  var prs: [String: (pr: PullRequest, comments: [PRComment], polled: Int64)] = [:]
+  /// The PRs that this sbd has read, by node id. `store` writes each entry.
+  var prs: [String: CachedPR] = [:]
   /// Comment bodies by comment id. A comment whose edit time changed is read again.
   private var bodies: [String: PRComment] = [:]
   /// The Depot run that the event log held for each PR, by node id, until the
@@ -72,6 +71,27 @@ final class GitHubPoller {
   var mergeDetails: [String: (head: String, read: Int64, details: MergeDetails)] = [:]
   /// When the last issues poll started, in ms.
   var issuesReadAt: Int64?
+
+  /// A PR that the poller read, with its comments from `GitHub.bodyAuthors`.
+  struct CachedPR {
+    var pr: PullRequest
+    var comments: [PRComment]
+    /// When the poller last read the PR from GitHub, in ms.
+    var polled: Int64
+    /// When sbd last applied a fact about the PR that came without a GitHub read, in ms. Nothing sets it yet.
+    var factAt: Int64?
+  }
+
+  /// Caches a status read of a PR. The status query reads neither the merged base nor the Depot run. The PR
+  /// therefore keeps the cached merged base while its base branch stays the same. It also keeps the cached Depot
+  /// run, or else the one that the event log held.
+  func store(_ pr: PullRequest, comments: [PRComment], polled: Int64) {
+    var pr = pr
+    let last = prs[pr.id]
+    if let last, last.pr.base == pr.base { pr.mergedBase = last.pr.mergedBase }
+    pr.depot = last?.pr.depot ?? recordedDepot.removeValue(forKey: pr.id)
+    prs[pr.id] = CachedPR(pr: pr, comments: comments, polled: polled, factAt: last?.factAt)
+  }
 
   /// What the poller knows about one session.
   struct Tracked {
@@ -556,13 +576,9 @@ final class GitHubPoller {
       let (read, notFound) = GitHub.parseStatus(
         try request(GitHub.statusQuery, idsVariable(chunk), stats: &stats), chunk)
       gone.formUnion(notFound)
-      for (parsed, comments) in read {
-        var pr = parsed
-        // Only the base query reads the merged base. A PR whose base query
-        // fails keeps the merged base that the poller last read.
-        if let last = prs[pr.id]?.pr, last.base == pr.base { pr.mergedBase = last.mergedBase }
-        pr.depot = prs[pr.id]?.pr.depot ?? recordedDepot.removeValue(forKey: pr.id)
-        prs[pr.id] = (pr, comments.filter { GitHub.bodyAuthors.contains($0.author) }, now)
+      for (pr, comments) in read {
+        // A PR whose base query fails keeps the merged base that `store` carried over.
+        store(pr, comments: comments.filter { GitHub.bodyAuthors.contains($0.author) }, polled: now)
         if pr.base != pr.defaultBranch { stacked.append(pr.id) }
       }
       stats.polled += read.count
