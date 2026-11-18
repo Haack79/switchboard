@@ -306,6 +306,18 @@ private let withBacklog = [backlogRows[0]] + rows + [backlogRows[1]]
     #expect(orderNumbers(model) == [2, 1, 3, 7])
   }
 
+  @Test func showingACollapsedHiddenBacklogExpandsIt() {
+    let model = model(withBacklog)
+    model.toggleIssueSection("backlog")
+    model.hidesBacklog = true
+
+    model.showBacklog()
+
+    #expect(!model.hidesBacklog)
+    #expect(!model.collapsedIssueSections.contains("backlog"))
+    #expect(orderNumbers(model) == [2, 1, 3, 7, 8, 9])
+  }
+
   @Test func hidingTheBacklogIsSavedAndReadByTheNextModel() throws {
     let name = "issues-backlog-tests-" + UUID().uuidString
     let store = try #require(UserDefaults(suiteName: name))

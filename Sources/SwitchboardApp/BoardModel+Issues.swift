@@ -112,6 +112,12 @@ extension BoardModel {
     if collapsedIssueSections.remove(id) == nil { collapsedIssueSections.insert(id) }
   }
 
+  /// Turns off Hide Backlog and expands the Backlog section, so its issues show after one click.
+  func showBacklog() {
+    hidesBacklog = false
+    collapsedIssueSections.remove(IssueSection.backlogID)
+  }
+
   /// Asks sbd to poll the sources when its last poll is over a minute old, as the Issues view opens.
   func refreshIssues() { refreshIssues(olderThan: 60) }
 

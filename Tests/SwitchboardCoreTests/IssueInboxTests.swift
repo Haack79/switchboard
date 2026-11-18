@@ -750,6 +750,8 @@ private func merged(
 
     #expect(
       config.issues.team == IssueTeam(labels: ["team/billing"], people: ["ana-m"], backlog: ["backlog", "icebox"]))
+    #expect(
+      try JSONCoding.decode(IssueTeam.self, from: #"{"backlog": ["", " icebox "]}"#) == IssueTeam(backlog: ["icebox"]))
   }
 
   /// One issue in each bucket, in an order that no sort gives. #2, #4, and #6 carry a backlog label, #3 has no

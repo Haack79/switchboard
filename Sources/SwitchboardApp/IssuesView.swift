@@ -148,7 +148,7 @@ private struct IssueRows: View {
             let collapsed = model.collapsedIssueSections.contains(section.id)
             if section.id == IssueSection.backlogID { Divider().padding(.top, 6) }
             if let hidden = section.hiddenCount {
-              header("Backlog hidden", count: hidden, collapsed: true) { model.hidesBacklog = false }
+              header("Backlog hidden", count: hidden, collapsed: true) { model.showBacklog() }
                 .help("Show the issues with a backlog label")
             } else {
               header(section.title, count: section.issues.count, collapsed: collapsed) {

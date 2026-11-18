@@ -330,6 +330,15 @@ private final class Inbox {
         == ["labels: team/billing", "people: ana-m, dev-p, kofi-a", "backlog: backlog, icebox"])
   }
 
+  @Test func teamSetsTheLabelsAndKeepsTheBacklog() throws {
+    let inbox = try Inbox(backlog: ["backlog"])
+
+    let printed = try inbox.sbd.sb("issues", "team", "--label", "team/payments", "--json")
+
+    #expect(try JSONCoding.decode(IssueTeam.self, from: printed).backlog == ["backlog"])
+    #expect(try inbox.sbd.config()["issues"]?["team"]?["backlog"] == .array(["backlog"]))
+  }
+
   @Test(arguments: ["", "  "])
   func teamWithABlankBacklogClearsIt(_ blank: String) throws {
     let inbox = try Inbox(backlog: ["backlog"])

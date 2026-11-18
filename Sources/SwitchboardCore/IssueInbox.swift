@@ -42,7 +42,8 @@ public struct IssueSource: Codable, Equatable, Hashable, Sendable {
 public struct IssueTeam: Codable, Equatable, Sendable {
   public var labels: [String]
   public var people: [String]
-  /// An issue with one of these labels goes after every other issue in the Issues list and `sb issues`.
+  /// An issue with one of these labels, which no session lists, goes after every other issue in the Issues list and
+  /// `sb issues`.
   public var backlog: [String]
 
   public init(labels: [String] = [], people: [String] = [], backlog: [String] = []) {
@@ -67,8 +68,7 @@ public struct IssueTeam: Codable, Equatable, Sendable {
     backlog = Self.backlogLabels(try c.decodeIfPresent([String].self, forKey: .backlog) ?? [])
   }
 
-  /// Writes `backlog` only when it has a label, so a team without one saves the same config.json as before the
-  /// setting existed.
+  /// Leaves out `backlog` when it is empty, so config.json gets no `backlog` key for a team without backlog labels.
   public func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
     try c.encode(labels, forKey: .labels)
