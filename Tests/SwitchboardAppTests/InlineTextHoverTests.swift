@@ -293,3 +293,196 @@ struct InlineTextHoverTests {
     #expect(links(InlineText(text)) == ["docs", "o/r#1"])
   }
 }
+
+// MARK: - Session links
+
+private let liveID = "seb4ec"
+private let liveName = "zsh-startup-for-switchboard"
+private let removedID = "sgcctv"
+private let removedName = "old-flag-cleanup"
+private let idURL = "switchboard://session/\(liveID)"
+private let otherID = "s3k9ap"
+private let otherName = "flag-cache-race"
+
+/// A model that lists one session, so its `sessionNames` resolve `liveID`.
+@MainActor
+private func namedModel() -> BoardModel {
+  var s = needsItem(liveID)
+  s.name = liveName
+  return appliedModel([s])
+}
+
+/// The help of each accessibility element under the hosted view.
+@MainActor
+private func helps<V: View>(_ view: V) -> [String] {
+  let hosted = HostedView(view.frame(width: width))
+  // A key that the object does not answer would raise an exception and end the test process.
+  return hosted.elements.map(\.object).filter {
+    $0.responds(to: NSSelectorFromString("accessibilityHelp"))
+  }
+  .compactMap { $0.value(forKey: "accessibilityHelp") as? String }.filter { !$0.isEmpty }
+}
+
+extension InlineTextHoverTests {
+  /// Every session link records a rect under a `session:` key, so the reference card opens on it.
+  @MainActor
+  @Suite struct SessionRects {
+    @Test func aSessionNameRecordsItsSessionKey() async {
+      let drawn = DrawnText(InlineText(plain: "Ask \(liveID) to rebase."), model: namedModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.key) == ["session:\(liveID)"])
+    }
+
+    @Test func aSessionNameRecordsASessionReferent() async {
+      let drawn = DrawnText(InlineText(plain: "Ask \(liveID) to rebase."), model: namedModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.referent) == [.session(.id(liveID))])
+    }
+
+    @Test func aMarkdownSessionLinkRecordsItsSessionKey() async {
+      let text = MarkdownText([MarkdownText.Run("Ask "), MarkdownText.Run("x", link: idURL)])
+      let drawn = DrawnText(InlineText(text), model: offlineModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.key) == ["session:\(liveID)"])
+    }
+
+    /// A session link whose label is a code span or a footnote records a session referent, so the card opens on it.
+    @Test(arguments: [MarkdownText.Run("fix-cache", .code, link: idURL), MarkdownText.Run("1", .footnote, link: idURL)])
+    func aCodeOrFootnoteSessionLinkRecordsASessionReferent(_ run: MarkdownText.Run) async {
+      let drawn = DrawnText(InlineText(MarkdownText([MarkdownText.Run("Ask "), run])), model: offlineModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.referent) == [.session(.id(liveID))])
+    }
+
+    @Test(arguments: [false, true])
+    func aBareSessionURLRecordsItsSessionKey(selectable: Bool) async {
+      let text = InlineText(plain: "See \(idURL) now.")
+      let drawn = DrawnText(
+        selectable ? AnyView(text.textSelection(.enabled)) : AnyView(text), model: offlineModel(), width: 400)
+
+      let entries = await drawn.recorded()
+
+      #expect(Set(entries.map(\.key)) == ["session:\(liveID)"])
+    }
+
+    @Test func aBracketLinkRecordsItsSessionKey() async {
+      let drawn = DrawnText(InlineText(plain: "Ask [x](\(idURL)) now."), model: offlineModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.key) == ["session:\(liveID)"])
+    }
+
+    @Test func aNameURLRecordsItsNameKey() async {
+      let drawn = DrawnText(InlineText(plain: "See switchboard://session/fix-cache now."), model: offlineModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.key) == ["session:fix-cache"])
+    }
+
+    @Test func aReferenceAndASessionLinkRecordInTextOrder() async {
+      let drawn = DrawnText(InlineText(plain: "See o/r#1 and [x](\(idURL))."), model: offlineModel())
+
+      let entries = await drawn.recorded()
+
+      #expect(entries.map(\.key) == ["github:o/r#1", "session:\(liveID)"])
+      #expect(inReadingOrder(entries))
+    }
+
+    // MARK: Guards
+
+    /// Draws `view` beside a control that records, and returns what `view` recorded once the control has.
+    private func recordedBeside<V: View>(_ view: V, model: BoardModel) async -> [ReferenceRects.Entry] {
+      let control = DrawnText(InlineText(plain: twoReferences), model: model)
+      let drawn = DrawnText(view, model: model)
+      let controlEntries = await control.recorded()
+      #expect(!controlEntries.isEmpty, "The control recorded nothing, so the harness is wrong.")
+      try? await Task.sleep(nanoseconds: 200_000_000)
+      return drawn.entries
+    }
+
+    @Test(arguments: ["Ask \(liveID) to rebase.", "See \(idURL) now.", "Ask [x](\(idURL)) now."])
+    func aSessionLinkWithoutLinksRecordsNothing(_ s: String) async {
+      #expect(await recordedBeside(InlineText(plain: s, links: false), model: namedModel()).isEmpty)
+    }
+
+    /// A removed session's name draws plain, with no link and no card.
+    @Test func aRemovedSessionsNameRecordsNothing() async {
+      let removed = SessionNames(live: [:], removed: [removedID: removedName])
+      let text = InlineText(plain: "Ask \(removedID) to rebase.").environment(\.sessionNames, removed)
+
+      #expect(await recordedBeside(text, model: offlineModel()).isEmpty)
+    }
+
+    @Test func aRefusedSessionURLRecordsNothing() async {
+      #expect(await recordedBeside(InlineText(plain: "See \(idURL)?x=1 now."), model: offlineModel()).isEmpty)
+    }
+
+    // MARK: Links
+
+    @Test func eachSessionLinkStillExposesALink() {
+      let hosted = HostedView(
+        InlineText(plain: "Ask \(liveID), [x](\(idURL)) and \(idURL).").inlineLinks(namedModel()).frame(width: 400))
+
+      let links = hosted.elements.filter { $0.role == "AXLink" }.map(\.label)
+
+      #expect(links == [liveName, "x", idURL])
+    }
+  }
+
+  /// Decision 14: where the reference card can open on a session, the card shows the id, so the text drops its
+  /// `name: id` help. Where no card can open, the help stays.
+  @MainActor
+  @Suite struct SessionHelp {
+    /// The control: without a card, the help names the session, so the harness reads help.
+    @Test func withoutACardTheHelpNamesTheSession() {
+      let text = InlineText(plain: "Ask \(liveID) to rebase.")
+        .environment(\.sessionNames, SessionNames(live: [liveID: liveName], removed: [:]))
+
+      #expect(helps(text).contains("\(liveName): \(liveID)"))
+    }
+
+    /// The text beside it has no card, so its help shows that the walk reads help in this same view.
+    @Test func withACardALiveSessionHasNoHelp() {
+      let model = offlineModel()
+      let names = SessionNames(live: [liveID: liveName, otherID: otherName], removed: [:])
+      let view = VStack {
+        InlineText(plain: "Ask \(liveID) to rebase.")
+        InlineText(plain: "Ask \(otherID) to rebase.").environment(\.referenceCard, nil)
+      }
+      .environment(\.sessionNames, names)
+      .environment(\.referenceCard, model.referenceCard)
+
+      let found = helps(view)
+
+      #expect(found.contains("\(otherName): \(otherID)"), "\(found)")
+      #expect(!found.contains { $0.contains(liveID) }, "\(found)")
+    }
+
+    /// A removed session's name opens no card, so the card path does not draw the text and the help stays.
+    @Test func withACardARemovedSessionKeepsItsHelp() {
+      let model = offlineModel()
+      let text = InlineText(plain: "Ask \(removedID) to rebase.")
+        .environment(\.sessionNames, SessionNames(live: [:], removed: [removedID: removedName]))
+        .environment(\.referenceCard, model.referenceCard)
+
+      #expect(helps(text).contains("\(removedName): \(removedID), removed"))
+    }
+
+    /// A text inside a button's label draws no link and no card, and has no help today.
+    @Test func withoutLinksThereIsStillNoHelp() {
+      let found = helps(InlineText(plain: "Ask \(liveID) to rebase.", links: false).inlineLinks(namedModel()))
+
+      #expect(!found.contains { $0.contains(liveID) }, "\(found)")
+    }
+  }
+}

@@ -189,12 +189,15 @@ extension ReferenceCardContent.Tone {
 /// What a link in text refers to, for its hover card.
 enum Referent: Hashable, Sendable {
   case github(GitHubRef)
+  case session(SessionLink.Target)
 
   /// One key per item, whatever case or form the text wrote it in. Each case's keys start with the case's name, so
   /// two kinds never share a key.
   var key: String {
     switch self {
     case .github(let ref): "github:\(ref.key)"
+    case .session(.id(let id)): "session:\(id)"
+    case .session(.name(let name)): "session:\(name)"
     }
   }
 }

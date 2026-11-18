@@ -105,6 +105,7 @@ extension ReferenceCardID {
   fileprivate var github: GitHubRef? {
     switch referent {
     case .github(let ref): ref
+    case .session: nil
     }
   }
 }
@@ -1052,6 +1053,103 @@ extension CardFixture where ID == String {
       f.scheduler.fire(delay)
 
       #expect(f.card.shown?.github?.key == "o/r#1")
+    }
+
+    // MARK: Session links
+
+    private func sessionEntry(_ target: SessionLink.Target, part: Int, x: CGFloat) -> ReferenceRects.Entry {
+      ReferenceRects.Entry(referent: .session(target), part: part, rect: CGRect(x: x, y: 0, width: 40, height: 14))
+    }
+
+    @Test func restingOnASessionLinkOpensItsSessionCard() {
+      let f = ReferenceFixture()
+
+      move(f, 5, in: [sessionEntry(.id("seb4ec"), part: 0, x: 0)])
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown?.referent == .session(.id("seb4ec")))
+    }
+
+    @Test func restingOnANameLinkOpensItsSessionCard() {
+      let f = ReferenceFixture()
+
+      move(f, 5, in: [sessionEntry(.name("fix-cache"), part: 0, x: 0)])
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown?.referent == .session(.name("fix-cache")))
+    }
+
+    /// A session card is not a GitHub card.
+    @Test func aSessionCardNamesNoGitHubReference() {
+      let f = ReferenceFixture()
+
+      move(f, 5, in: [sessionEntry(.id("seb4ec"), part: 0, x: 0)])
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown != nil)
+      #expect(f.card.shown?.github == nil)
+    }
+
+    @Test func movingFromAReferenceToASessionLinkOpensTheSessionCard() {
+      let f = ReferenceFixture()
+      let mixed = [entries[0], sessionEntry(.id("seb4ec"), part: 2, x: 60)]
+      move(f, 5, in: mixed)
+      f.scheduler.fire(delay)
+
+      move(f, 70, in: mixed)
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown?.referent == .session(.id("seb4ec")))
+    }
+
+    /// One session written twice is one card, so moving between the two keeps it open.
+    @Test func movingBetweenTwoLinksToOneSessionKeepsTheCard() {
+      let f = ReferenceFixture()
+      let same = [sessionEntry(.id("seb4ec"), part: 0, x: 0), sessionEntry(.id("seb4ec"), part: 1, x: 60)]
+      move(f, 5, in: same)
+      f.scheduler.fire(delay)
+
+      move(f, 70, in: same)
+      f.scheduler.flush()
+
+      #expect(f.presenter.shows.count == 1)
+      #expect(f.presenter.hides == 0)
+    }
+
+    @Test func movingBetweenTwoSessionsOpensTheSecondCard() {
+      let f = ReferenceFixture()
+      let two = [sessionEntry(.id("seb4ec"), part: 0, x: 0), sessionEntry(.id("sdcs7r"), part: 1, x: 60)]
+      move(f, 5, in: two)
+      f.scheduler.fire(delay)
+
+      move(f, 70, in: two)
+      f.scheduler.fire(delay)
+
+      #expect(f.card.shown?.referent == .session(.id("sdcs7r")))
+    }
+  }
+
+  /// Decision 12: a session referent's key is `session:` and the id or name, so it never equals a GitHub key.
+  @Suite struct ReferentKeys {
+    @Test func anIdTargetsKeyIsSessionAndTheId() {
+      #expect(Referent.session(.id("seb4ec")).key == "session:seb4ec")
+    }
+
+    @Test func aNameTargetsKeyIsSessionAndTheName() {
+      #expect(Referent.session(.name("Fix CI chat")).key == "session:Fix CI chat")
+    }
+
+    @Test func aGitHubKeyIsUnchanged() {
+      #expect(Referent.github(GitHubRef(parsing: "o/r#1")!).key == "github:o/r#1")
+    }
+
+    @Test func twoCardIDsForOneSessionAreEqual() {
+      #expect(ReferenceCardID(referent: .session(.id("seb4ec"))) == ReferenceCardID(referent: .session(.id("seb4ec"))))
+    }
+
+    @Test func anIdCardAndANameCardAreDifferentCards() {
+      #expect(
+        ReferenceCardID(referent: .session(.id("seb4ec"))) != ReferenceCardID(referent: .session(.name("fix-cache"))))
     }
   }
 }

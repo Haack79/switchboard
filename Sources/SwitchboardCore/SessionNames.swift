@@ -68,7 +68,8 @@ public struct SessionNames: Equatable, Sendable {
   /// The session's name, or `id` when no session has it.
   public func name(_ id: String) -> String { entries[id]?.name ?? id }
 
-  /// `string` with each session id that resolves replaced by the session's name. No Markdown in it is parsed.
+  /// `string` with each session id that resolves replaced by the session's name, and each session link written as
+  /// `[label](URL)` replaced by its label. No other Markdown in it is parsed.
   public func replacingIDs(in string: String) -> String {
     InlineMentions(names: self, repo: nil).pieces(MarkdownText(stringLiteral: string)).map(\.run.text).joined()
   }

@@ -945,3 +945,52 @@ extension HoverCardContentTests {
     }
   }
 }
+
+// MARK: - Link cards
+
+/// The card that a session link in text opens. It adds the state and the id, which no tile shows beside the text.
+/// The `link:` parameter is the one guessed signature in these tests.
+private func linkCard(_ s: SessionSummary, activeAccount: String = ClaudeAccount.defaultFolder) -> HoverCardContent {
+  HoverCardContent(s, activeAccount: activeAccount, now: now, link: true)
+}
+
+extension HoverCardContentTests {
+  @Suite struct LinkCard {
+    @Test func aLinkCardHasTheSessionsState() {
+      #expect(linkCard(everything()).state == .needsYou)
+    }
+
+    @Test func aLinkCardHasTheSessionsId() {
+      #expect(linkCard(everything()).id == "s1")
+    }
+
+    @Test(arguments: AttentionState.allCases)
+    func aLinkCardHasEachState(_ state: AttentionState) {
+      #expect(linkCard(bare(state: state)).state == state)
+    }
+
+    /// The link card adds facts. It keeps every fact the tile card shows.
+    @Test func aLinkCardKeepsTheTileCardsFacts() {
+      let tile = content(everything())
+      let link = linkCard(everything())
+
+      #expect(link.title == tile.title)
+      #expect(link.details == tile.details)
+      #expect(link.pr == tile.pr)
+      #expect(link.summary == tile.summary)
+    }
+
+    @Test func aTileCardHasNoState() {
+      #expect(content(everything()).state == nil)
+    }
+
+    @Test func aTileCardHasNoId() {
+      #expect(content(everything()).id == nil)
+    }
+
+    /// The tile already shows the state, so the tile card still leaves it out of its text.
+    @Test func aTileCardStillLeavesOutTheStateTitle() {
+      #expect(!texts(content(everything())).contains { $0.contains(AttentionState.needsYou.title) })
+    }
+  }
+}

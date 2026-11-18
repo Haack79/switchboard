@@ -73,6 +73,18 @@ enum TokenBoundary {
     return (end, cut)
   }
 
+  /// The index after `word` when `s` spells it at `i`, ignoring ASCII case.
+  static func spells(_ word: String, at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> Int? {
+    var j = i
+    for c in word.unicodeScalars {
+      guard j < limit, s[j] == c || (s[j].value ^ 0x20 == c.value && s[j].properties.isAlphabetic) else {
+        return nil
+      }
+      j += 1
+    }
+    return j
+  }
+
   private static func isASCIISpace(_ c: Unicode.Scalar) -> Bool {
     c == " " || c == "\t" || c == "\n" || c == "\u{0B}" || c == "\u{0C}" || c == "\r"
   }

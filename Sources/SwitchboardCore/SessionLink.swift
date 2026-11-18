@@ -5,11 +5,12 @@ import Foundation
 /// from another app or from `sb focus` opens the session in Switchboard.
 public enum SessionLink {
   public static let scheme = "switchboard"
-  private static let prefix = "\(scheme)://session/"
+  private static let schemeStart = "\(scheme)://"
+  private static let prefix = "\(schemeStart)session/"
 
   /// What a link names. Names are not unique and change on rename, so the
   /// links that Switchboard writes always name the id.
-  public enum Target: Equatable, Sendable {
+  public enum Target: Hashable, Sendable {
     case id(String)
     case name(String)
   }
@@ -82,6 +83,82 @@ public enum SessionLink {
       escaped.append(c)
     }
     return "[\(String(escaped))](\(url(for: id).absoluteString))"
+  }
+
+  /// The session link spans in one unlinked run, in order. A bare
+  /// `switchboard://` URL ends where cmark-gfm ends an autolink, and it links
+  /// only when `target(from:)` accepts it, `URL(string:)` keeps its text as
+  /// written, and no word or path touches its scheme. A refused URL is a span
+  /// with no mention, so no session id inside it matches. `[label](URL)` is a
+  /// span when the label is not empty, holds no newline and no unescaped `[`
+  /// or `]`, and `target(from:)` accepts the URL. Its piece reads the label,
+  /// and the backslash before each ASCII punctuation character in the label or
+  /// the URL is dropped, as CommonMark reads a link. A `[` with a backslash
+  /// before it starts no label.
+  static func spans(in range: Range<Int>, _ s: [Unicode.Scalar]) -> [InlineMentions.Span] {
+    var spans: [InlineMentions.Span] = []
+    var i = range.lowerBound
+    while i < range.upperBound {
+      if s[i] == "\\", i + 1 < range.upperBound, isASCIIPunctuation(s[i + 1]) {
+        i += 2
+      } else if s[i] == "[", let span = bracketLink(at: i, before: range.upperBound, s) {
+        spans.append(span)
+        i = span.range.upperBound
+      } else if let schemeEnd = TokenBoundary.spells(schemeStart, at: i, before: range.upperBound, s) {
+        let (end, cut) = TokenBoundary.autolinkEnd(after: schemeEnd, before: range.upperBound, s)
+        let text = String(String.UnicodeScalarView(s[i..<end]))
+        // `URL(string:)` percent-encodes a character that no URL may hold, such as the `>` of `<URL>`.
+        let url = URL(string: text).flatMap { $0.absoluteString == text ? $0 : nil }
+        let target = !cut && (i == 0 || TokenBoundary.allowedBefore(s[i - 1])) ? url.flatMap(target(from:)) : nil
+        spans.append(
+          InlineMentions.Span(range: i..<end, mention: target.map { .sessionLink($0) }, isURL: true, link: text))
+        i = end
+      } else {
+        i += 1
+      }
+    }
+    return spans
+  }
+
+  /// The `[label](URL)` span whose `[` sits at `open`. The URL stops at the
+  /// first `)` outside balanced parentheses. A space, a control character,
+  /// or a raw `[` or `]` in it refuses the span, so that a scan from each
+  /// `[` stops at the next one.
+  private static func bracketLink(at open: Int, before limit: Int, _ s: [Unicode.Scalar]) -> InlineMentions.Span? {
+    var label = String.UnicodeScalarView()
+    var i = open + 1
+    while i < limit, s[i] != "]" {
+      if s[i] == "[" || s[i] == "\n" || s[i] == "\r" { return nil }
+      if s[i] == "\\", i + 1 < limit, isASCIIPunctuation(s[i + 1]) { i += 1 }
+      label.append(s[i])
+      i += 1
+    }
+    guard !label.isEmpty, i + 1 < limit, s[i + 1] == "(" else { return nil }
+    var destination = String.UnicodeScalarView()
+    var end = i + 2
+    var depth = 0
+    while end < limit, s[end] != ")" || depth > 0 {
+      switch s[end] {
+      case "\\" where end + 1 < limit && isASCIIPunctuation(s[end + 1]): end += 1
+      case "(": depth += 1
+      case ")": depth -= 1
+      case "[", "]": return nil
+      case let c where c.properties.isWhitespace || c.properties.generalCategory == .control: return nil
+      default: break
+      }
+      destination.append(s[end])
+      end += 1
+    }
+    guard end < limit else { return nil }
+    let url = String(destination)
+    guard let target = URL(string: url).flatMap(target(from:)) else { return nil }
+    return InlineMentions.Span(
+      range: open..<end + 1, mention: .sessionLink(target), isURL: true, label: String(label), link: url)
+  }
+
+  private static func isASCIIPunctuation(_ c: Unicode.Scalar) -> Bool {
+    c.isASCII && c.properties.generalCategory != .control && !c.properties.isAlphabetic
+      && !("0"..."9").contains(c) && c != " "
   }
 
   private static let unreserved = CharacterSet(

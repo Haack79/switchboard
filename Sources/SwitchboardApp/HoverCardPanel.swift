@@ -229,8 +229,43 @@ extension BoardModel {
       guard let self else { return AnyView(EmptyView()) }
       switch id.referent {
       case .github(let ref): return AnyView(ReferenceCardView(model: self, ref: ref).inlineLinks(self))
+      case .session(let target): return AnyView(SessionLinkCardView(model: self, target: target))
       }
     }
+  }
+}
+
+/// The card of a session link in text. It reads every listed session and
+/// follow-up, whatever the org filter shows. For a link that names no listed
+/// session, it shows the name or id that the link holds and the error banner
+/// that a click on the link would set.
+private struct SessionLinkCardView: View {
+  @ObservedObject var model: BoardModel
+  let target: SessionLink.Target
+
+  var body: some View {
+    switch model.linkOutcome(target) {
+    case .reveal(let id)?:
+      if let s = model.summary(id) {
+        HoverCardBody(
+          content: HoverCardContent(s, activeAccount: model.activeAccountFolder, names: model.sessionNames, link: true))
+      }
+    case .error(let message)?: unresolved(message)
+    case nil: unresolved(BoardModel.unknownLinkError(target))
+    }
+  }
+
+  private func unresolved(_ message: String) -> some View {
+    let written =
+      switch target {
+      case .id(let id): id
+      case .name(let name): BoardModel.shown(name)
+      }
+    return VStack(alignment: .leading, spacing: 2) {
+      Text(verbatim: written).font(.headline).lineLimit(2)
+      Text(verbatim: message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+    .hoverCardFrame()
   }
 }
 
@@ -254,6 +289,12 @@ struct HoverCardBody: View {
     VStack(alignment: .leading, spacing: 8) {
       VStack(alignment: .leading, spacing: 2) {
         Text(verbatim: content.title).font(.headline).lineLimit(2)
+        if content.state != nil || content.id != nil {
+          HStack(spacing: 6) {
+            if let state = content.state { StateBadge(state: state) }
+            if let id = content.id { Text(verbatim: id).font(.caption.monospaced()).foregroundStyle(.secondary) }
+          }
+        }
         ForEach(Array(content.details.enumerated()), id: \.offset) { _, line in
           Text(verbatim: line).lineLimit(1).truncationMode(.middle)
         }

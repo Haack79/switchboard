@@ -616,3 +616,203 @@ extension InlineTextTests {
     }
   }
 }
+
+// MARK: - Session referents
+
+private let idURL = "switchboard://session/\(liveID)"
+
+private func segments(_ text: MarkdownText, links: Bool = true) -> [InlineText.Segment] {
+  InlineText.segments(text, names: names, repo: contextRepo, links: links).0
+}
+
+private func segments(plain: String, links: Bool = true) -> [InlineText.Segment] {
+  segments(MarkdownText(stringLiteral: plain), links: links)
+}
+
+/// The segment whose text reads `text`, from `segments`.
+private func segment(reading text: String, _ segments: [InlineText.Segment]) throws -> InlineText.Segment {
+  try #require(segments.first { String($0.text.characters) == text }, "segments: \(segments.map(\.text))")
+}
+
+private func referents(_ segments: [InlineText.Segment]) -> [Referent] { segments.compactMap(\.reference?.referent) }
+
+/// A segment as the parity tests compare it: its characters, its links, and its referent.
+private struct SeenSegment: Equatable {
+  let text: String
+  let links: Set<URL?>
+  let referent: Referent?
+}
+
+private func seen(_ segments: [InlineText.Segment]) -> [SeenSegment] {
+  segments.map {
+    SeenSegment(
+      text: String($0.text.characters), links: Set($0.text.runs.map(\.link)), referent: $0.reference?.referent)
+  }
+}
+
+extension InlineTextTests {
+  /// Each session link in the text carries a session referent, so the reference card can open on it.
+  @Suite struct SessionReferents {
+    // MARK: With links
+
+    @Test func aLiveIdGivesASessionReferent() throws {
+      let found = try segment(reading: liveName, segments(plain: "Ask \(liveID) to rebase."))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+    }
+
+    @Test func aLiveIdKeepsItsLinkToTheSession() throws {
+      let found = try segment(reading: liveName, segments(plain: "Ask \(liveID) to rebase."))
+
+      #expect(Set(found.text.runs.map(\.link)) == [SessionLink.url(for: liveID)])
+    }
+
+    @Test func aCollapsedNameAndIdGivesOneSessionReferent() {
+      #expect(referents(segments(plain: "\(liveName) (\(liveID)) is done")) == [.session(.id(liveID))])
+    }
+
+    @Test func aMarkdownSessionLinkGivesASessionReferent() throws {
+      let text = MarkdownText([MarkdownText.Run("Ask "), MarkdownText.Run("x", link: idURL)])
+
+      let found = try segment(reading: "x", segments(text))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+      #expect(Set(found.text.runs.map(\.link)) == [URL(string: idURL)])
+    }
+
+    /// A session link changes no text, so a label that is a code span keeps its code style and gets the referent.
+    @Test func aMarkdownSessionLinkWhoseLabelIsACodeSpanGivesASessionReferent() throws {
+      let found = try segment(reading: "fix-cache", segments(try paragraph("Ask [`fix-cache`](\(idURL)) now")))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+      #expect(Set(found.text.runs.map(\.link)) == [URL(string: idURL)])
+      #expect(found.text.runs.allSatisfy { $0.inlinePresentationIntent == .code })
+    }
+
+    @Test func aSessionLinkOnAFootnoteGivesASessionReferent() throws {
+      let text = MarkdownText([MarkdownText.Run("Ask"), MarkdownText.Run("1", .footnote, link: idURL)])
+
+      let found = try segment(reading: "1", segments(text))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+      #expect(Set(found.text.runs.map(\.link)) == [URL(string: idURL)])
+    }
+
+    @Test func aBareURLGivesASessionReferentAndLinksToItself() throws {
+      let found = try segment(reading: idURL, segments(plain: "See \(idURL) now"))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+      #expect(Set(found.text.runs.map(\.link)) == [URL(string: idURL)])
+    }
+
+    @Test func aBracketLinkGivesASessionReferentThatReadsItsLabel() throws {
+      let found = try segment(reading: "x", segments(plain: "Ask [x](\(idURL)) now"))
+
+      #expect(found.reference?.referent == .session(.id(liveID)))
+      #expect(Set(found.text.runs.map(\.link)) == [URL(string: idURL)])
+    }
+
+    @Test func aBracketLinkLeavesTheTextAroundItWithoutALink() throws {
+      let (text, _) = InlineText.attributed(
+        MarkdownText(stringLiteral: "Ask [x](\(idURL)) now"), names: names, repo: nil, links: true)
+
+      #expect(String(text.characters) == "Ask x now")
+      #expect(try links(in: text, of: "Ask ") == [nil])
+      #expect(try links(in: text, of: " now") == [nil])
+    }
+
+    @Test func aNameURLGivesANameReferent() {
+      #expect(referents(segments(plain: "See switchboard://session/fix-cache now")) == [.session(.name("fix-cache"))])
+    }
+
+    /// A link that names no session the app knows still opens a card, which says why the link does not resolve.
+    @Test func anUnknownIdURLStillGivesASessionReferent() {
+      #expect(referents(segments(plain: "See switchboard://session/sxyz23 now")) == [.session(.id("sxyz23"))])
+    }
+
+    @Test func aSessionAndAReferenceEachGiveTheirOwnReferent() throws {
+      let found = referents(segments(plain: "Ask \(liveID) about o/r#1 and \(idURL)."))
+
+      #expect(
+        found == [.session(.id(liveID)), .github(try #require(GitHubRef(parsing: "o/r#1"))), .session(.id(liveID))])
+    }
+
+    /// The same session named twice gives two parts, so each has its own rect.
+    @Test func aSessionNamedTwiceGivesTwoParts() {
+      let parts = segments(plain: "\(liveID) then \(idURL)").compactMap(\.reference?.part)
+
+      #expect(parts.count == 2)
+      #expect(Set(parts).count == 2)
+    }
+
+    // MARK: Removed sessions
+
+    @Test func aRemovedIdGivesNoReferent() {
+      #expect(referents(segments(plain: "Ask \(removedID) to rebase.")).isEmpty)
+    }
+
+    @Test func aRemovedIdDrawsPlainWithNoLink() {
+      let found = segments(plain: "Ask \(removedID) to rebase.")
+
+      #expect(String(InlineText.joined(found).characters) == "Ask \(removedName) to rebase.")
+      #expect(Set(InlineText.joined(found).runs.map(\.link)) == [nil])
+    }
+
+    // MARK: Without links
+
+    static let sessionTexts: [MarkdownText] = [
+      MarkdownText(stringLiteral: "Ask \(liveID) to rebase."),
+      MarkdownText(stringLiteral: "See \(idURL) now"),
+      MarkdownText(stringLiteral: "Ask [x](\(idURL)) now"),
+      MarkdownText(stringLiteral: "See switchboard://session/fix-cache now"),
+      MarkdownText([MarkdownText.Run("Ask "), MarkdownText.Run("x", link: idURL)]),
+      MarkdownText([MarkdownText.Run("Ask "), MarkdownText.Run("fix-cache", .code, link: idURL)]),
+    ]
+
+    @Test(arguments: sessionTexts)
+    func withoutLinksASessionGivesNoReferent(_ text: MarkdownText) {
+      #expect(referents(segments(text, links: false)).isEmpty)
+    }
+
+    @Test(arguments: sessionTexts)
+    func withoutLinksASessionHasNoLink(_ text: MarkdownText) {
+      #expect(Set(InlineText.joined(segments(text, links: false)).runs.map(\.link)) == [nil])
+    }
+
+    @Test(arguments: sessionTexts)
+    func withAndWithoutLinksGiveTheSameCharacters(_ text: MarkdownText) {
+      let linked = InlineText.joined(segments(text, links: true))
+      let unlinked = InlineText.joined(segments(text, links: false))
+
+      #expect(String(linked.characters) == String(unlinked.characters))
+    }
+
+    // MARK: Parity
+
+    /// Unstyled text that cmark parses as one paragraph with the same characters. cmark does not autolink a
+    /// `switchboard:` URL, and it parses the bracket form as a link run.
+    static let unstyled: [String] = [
+      "Ask \(liveID) to rebase.",
+      "\(liveName) (\(liveID)) is done",
+      "Ask \(removedID) to rebase.",
+      "See \(idURL) now.",
+      "(\(idURL))",
+      "See switchboard://session/fix-cache, then \(otherID).",
+      "See switchboard://session/x?\(liveID) now",
+      "Ask [x](\(idURL)) now",
+      "[a\\]b](\(idURL))",
+      "[chat](switchboard://session/Fix%20CI%20chat)",
+      SessionLink.markdown(name: "Fix `sb ls` *now* <x>", id: liveID),
+      "Ask \(liveID) about o/r#1 and #2, then see \(idURL).",
+      "see https://github.com/o/r/pull/1 and \(idURL)",
+    ]
+
+    @Test(arguments: unstyled)
+    func plainTextAndItsParagraphGiveTheSameSegments(_ s: String) throws {
+      let fromPlain = seen(segments(plain: s))
+      let fromParagraph = seen(segments(try paragraph(s)))
+
+      #expect(fromPlain == fromParagraph)
+    }
+  }
+}

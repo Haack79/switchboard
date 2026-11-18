@@ -407,6 +407,7 @@ private func idle() async { try? await Task.sleep(nanoseconds: 200_000_000) }
     let presenter = HoverCardPanel<ReferenceCardID>(clickable: true) { id in
       switch id.referent {
       case .github(let ref): AnyView(ReferenceCardView(model: model, ref: ref))
+      case .session: AnyView(EmptyView())
       }
     }
     presenter.show(ReferenceCardID(referent: .github(ref)), below: HoverAnchor(view: anchor))

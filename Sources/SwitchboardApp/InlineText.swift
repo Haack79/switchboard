@@ -27,7 +27,17 @@ struct InlineText: View {
 
   var body: some View {
     let (segments, help) = Self.segments(text, names: names, repo: repo, links: links)
-    if let help { content(segments).help(help) } else { content(segments) }
+    if let help, !opensSessionCard(segments) { content(segments).help(help) } else { content(segments) }
+  }
+
+  /// Whether the pointer can open the reference card on a session in the
+  /// text. The card shows the session's id, so the text then drops its
+  /// `name: id` help.
+  private func opensSessionCard(_ segments: [Segment]) -> Bool {
+    guard #available(macOS 15, *), card != nil else { return false }
+    return segments.contains {
+      if case .session? = $0.reference?.referent { true } else { false }
+    }
   }
 
   /// Only a text that can open a card, or that a test reads the rects of,
@@ -40,9 +50,9 @@ struct InlineText: View {
     }
   }
 
-  /// A stretch of the drawn text. `reference` is set only on a reference
-  /// that links, and its `part` is the reference's index among the text's
-  /// pieces.
+  /// A stretch of the drawn text. `reference` is set only on a reference,
+  /// live session name, or session link that links, and its `part` is its
+  /// index among the text's pieces.
   struct Segment {
     var text: AttributedString
     var reference: ReferenceAttribute?
@@ -56,9 +66,10 @@ struct InlineText: View {
   /// `links`, a live session's name links to the session, and `help` lists
   /// each swapped session as `name: id`, once each, in the order the text
   /// names them. A removed session's name never links. With `links`, a
-  /// reference links to its issue or pull request, and a bare `#123` refers
-  /// to `repo`. Without `links`, a reference has no link, even one that its
-  /// Markdown gave it.
+  /// reference links to its issue or pull request, a session link links to
+  /// its URL, and a bare `#123` refers to `repo`. Without `links`, a
+  /// reference or a session link has no link, even one that its Markdown
+  /// gave it.
   static func attributed(_ text: MarkdownText, names: SessionNames, repo: String?, links: Bool) -> (
     AttributedString, help: String?
   ) {
@@ -66,8 +77,9 @@ struct InlineText: View {
     return (joined(segments), help)
   }
 
-  /// `attributed`'s text, split so that each reference that links is a
-  /// segment of its own. Text between references joins into one segment.
+  /// `attributed`'s text, split so that each reference, live session name,
+  /// and session link that links is a segment of its own. Text between them
+  /// joins into one segment.
   static func segments(_ text: MarkdownText, names: SessionNames, repo: String?, links: Bool) -> (
     [Segment], help: String?
   ) {
@@ -79,12 +91,17 @@ struct InlineText: View {
       var reference: ReferenceAttribute?
       switch piece.mention {
       case .session(let match)? where links:
-        if !match.removed { part.link = SessionLink.url(for: match.id) }
+        if !match.removed {
+          part.link = SessionLink.url(for: match.id)
+          reference = ReferenceAttribute(referent: .session(.id(match.id)), part: index)
+        }
         if listed.insert(match.id).inserted {
           lines.append("\(match.name): \(match.id)" + (match.removed ? ", removed" : ""))
         }
       case .reference(let ref)? where links: reference = ReferenceAttribute(referent: .github(ref), part: index)
-      case .reference?: part.link = nil
+      case .sessionLink(let target)? where links:
+        reference = ReferenceAttribute(referent: .session(target), part: index)
+      case .reference?, .sessionLink?: part.link = nil
       case .session?, nil: break
       }
       if reference == nil, let last = segments.last, last.reference == nil {

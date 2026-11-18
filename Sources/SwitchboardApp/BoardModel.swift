@@ -1078,7 +1078,7 @@ final class BoardModel: ObservableObject {
     return true
   }
 
-  private enum LinkOutcome {
+  enum LinkOutcome {
     case reveal(String)
     case error(String)
   }
@@ -1086,7 +1086,7 @@ final class BoardModel: ObservableObject {
   /// What a link target comes to against every listed session and follow-up,
   /// whatever the org filter says. It is nil when no listed session matches
   /// and a later refresh could list one.
-  private func linkOutcome(_ target: SessionLink.Target) -> LinkOutcome? {
+  func linkOutcome(_ target: SessionLink.Target) -> LinkOutcome? {
     switch SessionLink.resolve(target, in: allBoard.map { ($0.id, $0.name) }) {
     case .session(let id):
       return .reveal(id)
@@ -1114,7 +1114,7 @@ final class BoardModel: ObservableObject {
 
   private static func cantOpen(_ url: URL) -> String { "Switchboard can't open \(url.absoluteString)" }
 
-  private static func unknownLinkError(_ target: SessionLink.Target) -> String {
+  static func unknownLinkError(_ target: SessionLink.Target) -> String {
     switch target {
     case .id(let id): "Switchboard has no session \(id)"
     case .name(let name): "Switchboard has no session named \"\(shown(name))\""
@@ -1124,7 +1124,7 @@ final class BoardModel: ObservableObject {
   /// A link's name with each format character, such as a bidi override or a
   /// zero-width space, written as its code point. The raw character would
   /// make the banner show text other than the name that the link holds.
-  private static func shown(_ name: String) -> String {
+  static func shown(_ name: String) -> String {
     var text = ""
     for scalar in name.unicodeScalars {
       if scalar.properties.generalCategory == .format {

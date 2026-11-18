@@ -185,21 +185,9 @@ extension GitHubRef {
   /// Where the URL whose `http://` or `https://` scheme starts at `i` ends,
   /// by `TokenBoundary.autolinkEnd`. nil when no scheme starts at `i`.
   private static func urlEnd(at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> (end: Int, cut: Bool)? {
-    guard var http = spells("http", at: i, before: limit, s) else { return nil }
+    guard var http = TokenBoundary.spells("http", at: i, before: limit, s) else { return nil }
     if http < limit, s[http] == "s" || s[http] == "S" { http += 1 }
-    guard let schemeEnd = spells("://", at: http, before: limit, s) else { return nil }
+    guard let schemeEnd = TokenBoundary.spells("://", at: http, before: limit, s) else { return nil }
     return TokenBoundary.autolinkEnd(after: schemeEnd, before: limit, s)
-  }
-
-  /// The index after `word` when `s` spells it at `i`, ignoring ASCII case.
-  private static func spells(_ word: String, at i: Int, before limit: Int, _ s: [Unicode.Scalar]) -> Int? {
-    var j = i
-    for c in word.unicodeScalars {
-      guard j < limit, s[j] == c || (s[j].value ^ 0x20 == c.value && s[j].properties.isAlphabetic) else {
-        return nil
-      }
-      j += 1
-    }
-    return j
   }
 }
