@@ -239,6 +239,25 @@ extension FakeGitHub {
     #expect(share(try sbd.pollStats(), "wait", "posthog").reads == before.reads + 1)
   }
 
+  /// `send` counts a status request that GitHub fails in the totals, so the split counts it too.
+  @Test func aFailedStatusRequestStillCountsUnderItsTrigger() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    let s = try sbd.session(in: StatsPR.charts.repo, branch: StatsPR.charts.branch)
+    try sbd.poll()
+    try sbd.sb("wait", s.id, "--kind", "merge")
+    let before = share(try sbd.pollStats(), "wait", "posthog")
+    let mark = github.mark
+    github.reply(500, #"{"message":"Server Error"}"#)
+
+    try sbd.poll()
+
+    let after = share(try sbd.pollStats(), "wait", "posthog")
+    #expect(github.seen(since: mark).graphQL.first?.kind == "status")
+    #expect(after.requests == before.requests + 1)
+    #expect(after.reads == before.reads)
+  }
+
   @Test func statsDoNotAskGitHub() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withGitHub(github)

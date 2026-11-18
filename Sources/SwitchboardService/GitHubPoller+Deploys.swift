@@ -123,14 +123,17 @@ extension GitHubPoller {
   }
 
   /// What happened to a deploy wait, from its PR and comments, or from the
-  /// last check of its service. The state files are shared by every session, so a session on a host whose `repos`
-  /// don't list the charts repo gets no outcome from them.
-  func deployOutcome(_ wait: Wait, _ pr: PullRequest, _ comments: [PRComment], host: String?) -> String? {
-    if let outcome = wait.deployResolution(of: pr, comments: comments) { return outcome }
+  /// last check of its service, with the time of the merge or close that settled it when one did. The state files
+  /// are shared by every session, so a session on a host whose `repos` don't list the charts repo gets no outcome
+  /// from them.
+  func deployOutcome(_ wait: Wait, _ pr: PullRequest, _ comments: [PRComment], host: String?) -> (
+    outcome: String, changedAt: Int64?
+  )? {
+    if let settled = wait.deploySettlement(of: pr, comments: comments) { return settled }
     guard pr.state == .merged, let service = wait.service, mayRead(Wait.chartsRepository, for: host),
       let read = serviceRead(service, id: wait.id, since: wait.created)
     else { return nil }
-    return wait.serviceDeployResolution(read.state, pr: pr, environments: read.progress)
+    return wait.serviceDeployResolution(read.state, pr: pr, environments: read.progress).map { ($0, nil) }
   }
 
   /// The service's state file and a target's progress from the last check,

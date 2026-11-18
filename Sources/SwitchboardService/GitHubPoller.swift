@@ -550,6 +550,9 @@ final class GitHubPoller {
     var gone: Set<String> = []
     for chunk in GitHub.chunks(ids) {
       let before = stats
+      var parsed = false
+      // A request that throws still cost what `send` counted, so the split keeps it.
+      defer { count(chunk, from: before, to: stats, countsReads: parsed) }
       let (read, notFound) = GitHub.parseStatus(
         try request(GitHub.statusQuery, idsVariable(chunk), stats: &stats), chunk)
       gone.formUnion(notFound)
@@ -563,7 +566,7 @@ final class GitHubPoller {
         if pr.base != pr.defaultBranch { stacked.append(pr.id) }
       }
       stats.polled += read.count
-      count(chunk, from: before, to: stats, countsReads: true)
+      parsed = true
     }
     for (id, var t) in tracked {
       if let prId = t.branch.prId, gone.contains(prId) {
@@ -601,11 +604,11 @@ final class GitHubPoller {
     }
     for chunk in GitHub.chunks(stacked) {
       let before = stats
+      defer { count(chunk, from: before, to: stats, countsReads: false) }
       let response = try request(GitHub.baseQuery, idsVariable(chunk), stats: &stats)
       for (id, base) in (response["data"]?["nodes"]?.array ?? []).compactMap(GitHub.parseMergedBase) {
         prs[id]?.pr.mergedBase = base
       }
-      count(chunk, from: before, to: stats, countsReads: false)
     }
     // A body that the poller read after its PR's status can carry a newer
     // edit time. A comment that GitHub reports NOT_FOUND, as after a
@@ -618,11 +621,11 @@ final class GitHubPoller {
     }
     for chunk in GitHub.chunks(stale, size: GitHub.lightChunkSize) {
       let before = stats
+      defer { count(Array(Set(chunk.map(\.prId))), from: before, to: stats, countsReads: false) }
       let ids = chunk.map(\.comment.id)
       let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(ids), stats: &stats), ids)
       for comment in read { bodies[comment.id] = comment }
       for s in chunk where gone.contains(s.comment.id) { bodies[s.comment.id] = s.comment }
-      count(Array(Set(chunk.map(\.prId))), from: before, to: stats, countsReads: false)
     }
   }
 
