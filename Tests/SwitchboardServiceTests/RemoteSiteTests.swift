@@ -2762,7 +2762,7 @@ private func session(_ id: String, host: String?) -> Session {
       let path = "\(sessions)/\(id)"
       if let file = try? filled(path) { canaries.append(file) }
 
-      #expect(throws: (any Error).self) { try b.site.removeSessionFolder(path, of: id) }
+      #expect { try b.site.removeSessionFolder(path, of: id) } throws: { !passedTheShapeCheck($0) }
 
       for canary in canaries { #expect(exists(canary), "\(canary)") }
       #expect(exists(sessions))

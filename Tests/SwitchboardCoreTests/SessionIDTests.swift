@@ -36,13 +36,15 @@ import Testing
     #expect(!SessionID.isValid(s))
   }
 
-  /// `isValid` and the matcher's `length(at:)` must accept the same ids, or an id would link in text and fail to
-  /// parse as a link target, or the reverse.
+  /// `isValid` and the matcher must accept the same ids, or an id would link in text and fail to parse as a link
+  /// target, or the reverse. The live session's id is the whole string, so a match on part of it resolves nothing.
   @Test(arguments: oldForm + newForm + notIds)
-  func isValidAgreesWithALengthThatCoversTheWholeString(_ s: String) {
-    let count = s.unicodeScalars.count
+  func isValidAgreesWithTheMatcher(_ s: String) {
+    let names = SessionNames(live: [s: "x"], removed: [:])
 
-    #expect(SessionID.isValid(s) == (SessionID.length(at: 0, in: scalars(s), before: count) == count))
+    let pieces = InlineMentions(names: names, repo: nil).pieces(MarkdownText(stringLiteral: s))
+
+    #expect(pieces.contains { if case .session? = $0.mention { true } else { false } } == SessionID.isValid(s))
   }
 
   @Test(
