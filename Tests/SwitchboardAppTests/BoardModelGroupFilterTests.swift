@@ -804,6 +804,24 @@ let everyGroupShape = [
     #expect(model.selection == "i1")
   }
 
+  /// A selected session that the removal job holds doesn't widen the filter, so it can't let another session in
+  /// a hidden group notify.
+  @Test func aHeldSelectedSessionDoesNotLetAHiddenGroupNotify() {
+    let before = [groupedSession("i1", group: "g1"), groupedSession("w1", group: "g2")]
+    let model = model(GroupFilter(keys: ["g1"]), before, followups: nil)
+    model.selection = "i1"
+    var held = groupedSession("i1", group: "g2")
+    held.removal = removalSession("i1", .queued).removal
+    let next = [held, groupedSession("w1", group: "g2", state: .needsYou)]
+    var notified: [String] = []
+    model.notifier = { notified.append($0.id) }
+
+    model.apply(.success(next), followups: nil, groups: Self.groups)
+
+    #expect(notified.isEmpty)
+    #expect(model.groupFilter == GroupFilter(keys: ["g1"]))
+  }
+
   @Test func aSessionInAShownGroupThatStartsNeedingYouNotifies() {
     let before = [groupedSession("i1", group: "g1"), groupedSession("w1", group: "g2")]
     let model = model(GroupFilter(keys: ["g1"]), before, followups: nil)

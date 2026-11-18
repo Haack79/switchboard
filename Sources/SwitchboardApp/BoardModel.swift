@@ -446,20 +446,22 @@ final class BoardModel: ObservableObject {
   /// the answer moves it out of the selected groups, as a merge or a delete does.
   func applyGroups(_ listed: [GroupSummary]) {
     if groups != listed { groups = listed }
-    let next = filter(after: listed, sessions: listedBoard)
+    let next = filter(after: listed, sessions: allBoard)
     let ids = Set(listed.map(\.id))
     unlistedNewGroups = unlistedNewGroups.filter { !ids.contains($0.key) && $0.value > 1 }.mapValues { $0 - 1 }
     if next != filter { filter = next }
   }
 
   /// The filter once it takes sbd's `group-ls` answer `listed`, widened to keep the selected session in sight
-  /// as `sessions` lists it.
+  /// as `sessions` lists it. A session that the removal job holds never widens it.
   func filter(after listed: [GroupSummary], sessions: [SessionSummary]) -> SessionFilter {
     let ids = Set(listed.map(\.id))
     var next = filter
     next.knownGroups = ids
     next.group = filter.group.pruned(known: ids.union(unlistedNewGroups.keys))
-    if let id = selection, let s = sessions.first(where: { $0.id == id }) { next = widened(next, toShow: s) }
+    if let id = selection, let s = sessions.first(where: { $0.id == id && !$0.isBeingRemoved }) {
+      next = widened(next, toShow: s)
+    }
     return next
   }
 
