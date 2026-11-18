@@ -1,34 +1,32 @@
 import SwiftUI
 import SwitchboardCore
 
-/// The Snooze menu, with its presets and Pick a Time…, and Unsnooze while the
-/// session is snoozed. A session that `canSnooze` refuses gets no items.
+/// The Snooze menu, with its presets and Pick a Time…, and Unsnooze while the session is snoozed. The session
+/// menu shows it only for a session that `canSnooze` allows.
 struct SnoozeMenuItems: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
 
   var body: some View {
-    if session.canSnooze {
-      let busy = model.snoozing.contains(session.id)
-      Menu("Snooze") {
-        let presets = SnoozePresets.times(now: nowMs(), zone: .current)
-        ForEach(Array(presets.enumerated()), id: \.offset) { index, shown in
-          Button(shown.title) {
-            // SwiftUI can build a context menu long before the click. A duration counts from the click.
-            // A dated preset keeps the day that its title names, even when midnight passes before the click.
-            let now = nowMs()
-            let fresh = SnoozePresets.times(now: now, zone: .current)[index]
-            let until = fresh.title == shown.title || shown.until <= now ? fresh.until : shown.until
-            model.snooze(session.id, until: Date(timeIntervalSince1970: Double(until) / 1000))
-          }
+    let busy = model.snoozing.contains(session.id)
+    Menu("Snooze") {
+      let presets = SnoozePresets.times(now: nowMs(), zone: .current)
+      ForEach(Array(presets.enumerated()), id: \.offset) { index, shown in
+        Button(shown.title) {
+          // SwiftUI can build a context menu long before the click. A duration counts from the click.
+          // A dated preset keeps the day that its title names, even when midnight passes before the click.
+          let now = nowMs()
+          let fresh = SnoozePresets.times(now: now, zone: .current)[index]
+          let until = fresh.title == shown.title || shown.until <= now ? fresh.until : shown.until
+          model.snooze(session.id, until: Date(timeIntervalSince1970: Double(until) / 1000))
         }
-        Divider()
-        Button("Pick a Time…") { model.pickingSnoozeTime = session.id }
       }
-      .disabled(busy)
-      if session.snoozedUntil != nil {
-        Button("Unsnooze") { model.unsnooze(session.id) }.disabled(busy)
-      }
+      Divider()
+      Button("Pick a Time…") { model.pickingSnoozeTime = session.id }
+    }
+    .disabled(busy)
+    if session.snoozedUntil != nil {
+      Button("Unsnooze") { model.unsnooze(session.id) }.disabled(busy)
     }
   }
 }

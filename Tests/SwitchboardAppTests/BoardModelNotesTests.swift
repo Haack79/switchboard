@@ -91,22 +91,22 @@ import Testing
     #expect(request["resolve"] == nil)
   }
 
-  @Test func deleteDoneSendsTheShownTodos() async {
+  @Test func deleteSessionSendsTheShownTodos() async {
     let s = session(mixed)
 
-    let sent = await firstRequest { $0.deleteDone(s, resolve: ["n3", "n4"]) }
+    let sent = await firstRequest { $0.deleteSession(s, resolve: ["n3", "n4"]) }
 
     #expect(sent.op == "rm-queue")
     #expect(sent.args["resolve"] == ["n3", "n4"])
   }
 
-  @Test func deleteDoneSendsOnlyTheShownTodosWhenTheBoardHasANewerOne() async {
+  @Test func deleteSessionSendsOnlyTheShownTodosWhenTheBoardHasANewerOne() async {
     let shown = session([todoFixture("n3", "tell Alex in #flags")])
     let newer = session([todoFixture("n3", "tell Alex in #flags"), todoFixture("n5", "added after the dialog opened")])
 
     let sent = await firstRequest { model in
       model.apply(.success([newer]), followups: nil)
-      model.deleteDone(shown, resolve: TodoDeletion(shown).ids)
+      model.deleteSession(shown, resolve: TodoDeletion(shown).ids)
     }
 
     #expect(sent.args["resolve"] == ["n3"])
@@ -126,22 +126,22 @@ import Testing
     #expect(model.confirmingDelete.map { TodoDeletion($0).ids } == ["n3"])
   }
 
-  @Test func deleteDoneWithTodosIgnoresASecondDeleteWhileTheFirstRuns() async {
+  @Test func deleteSessionWithTodosIgnoresASecondDeleteWhileTheFirstRuns() async {
     let s = session(mixed)
 
     let sent = await firstRequest { model in
-      model.deleteDone(s, resolve: ["n3", "n4"])
-      model.deleteDone(s, resolve: ["n3", "n4"])
+      model.deleteSession(s, resolve: ["n3", "n4"])
+      model.deleteSession(s, resolve: ["n3", "n4"])
       #expect(model.deleting == [s.id])
     }
 
     #expect(sent.count == 1)
   }
 
-  @Test func deleteDoneSendsNoResolveWithoutAnOpenTodo() async {
+  @Test func deleteSessionSendsNoResolveWithoutAnOpenTodo() async {
     let s = session([noteFixture("n1", "plain")])
 
-    let sent = await firstRequest { $0.deleteDone(s, resolve: []) }
+    let sent = await firstRequest { $0.deleteSession(s, resolve: []) }
 
     #expect(sent.op == "rm-queue")
     #expect(sent.args["resolve"] == nil)

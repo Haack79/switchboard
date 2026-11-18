@@ -168,7 +168,7 @@ struct NotesList: View {
 
   private func row(_ note: Note) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      InlineText(plain: note.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+      MarkdownView(text: note.text)
       Text("\(note.by.rawValue) · \(ago(note.t)) ago").font(.caption).foregroundStyle(.secondary)
     }
   }

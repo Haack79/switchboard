@@ -156,4 +156,33 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
     #expect(refusal == .some("acme/ledger is already a source"))
     #expect(sent.ops == ["issues-source-add"])
   }
+
+  // MARK: - Team settings
+
+  /// An empty list goes as `[]`, which clears the labels. sbd keeps the old labels when the key is missing.
+  @Test(arguments: [["backlog", "icebox"], []] as [[String]])
+  func saveSendsTheBacklogLabels(_ backlog: [String]) async {
+    let sent = await firstRequest { model in
+      model.saveIssueSettings(labels: ["team/billing"], people: ["ana-m"], backlog: backlog, defaultPreset: nil)
+    }
+
+    #expect(sent.op == "issues-settings")
+    #expect(sent.args["backlog"] == .array(backlog.map(JSON.string)))
+    #expect(sent.args["labels"] == .array(["team/billing"]))
+  }
+
+  /// A label set from `sb issues team` or config.json can hold a comma. A field that still shows the loaded text
+  /// gives the loaded list back, so Save leaves that label whole.
+  @Test(arguments: [["backlog,icebox"], ["team/billing, west", "ops"], ["ana-m"], []] as [[String]])
+  func anUnchangedFieldKeepsTheLoadedList(_ loaded: [String]) {
+    #expect(IssueSetupView.list(IssueSetupView.text(loaded), loaded: loaded) == loaded)
+  }
+
+  @Test func anEditedFieldSplitsOnCommas() {
+    #expect(IssueSetupView.list("backlog, icebox ,, ", loaded: ["backlog,icebox"]) == ["backlog", "icebox"])
+  }
+
+  @Test func beforeTheListLoadsAFieldSplitsOnCommas() {
+    #expect(IssueSetupView.list("backlog,icebox", loaded: nil) == ["backlog", "icebox"])
+  }
 }

@@ -356,9 +356,12 @@ let usage = """
     plan reject <proposal>        drop it. A declined row stays declined
 
   Issues, open GitHub issues from the sources you pick:
-    issues [--mine]               list them by bucket: assigned to you, the team's
+    issues [--mine] [--no-backlog]
+                                  list them by bucket: assigned to you, the team's
                                   unassigned, the team's assigned to others, other,
-                                  and being worked on by a session
+                                  and being worked on by a session. Issues with a
+                                  backlog label come last, and --no-backlog leaves
+                                  them out. --json marks each with "backlog"
     issues start <owner/name#N> [--preset P] [--group G] [--path FOLDER]
                                   start a session on the issue in a worktree on
                                   <branchPrefix><N>-<slug>, with the preset's prompt
@@ -366,8 +369,9 @@ let usage = """
                                   add or remove a source. An org needs a label or
                                   a person
     issues source ls              list the sources
-    issues team [--label L]... [--person P]...
-                                  show or set the labels and logins of your team
+    issues team [--label L]... [--person P]... [--backlog L]...
+                                  show or set the labels and logins of your team,
+                                  and its backlog labels. --backlog '' clears them
     ref <owner/name#N | URL | #N> [--repo owner/name]
                                   show an issue or PR: its kind, state, title,
                                   author, and labels, and a PR's checks, review,
@@ -479,7 +483,7 @@ struct Args {
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
-      "--preset", "--label", "--person", "--steps", "--for",
+      "--preset", "--label", "--person", "--backlog", "--steps", "--for",
       "--reason", "--message",
     ]).union(waitFlags.keys)
     var rest = argv

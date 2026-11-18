@@ -1,8 +1,8 @@
 import SwiftUI
 import SwitchboardCore
 
-/// The accounts a session can move to, for a context menu's submenu and the
-/// session header's account menu.
+/// The accounts a session can move to, for a context menu's Move to Account
+/// submenu and the session header's account menu.
 struct MoveToAccountMenuItems: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
@@ -27,19 +27,6 @@ struct MoveToAccountMenuItems: View {
     if let lock, model.boardShowsGroup(lock.groupID) {
       Divider()
       Button("Show \(lock.groupName) on the Board") { model.showGroupOnBoard(session) }
-    }
-  }
-}
-
-/// A session row's Move to Account submenu. It shows only when the session
-/// can move to another account.
-struct MoveToAccountSubmenu: View {
-  @EnvironmentObject var model: BoardModel
-  let session: SessionSummary
-
-  var body: some View {
-    if SessionAccountMenu.shows(session, accountCount: model.accounts.count) {
-      Menu("Move to Account") { MoveToAccountMenuItems(session: session) }
     }
   }
 }
