@@ -202,6 +202,20 @@ public struct Wait: Codable, Equatable, Sendable {
     return summary + (note.map { " (\($0))" } ?? "")
   }
 
+  /// `line` as the app draws it. A session wait's target name links to the target's id URL when `names` has the
+  /// target live. The link comes from the wait's target id, not from the text, and the name is the one the wait
+  /// recorded.
+  public func lineText(names: SessionNames) -> MarkdownText {
+    guard kind == .session, let target = session, !target.name.isEmpty, names.entry(target.id)?.removed == false
+    else { return MarkdownText(stringLiteral: line) }
+    // `summary` starts with the name. Scalars split the line where the name ends, while characters could merge
+    // the name's last scalar with the space after it.
+    let rest = String(line.unicodeScalars.dropFirst(target.name.unicodeScalars.count))
+    return MarkdownText([
+      MarkdownText.Run(target.name, link: SessionLink.url(for: target.id).absoluteString), MarkdownText.Run(rest),
+    ])
+  }
+
   /// Whether the wait is past its recheck time and still open.
   public func isOverdue(now: Int64) -> Bool {
     guard let recheck else { return false }

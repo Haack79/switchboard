@@ -334,6 +334,7 @@ struct SectionTitle: View {
 /// call that the Summary shows in part.
 struct CardDetails: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.sessionNames) private var names
   let session: SessionSummary
   /// The item's ref. Steps read for another item don't show.
   let ref: String
@@ -394,7 +395,7 @@ struct CardDetails: View {
           }
         }
         if !session.waits.isEmpty {
-          section("Waits") { ForEach(session.waits, id: \.id) { InlineText(plain: $0.line) } }
+          section("Waits") { ForEach(session.waits, id: \.id) { InlineText($0.lineText(names: names)) } }
         }
         if let text = Self.lastReply(context: context, reply: model.replies[session.id] ?? session.lastReply) {
           section("Last reply") { MarkdownView(text: text) }
