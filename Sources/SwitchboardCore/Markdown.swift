@@ -236,6 +236,9 @@ public enum MarkdownBlock: Equatable, Sendable {
     guard case .paragraph(let text)? = blocks.first, let first = text.runs.first,
       first.style.isEmpty, first.link == nil, first.image == nil
     else { return .quote(blocks) }
+    // Styled text after the marker starts a new run. The marker is alone on its line only when its run holds the
+    // line break or when the marker is the whole paragraph.
+    guard first.text.contains("\n") || text.runs.count == 1 else { return .quote(blocks) }
     let line = first.text.prefix { $0 != "\n" }
     let marker = line.trimmingCharacters(in: .whitespaces)
     guard marker.hasPrefix("[!"), marker.hasSuffix("]"),

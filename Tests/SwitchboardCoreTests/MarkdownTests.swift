@@ -189,6 +189,18 @@ private func alert(_ kind: MarkdownBlock.AlertKind, _ blocks: [MarkdownBlock]) -
   @Test func aQuoteThatGitHubWouldNotReadAsAnAlertStaysAQuote() {
     // Text on the marker's line, no text after the marker, an unknown kind, or a styled marker.
     #expect(MarkdownBlock.parse("> [!NOTE] same line") == [.quote([.paragraph("[!NOTE] same line")])])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] **bold**\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("bold", .strong), Run("\ntext")))])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] [link](https://x.example)\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("link", link: "https://x.example"), Run("\ntext")))])
+      ])
+    #expect(
+      MarkdownBlock.parse("> [!NOTE] `code`\n> text") == [
+        .quote([.paragraph(text(Run("[!NOTE] "), Run("code", .code), Run("\ntext")))])
+      ])
     #expect(MarkdownBlock.parse("> [!NOTE]") == [.quote([.paragraph("[!NOTE]")])])
     #expect(MarkdownBlock.parse("> [!DANGER]\n> text") == [.quote([.paragraph("[!DANGER]\ntext")])])
     #expect(

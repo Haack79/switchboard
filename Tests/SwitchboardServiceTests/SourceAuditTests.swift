@@ -403,4 +403,25 @@ enum SourceAudit {
         lines[start..<read].contains { $0.contains("isatty(") }, "\(file):\(read + 1) reads stdin with no isatty check")
     }
   }
+
+  // MARK: Markdown in the app
+
+  @Test(arguments: [
+    ("  let s = try AttributedString(markdown: text)", "Markdown renderer"),
+    ("  let doc = cmark_parse_document(p, n, 0)", "Markdown renderer"),
+    ("import MarkdownUI", "Markdown renderer"),
+    ("  let blocks = MarkdownBlock.parse(note.text)", "MarkdownBlock.parse in the app"),
+    ("  Text(LocalizedStringKey(note.text))", "LocalizedStringKey("),
+  ])
+  func markdownDrawnOutsideMarkdownViewFails(line: String, rule: String) {
+    let rules = SourceAudit.scan(file: "SwitchboardApp/Notes.swift", text: line).map(\.rule)
+
+    #expect(rules.contains(rule), "\(line)")
+  }
+
+  @Test func theMarkdownRulesPassInTheirAllowedFilesAndOutsideTheApp() {
+    #expect(SourceAudit.scan(file: "SwitchboardApp/MarkdownView.swift", text: "  MarkdownBlock.parse(text)").isEmpty)
+    #expect(SourceAudit.scan(file: "SwitchboardApp/InlineText.swift", text: "  LocalizedStringKey(s)").isEmpty)
+    #expect(SourceAudit.scan(file: "SwitchboardCore/Markdown.swift", text: "  cmark_parser_new(0)").isEmpty)
+  }
 }
