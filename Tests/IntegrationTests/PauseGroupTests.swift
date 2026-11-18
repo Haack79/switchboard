@@ -230,7 +230,7 @@ extension Instance {
     switch how {
     case .name: ref = "bravo"
     case .id: ref = g.b.id
-    case .idPrefix: ref = String(g.b.id.prefix(4))
+    case .idPrefix: ref = String(g.b.id.prefix(g.b.id.count - 1))
     case .nameWithState: ref = "bravo=needs_you"
     }
 
@@ -350,7 +350,7 @@ extension Instance {
       return ("Flags", session, member)
     case .sessionIdPrefix:
       let session = try sbd.liveIdle("x")
-      let ref = String(session.id.prefix(4))
+      let ref = String(session.id.prefix(session.id.count - 1))
       _ = try sbd.addGroup(ref, [member.id])
       return (ref, session, member)
     }

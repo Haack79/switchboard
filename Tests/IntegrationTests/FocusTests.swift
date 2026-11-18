@@ -49,7 +49,7 @@ import Testing
     func text(for s: SessionSummary) -> String {
       switch self {
       case .id: s.id
-      case .prefix: String(s.id.prefix(3))
+      case .prefix: String(s.id.prefix(s.id.count - 1))
       case .name: s.name
       }
     }

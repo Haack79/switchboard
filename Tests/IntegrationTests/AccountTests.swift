@@ -359,7 +359,7 @@ import Testing
     #expect(try sbd.get(named.id).account == sbd.account("A"))
     #expect(transcript(sbd, "B", named) == nil)
 
-    let result = try move(sbd, "--session", String(named.id.prefix(4)), "--session", "first")
+    let result = try move(sbd, "--session", String(named.id.prefix(named.id.count - 1)), "--session", "first")
     #expect(result.moved == [named.id])
     #expect(result.blocked.isEmpty)
     let after = try sbd.get(named.id)
