@@ -33,7 +33,7 @@ public enum SessionLink {
   /// The guidance that the Manager guide, the chat guide, and the default
   /// system prompt give every agent.
   public static let guidance =
-    "When you name a Switchboard session in a reply, write it as a Markdown link to its id URL, such as [fix-cache](switchboard://session/seb4ec). Copy the URL from the `url` field of `sb get --json`, `sb ls --json`, or the `get_session` and `list_sessions` tools. Never build the URL yourself: if you don't have it, look the session up first."
+    "When you name a Switchboard session in a reply, write it as a Markdown link to its id URL, such as [fix-cache](switchboard://session/seb4ec). Copy the URL from the `url` field of `sb get --json`, `sb ls --json`, or the `get_session` and `list_sessions` tools, or from a Switchboard message that gives it. Never build the URL yourself: if you don't have it, look the session up first."
 
   /// `id` is a session id, so the string always parses as a URL.
   public static func url(for id: String) -> URL { URL(string: prefix + id)! }

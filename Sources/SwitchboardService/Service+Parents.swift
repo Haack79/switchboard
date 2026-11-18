@@ -14,7 +14,7 @@ struct ParentNotices {
 }
 
 extension Service {
-  private func parentOf(_ session: Session) -> String? {
+  func parentOf(_ session: Session) -> String? {
     SessionTree.parentID(
       of: session.id, parent: session.parent, followup: session.followup, isKnown: { entries[$0] != nil })
   }

@@ -106,6 +106,27 @@ extension Instance {
     #expect(sbd.summaryCalls().isEmpty)
   }
 
+  /// A child asks its own questions in its own item, so its parent's card names the child instead of asking again.
+  @Test func aParentsCardListsTheChildrenThatAskInTheirOwnItems() throws {
+    let sbd = try Instance()
+    try sbd.writeCard("c1", specCard)
+    let parent = try ManagerTests().idle(sbd, name: "p")
+    let kid = try ManagerTests().child(sbd, of: parent.id, name: "kid", prompt: "card c1")
+    try sbd.waitFor(kid.id, "the child's card") { $0.triage?.source == .session }
+
+    let asking = cardText([["label": "Merge"], ["label": "Wait"]])
+    let text = try sbd.setSummary(parent.id, asking).stdout
+    let json = try #require(JSON.parse(try sbd.setSummary(["--json", parent.id], asking).stdout))
+    let review = try sbd.setSummary(parent.id, cardText([])).stdout
+    let own = try sbd.setSummary(kid.id, asking).stdout
+
+    #expect(text.contains("already ask the user in their own Inbox items"), "\(text)")
+    #expect(text.contains("[kid](switchboard://session/\(kid.id)): Pick how to land #98"), "\(text)")
+    #expect(json["childItems"]?.array?.map { $0["session"]?.string } == [kid.id], "\(json)")
+    #expect(!review.contains("These sessions you started"), "\(review)")
+    #expect(!own.contains("These sessions you started"), "\(own)")
+  }
+
   @Test func aNewTurnDropsTheSessionsCard() throws {
     let sbd = try Instance()
     try sbd.writeCard("c1", specCard)
