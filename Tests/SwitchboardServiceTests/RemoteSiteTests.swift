@@ -2686,11 +2686,14 @@ private func session(_ id: String, host: String?) -> Session {
 // MARK: The session's launcher folder on the host
 
 /// After sbd forgets a remote session, it removes the session's launcher folder on the host with `rm -rf`, only for
-/// a path that equals `<home>/.sb/sessions/<id>` with an id that matches `^s[a-z0-9]+$`. Each refusal leaves every
-/// folder in place.
+/// a path that equals `<home>/.sb/sessions/<id>` with an id that `SessionID.isValid` accepts: `s` and 5 characters
+/// from `ShortId.alphabet`, or `swb_` and 5 characters from it. Each refusal leaves every folder in place.
 ///
 /// These tests assume `RemoteSite.removeSessionFolder(_ path:, of id:)`.
 @Suite struct RemoteSessionFolderRemovalTests {
+  /// One id of each form that sbd makes.
+  private static let ids = ["seb4ec", "swb_eb4ec"]
+
   /// Creates the folder with a file in it and returns the file.
   @discardableResult
   private func filled(_ folder: String) throws -> String {
@@ -2702,29 +2705,35 @@ private func session(_ id: String, host: String?) -> Session {
 
   private func exists(_ path: String) -> Bool { FileManager.default.fileExists(atPath: path) }
 
-  @Test(.timeLimit(.minutes(1)))
-  func theLauncherFolderOfTheSessionIsRemovedAndNoOtherOne() throws {
+  /// Whether a check after the id's shape check refused the removal. A test of a later check that the shape check
+  /// refuses first would pass without testing its own check.
+  private func passedTheShapeCheck(_ error: any Error) -> Bool { !"\(error)".contains("is not a session id") }
+
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func theLauncherFolderOfTheSessionIsRemovedAndNoOtherOne(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       let sessions = "\(facts.folder)/sessions"
-      try filled("\(sessions)/s1abc")
-      let other = try filled("\(sessions)/s2xyz")
+      try filled("\(sessions)/\(id)")
+      let others = try ["seb4ec", "sgcctv", "swb_eb4ec", "swb_gcctv"].filter { $0 != id }.map {
+        try filled("\(sessions)/\($0)")
+      }
 
-      try b.site.removeSessionFolder("\(sessions)/s1abc", of: "s1abc")
+      try b.site.removeSessionFolder("\(sessions)/\(id)", of: id)
 
-      #expect(!exists("\(sessions)/s1abc"))
-      #expect(exists(other))
+      #expect(!exists("\(sessions)/\(id)"))
+      for other in others { #expect(exists(other), "\(other)") }
       #expect(exists(sessions))
       #expect(b.sent.runs.allSatisfy { $0.timeout != nil })
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func aLauncherFolderThatIsAlreadyGoneIsNoError() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func aLauncherFolderThatIsAlreadyGoneIsNoError(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
 
-      try b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc")
+      try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id)
 
       #expect(exists("\(facts.folder)/sessions"))
     }
@@ -2735,6 +2744,16 @@ private func session(_ id: String, host: String?) -> Session {
     arguments: [
       "", "s", "S1", "s1/x", "s1/..", "../x", "..", ".", "-rf", "s1\n", "s1 ", " s1", "x1", "s-1", "s_1", "s1.", "s1*",
       "s1abc/../s2xyz", "sé1",
+      // The old form: one character short or long, upper case, and characters outside the alphabet.
+      "s1", "s1abc", "s2xyz", "seb4e", "seb4ecx", "Seb4ec", "SEB4EC", "seb4e1", "seb4eo", "seb4el", "seb4e0", "seb4é",
+      "seb4ec ", "seb4ec\n", "seb4ec/", "./seb4ec",
+      // The new form: the prefix alone, length, case, the prefix written another way, and non-ASCII.
+      "swb_", "swb_eb4e", "swb_eb4ec1", "swb_eb4eC", "swb_eb4e1", "swb_eb4eo", "SWB_eb4ec", "Swb_eb4ec", "swb_EB4EC",
+      "swb-eb4ec", "swb__eb4e", "swb__eb4ec", "swbeb4ec", "sw_eb4ec", "swb_eb4é", "swb_eb4eé", "ѕwb_eb4ec",
+      "swb_eb4ec ", " swb_eb4ec", "swb_eb4ec\n", "swb_eb4ec/", "./swb_eb4ec", "swb_eb4ec-claude",
+      // Dot segments and traversal, with real ids on both sides.
+      "swb_eb4ec/..", "swb_/../x", "swb_..", "swb_eb4e.", "seb4ec/../sgcctv", "swb_eb4ec/../seb4ec",
+      "seb4ec/../swb_eb4ec", "swb_eb4ec/../../x",
     ])
   func anIdThatIsNotASessionIdIsRefusedAndRemovesNothing(id: String) throws {
     try withSite { b in
@@ -2742,6 +2761,7 @@ private func session(_ id: String, host: String?) -> Session {
       let sessions = "\(facts.folder)/sessions"
       var canaries = [
         try filled("\(sessions)/s1abc"), try filled("\(sessions)/s2xyz"), try filled("\(sessions)/s1"),
+        try filled("\(sessions)/seb4ec"), try filled("\(sessions)/sgcctv"), try filled("\(sessions)/swb_eb4ec"),
         try filled("\(facts.folder)/x"), try filled("\(facts.home)/x"),
       ]
       let path = "\(sessions)/\(id)"
@@ -2760,29 +2780,30 @@ private func session(_ id: String, host: String?) -> Session {
       "the box's Switchboard folder", "the sessions folder", "the box's home", "another session's folder",
       "a folder of the id outside sessions", "a path through a dot-dot", "a relative path", "a path with a tilde",
       "this Mac's launcher folder of the session",
-    ])
-  func aPathOtherThanTheSessionsOwnFolderIsRefusedAndRemovesNothing(shape: String) throws {
+    ], ids)
+  func aPathOtherThanTheSessionsOwnFolderIsRefusedAndRemovesNothing(shape: String, id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       let sessions = "\(facts.folder)/sessions"
-      var canaries = [try filled("\(sessions)/s1abc"), try filled("\(sessions)/s2xyz")]
+      let other = "sgcctv"
+      var canaries = [try filled("\(sessions)/\(id)"), try filled("\(sessions)/\(other)")]
       let path: String
       switch shape {
       case "the box's Switchboard folder": path = facts.folder
       case "the sessions folder": path = sessions
       case "the box's home": path = facts.home
-      case "another session's folder": path = "\(sessions)/s2xyz"
-      case "a folder of the id outside sessions": path = "\(facts.folder)/other/s1abc"
-      case "a path through a dot-dot": path = "\(sessions)/s1abc/../s2xyz"
-      case "a relative path": path = "sessions/s1abc"
-      case "a path with a tilde": path = "~/.sb/sessions/s1abc"
-      default: path = "\(b.home)/sessions/s1abc"
+      case "another session's folder": path = "\(sessions)/\(other)"
+      case "a folder of the id outside sessions": path = "\(facts.folder)/other/\(id)"
+      case "a path through a dot-dot": path = "\(sessions)/\(id)/../\(other)"
+      case "a relative path": path = "sessions/\(id)"
+      case "a path with a tilde": path = "~/.sb/sessions/\(id)"
+      default: path = "\(b.home)/sessions/\(id)"
       }
-      for folder in ["\(facts.folder)/other/s1abc", "\(facts.home)/sessions/s1abc", "\(b.home)/sessions/s1abc"] {
+      for folder in ["\(facts.folder)/other/\(id)", "\(facts.home)/sessions/\(id)", "\(b.home)/sessions/\(id)"] {
         canaries.append(try filled(folder))
       }
 
-      #expect(throws: (any Error).self) { try b.site.removeSessionFolder(path, of: "s1abc") }
+      #expect { try b.site.removeSessionFolder(path, of: id) } throws: { passedTheShapeCheck($0) }
 
       for canary in canaries { #expect(exists(canary), "\(canary)") }
     }
@@ -2790,16 +2811,20 @@ private func session(_ id: String, host: String?) -> Session {
 
   /// `rm -rf` of a link removes the link. The folder that it points at, here one outside the box's Switchboard
   /// folder, keeps its files whether sbd refuses or removes the link.
-  @Test(.timeLimit(.minutes(1)))
-  func aLauncherFolderThatIsALinkNeverRemovesWhatItPointsAt() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func aLauncherFolderThatIsALinkNeverRemovesWhatItPointsAt(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       let precious = try filled("\(b.home)/precious")
       try FileManager.default.createDirectory(atPath: "\(facts.folder)/sessions", withIntermediateDirectories: true)
       try FileManager.default.createSymbolicLink(
-        atPath: "\(facts.folder)/sessions/s1abc", withDestinationPath: "\(b.home)/precious")
+        atPath: "\(facts.folder)/sessions/\(id)", withDestinationPath: "\(b.home)/precious")
 
-      try? b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc")
+      do {
+        try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id)
+      } catch {
+        #expect(passedTheShapeCheck(error), "\(error)")
+      }
 
       #expect(exists(precious))
     }
@@ -2807,56 +2832,56 @@ private func session(_ id: String, host: String?) -> Session {
 
   /// `.sb` or `.sb/sessions` is a link to a folder elsewhere that holds a folder of the session's id. The removal
   /// refuses, and that folder keeps its files.
-  @Test(.timeLimit(.minutes(1)), arguments: [".sb", ".sb/sessions"])
-  func aLinkAboveTheLauncherFolderIsRefusedAndRemovesNothingWhereItLeads(linked: String) throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [".sb", ".sb/sessions"], ids)
+  func aLinkAboveTheLauncherFolderIsRefusedAndRemovesNothingWhereItLeads(linked: String, id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       let target = "\(b.home)/elsewhere"
-      let precious = try filled(linked == ".sb" ? "\(target)/sessions/s1abc" : "\(target)/s1abc")
+      let precious = try filled(linked == ".sb" ? "\(target)/sessions/\(id)" : "\(target)/\(id)")
       try replaceWithLink("\(facts.home)/\(linked)", to: target, keeping: "\(b.home)/moved")
 
-      #expect(throws: (any Error).self) {
-        try b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc")
+      #expect { try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id) } throws: {
+        passedTheShapeCheck($0)
       }
 
       #expect(exists(precious))
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func aSessionsFolderThatIsAFileIsRefusedAndKeepsTheFile() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func aSessionsFolderThatIsAFileIsRefusedAndKeepsTheFile(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       let sessions = "\(facts.folder)/sessions"
       try FileManager.default.removeItem(atPath: sessions)
       try Data("keep\n".utf8).write(to: URL(fileURLWithPath: sessions))
 
-      #expect(throws: (any Error).self) { try b.site.removeSessionFolder("\(sessions)/s1abc", of: "s1abc") }
+      #expect { try b.site.removeSessionFolder("\(sessions)/\(id)", of: id) } throws: { passedTheShapeCheck($0) }
 
       #expect(FileManager.default.contents(atPath: sessions) == Data("keep\n".utf8))
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func aSessionsFolderThatIsGoneIsNoError() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func aSessionsFolderThatIsGoneIsNoError(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
       try FileManager.default.removeItem(atPath: "\(facts.folder)/sessions")
 
-      try b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc")
+      try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id)
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func theRemovalThrowsHostUnreadWhenTheLinkDroppedAndRemovesNothing() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func theRemovalThrowsHostUnreadWhenTheLinkDroppedAndRemovesNothing(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
-      let file = try filled("\(facts.folder)/sessions/s1abc")
+      let file = try filled("\(facts.folder)/sessions/\(id)")
       let master = try #require(b.bench.masters().last)
       b.bench.drop(master)
       try b.bench.waitFor(.unreachable)
 
-      #expect { try b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc") } throws: {
+      #expect { try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id) } throws: {
         isUnread($0)
       }
 
@@ -2864,14 +2889,14 @@ private func session(_ id: String, host: String?) -> Session {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func theRemovalThrowsHostUnreadOnAConnectionWhoseSetupHasNotRunAndRemovesNothing() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: ids)
+  func theRemovalThrowsHostUnreadOnAConnectionWhoseSetupHasNotRunAndRemovesNothing(id: String) throws {
     try withSite { b in
       let facts = try b.ready()
-      let file = try filled("\(facts.folder)/sessions/s1abc")
+      let file = try filled("\(facts.folder)/sessions/\(id)")
       try b.reconnect()
 
-      #expect { try b.site.removeSessionFolder("\(facts.folder)/sessions/s1abc", of: "s1abc") } throws: {
+      #expect { try b.site.removeSessionFolder("\(facts.folder)/sessions/\(id)", of: id) } throws: {
         isUnread($0)
       }
 
