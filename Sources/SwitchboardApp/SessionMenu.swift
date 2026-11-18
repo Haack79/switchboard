@@ -3,6 +3,7 @@ import SwitchboardCore
 
 /// An action of a session row's context menu. `divider` separates the destructive actions that follow it.
 enum SessionMenuAction: Hashable {
+  case highlight
   case snooze
   case pause
   case resume
@@ -23,6 +24,7 @@ enum SessionMenu {
   /// when an item comes before it.
   static func actions(for s: SessionSummary, selectionCount: Int?, hasExtra: Bool = false) -> [SessionMenuAction] {
     var safe: [SessionMenuAction] = []
+    if HighlightMenuItem.title(for: s) != nil { safe.append(.highlight) }
     if s.canSnooze { safe.append(.snooze) }
     if s.pause != nil {
       safe.append(.resume)
@@ -68,6 +70,8 @@ struct SessionMenuItems<Extra: View>: View {
   @ViewBuilder private func item(_ action: SessionMenuAction) -> some View {
     let id = session.id
     switch action {
+    case .highlight:
+      HighlightMenuItem(session: session)
     case .snooze:
       SnoozeMenuItems(session: session)
     case .pause:

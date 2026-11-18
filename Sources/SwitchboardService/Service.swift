@@ -342,9 +342,7 @@ public final class Service {
     try? refreshChatGuides()
     // A summary that was running when sbd stopped never finished.
     for (id, e) in entries {
-      let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
-      startSummaries(id, verdict)
-      resolveDraftTargets(id, verdict)
+      afterTrack(id, Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState))
     }
     try startMCPServers()
     github = GitHubPoller(service: self, settings: config.github, depot: config.depot, trunk: config.trunk)
@@ -510,6 +508,19 @@ public final class Service {
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
       try requireSignedIn(request.args)
+      if request.op == "account-move", request.args["stop"]?.bool == true, request.args["dryRun"]?.bool != true {
+        try stopAndWait(request, origin: origin, reason: "a move to another account") {
+          try sessionsToStopForMove(request.args)
+        }
+      }
+    case "stop":
+      let id = try stopAndWait(request, origin: origin, reason: "asked") { [try lookup(request.args)] }[0]
+      let fresh = buildSnapshot()
+      return .success(
+        try queue.sync {
+          install(fresh)
+          return try JSON(encoding: summary(id, for: origin))
+        })
     default:
       break
     }
@@ -643,10 +654,6 @@ public final class Service {
       return .object(reply)
     case "dependency-resolved":
       return try dependencyResolved(args)
-    case "stop":
-      let id = try lookup(args)
-      try stop(id, reason: "asked")
-      return try JSON(encoding: summary(id, for: origin))
     case "pause":
       return try pauseRequest(args)
     case "resume":
@@ -669,6 +676,8 @@ public final class Service {
       return try snoozeRequest(args)
     case "unsnooze":
       return try unsnoozeRequest(args)
+    case "highlight":
+      return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
     case "wait", "clear-wait", "resolve-wait":
@@ -899,11 +908,18 @@ public final class Service {
       entries[id] = e
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
-      startSummaries(id, verdict)
-      resolveDraftTargets(id, verdict)
+      afterTrack(id, verdict)
     }
     releaseCards(id)
     return event
+  }
+
+  /// Runs after each verdict sbd computes for a session: after an event, on
+  /// each tick, and once at startup.
+  func afterTrack(_ id: String, _ verdict: Verdict) {
+    startSummaries(id, verdict)
+    resolveDraftTargets(id, verdict)
+    clearHighlightOnDone(id, verdict)
   }
 
   // MARK: Sessions
@@ -1674,6 +1690,34 @@ public final class Service {
     record(id, "stopped", ["reason": .string(reason), "pid": .number(Double(pid))])
   }
 
+  /// Stops the claude of each session that `pick` returns on the state queue.
+  /// Then it waits off the queue up to 5 s for the Claude pane of each such
+  /// session on this Mac to die. `claudeState` reads a session as stopped only
+  /// once its pane is dead, so a request that follows sees each such claude
+  /// stopped, unless the pane outlived the wait. A session on a host gets no
+  /// wait, because each check of its pane runs a command over ssh. Returns
+  /// the picked sessions.
+  @discardableResult
+  func stopAndWait(
+    _ request: Request, origin: RequestOrigin, reason: String, _ pick: () throws -> [String]
+  ) throws -> [String] {
+    var picked: [String] = []
+    var panes: [String] = []
+    _ = try prepared(request, origin: origin) {
+      picked = try pick()
+      for id in picked {
+        try stop(id, reason: reason)
+        if entries[id]?.session.host == nil { panes.append(paneName(id, .claude)) }
+      }
+      return .null
+    }
+    if !panes.isEmpty {
+      let terminals = mac.terminals()
+      pollFor5Seconds { panes.allSatisfy { terminals.isDead($0) != false } }
+    }
+    return picked
+  }
+
   /// Stops claude, removes the worktree when asked, then closes the panes and
   /// forgets the session. A removal that asked for the worktree first checks
   /// that nothing is lost, and refuses before it stops anything. `branch`
@@ -2408,12 +2452,13 @@ public final class Service {
   private func settle(_ id: String) {
     let name = paneName(id, .claude)
     guard let terminals = queue.sync(execute: { try? site(of: id).terminals() }) else { return }
+    pollFor5Seconds { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
+  }
+
+  /// Checks `done` every 50 ms until it returns true, or for at most 5 s.
+  private func pollFor5Seconds(_ done: () -> Bool) {
     let deadline = Date().addingTimeInterval(5)
-    while Date() < deadline {
-      if queue.sync(execute: { entries[id]?.facts.live ?? true }) { return }
-      guard let dead = terminals.isDead(name), !dead else { return }
-      usleep(50_000)
-    }
+    while !done(), Date() < deadline { usleep(50_000) }
   }
 
   /// The number of background jobs. A job is a child of claude that leads its
@@ -2490,8 +2535,7 @@ public final class Service {
         if var e = entries[id] {
           let verdict = Attention.track(e.session, &e.facts, now: now, stateOf: lastState)
           entries[id] = e
-          startSummaries(id, verdict)
-          resolveDraftTargets(id, verdict)
+          afterTrack(id, verdict)
           checkUnknownPosts(id)
         }
       }
@@ -2597,6 +2641,7 @@ public final class Service {
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
+    if s.highlighted == true { out.highlighted = true }
     if verdict.requested { out.requested = true }
     out.snoozedUntil = facts.snooze.flatMap { $0.isActive(at: now) ? $0.until : nil }
     out.snoozeNote = verdict.snoozeNote

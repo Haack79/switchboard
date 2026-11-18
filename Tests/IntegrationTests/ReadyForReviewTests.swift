@@ -33,11 +33,6 @@ extension FakeGitHub {
 }
 
 extension Instance {
-  /// The rows of `sb ls --json`.
-  fileprivate func listJSON() throws -> [JSON] {
-    try #require(JSON.parse(try sb("ls", "--json"))?.array)
-  }
-
   /// The time of the session's last `pr` event.
   fileprivate func lastPREvent(_ id: String) throws -> Int64 {
     try #require(try events(id).last { $0.kind == "pr" }).t
@@ -237,7 +232,7 @@ extension Instance {
     github.awaitReview(Self.docsNumber, draft: false, from: ["bob"])
     try sbd.poll(all: true)
 
-    let rows = try sbd.listJSON().filter { $0["state"]?.string == "ready_for_review" }
+    let rows = try sbd.lsRows().filter { $0["state"]?.string == "ready_for_review" }
 
     #expect(rows.compactMap { $0["id"]?.string } == [docs.id, charts.id])
   }
@@ -247,7 +242,7 @@ extension Instance {
     let sbd = try Instance.withGitHub(github)
     let s = try session(github, sbd, draft: false, from: ["alice", "bob"])
 
-    let row = try #require(try sbd.listJSON().first { $0["id"]?.string == s.id })
+    let row = try #require(try sbd.lsRows().first { $0["id"]?.string == s.id })
     let got = try sbd.getJSON(s.id)
 
     #expect(row["pr"]?["reviewRequests"] == ["alice", "bob"])

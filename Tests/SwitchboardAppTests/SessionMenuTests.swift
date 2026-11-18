@@ -51,7 +51,7 @@ private func isDeleteSelection(_ a: SessionMenuAction) -> Bool {
 private func isDestructive(_ a: SessionMenuAction) -> Bool {
   switch a {
   case .cleanUp, .delete, .deleteSelection: true
-  case .snooze, .pause, .resume, .startNow, .stop, .divider: false
+  case .highlight, .snooze, .pause, .resume, .startNow, .stop, .divider: false
   }
 }
 
@@ -208,7 +208,10 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
   @Test func separatesStopFromDeleteWithADivider() {
     let s = liveWork()
 
-    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [.snooze, .pause, .stop, .divider, expectedDelete(s)])
+    #expect(
+      SessionMenu.actions(for: s, selectionCount: nil) == [
+        .highlight, .snooze, .pause, .stop, .divider, expectedDelete(s),
+      ])
   }
 
   @Test func showsPauseAndStopButNoSnoozeOrDeleteForALiveChat() {
@@ -245,7 +248,24 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
     var s = liveWork()
     s.pause = paused
 
-    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [.snooze, .resume, .divider, expectedDelete(s)])
+    #expect(
+      SessionMenu.actions(for: s, selectionCount: nil) == [.highlight, .snooze, .resume, .divider, expectedDelete(s)])
+  }
+
+  @Test func offersHighlightFirstForAWorkSessionThatIsNotDone() {
+    #expect(SessionMenu.actions(for: liveWork(), selectionCount: nil).first == .highlight)
+  }
+
+  @Test func offersHighlightToRemoveAHighlightOnADoneSession() {
+    var s = stoppedWork(.done)
+    s.highlighted = true
+
+    #expect(SessionMenu.actions(for: s, selectionCount: nil).first == .highlight)
+  }
+
+  @Test func offersNoHighlightForADoneSessionOrAChat() {
+    #expect(!SessionMenu.actions(for: stoppedWork(.done), selectionCount: nil).contains(.highlight))
+    #expect(!SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil).contains(.highlight))
   }
 
   @Test func offersNoSnoozeForASessionMarkedDone() {

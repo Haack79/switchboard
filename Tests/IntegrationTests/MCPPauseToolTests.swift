@@ -2,12 +2,6 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-extension MCPToolServerSuite {
-  fileprivate func managerID(_ sbd: Instance) throws -> String {
-    try sbd.id(of: try #require(JSON.parse(try sbd.sb("manager", "--json"))))
-  }
-}
-
 /// The `pause` and `resume` tools of an unscoped server, as the Manager has them.
 @Suite(.blocking(timeLimit: .seconds(120))) struct MCPPauseToolTests: MCPToolServerSuite {
   @Test func pauseFromTheManagerLabelsTheSessionPausedByManager() throws {
@@ -190,10 +184,6 @@ extension MCPToolServerSuite {
     return (s, try sbd.chatOf("Flags"))
   }
 
-  private func scopedClient(_ sbd: Instance, _ s: Scope, chat: String) throws -> MCPClient {
-    try MCPClient(sbd, group: s.group.id, env: inside(chat))
-  }
-
   // MARK: The scoped tools
 
   @Test func aScopedPauseOfAMemberShowsPausedByTheGroupChat() throws {
@@ -207,13 +197,11 @@ extension MCPToolServerSuite {
     #expect(try sbd.get(s.member.id).reason == "Paused by the Flags chat")
   }
 
-  enum Outsider: String, CaseIterable, Sendable { case outside, loose }
-
   @Test(arguments: Outsider.allCases, Naming.allCases)
   func aScopedPauseRefusesASessionOutsideTheGroupHoweverItIsNamed(_ who: Outsider, _ how: Naming) throws {
     let sbd = try Instance()
     let (s, chat) = try scopeWithChat(sbd)
-    let target = who == .outside ? s.outside : s.loose
+    let target = who.session(s)
     let mcp = try scopedClient(sbd, s, chat: chat)
 
     let result = try mcp.call("pause", ["session": .string(name(target.id, target.name, how))])
@@ -311,7 +299,7 @@ extension MCPToolServerSuite {
   func aScopedResumeRefusesASessionOutsideTheGroupAndLeavesItPaused(_ who: Outsider) throws {
     let sbd = try Instance()
     let (s, chat) = try scopeWithChat(sbd)
-    let target = who == .outside ? s.outside : s.loose
+    let target = who.session(s)
     try sbd.pauseJSON(target.id)
     let mark = try sbd.lastEventId(target.id)
     let mcp = try scopedClient(sbd, s, chat: chat)

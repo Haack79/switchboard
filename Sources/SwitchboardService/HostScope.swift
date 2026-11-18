@@ -90,7 +90,8 @@ enum HostScope {
     for op in [
       "import", "importable", "accounts", "account-use", "account-move", "usage", "mcp", "hosts", "host-connect",
       "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
-      "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "schedule",
+      "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
+      "schedule",
       "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
       "removal-notices", "removal-notice-dismiss",
       "host-disconnect", "live", "live-next", "autocontinue", "snapshots", "poll", "repos", "repo-add", "clock",
