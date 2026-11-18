@@ -128,7 +128,8 @@ private struct IssueListHeader: View {
       .help("Choose the sources, your team, and the start preset")
       .accessibilityLabel("Issue sources")
     }
-    .padding(8)
+    .padding(.horizontal, Design.listInset)
+    .padding(.vertical, 8)
   }
 }
 
