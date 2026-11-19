@@ -161,7 +161,7 @@ extension Service {
   func operatorReports(_ args: JSON) throws -> JSON {
     guard let id = operatorID() else { return [] }
     let limit = args["all"]?.bool == true ? Int.max : Event.defaultLimit
-    let events = try store.events(session: id, kind: OperatorReport.event, limit: limit, newest: true)
+    let events = try store.events(session: id, kinds: [OperatorReport.event], limit: limit, newest: true)
     return .array(try events.compactMap(OperatorReport.init).map { try reportRow($0, of: id) })
   }
 
