@@ -731,13 +731,17 @@ public final class Service {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
       let limit = args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":

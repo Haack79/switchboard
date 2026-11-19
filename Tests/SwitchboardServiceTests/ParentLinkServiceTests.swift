@@ -123,7 +123,7 @@ extension Service {
   }
 
   fileprivate func linkEvents(_ id: String, _ kind: String) throws -> [Event] {
-    try queue.sync { try store.events(session: id, kind: kind) }
+    try queue.sync { try store.events(session: id, kinds: [kind]) }
   }
 
   /// The kinds of the session's `unlinked` and `linked` events, oldest first.
