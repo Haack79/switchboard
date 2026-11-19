@@ -123,8 +123,10 @@ private let otherDestination = "haacked@other.local"
     }
     shapes.append(Shape("a local session by its name", .string(localName)))
     shapes.append(Shape("a session of other by its name", .string(otherName)))
-    shapes.append(Shape("a local session by a prefix of its id", .string(String(b.local.id.prefix(b.local.id.count - 1)))))
-    shapes.append(Shape("a session of other by a prefix of its id", .string(String(b.other.id.prefix(b.other.id.count - 1)))))
+    shapes.append(
+      Shape("a local session by a prefix of its id", .string(String(b.local.id.prefix(b.local.id.count - 1)))))
+    shapes.append(
+      Shape("a session of other by a prefix of its id", .string(String(b.other.id.prefix(b.other.id.count - 1)))))
     shapes.append(Shape("mini's session with a space after its id", .string(b.mini.id + " ")))
     shapes.append(Shape("another spelling of mini's id", .string(b.mini.id.uppercased() + "X")))
     shapes.append(Shape("an empty session", .string("")))
@@ -380,7 +382,7 @@ private let otherDestination = "haacked@other.local"
     "manager-skills", "chat",
     "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
     "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
-    "parent", "schedule",
+    "parent", "schedule", "wait-approve",
     "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
     "rm-cancel", "rm-keep", "rm-retry",
     "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",
@@ -449,6 +451,8 @@ private let otherDestination = "haacked@other.local"
     add("note", ["session": l, "text": text], scope)
     add("wait", ["session": s, "on": text], "on")
     add("wait", ["session": s, "kind": "session", "target": l, "state": "idle"], scope)
+    add(
+      "wait", ["session": s, "kind": "date", "until": "2h", "note": text, "then": "report"], "can't come from a host")
     add("issue", ["session": l, "issue": "1"], scope)
     taken("ls")
     add("ls", ["host": "other"], "host")

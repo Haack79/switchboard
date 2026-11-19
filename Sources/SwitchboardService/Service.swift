@@ -128,8 +128,16 @@ public final class Service {
   var removedNames: [String: String] = [:]
   /// The follow-ups that `followup start` is starting.
   var starting: Set<String> = []
-  /// The sessions whose PR `merge` is merging.
+  /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// Runs wait actions, one at a time, off the state queue.
+  let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
+  /// `loadSbdMerges` rebuilds it at startup.
+  var lastSbdMerges: [String: SbdMergeRecord] = [:]
+  /// The changed files that a merge action read for each PR, keyed by the lowercased owner/name and the number, with
+  /// the head they were read at. Only `followThroughQueue` reads and writes it.
+  var changedFilesRead: [String: (head: String, files: Set<String>)] = [:]
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
@@ -395,6 +403,8 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      loadSbdMerges()
+      resumeActions()
       refreshManagerSkills()
     }
   }
@@ -495,6 +505,24 @@ public final class Service {
       return .success(try reviewRequest(request.args))
     case "draft-post", "draft-check":
       return .success(try draftReplyRequest(request.op, request.args, caller: caller))
+    case "wait-approve":
+      // The check reads the client's panes, so it takes a new snapshot.
+      let fresh = buildSnapshot()
+      return try .success(
+        queue.sync {
+          install(fresh)
+          return try approveWait(request.args, caller: caller)
+        })
+    case "wait", "clear-wait", "resolve-wait":
+      // An action's check reads the client's panes, so it takes a new snapshot.
+      let arms =
+        request.op == "wait" && (try? JSONCoding.convert(request.args, to: WaitRequest.self))?.actionKind != nil
+      let fresh = arms ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try waitRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     // An advance runs a tick before the reply, so the stop rule sees the
     // new time. `tick` takes the state queue itself, so `clock` runs here
     // and not in `dispatch`.
@@ -725,8 +753,6 @@ public final class Service {
       return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
-    case "wait", "clear-wait", "resolve-wait":
-      return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
     case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
@@ -1830,8 +1856,9 @@ public final class Service {
   /// lists is forgotten only when its claude stopped on record.
   /// A removal of the worktree refuses a caller inside a session on this Mac before anything stops, as
   /// `beginPaneStop` describes. It refuses a session that the removal job holds, or that another `rm` or
-  /// `cleanup` is removing.
-  func remove(_ args: JSON, caller: Caller) throws -> JSON {
+  /// `cleanup` is removing. With `whileIdle`, it throws `TurnRunsError` instead of stopping a turn that runs or a
+  /// message on its way when the stop would begin.
+  func remove(_ args: JSON, caller: Caller, whileIdle: Bool = false) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
     let removesBranch = args["branch"]?.bool == true
@@ -1856,7 +1883,7 @@ public final class Service {
       defer { queue.sync { _ = removing.remove(id) } }
       let released = try removeAtSite(
         id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
-        resolving: resolving, ancestry: ancestry, by: .rm
+        resolving: resolving, ancestry: ancestry, whileIdle: whileIdle, by: .rm
       ) { check, stopped, site in
         try releaseFiles(
           check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
@@ -1888,10 +1915,11 @@ public final class Service {
   /// `release` in one scope of the site, so on a host every check and git command runs on one connection, and the
   /// scope's machine refuses each command once one got no answer. `release` gets the scope's site. Then
   /// `forgetRemoved` forgets the session. For the job, `forgetRemoved` also stores a removal notice for a branch or
-  /// remote branch that stayed. It runs off the state queue.
+  /// remote branch that stayed. `whileIdle` goes to `stopAndCheckAgain`. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    by runner: RemovalRunner, release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
+    whileIdle: Bool = false, by runner: RemovalRunner,
+    release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
   ) throws -> ReleasedFiles {
     let entry = try removalEntry(id, resolving: resolving, for: runner)
     let site = self.site(for: entry.session)
@@ -1907,7 +1935,7 @@ public final class Service {
         entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
       let stopped = try stopAndCheckAgain(
         check, worktree: worktree, branch: branch, resolving: resolving, for: runner, ancestry: ancestry,
-        scope: scope)
+        whileIdle: whileIdle, scope: scope)
       return try release(check, stopped, scope.site)
     }
     let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
@@ -1990,11 +2018,13 @@ public final class Service {
   /// when `worktree` is set, and otherwise stops claude as
   /// `stopForRemoval(_:at:)` says. It first refuses a session that changed
   /// since the checks, whose record the store can't delete, or whose scope's
-  /// check fails. It returns what `checkRemoval` returns when it runs again
-  /// after the stop. It runs off the state queue.
+  /// check fails. With `whileIdle`, it throws `TurnRunsError` for a session
+  /// whose turn runs or whose message is on its way. It returns what
+  /// `checkRemoval` returns when it runs again after the stop. It runs off
+  /// the state queue.
   func stopAndCheckAgain(
     _ check: RemovalSubject, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
-    ancestry: Set<Int>?, scope: SiteScope
+    ancestry: Set<Int>?, whileIdle: Bool = false, scope: SiteScope
   ) throws -> ReleaseTargets {
     let session = check.session
     let fresh = try freshSnapshot(of: session)
@@ -2008,6 +2038,7 @@ public final class Service {
       try store.checkDeletable(
         session: removal(session.id, resolving: removalResolving(session.id, resolving, for: runner)))
       install(fresh, of: session)
+      if whileIdle, let e = entries[session.id], turnRuns(e) { throw TurnRunsError(name: session.name) }
       try scope.require()
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
       try stopForRemoval(session, at: site(for: session))

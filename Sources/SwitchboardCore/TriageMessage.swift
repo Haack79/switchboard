@@ -173,13 +173,7 @@ extension Triage {
   /// each end when both ends have one, so the text is padded with spaces
   /// when an end is a backtick or both ends are spaces.
   static func codeSpan(_ text: String) -> String {
-    var longest = 0
-    var run = 0
-    for c in text {
-      run = c == "`" ? run + 1 : 0
-      longest = max(longest, run)
-    }
-    let fence = String(repeating: "`", count: longest + 1)
+    let fence = String(repeating: "`", count: Triage.longestBacktickRun(text) + 1)
     let pad = text.first == "`" || text.last == "`" || (text.first == " " && text.last == " ")
     return pad ? "\(fence) \(text) \(fence)" : "\(fence)\(text)\(fence)"
   }

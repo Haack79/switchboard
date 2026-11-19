@@ -84,15 +84,13 @@ extension GitHubPoller {
     let settled = interest.waits.compactMap { session, wait -> Settled? in
       guard let id = prId(of: wait, session: session), let read = prs[id], read.polled >= wait.created,
         case let comments = keptComments(read.comments), let pr = shown(id, last: nil),
-        let settlement: (outcome: String, changedAt: Int64?) =
+        let settlement =
           (wait.kind == .deploy
             ? deployOutcome(wait, pr, comments, host: session.host)
-            : wait.settlement(of: pr) ?? githubQueueOutcome(wait, pr).map { ($0, nil) }),
+            : wait.settlement(of: pr) ?? githubQueueOutcome(wait, pr)),
         !(wait.pr == nil && wait.finishedBeforeItCounts(pr))
       else { return nil }
-      return Settled(
-        session: session.id, wait: wait, prId: id, pr: pr, outcome: settlement.outcome,
-        changedAt: settlement.changedAt, polled: read.polled)
+      return Settled(session: session.id, wait: wait, prId: id, pr: pr, settlement: settlement, polled: read.polled)
     }
     let actions = readActions(settled, stats: &stats)
     for s in settled {
@@ -100,7 +98,9 @@ extension GitHubPoller {
         !service.queue.sync(execute: { service.entries[s.session]?.session.done ?? true })
       else { continue }
       do {
-        _ = try service.resolveWait(session: s.session, wait: s.wait.id, outcome: s.outcome, changedAt: s.changedAt)
+        _ = try service.resolveWait(
+          session: s.session, wait: s.wait.id, outcome: s.settlement.outcome, changedAt: s.settlement.changedAt,
+          met: s.settlement.met)
         stats.resolved += 1
       } catch {
         logLine("github: can't resolve wait \(s.wait.id) of \(s.session): \(error)")
@@ -120,9 +120,7 @@ extension GitHubPoller {
     var wait: Wait
     var prId: String
     var pr: PullRequest
-    var outcome: String
-    /// When the change that settled the wait happened on GitHub or Trunk, in ms.
-    var changedAt: Int64?
+    var settlement: Wait.Settlement
     var polled: Int64
 
     /// Whether the PR's head is the commit that the `ci` wait recorded, and
@@ -163,15 +161,15 @@ extension GitHubPoller {
   /// `leftGitHubQueue` for a `queue` wait whose open PR an earlier read showed
   /// in GitHub's merge queue and this read shows outside it. A PR that the
   /// queue has not taken yet keeps the wait open.
-  private func githubQueueOutcome(_ wait: Wait, _ pr: PullRequest) -> String? {
+  private func githubQueueOutcome(_ wait: Wait, _ pr: PullRequest) -> Wait.Settlement? {
     guard wait.kind == .queue, pr.state == .open, pr.queue == nil else { return nil }
     if pr.inMergeQueue == true { queuedWaits.insert(wait.id) }
     guard pr.inMergeQueue == false, queuedWaits.contains(wait.id) else { return nil }
-    return Self.leftGitHubQueue
+    return Wait.Settlement(Self.leftGitHubQueue, met: false)
   }
 
   private func confirmed(_ s: Settled, actions: ActionsRead?) -> Bool {
-    let (wait, pr, outcome) = (s.wait, s.pr, s.outcome)
+    let (wait, pr, outcome) = (s.wait, s.pr, s.settlement.outcome)
     guard wait.kind == .ci || outcome == Self.leftGitHubQueue else { return true }
     if s.mayResolveOnOneRead(window: settings.pendingMs), actions?.showsFinishedRun(of: pr) == true { return true }
     // More Depot jobs can fail between the two reads. That changes the

@@ -4,14 +4,17 @@ import Testing
 
 extension Instance {
   /// A private sbd whose poller asks `github`, with Fixtures/gh-merge-stub as
-  /// its gh. Polls run only when a test asks.
-  static func withMergeStub(_ github: FakeGitHub) throws -> Instance {
-    try Instance(config: [
+  /// its gh. Polls run only when a test asks. `mergeRepos` sets
+  /// `operator.mergeRepos` in config.json, and nil leaves the key out.
+  static func withMergeStub(_ github: FakeGitHub, mergeRepos: [String]? = nil) throws -> Instance {
+    var config: [String: JSON] = [
       "github": [
         "gh": .string("\(FakeGitHub.fixtures)/gh-merge-stub"), "url": .string(github.url), "pollSeconds": 0,
       ],
       "tickSeconds": 1,
-    ])
+    ]
+    if let mergeRepos { config["operator"] = ["mergeRepos": .array(mergeRepos.map(JSON.string))] }
+    return try Instance(config: config)
   }
 
   /// The arguments of each gh call that the stub ran and that starts with
@@ -52,7 +55,9 @@ extension Instance {
     return s
   }
 
-  func head(_ github: FakeGitHub) -> String { github.pr(MergeTests.number)["headRefOid"]!.string! }
+  func head(_ github: FakeGitHub, _ number: Int = MergeTests.number) -> String {
+    github.pr(number)["headRefOid"]!.string!
+  }
 
   @Test func readyPRShowsReadyToMerge() throws {
     let github = try FakeGitHub()

@@ -22,7 +22,7 @@ enum PlannedScope {
   private static let noteKeys: Set<String> = ["session", "text", "by", "kind", "note"]
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "wait", "outcome",
+    "needsYou", "wait", "outcome", "caller",
   ]
 
   /// The op table of "The scope design". `answer` also takes `always`, which it reads through `AllowExtra` as it
@@ -72,7 +72,7 @@ enum PlannedScope {
     "manager-skills", "chat",
     "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
     "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
-    "parent", "schedule",
+    "parent", "schedule", "wait-approve",
     "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
     "rm-cancel", "rm-keep", "rm-retry",
     "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",

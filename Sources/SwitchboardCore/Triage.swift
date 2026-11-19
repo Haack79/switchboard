@@ -849,6 +849,17 @@ public enum Triage {
     text.prefix(1).lowercased() + text.dropFirst()
   }
 
+  /// The length of the longest run of backticks in `text`.
+  static func longestBacktickRun(_ text: String) -> Int {
+    var longest = 0
+    var run = 0
+    for c in text {
+      run = c == "`" ? run + 1 : 0
+      longest = max(longest, run)
+    }
+    return longest
+  }
+
   // MARK: Order
 
   /// The list's groups, first to last: a held prompt or question; a decision,

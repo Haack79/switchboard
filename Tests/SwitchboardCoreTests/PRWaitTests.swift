@@ -251,3 +251,90 @@ import Testing
     #expect(wait(.review, who: "alex").settlement(of: merged)?.changedAt == at)
   }
 }
+
+/// One PR as the poller read it, and how a wait of one kind settles on it.
+struct MetCase: CustomTestStringConvertible, Sendable {
+  var wait: Wait
+  var pr: PullRequest
+  var outcome: String
+  var met: Bool
+
+  var testDescription: String { "\(wait.kind.rawValue): \(outcome)" }
+}
+
+extension PRWaitTests {
+  /// Every outcome that `settlement(of:)` gives, for each kind. An action runs
+  /// only on an outcome that met the wait's condition.
+  static let metCases: [MetCase] = {
+    let t = PRWaitTests()
+    let after = PRWaitTests.after
+    var labeledRemoval = t.pr(queue: .removed)
+    labeledRemoval.queueLabel = "conflict"
+    labeledRemoval.queueText = "the PR conflicts with main"
+    return [
+      MetCase(wait: t.wait(.ci), pr: t.pr(checks: "SUCCESS"), outcome: "the checks passed", met: true),
+      MetCase(wait: t.wait(.ci), pr: t.pr(.merged, checks: "SUCCESS"), outcome: "the checks passed", met: true),
+      MetCase(wait: t.wait(.ci), pr: t.pr(checks: "FAILURE"), outcome: "the checks failed", met: false),
+      MetCase(wait: t.wait(.ci), pr: t.pr(checks: "ERROR"), outcome: "the checks failed", met: false),
+      MetCase(
+        wait: t.wait(.ci), pr: withDepot(samplePR(checks: "PENDING"), sampleDepot(["a"])),
+        outcome: "Depot CI failed: a (run r1)", met: false),
+      MetCase(wait: t.wait(.ci), pr: t.pr(.merged), outcome: "the PR merged first", met: false),
+      MetCase(wait: t.wait(.ci), pr: t.pr(.closed), outcome: "the PR closed first", met: false),
+
+      MetCase(
+        wait: t.wait(.review, who: "alex"), pr: t.pr(reviews: [t.review("alex", "APPROVED", after)]),
+        outcome: "alex approved", met: true),
+      MetCase(
+        wait: t.wait(.review, who: "alex"), pr: t.pr(reviews: [t.review("alex", "CHANGES_REQUESTED", after)]),
+        outcome: "alex requested changes", met: true),
+      MetCase(
+        wait: t.wait(.review, who: "alex"), pr: t.pr(reviews: [t.review("alex", "COMMENTED", after)]),
+        outcome: "alex reviewed", met: true),
+      MetCase(wait: t.wait(.review, who: "alex"), pr: t.pr(.merged), outcome: "the PR merged first", met: false),
+      MetCase(wait: t.wait(.review, who: "alex"), pr: t.pr(.closed), outcome: "the PR closed first", met: false),
+
+      MetCase(
+        wait: t.wait(.botReview), pr: t.pr(reviews: [t.review("greptile-apps", "COMMENTED", after, bot: true)]),
+        outcome: "greptile-apps reviewed", met: true),
+      MetCase(
+        wait: t.wait(.botReview, who: "greptile-apps"),
+        pr: t.pr(reviews: [t.review("greptile-apps", "CHANGES_REQUESTED", after, bot: true)]),
+        outcome: "greptile-apps requested changes", met: true),
+      MetCase(wait: t.wait(.botReview), pr: t.pr(.merged), outcome: "the PR merged first", met: false),
+      MetCase(wait: t.wait(.botReview), pr: t.pr(.closed), outcome: "the PR closed first", met: false),
+
+      MetCase(
+        wait: t.wait(.approval, who: "alex"), pr: t.pr(verdicts: [t.review("alex", "APPROVED", after)]),
+        outcome: "alex approved", met: true),
+      MetCase(
+        wait: t.wait(.approval),
+        pr: t.pr(reviewDecision: .approved, verdicts: [t.review("alex", "APPROVED", after)]),
+        outcome: "approved by alex", met: true),
+      MetCase(
+        wait: t.wait(.approval), pr: t.pr(reviewDecision: .approved), outcome: "the PR is approved", met: true),
+      MetCase(wait: t.wait(.approval, who: "alex"), pr: t.pr(.merged), outcome: "the PR merged first", met: false),
+      MetCase(wait: t.wait(.approval), pr: t.pr(.closed), outcome: "the PR closed first", met: false),
+
+      MetCase(wait: t.wait(.merge), pr: t.pr(.merged), outcome: "it merged", met: true),
+      MetCase(wait: t.wait(.merge), pr: t.pr(.closed), outcome: "it closed without merging", met: false),
+
+      MetCase(wait: t.wait(.queue), pr: t.pr(.merged), outcome: "it merged", met: true),
+      MetCase(wait: t.wait(.queue), pr: t.pr(queue: .merged), outcome: "Trunk merged it", met: true),
+      MetCase(wait: t.wait(.queue), pr: t.pr(.closed), outcome: "it closed without merging", met: false),
+      MetCase(
+        wait: t.wait(.queue), pr: t.pr(queue: .removed), outcome: "Trunk removed it from the queue", met: false),
+      MetCase(
+        wait: t.wait(.queue), pr: labeledRemoval,
+        outcome: "Trunk removed it from the queue (conflict): the PR conflicts with main", met: false),
+    ]
+  }()
+
+  @Test(arguments: PRWaitTests.metCases)
+  func aSettlementIsMetOnlyWhenTheWaitedForChangeHappened(_ c: MetCase) throws {
+    let settlement = try #require(c.wait.settlement(of: c.pr))
+
+    #expect(settlement.outcome == c.outcome)
+    #expect(settlement.met == c.met)
+  }
+}

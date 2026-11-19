@@ -177,7 +177,7 @@ public struct MCPToolServer: Sendable {
     case "set_wait":
       var wait = try JSONCoding.convert(args, to: WaitRequest.self)
       // Only a blocked `sb wait --block` reads a caller wait's outcome.
-      if wait.then == Wait.Then.caller.rawValue { throw APIError("then is resume or notify, not caller") }
+      if wait.then == Wait.Then.caller.rawValue { throw WaitRequest.unknownThen("caller") }
       wait.by = Author.claude.rawValue
       if wait.kind == Wait.Kind.session.rawValue, let target = wait.target {
         wait.target = try sessionID(target, scoped).string
@@ -185,6 +185,7 @@ public struct MCPToolServer: Sendable {
       var request = try JSON(encoding: wait).object ?? [:]
       request["session"] = try sessionOrCaller(args, scoped)
       if let here = args["here"]?.bool { request["here"] = .bool(here) }
+      if let caller { request["caller"] = .string(caller) }
       return try client.call("wait", request)
     case "clear_wait":
       var request = pick(args, ["wait"])
@@ -258,6 +259,10 @@ public struct MCPToolServer: Sendable {
       var request = pick(args, ["text", "needsYou", "session"])
       if let caller { request["caller"] = .string(caller) }
       return try client.call("operator-report", request)
+    case "approve":
+      var request = pick(args, ["wait"])
+      if let caller { request["caller"] = .string(caller) }
+      return try client.call("wait-approve", request)
     default:
       throw APIError("no tool \(name)")
     }
