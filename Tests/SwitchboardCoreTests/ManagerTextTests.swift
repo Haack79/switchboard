@@ -30,6 +30,33 @@ import Testing
     #expect(commands.contains("add_schedule"))
   }
 
+  /// The guide's section under `heading`, up to the next heading.
+  static func guideSection(_ heading: String) throws -> String {
+    let start = try #require(Manager.guide.range(of: heading + "\n"))
+    let rest = Manager.guide[start.upperBound...]
+    return String(rest[..<(rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex)])
+  }
+
+  @Test(arguments: [
+    "`/go`", "don't read or edit code", "Start a session",
+    "more than a screen of output", "only its conclusion",
+    "planning and design", "`model: \"opus\"`",
+    "set a wait instead of checking it again and again",
+  ])
+  func theManagerGuideSaysHowToKeepTurnsCheap(_ phrase: String) throws {
+    let section = try Self.guideSection("## Cost")
+    #expect(section.contains(phrase), "\(section)")
+  }
+
+  @Test func theManagerGuideLeavesBranchTestingToASession() throws {
+    let section = try Self.guideSection("## Testing branches together")
+    #expect(section.contains("reply with the result in one line"), "\(section)")
+  }
+
+  @Test func theOperatorPromptSaysThatTheCostRulesApply() {
+    #expect(Manager.operatorPrompt.contains("cost rules"), "\(Manager.operatorPrompt)")
+  }
+
   @Test func theChatGuideNamesTheScheduleTools() {
     #expect(Chat.guide.contains("add_schedule"))
     #expect(Chat.guide.contains("remove_schedule"))
@@ -68,21 +95,14 @@ import Testing
 
   // MARK: Asking for an MCP server
 
-  /// The guide's "## MCP servers" section, up to the next heading.
-  func mcpSection() throws -> String {
-    let start = try #require(Manager.guide.range(of: "## MCP servers"))
-    let rest = Manager.guide[start.upperBound...]
-    return String(rest[..<(rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex)])
-  }
-
   @Test func theGuidesMCPSectionNamesTheRequestTool() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("`request_mcp_server`"), "\(section)")
   }
 
   @Test func theParagraphThatNamesTheRequestToolSaysToEndTheTurn() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
     let paragraph = try #require(
       section.split(separator: "\n").first { $0.contains("request_mcp_server") }, "\(section)")
 
@@ -96,26 +116,26 @@ import Testing
   }
 
   @Test func theGuideStillListsTheServersWithSbManagerMCP() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("sb manager mcp $SB_SESSION_ID"), "\(section)")
   }
 
   @Test func theGuideSaysAConnectorNeedsAll() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("Slack"), "\(section)")
     #expect(section.contains("`all`"), "\(section)")
   }
 
   @Test func theGuideSaysNotToWorkAroundAMissingTool() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     for word in ["`sb`", "`curl`", "another session"] { #expect(section.contains(word), "\(word) in \(section)") }
   }
 
   @Test func theGuideSaysNotToRunAddItself() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("Do not run `sb manager mcp"), "\(section)")
   }
