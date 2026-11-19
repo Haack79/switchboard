@@ -183,12 +183,23 @@ public enum SkillListing {
 
 /// A skill or a legacy command file, read from its frontmatter.
 public struct ScannedSkill: Equatable, Sendable {
+  /// The folder that a file came from, in the order of `SkillFolders.scan`.
+  public enum Origin: Sendable {
+    case accountSkill
+    case cwdSkill
+    case accountCommand
+    case cwdCommand
+  }
+
   public let name: String
   public let description: String?
   /// False when the frontmatter says `user-invocable: false`.
   public let userInvocable: Bool
   /// False when the frontmatter says `disable-model-invocation: true`.
   public let modelInvocable: Bool
+  /// The file's path as the scan built it, without resolving links.
+  public let path: String
+  public let origin: Origin
 }
 
 /// Reads the skill and command folders that Claude Code loads for a session.
@@ -199,16 +210,19 @@ public enum SkillFolders {
   /// before a command, and the account's before the cwd's. A nil account
   /// scans only the cwd.
   public static func scan(account: String?, cwd: String, on machine: any Machine) -> [ScannedSkill] {
-    let folders = [account, "\(cwd)/.claude"].compactMap { $0 }
-    let skills = folders.flatMap { folder in
+    let folders: [(folder: String, skill: ScannedSkill.Origin, command: ScannedSkill.Origin)] =
+      (account.map { [($0, .accountSkill, .accountCommand)] } ?? []) + [("\(cwd)/.claude", .cwdSkill, .cwdCommand)]
+    let skills = folders.flatMap { folder, origin, _ in
       machine.list("\(folder)/skills").sorted().compactMap { name in
-        head("\(folder)/skills/\(name)/SKILL.md", on: machine).map { skill($0, named: name) }
+        let path = "\(folder)/skills/\(name)/SKILL.md"
+        return headText(path, on: machine).map { skill($0, named: name, path: path, origin: origin) }
       }
     }
-    let commands = folders.flatMap { folder in
+    let commands = folders.flatMap { folder, _, origin in
       machine.list("\(folder)/commands").filter { $0.hasSuffix(".md") }.sorted().compactMap { file in
-        head("\(folder)/commands/\(file)", on: machine).map {
-          skill($0, named: String(file.dropLast(3)), isCommand: true)
+        let path = "\(folder)/commands/\(file)"
+        return headText(path, on: machine).map {
+          skill($0, named: String(file.dropLast(3)), path: path, origin: origin)
         }
       }
     }
@@ -218,10 +232,15 @@ public enum SkillFolders {
   /// The frontmatter and the first body line fit well inside this many bytes.
   private static let maxFileBytes = 64 << 10
 
-  /// The start of the file. A repo can commit a skill as a symlink to a
-  /// device such as /dev/zero, which never reaches its end.
-  private static func head(_ path: String, on machine: any Machine) -> String? {
-    machine.read(path, from: 0, count: maxFileBytes).map { String(decoding: $0, as: UTF8.self) }
+  /// The file's first 64 KiB, or nil when it can't be read. A repo can
+  /// commit a skill as a symlink to a device such as /dev/zero, which never
+  /// reaches its end.
+  public static func head(_ path: String, on machine: any Machine) -> Data? {
+    machine.read(path, from: 0, count: maxFileBytes)
+  }
+
+  private static func headText(_ path: String, on machine: any Machine) -> String? {
+    head(path, on: machine).map { String(decoding: $0, as: UTF8.self) }
   }
 
   /// The `skillOverrides` of the account's settings.json, from skill name to
@@ -236,7 +255,8 @@ public enum SkillFolders {
   /// A file has frontmatter only when its first line is `---`. The
   /// frontmatter ends at the next `---` line. Its `name` replaces `fallback`
   /// for a skill. A command is always named after its file, as in Claude Code.
-  static func skill(_ text: String, named fallback: String, isCommand: Bool = false) -> ScannedSkill {
+  static func skill(_ text: String, named fallback: String, path: String, origin: ScannedSkill.Origin) -> ScannedSkill {
+    let isCommand = origin == .accountCommand || origin == .cwdCommand
     let lines = text.replacingOccurrences(of: "\r\n", with: "\n").trimmingPrefix("\u{FEFF}")
       .components(separatedBy: "\n")
     var scalars: [String: String] = [:]
@@ -254,7 +274,7 @@ public enum SkillFolders {
       name: name ?? fallback,
       description: described ?? body.lazy.compactMap { trimmed($0[...]) }.first,
       userInvocable: scalars["user-invocable"]?.lowercased() != "false",
-      modelInvocable: scalars["disable-model-invocation"]?.lowercased() != "true")
+      modelInvocable: scalars["disable-model-invocation"]?.lowercased() != "true", path: path, origin: origin)
   }
 }
 

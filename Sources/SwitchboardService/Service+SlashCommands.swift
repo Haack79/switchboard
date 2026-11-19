@@ -15,23 +15,37 @@ extension Service {
       let account = try? claudeFolder(of: session)
       return (id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id])
     }
-    var state = SkillListing.State()
-    if let path = findTranscript() {
-      let read: Bool
-      if let cached, cached.path == path {
-        state = cached.state
-        read = SkillListing.read(path, from: state.offset, into: &state, on: machine)
-      } else {
-        read = SkillListing.read(path, into: &state, on: machine)
-      }
-      // A failed read drops the entry, so that the next request reads the transcript from the end again.
-      queue.sync {
-        if entries[id] != nil { slashListings[id] = read ? (path, state) : nil }
-      }
-    }
+    let listing = skillListing(id, findTranscript: findTranscript, machine: machine, cached: cached)
     let commands = SlashCommands.merge(
-      listing: state.commands, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
+      listing: listing, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
       overrides: SkillFolders.overrides(account: account, on: machine))
-    return ["commands": try JSON(encoding: commands), "listing": .bool(state.commands != nil)]
+    return ["commands": try JSON(encoding: commands), "listing": .bool(listing != nil)]
+  }
+
+  /// The session's latest transcript skill listing, or nil when the
+  /// transcript holds none or can't be found. It reads off the state queue
+  /// and saves the folded state in `slashListings[id]`, so that a later read
+  /// of the same transcript from `cached` reads only the lines added since.
+  /// The caller takes `findTranscript`, `machine`, and `cached` (the
+  /// session's `slashListings` entry) on the state queue.
+  func skillListing(
+    _ id: String, findTranscript: () -> String?, machine: any Machine,
+    cached: (path: String, state: SkillListing.State)?
+  ) -> [SlashCommand]? {
+    dispatchPrecondition(condition: .notOnQueue(queue))
+    guard let path = findTranscript() else { return nil }
+    var state = SkillListing.State()
+    let read: Bool
+    if let cached, cached.path == path {
+      state = cached.state
+      read = SkillListing.read(path, from: state.offset, into: &state, on: machine)
+    } else {
+      read = SkillListing.read(path, into: &state, on: machine)
+    }
+    // A failed read drops the entry, so that the next request reads the transcript from the end again.
+    queue.sync {
+      if entries[id] != nil { slashListings[id] = read ? (path, state) : nil }
+    }
+    return state.commands
   }
 }
