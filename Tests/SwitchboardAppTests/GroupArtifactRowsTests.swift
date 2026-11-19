@@ -124,13 +124,13 @@ private func rows(
       row(url: "https://claude.ai/artifact/c", artifactId: nil),
     ]
 
-    #expect(GroupArtifactRows(group: group(artifacts), liveNames: [:], now: now).linkTitle == "Artifacts (2)")
+    #expect(GroupArtifactRows(group: group(artifacts), liveNames: [:], now: now).linkTitle == "Artifacts 2")
   }
 
   /// The link shows whenever the list is not empty, so a group whose artifacts were all deleted still lists them.
-  @Test func linkTitleShowsWhenEveryArtifactIsRemoved() {
+  @Test func linkTitleLeavesOutAZeroCountWhenEveryArtifactIsRemoved() {
     let artifacts = [row(removed: now - minute)]
 
-    #expect(GroupArtifactRows(group: group(artifacts), liveNames: [:], now: now).linkTitle == "Artifacts (0)")
+    #expect(GroupArtifactRows(group: group(artifacts), liveNames: [:], now: now).linkTitle == "Artifacts")
   }
 }
