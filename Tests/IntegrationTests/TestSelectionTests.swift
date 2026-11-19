@@ -68,7 +68,9 @@ private let srcDir = "Sour" + "ces"
 /// FxRepoPathTests.swift quotes the folder's name only in a made-up path.
 /// CLIMoreTests.swift names FxCLITests only as `extension FxCLITests`.
 /// FxMergeTests.swift calls `fxGroupFixture()`, which FxGroupTests.swift declares.
-/// No file uses Helpers.swift's `fxFixturePath`. FxRepoPathTests is the smoke suite.
+/// No file uses Helpers.swift's `fxFixturePath`. FxRepoPathTests and FxGroupTests
+/// are the smoke suites. The smoke list's `Nested.Skipped` line has too many parts,
+/// so the selector skips it.
 private let baselineFiles: [String: String] = [
   "Package.swift": "// swift-tools-version: 6.0\n",
   "README.md": "# Fixture\n",
@@ -115,7 +117,8 @@ private let baselineFiles: [String: String] = [
 
   """,
   "Tests/IntegrationTests/Fixtures/claude-stub": "#!/bin/sh\nexit 0\n",
-  "Tests/smoke-suites": "# Smoke suites\nIntegrationTests.FxRepoPathTests\n",
+  "Tests/smoke-suites":
+    "# Smoke suites\nIntegrationTests.FxRepoPathTests\nIntegrationTests.Nested.Skipped\nIntegrationTests.FxGroupTests\n",
 ]
 
 /// The lines that `swift test list --skip-build` prints for the baseline files.
@@ -422,7 +425,7 @@ private let unitTargetNames = ["SwitchboardCoreTests", "SwitchboardServiceTests"
 private let unitTargets = Set(unitTargetNames.map(wholeTarget))
 
 /// The suites that the baseline's Tests/smoke-suites lists.
-private let smoke = suiteFilter("IntegrationTests", "FxRepoPathTests")
+private let smoke = suiteFilter("IntegrationTests", "FxRepoPathTests", "FxGroupTests")
 
 /// What a change that no rule maps selects.
 private let unitsAndSmoke = unitTargets.union([smoke])
@@ -550,6 +553,9 @@ private let freeTests: [(name: String, text: String)] = [
 /// selects them and the suites of the files that use its names, or the smoke
 /// suites in their place.
 private let integrationFileCases: [SelectionCase] = [
+  SelectionCase(
+    name: "deleted test file", change: { try $0.delete("Tests/IntegrationTests/FxMergeTests.swift") },
+    filters: [smoke]),
   SelectionCase(
     name: "helper file of functions", change: { try $0.edit("Tests/IntegrationTests/Helpers.swift") },
     filters: [smoke]),
@@ -867,7 +873,7 @@ private struct SelectCase: Sendable, CustomTestStringConvertible {
   var testDescription: String { name }
 }
 
-private let smokeLine = "suites IntegrationTests 0 FxRepoPathTests"
+private let smokeLine = "suites IntegrationTests 0 FxGroupTests FxRepoPathTests"
 
 private let unitAndSmokeLines = Set(unitTargetNames.map { "target \($0)" } + [smokeLine])
 

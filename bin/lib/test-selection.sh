@@ -10,9 +10,11 @@
 # reaches, they select whole test targets outside ci_only_targets and the smoke
 # suites, never nothing. They never select a whole ci_only_targets target.
 
-# CI runs every test on each push. Locally these targets run only the suites
-# that a change names or reaches in one step, and the smoke suites. Their tests
-# start sbd and tmux, so they take most of the suite's run time.
+# CI runs every test on each push. Locally these targets run only a changed
+# file's own suites, the suites of the test files that use its names or quote
+# its path, and the smoke suites. The search does not follow the files that use
+# those test files. The tests of these targets start sbd and tmux, so they take
+# most of the suite's run time.
 ci_only_targets=" IntegrationTests "
 
 # A changed file that more test files of a ci-only target use than this runs
@@ -88,7 +90,7 @@ select_tests() {
   # Selects the suites of <files>, one path per line, which use <changed>. When
   # there are more than max_user_files, selects the smoke suites instead.
   add_user_files() {
-    local n
+    local n file line
     n=$(grep -c . <<<"$3" || true)
     if [ "$n" -gt "$max_user_files" ]; then
       echo "bin/test: $2: $n $1 test files use it, more than $max_user_files, so the smoke suites run in their place" >&2
@@ -149,7 +151,7 @@ select_tests() {
   # that no rule maps, such as a fixture or a bin/ script. A file names it by
   # its repo path, or by its file name when <in-test-target> is set.
   add_naming_files() {
-    local terms pattern users
+    local terms pattern users name type dir excludes deps
     terms=$(ere_escape "$1")
     [ -z "$2" ] || terms+="|$(ere_escape "${1##*/}")"
     pattern="(^|[^A-Za-z0-9_.-])($terms)([^A-Za-z0-9_.-]|\$)"
