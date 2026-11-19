@@ -2,8 +2,9 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// Every interval here is 30 minutes or longer. No test moves the clock. No
-/// schedule comes due while a test runs.
+/// Every interval here is 30 minutes or longer, except in the one test that
+/// moves the clock to fire a 1m loop. No other schedule comes due while a test
+/// runs.
 @Suite(.blocking(timeLimit: .seconds(120))) struct MCPScheduleToolTests: MCPToolServerSuite {
   static let thirtyMinutes: Int64 = 1_800_000
 
@@ -176,7 +177,8 @@ import Testing
 
     let listed = try mcp.call("list_schedules").decode([ScheduleRow].self)
 
-    #expect(listed == [added])
+    #expect(listed.map(\.identity) == [added.identity])
+    #expect(listed.map { $0.status?.state } == [.active])
   }
 
   /// Rows on grouped and ungrouped sessions, as `sb schedule ls --json` prints them.
@@ -204,7 +206,8 @@ import Testing
     let listed = try mcp.call("list_schedules", ["session": .string(name(a.id, "alpha", how))]).decode(
       [ScheduleRow].self)
 
-    #expect(listed == [mine])
+    #expect(listed.map(\.identity) == [mine.identity])
+    #expect(listed.map { $0.status?.state } == [.active])
   }
 
   @Test func removeScheduleRemovesTheScheduleAndReturnsIt() throws {
@@ -471,4 +474,38 @@ import Testing
     #expect(result.text.contains("not in group"), "\(result.text)")
     #expect(try stored(sbd, s.member.id) == nil)
   }
+
+  // MARK: Status and history
+
+  /// `list_schedules` returns the `schedules` rows, so each row's `status` and each fired loop's `runs` reach
+  /// agents with no tool change.
+  @Test func listSchedulesCarriesEachRowsStatusAndAFiredLoopsRuns() throws {
+    let sbd = try Instance()
+    let fired = try sbd.idleSession(name: "fired")
+    let quiet = try sbd.new(name: "quiet")
+    let loop = try decode(ScheduleRow.self, sbd.sb("schedule", fired.id, "--every", "1m", "tick mcp", "--json"))
+    _ = try schedule(sbd, quiet.id)
+    try sbd.advanceClock(61_000)
+    try sbd.waitFor("the run of \(loop.schedule.id)") {
+      try sbd.get(fired.id).schedules?.first { $0.id == loop.schedule.id }?.last != nil
+    }
+    let mcp = try MCPClient(sbd)
+
+    let result = try mcp.call("list_schedules")
+
+    let objects = try #require(result.json?.array)
+    #expect(objects.count == 2)
+    #expect(objects.allSatisfy { $0["status"]?["state"]?.string != nil }, "\(objects)")
+    let listed = try result.decode([ScheduleRow].self)
+    let firedRow = try #require(listed.first { $0.schedule.id == loop.schedule.id })
+    let quietRow = try #require(listed.first { $0.session == quiet.id })
+    #expect(firedRow.schedule.runs?.count == 1)
+    #expect(firedRow.schedule.runs?.first == firedRow.schedule.last)
+    #expect(quietRow.schedule.runs == nil)
+  }
+}
+
+extension ScheduleRow {
+  /// The row without its status, whose text counts down between two requests.
+  fileprivate var identity: ScheduleRow { ScheduleRow(session: session, name: name, schedule: schedule) }
 }

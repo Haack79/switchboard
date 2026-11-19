@@ -75,6 +75,10 @@ struct ContentView: View {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
   }
 
+  private var isEditingLoop: Binding<Bool> {
+    Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
+  }
+
   private var isShowingQuickAsk: Binding<Bool> {
     Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
   }
@@ -110,6 +114,7 @@ struct ContentView: View {
           case .inbox: InboxView()
           case .board: BoardView()
           case .issues: IssuesView()
+          case .loops: LoopsView()
           }
         }
       }
@@ -126,15 +131,19 @@ struct ContentView: View {
     .toolbar {
       ToolbarItem(placement: .navigation) { NavHistoryControls() }
       ToolbarItem(placement: .navigation) {
-        // No segment is selected while a session shows.
-        Picker("View", selection: viewChoice) {
-          Text(Self.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
-          Text("Board").tag(MainView?.some(.board))
-          Text(Self.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
+        // The Loops count changes with the time alone, while sbd's `ls` answer stays the same.
+        TimelineView(.everyMinute) { _ in
+          let now = nowMs()
+          // No segment is selected while a session shows.
+          Picker("View", selection: viewChoice) {
+            ForEach(MainView.allCases, id: \.self) { view in
+              Text(Self.viewLabel(view.title, model.viewCount(view, now: now))).tag(MainView?.some(view))
+            }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .help("Show the Inbox (⌘1), the Board (⌘2), Issues (⌘3), or Loops (⌘4)")
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
       ToolbarItem(placement: .navigation) { SessionFilterMenu() }
       ToolbarItem { ManagerButton() }
@@ -182,6 +191,15 @@ struct ContentView: View {
     }
     .sheet(isPresented: isPickingSnoozeTime) {
       if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
+    .sheet(isPresented: isEditingLoop) {
+      if let request = model.loopEditor {
+        LoopEditor(
+          request: request, schedule: model.editedSchedule(request),
+          choices: LoopEditor.sessionChoices(model.sessions, operatorID: model.operatorSession?.id)
+        )
+        .environmentObject(model)
+      }
     }
     .inlineLinks(model)
   }

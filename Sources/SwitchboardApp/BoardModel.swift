@@ -5,10 +5,39 @@ import SwitchboardCore
 import UserNotifications
 
 /// The views that the detail pane shows while no session is selected.
-enum MainView {
+enum MainView: CaseIterable {
   case inbox
   case board
   case issues
+  case loops
+
+  var title: String {
+    switch self {
+    case .inbox: "Inbox"
+    case .board: "Board"
+    case .issues: "Issues"
+    case .loops: "Loops"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .inbox: "tray"
+    case .board: "square.grid.3x3"
+    case .issues: "smallcircle.filled.circle"
+    case .loops: "clock.arrow.circlepath"
+    }
+  }
+
+  /// The key that, with ⌘, shows the view from the Session menu.
+  var shortcutKey: Character {
+    switch self {
+    case .inbox: "1"
+    case .board: "2"
+    case .issues: "3"
+    case .loops: "4"
+    }
+  }
 }
 
 /// The app's view of sbd. It polls `ls` once a second, because sbd keeps
@@ -103,9 +132,22 @@ final class BoardModel: ObservableObject {
   var showingDoneRemoval: Bool { doneRemoval != nil }
   /// The quick-ask panel's state, or nil while it is closed.
   @Published var quickAsk: QuickAskState?
+  /// The New Loop… or Edit… sheet's opening, or nil while it is closed. A save closes it once sbd accepts the loop.
+  @Published var loopEditor: LoopEditorRequest? {
+    didSet {
+      loopEditorOpening += 1
+      loopEditorError = nil
+    }
+  }
+  /// sbd's refusal of the open loop editor's last save.
+  @Published var loopEditorError: String?
+  /// Changes on every open and close of the loop editor, so a late save answer can tell a reopened editor from its own.
+  private(set) var loopEditorOpening = 0
+  /// A loop editor's save is on its way to sbd, so a second Save would add a second loop.
+  @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil
+      || pickingSnoozeTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -283,6 +325,16 @@ final class BoardModel: ObservableObject {
   /// entry starts in `KnownRepos.preferredGroup`.
   @Published var issueGroupPicks: [String: String?] = [:]
   @Published var showingIssueSetup = false
+  /// The loop that the user last moved to in the Loops view, by schedule id.
+  @Published var loopFocus: String?
+  /// Counts moves in the Loops view. Each one scrolls to the current loop.
+  @Published var loopJumps = 0
+  /// The Loops view's order. The installed app saves it in its view settings.
+  @Published var loopSort: LoopSort {
+    didSet { if loopSort != oldValue { viewSettingsStore?.set(loopSort.rawValue, forKey: Self.loopSortKey) } }
+  }
+  /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
+  @Published var loopSessionFilter: String?
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -369,6 +421,7 @@ final class BoardModel: ObservableObject {
   static let orgFilterKey = "orgFilter"
   static let groupFilterKey = "groupFilter"
   static let hidesBacklogKey = "issuesHideBacklog"
+  static let loopSortKey = "loopsSort"
   /// Where the org filter, the group filter, and the other saved view settings are saved. It is nil outside the
   /// installed app, so a debug or test run never saves a setting that changes a later run.
   private let viewSettingsStore: UserDefaults?
@@ -388,6 +441,7 @@ final class BoardModel: ObservableObject {
       org: viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter,
       group: viewSettingsStore?.stringArray(forKey: Self.groupFilterKey).map { GroupFilter(keys: $0) } ?? groupFilter)
     hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
+    loopSort = viewSettingsStore?.string(forKey: Self.loopSortKey).flatMap(LoopSort.init) ?? .status
     makeHoverCards()
   }
 
@@ -591,6 +645,16 @@ final class BoardModel: ObservableObject {
   }
 
   var triage: [SessionSummary] { Triage.order(sessions) }
+
+  /// The count that the view picker shows next to `view`'s title.
+  func viewCount(_ view: MainView, now: Int64) -> Int {
+    switch view {
+    case .inbox: triage.count
+    case .board: 0
+    case .issues: issueCount
+    case .loops: loopAttentionCount(now: now)
+    }
+  }
 
   /// The repo label of each session in the sidebar. The Inbox uses the same
   /// labels. A session therefore shows the same repo in both lists.
