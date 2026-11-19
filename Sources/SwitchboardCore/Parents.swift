@@ -114,7 +114,7 @@ extension SessionKind {
 }
 
 /// How many sessions outside a parent's own children need the user.
-public struct BoardCounts: Equatable, Sendable {
+public struct BoardCounts: Sendable {
   public var needsYou: Int
   public var readyToMerge: Int
 
@@ -133,8 +133,9 @@ public struct BoardCounts: Equatable, Sendable {
 }
 
 /// The text that a Manager or a chat gets with a prompt, through the
-/// `additionalContext` of its UserPromptSubmit hook. Claude Code shows it to
-/// the model and keeps it out of the conversation's messages.
+/// `additionalContext` of its UserPromptSubmit hook. Claude Code saves it in
+/// the conversation's transcript as an attachment, so every later call in the
+/// conversation reads it again.
 public enum ParentDigest {
   /// The most child lines in one digest. The rest become a count.
   static let maxLines = 15
@@ -156,13 +157,11 @@ public enum ParentDigest {
     return parts.isEmpty ? nil : "\(sessionMention(name: name, id: id)): " + parts.joined(separator: "; ")
   }
 
+  /// `lines` holds at least one line. `Service.digest` sends nothing when no child changed.
   public static func text(_ lines: [String], elsewhere: BoardCounts) -> String {
-    var out = ["Switchboard: what changed since your last turn."]
-    if !lines.isEmpty {
-      out.append("Sessions you started:")
-      out += lines.prefix(maxLines).map { "- \($0)" }
-      if lines.count > maxLines { out.append("- and \(lines.count - maxLines) more") }
-    }
+    var out = ["Switchboard: what changed since your last turn.", "Sessions you started:"]
+    out += lines.prefix(maxLines).map { "- \($0)" }
+    if lines.count > maxLines { out.append("- and \(lines.count - maxLines) more") }
     out.append("Other sessions: \(elsewhere.needsYou) in Needs you, \(elsewhere.readyToMerge) in Ready to merge.")
     return out.joined(separator: "\n")
   }
