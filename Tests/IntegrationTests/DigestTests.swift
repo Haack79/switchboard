@@ -145,17 +145,35 @@ import Testing
     #expect(log.map(\.text) == ["hello", "Done: hello", "what changed", "Done: what changed"])
   }
 
+  /// Claude Code keeps each digest in the conversation's context. A change in the counts alone sends no digest.
+  @Test(arguments: Parent.allCases) func aChangeInTheCountsAloneSendsNoDigest(_ kind: Parent) throws {
+    let sbd = try Instance()
+    let p = try parent(sbd, kind)
+    let other = try sbd.new(prompt: "hello", name: "other")
+    if kind == .chat { _ = try sbd.sb("group", "move", other.id, "--to", "Flags") }
+    try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    let given = contexts(sbd, p).count
+    let digests = try sbd.events(p.id, kind: "digest").count
+
+    try prompt(sbd, p, "what changed")
+
+    #expect(contexts(sbd, p).count == given, "\(contexts(sbd, p))")
+    #expect(try sbd.events(p.id, kind: "digest").count == digests)
+  }
+
   @Test func theDigestCountsTheOtherSessionsThatNeedYou() throws {
     let sbd = try Instance()
     let p = try parent(sbd, .manager)
     let other = try sbd.new(prompt: "hello", name: "other")
     try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    let kid = try child(sbd, of: p, name: "kid", prompt: "one")
+    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
 
     try prompt(sbd, p, "what changed")
 
     let text = try #require(contexts(sbd, p).last)
+    #expect(text.contains("kid (\(kid.id))"), "\(text)")
     #expect(text.hasSuffix("Other sessions: 1 in Needs you, 0 in Ready to merge."), "\(text)")
-    #expect(!text.contains("Sessions you started"))
   }
 
   @Test func aChatCountsOnlyTheSessionsInItsGroup() throws {
@@ -165,7 +183,8 @@ import Testing
     let inDocs = try sbd.new(prompt: "hello", name: "indocs")
     _ = try sbd.sb("group", "move", inFlags.id, "--to", "Flags")
     _ = try sbd.sb("group", "add", "--json", "Docs", inDocs.id)
-    for s in [inFlags, inDocs] { try sbd.waitFor(s.id, "the reply") { $0.state == .needsYou } }
+    let kid = try child(sbd, of: p, name: "kid", prompt: "one")
+    for s in [inFlags, inDocs, kid] { try sbd.waitFor(s.id, "the reply") { $0.state == .needsYou } }
 
     try prompt(sbd, p, "what changed")
 
