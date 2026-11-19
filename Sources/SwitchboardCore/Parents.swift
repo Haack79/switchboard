@@ -33,6 +33,15 @@ public struct ChildMark: Equatable, Sendable {
   }
 }
 
+/// A parent session leaves its children's questions in the children's own Inbox items. The user then answers
+/// each question in one place.
+public enum ChildQuestions {
+  /// The guidance that the Manager guide, the chat guide, and the default system prompt give every agent.
+  public static let guidance =
+    "If you started other sessions, each one asks the user its own questions in its own Inbox item. Never ask the user a question or decision that one of those sessions already asks, whether in a reply, with `sb summary set`, or in a report. Link to that session and say in a few words what it waits on, without copying its question, such as \"[fix-cache](switchboard://session/swb_eb4ec) asks you to pick a cache size in its Inbox item.\" Ask the user only your own decisions, such as whether to merge a PR, remove a worktree, or send one message to several sessions."
+
+}
+
 /// The messages that a parent session gets about its children.
 public enum ParentNotice {
   /// The most lines in one message. The rest become a count.
@@ -63,6 +72,11 @@ public enum ParentNotice {
     static func opened(_ number: Int, url: String?) -> String {
       "opened PR #\(number)" + (url.map { ": \($0)" } ?? "")
     }
+
+    /// The child's link goes in the line so that the parent can copy it when it points the user at the item.
+    static func needsYou(id: String, reason: String) -> String {
+      "needs you in its own Inbox item (\(SessionLink.url(for: id).absoluteString)): \(reason)"
+    }
   }
 
   /// The lines that say what changed between two sightings of a child, one per change.
@@ -73,7 +87,7 @@ public enum ParentNotice {
     return Change.between(before, after, reason: reason, prURL: prURL).map {
       switch $0 {
       case .pr(let number, let url): "\(mention) \(Change.opened(number, url: url))"
-      case .needsYou(let reason): "\(mention) needs you: \(reason)"
+      case .needsYou(let reason): "\(mention) \(Change.needsYou(id: id, reason: reason))"
       case .readyToMerge(let reason): "\(mention): \(reason)"
       case .done: "\(mention) is done"
       }
@@ -134,7 +148,7 @@ public enum ParentDigest {
     let parts = ParentNotice.Change.between(heard, now, reason: reason, prURL: prURL).map {
       switch $0 {
       case .pr(let number, let url): ParentNotice.Change.opened(number, url: url)
-      case .needsYou(let reason): "needs you: \(reason)"
+      case .needsYou(let reason): ParentNotice.Change.needsYou(id: id, reason: reason)
       case .readyToMerge(let reason): reason
       case .done: "done"
       }
