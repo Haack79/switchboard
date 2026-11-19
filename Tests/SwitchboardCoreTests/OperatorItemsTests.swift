@@ -25,11 +25,11 @@ private func askReport(_ id: Int64, _ text: String = "Merge it?", about: String?
 /// An Operator wait on a session. `overdue` puts its recheck time before or after `oiNow`.
 private func heldWait(
   _ id: String, action: WaitAction.Kind? = nil, watching target: String = "k1", subject: String? = nil,
-  handedFrom: String? = nil, overdue: Bool = true
+  handedFrom: String? = nil, overdue: Bool = true, wanting wanted: AttentionState? = nil
 ) -> Wait {
   var w = Wait(
     id: id, kind: .session, session: Wait.SessionTarget(id: target, name: "kid"),
-    state: action == .merge ? .readyToMerge : .done, created: 0, recheck: overdue ? oiNow / 2 : oiNow * 10)
+    state: wanted ?? (action == .merge ? .readyToMerge : .done), created: 0, recheck: overdue ? oiNow / 2 : oiNow * 10)
   w.action = action.map { WaitAction(kind: $0) }
   w.subject = subject.map { Wait.SessionTarget(id: $0, name: "subj") }
   w.handedFrom = handedFrom.map { Wait.SessionTarget(id: $0, name: "chat") }
@@ -1020,6 +1020,29 @@ extension OperatorItemsTests {
       let v = oiVerdict(session(), withItems(f, OperatorItems(heldWaits: [heldWait("w1")])), now: now)
 
       #expect(v.state == .stale, "\(v.reason)")
+    }
+
+    /// An Operator-held `session` wait that wants Waiting would never settle if its verdict hid Waiting.
+    @Test func aHeldWaitLeavesTheStateThatAWaitOnThisSessionWants() {
+      let job = facts(opIdle + [event("job", 2, ["count": 1])])
+      #expect(oiVerdict(session(), job).state == .waiting)
+
+      let v = oiVerdict(
+        session(), withItems(job, OperatorItems(heldWaits: [heldWait("w1", watching: "s1", wanting: .waiting)])))
+
+      #expect(v.state == .waiting, "\(v.reason)")
+    }
+
+    @Test func aHeldWaitStillWinsOverAStateThatNoWaitOnThisSessionWants() {
+      let job = facts(opIdle + [event("job", 2, ["count": 1])])
+      let waits = [
+        heldWait("w1", watching: "s1", wanting: .needsYou), heldWait("w2", watching: "k1", wanting: .waiting),
+      ]
+
+      let v = oiVerdict(session(), withItems(job, OperatorItems(heldWaits: waits)))
+
+      #expect(v.state == .needsYou, "\(v.reason)")
+      #expect(v.fromOperator)
     }
 
     @Test func aHeldWaitLeavesAMarkedDoneSessionDone() {

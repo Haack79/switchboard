@@ -722,7 +722,13 @@ public final class Service {
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
       // Only the user's message closes the operator's reports, so `reports` from a Claude Code is dropped.
       var extra: [String: JSON] = [:]
-      if let reports = args["reports"]?.array, author == .you, id == operatorID() { extra["reports"] = .array(reports) }
+      if let reports = args["reports"] {
+        // A dropped `reports` would make the `sent` event close every open report.
+        guard let list = reports.array, list.allSatisfy({ $0.int != nil }) else {
+          throw APIError("send's reports must be an array of integer report ids")
+        }
+        if author == .you, id == operatorID() { extra["reports"] = .array(list) }
+      }
       let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere, extra: extra)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]

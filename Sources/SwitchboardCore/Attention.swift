@@ -641,9 +641,14 @@ public enum Attention {
     if facts.turnRunning { return workingVerdict(facts, now: now) }
     let idle = idleRules(session, facts, now: now, stateOf: stateOf)
     // A merge wait watches for Ready to merge, which `openPR` gives below the session's own waits, and a `session` wait
-    // settles on Stale, so a routed held wait must hide neither. It comes before every other idle verdict, the
-    // session's own waits included.
-    if idle.state != .readyToMerge, idle.state != .stale, let held = heldWaitVerdict(facts.operatorItems, now: now) {
+    // settles on Stale and on its wanted state, so a routed held wait must hide none of them. It comes before every
+    // other idle verdict, the session's own waits included.
+    let watched = Set(
+      facts.operatorItems.heldWaits.filter { $0.kind == .session && $0.session?.id == session.id }
+        .map { $0.state ?? .done })
+    if idle.state != .readyToMerge, idle.state != .stale, !watched.contains(idle.state),
+      let held = heldWaitVerdict(facts.operatorItems, now: now)
+    {
       return held
     }
     return idle

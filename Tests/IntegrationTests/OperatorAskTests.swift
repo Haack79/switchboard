@@ -464,6 +464,28 @@ import Testing
     #expect(try reports(sbd).map { $0["open"]?.bool } == [false, false])
   }
 
+  /// A malformed `reports` would otherwise be dropped, and a `sent` without `reports` closes every open report.
+  @Test func aSendWithMalformedReportsIsRefusedAndClosesNothing() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    let first = try ask(sbd, op, "PR alpha is green. Merge it?", about: try sbd.new(name: "kid").id)
+    let second = try ask(sbd, op, "PR bravo is green. Merge it?", about: try sbd.new(name: "kid2").id)
+    let sent = try sbd.count("sent", of: op.id)
+
+    for reports: JSON in ["10", [.string("10")], [1.5], .object([:])] {
+      let answer = try sbd.sendLine(
+        Instance.requestLine("send", ["session": .string(op.id), "text": "yes", "reports": reports]),
+        to: sbd.home.socket)
+
+      #expect(answer?["ok"]?.bool == false, "\(answer?.text ?? "no answer")")
+      #expect(answer?.text.contains("reports") == true)
+    }
+
+    #expect(try sbd.count("sent", of: op.id) == sent)
+    #expect(try isOpen(sbd, first) == true)
+    #expect(try isOpen(sbd, second) == true)
+  }
+
   // MARK: Acknowledge (criterion 4)
 
   @Test func sbAckOnTheOwnerRecordsReportClosedOnTheOperatorAndNoAckOnTheOwner() throws {
