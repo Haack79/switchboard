@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import SwitchboardCore
 import Testing
 
@@ -29,14 +30,16 @@ import Testing
   }
 
   /// A model that lists `sessions` and whose `send` records every request. sbd answers `slash-commands` with
-  /// `slash`, or refuses it when `slash` is nil, and answers the rest with null.
-  func slashModel(slash: [SlashCommand]?) throws -> (BoardModel, SentRequests) {
+  /// `slash`, or refuses it when `slash` is nil, and answers the rest with null. With `hold`, each `slash-commands`
+  /// answer waits for a signal of `hold`.
+  func slashModel(slash: [SlashCommand]?, hold: DispatchSemaphore? = nil) throws -> (BoardModel, SentRequests) {
     let model = appliedModel(Self.sessions)
     let sent = SentRequests()
     let answer: JSON? = try slash.map { .object(["commands": try JSON(encoding: $0), "listing": true]) }
     model.send = { op, args in
       sent.append(op, args)
       if op == "slash-commands" {
+        hold?.wait()
         guard let answer else { throw Boom() }
         return answer
       }
@@ -246,6 +249,56 @@ import Testing
 
     #expect(texts(sent) == ["/go x"])
     #expect(model.workSkillOffers["m"] == nil)
+  }
+
+  /// Claude Code loads a plugin's command by its bare name when no other command has that name.
+  @Test func aBareNameOfAPluginWorkCommandSetsTheOffer() async throws {
+    let rows =
+      Self.rows(go: nil) + [SlashCommand(name: "p:ship", description: "Ship it.", source: .listing, label: .work)]
+    let (model, sent) = try slashModel(slash: rows)
+
+    await submitUntilOffer(model, "m", draft("/ship x"))
+    await pause()
+
+    #expect(model.workSkillOffers["m"]?.skill == "ship")
+    #expect(sends(sent).isEmpty)
+  }
+
+  // MARK: Send during the read
+
+  @Test func aDraftChangedDuringTheReadSendsNothingAndOffersNothing() async throws {
+    let hold = DispatchSemaphore(value: 0)
+    defer { hold.signal() }
+    let (model, sent) = try slashModel(slash: Self.rows(go: .work), hold: hold)
+    let field = draft("/go x")
+    model.submitChecked(session: "m", draft: field)
+    await sent.wait(for: "slash-commands")
+
+    field.text = "/go y"
+    hold.signal()
+    await settle { !model.sending.contains("m") }
+    await pause()
+
+    #expect(sent.ops == ["slash-commands"])
+    #expect(model.workSkillOffers["m"] == nil)
+    #expect(field.text == "/go y")
+  }
+
+  @Test func aSecondSendDuringTheReadIsDropped() async throws {
+    let hold = DispatchSemaphore(value: 0)
+    defer { hold.signal() }
+    let (model, sent) = try slashModel(slash: Self.rows(go: nil), hold: hold)
+    let field = draft("/go x")
+    model.submitChecked(session: "m", draft: field)
+    await sent.wait(for: "slash-commands")
+
+    model.submitChecked(session: "m", draft: field)
+    hold.signal()
+    await sent.wait(for: "send")
+    await pause()
+
+    #expect(sent.ops.filter { $0 == "slash-commands" }.count == 1)
+    #expect(texts(sent) == ["/go x"])
   }
 
   // MARK: Run here anyway

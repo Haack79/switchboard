@@ -27,7 +27,8 @@ extension BoardModel {
       // A draft that the user changed during the read waits for the next Send.
       guard draft.trimmed == text else { return }
       let rows = fresh ?? self.slashCommands[session] ?? []
-      if rows.contains(where: { $0.name == skill && $0.label == .work }) {
+      let name = SkillCommand.resolve(skill, among: rows.map(\.name))
+      if rows.contains(where: { $0.name == name && $0.label == .work }) {
         self.offer(WorkSkillOffer(skill: skill, text: text), for: session, draft: draft)
       } else {
         draft.submit(session, to: self)

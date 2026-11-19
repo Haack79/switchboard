@@ -445,6 +445,19 @@ public enum SkillCommand {
     return String(name)
   }
 
+  /// The name among `names` that Claude Code loads for a typed name: the name itself when `names` holds it. Claude
+  /// Code also loads a plugin's skill or command by its bare name when no other skill or command has that name. So
+  /// a name without a `:` that `names` lacks resolves to the one `<plugin>:<name>` in `names`. It is nil when
+  /// `names` holds no match or several.
+  public static func resolve(_ name: String, among names: some Collection<String>) -> String? {
+    if names.contains(name) { return name }
+    guard !name.contains(":") else { return nil }
+    let plugins = names.filter { full in
+      full.firstIndex(of: ":").map { full[full.index(after: $0)...] == name } ?? false
+    }
+    return plugins.count == 1 ? plugins.first : nil
+  }
+
   /// The skill that a call of the Skill tool or of the older SlashCommand tool loads. Every other tool loads none.
   public static func name(inToolCall tool: String, input: JSON?) -> String? {
     switch tool {
@@ -462,7 +475,8 @@ public enum SkillCommand {
 
 /// A user's "Run here anyway" for one message in a Manager conversation. It lives only in sbd's memory.
 public enum SkillBypass: Equatable, Sendable {
-  /// The message with this skill's command is on its way to claude. The next UserPromptSubmit takes it.
+  /// The message with this skill's command is on its way to claude. The next UserPromptSubmit clears it. That
+  /// prompt gets past the gate only when its command is this skill.
   case armed(String)
   /// The message's skill runs. Every Skill call of its turn is let through until the turn ends.
   case turn
@@ -501,8 +515,10 @@ public enum ManagerSkillGate {
     case .armed(let armed)? where armed == name: return .bypassed
     default: break
     }
-    let key = catalog[name]?.key(model: settings.model)
-    guard let found = ManagerSkillRow.label(of: name, key: key, settings: settings, labels: labels) else {
+    // A config.json name decides before a plugin skill of the same bare name.
+    let resolved = settings.override(name) == nil ? SkillCommand.resolve(name, among: catalog.keys) ?? name : name
+    let key = catalog[resolved]?.key(model: settings.model)
+    guard let found = ManagerSkillRow.label(of: resolved, key: key, settings: settings, labels: labels) else {
       return .unchecked(key.flatMap { failures[$0] })
     }
     return found.label == .work ? .blocked(by: found.by) : .allowed(by: found.by)

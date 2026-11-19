@@ -201,6 +201,10 @@ public final class Service {
   var skillLabels = SkillLabelCache()
   /// The last failed run of each cache key. A refresh retries one only after `skillRetryMs`.
   var skillFailures: [String: SkillFailure] = [:]
+  /// The last run of each account whose claude call failed, timed out, or didn't start. Every skill of the account
+  /// would fail the same way. So a run in the next `skillRetryMs` records this failure for its own key and starts
+  /// no claude.
+  var skillAccountFailures: [String: SkillFailure] = [:]
   /// When sbd last scanned each account's skills.
   var skillRefreshed: [String: Int64] = [:]
   /// The cache keys whose run waits on `skillJobs` or runs.

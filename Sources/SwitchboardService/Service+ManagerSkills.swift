@@ -77,20 +77,23 @@ extension Service {
       if let failure = skillFailures[key], now - failure.t < Self.skillRetryMs { continue }
       skillQueued.insert(key)
       skillJobs.addOperation { [self] in
-        let outcome = classifySkill(entry, account: account, settings: settings)
-        queue.async { [self] in finishSkillRun(entry, key: key, account: account, outcome) }
+        let (outcome, fromClaude) = classifySkill(entry, account: account, settings: settings)
+        queue.async { [self] in finishSkillRun(entry, key: key, account: account, outcome, fromClaude: fromClaude) }
       }
     }
   }
 
   /// Labels the entry under the account's login, off the state queue. The
   /// label's key is the hash of the text that the run read, which differs
-  /// from the queued key when the file changed after the scan.
+  /// from the queued key when the file changed after the scan. `fromClaude`
+  /// is true when the claude call itself failed, timed out, or didn't start.
   private func classifySkill(_ entry: CatalogEntry, account: String, settings: ManagerSkillSettings)
-    -> SkillRunOutcome
+    -> (outcome: SkillRunOutcome, fromClaude: Bool)
   {
-    func failure(_ category: SkillFailure.Category, _ message: String) -> SkillRunOutcome {
-      .failure(SkillFailure(category: category, message: message, t: nowMs()))
+    func failure(_ category: SkillFailure.Category, _ message: String, fromClaude: Bool = false)
+      -> (SkillRunOutcome, Bool)
+    {
+      (.failure(SkillFailure(category: category, message: message, t: nowMs())), fromClaude)
     }
     do {
       try requireSignedIn(["account": .string(account)])
@@ -110,6 +113,9 @@ extension Service {
     } else {
       return failure(.failed, "\(entry.name) has neither a file nor a description")
     }
+    if let shared = queue.sync(execute: { skillAccountFailures[account] }), nowMs() - shared.t < Self.skillRetryMs {
+      return (.failure(shared), false)
+    }
     let outcome = headlessCall(
       .skillLabel, session: nil, arguments: SkillClassifier.arguments(model: settings.model),
       input: SkillClassifier.input(name: entry.name, text: text),
@@ -117,27 +123,32 @@ extension Service {
       timeout: settings.timeoutSeconds, parse: SkillClassifier.parse)
     switch outcome.result {
     case .success(let answer):
-      return .success((SkillLabelCache.key(hash: hash, model: settings.model), answer))
+      return (.success((SkillLabelCache.key(hash: hash, model: settings.model), answer)), false)
     case .failure(let error as Headless.TimedOut):
-      return failure(.timeout, "\(error)")
+      return failure(.timeout, "\(error)", fromClaude: true)
     case .failure(let error) where outcome.reply == nil || error is Headless.ExitError:
-      return failure(.failed, "\(error)")
+      return failure(.failed, "\(error)", fromClaude: true)
     case .failure(let error):
       return failure(.badAnswer, "\(error)")
     }
   }
 
-  /// Saves a label, or keeps the failure in memory. Runs on the state queue.
-  private func finishSkillRun(_ entry: CatalogEntry, key: String, account: String, _ outcome: SkillRunOutcome) {
+  /// Saves a label, or keeps the failure in memory. A failure `fromClaude` is also the account's. Runs on the
+  /// state queue.
+  private func finishSkillRun(
+    _ entry: CatalogEntry, key: String, account: String, _ outcome: SkillRunOutcome, fromClaude: Bool
+  ) {
     skillQueued.remove(key)
     switch outcome {
     case .success(let (labelKey, answer)):
       skillFailures[key] = nil
+      skillAccountFailures[account] = nil
       skillLabels.labels[labelKey] = SkillLabelCache.Label(
         label: answer.label, reason: answer.reason, model: config.managerSkills.model, t: nowMs())
       saveSkillLabels()
     case .failure(let failure):
       skillFailures[key] = failure
+      if fromClaude { skillAccountFailures[account] = failure }
       logLine("can't label the skill \(entry.name) of \(account): \(failure.message)")
     }
   }
@@ -194,8 +205,9 @@ extension Service {
   }
 
   /// Drops the labels and failures of the names' current keys, or of every
-  /// name when `names` is nil, and queues them again. It throws for a name
-  /// that no account holds. Runs on the state queue.
+  /// name when `names` is nil, and the accounts' failures, and queues them
+  /// again. It throws for a name that no account holds. Runs on the state
+  /// queue.
   private func relabelSkills(_ names: [String]?, accounts: [String]) throws {
     if let names {
       let settings = config.managerSkills
@@ -205,6 +217,7 @@ extension Service {
     }
     let model = config.managerSkills.model
     for account in accounts {
+      skillAccountFailures[account] = nil
       for entry in (skillIndex[account] ?? [:]).values where names?.contains(entry.name) ?? true {
         guard let key = entry.key(model: model) else { continue }
         skillLabels.labels[key] = nil
@@ -217,8 +230,9 @@ extension Service {
 
   // MARK: The gate
 
-  /// The UserPromptSubmit gate of a manager-kind session. The prompt takes an armed bypass, whatever its command.
-  /// It returns the block answer for a work skill, after it records `skill_blocked` and delivers the next queued
+  /// The UserPromptSubmit gate of a manager-kind session. Each prompt clears the session's bypass. Only a prompt
+  /// whose command matches the armed name gets past the gate, and its turn then lets Skill calls through. It
+  /// returns the block answer for a work skill, after it records `skill_blocked` and delivers the next queued
   /// message, because Claude Code sends no Stop after a block. Runs on the state queue.
   func managerSkillPromptGate(_ id: String, _ payload: JSON, stamp: HostEventStamp?) -> JSON? {
     guard let account = gatedSkillAccount(id, stamp: stamp) else { return nil }
@@ -301,10 +315,11 @@ extension Service {
   }
 
   /// Records `skill_unchecked` for a skill of the account's index that the gate let through without a label, once
-  /// per cache key and reason in each run of sbd. A name that the index lacks is not a skill that sbd knows, so
-  /// it records nothing. Runs on the state queue.
+  /// per cache key and reason in each run of sbd. A name that resolves to no entry of the index is not a skill
+  /// that sbd knows, so it records nothing. Runs on the state queue.
   private func recordSkillUnchecked(_ id: String, _ name: String, account: String, _ failure: SkillFailure?) {
-    guard let entry = skillIndex[account]?[name] else { return }
+    let catalog = skillIndex[account] ?? [:]
+    guard let entry = SkillCommand.resolve(name, among: catalog.keys).flatMap({ catalog[$0] }) else { return }
     let why = failure?.category.rawValue ?? "unlabeled"
     let key = entry.key(model: config.managerSkills.model) ?? "\(account)/\(name)"
     guard skillUnchecked.insert("\(why) \(key)").inserted else { return }

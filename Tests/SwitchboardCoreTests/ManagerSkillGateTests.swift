@@ -251,6 +251,76 @@ private func blocks(_ decision: ManagerSkillGate.Decision) -> Bool {
     #expect(decide("go", go, labels: goWork, bypass: nil) == .blocked(by: .haiku))
   }
 
+  // MARK: Bare plugin names
+
+  @Test func aBareNameOfOnePluginWorkSkillIsBlocked() {
+    let entries = catalog(entry("p:s", origin: .plugin))
+
+    #expect(decide("s", entries, labels: labels(["hash-p:s": .work])) == .blocked(by: .haiku))
+  }
+
+  @Test func aBareNameOfAnUnlabeledPluginSkillIsUncheckedWithItsFailure() {
+    let entries = catalog(entry("p:s", origin: .plugin))
+
+    #expect(decide("s", entries, failures: [key("hash-p:s"): failure(.timeout)]) == .unchecked(failure(.timeout)))
+  }
+
+  @Test func aNonPluginEntryOfTheBareNameWins() {
+    let entries = catalog(entry("s"), entry("p:s", origin: .plugin))
+    let cache = labels(["hash-s": .safe, "hash-p:s": .work])
+
+    #expect(decide("s", entries, labels: cache) == .allowed(by: .haiku))
+  }
+
+  @Test func aBareNameOfTwoPluginsStaysUnknown() {
+    let entries = catalog(entry("p:s", origin: .plugin), entry("q:s", origin: .plugin))
+    let cache = labels(["hash-p:s": .work, "hash-q:s": .work])
+
+    #expect(decide("s", entries, labels: cache) == .unchecked(nil))
+  }
+
+  @Test func aConfigNameBeatsAPluginSkillOfTheSameBareName() {
+    let entries = catalog(entry("p:s", origin: .plugin))
+
+    #expect(
+      decide("s", entries, labels: labels(["hash-p:s": .work]), settings: settings(safe: ["s"]))
+        == .allowed(by: .config))
+  }
+
+  @Test func aConfigWorkNameOfThePluginSkillBlocksItsBareName() {
+    let entries = catalog(entry("p:s", origin: .plugin))
+
+    #expect(decide("s", entries, settings: settings(work: ["p:s"])) == .blocked(by: .config))
+  }
+
+  /// A name with a `:` is never a bare name, so `x:s` doesn't load `p:x:s`.
+  @Test func aNameWithAColonResolvesOnlyToItself() {
+    #expect(SkillCommand.resolve("x:s", among: ["p:x:s"]) == nil)
+    #expect(SkillCommand.resolve("p:s", among: ["p:s"]) == "p:s")
+    #expect(SkillCommand.resolve("s", among: ["p:s", "p:ss", "s:p"]) == "p:s")
+    #expect(SkillCommand.resolve("s", among: ["sp:s2"]) == nil)
+  }
+
+  @Test func aBuiltInNameIsIgnoredEvenWithAPluginCommandOfThatName() {
+    let entries = catalog(entry("p:clear", origin: .plugin))
+
+    #expect(decide("clear", entries, labels: labels(["hash-p:clear": .work])) == .ignored)
+  }
+
+  // MARK: Row lines
+
+  @Test func eachRowPrintsItsLabelNameOriginAndWhy() {
+    #expect(
+      ManagerSkillRow(name: "go", origin: .user, label: .work, by: .haiku, reason: "It runs.").line
+        == "work  go  user  haiku: It runs.")
+    #expect(ManagerSkillRow(name: "go", origin: .user, label: .work, by: .config).line == "work  go  user  config")
+    #expect(ManagerSkillRow(name: "go", origin: .config, label: .safe, by: .config).line == "safe  go  config  config")
+    #expect(ManagerSkillRow(name: "go", origin: .user, error: "boom", pending: true).line == "-  go  user  queued")
+    #expect(ManagerSkillRow(name: "go", origin: .user, pending: true).line == "-  go  user  queued")
+    #expect(ManagerSkillRow(name: "go", origin: .user, error: "boom").line == "-  go  user  unlabeled: boom")
+    #expect(ManagerSkillRow(name: "go", origin: .user).line == "-  go  user  unlabeled")
+  }
+
   // MARK: Parity with manager-skills
 
   /// The hook blocks a name exactly when its `manager-skills` row shows `work`, because both read one decision.

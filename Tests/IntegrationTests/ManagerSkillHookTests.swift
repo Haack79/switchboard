@@ -235,10 +235,12 @@ private func write(_ text: String, to path: String) throws {
     #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
   }
 
+  /// A failed claude call holds back the account's other runs, so `flaky` fails only after `go` has its label.
   @Test func aFailedSkillRunsAndRecordsOneUncheckedWithWhyFailed() throws {
     let sbd = try instance()
-    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
     let c = try workGoConversation(sbd)
+    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    try sbd.sb("manager", "skills", "relabel", "flaky")
     try waitForError(sbd, "flaky")
 
     try prompt(sbd, c, "/flaky a")
@@ -373,11 +375,12 @@ private func write(_ text: String, to path: String) throws {
 
   /// Each name with whether the hook must refuse it. A name resolves to the entry that Claude Code would load for
   /// the account and `~/.sb/manager`: a user file beats a cwd file, a skill beats a command, a plugin counts only
-  /// when enabled, and `skillOverrides` "off" drops a name.
+  /// when enabled, a plugin's bare name loads it, and `skillOverrides` "off" drops a name.
   static let names: [(name: String, blocked: Bool)] = [
     ("u-work", true), ("c-work", true), ("cmd-work", true), ("dup", false), ("both", false), ("p:s", true),
-    ("p:pc", true), ("q:qs", false), ("bundled-review", true), ("cfg-only", true), ("forced-safe", false),
-    ("off-work", false), ("nope", false), ("clear", false), ("flaky", false), ("forced-work", true),
+    ("p:pc", true), ("s", true), ("pc", true), ("q:qs", false), ("qs", false), ("bundled-review", true),
+    ("cfg-only", true), ("forced-safe", false), ("off-work", false), ("nope", false), ("clear", false),
+    ("flaky", false), ("forced-work", true),
   ]
 
   /// A Manager whose account and cwd hold one skill for each row of `names`, after every label has landed.
@@ -396,7 +399,7 @@ private func write(_ text: String, to path: String) throws {
     try writeSkill(account, "off-work")
     try writeSkill(account, "forced-safe")
     try writeSkill(account, "forced-work", safe)
-    try writeSkill(account, "flaky", "FAIL-SKILL")
+    try writeSkill(account, "flaky", "BAD-SKILL")
     let p = "\(sbd.home.path)/plugin-cache/p/1.0.0"
     let q = "\(sbd.home.path)/plugin-cache/q/1.0.0"
     try writeSkill(p, "s")
@@ -555,7 +558,7 @@ private func write(_ text: String, to path: String) throws {
   }
 
   /// A run-here message that waits in the queue arms nothing until sbd pastes it. The `/go y` pasted before it
-  /// would take the bypass if it were armed when it was queued.
+  /// would get past the gate if the bypass were armed when the run-here message was queued.
   @Test func aQueuedRunHereMessageArmsOnlyWhenPasted() throws {
     let sbd = try instance()
     let c = try workGoConversation(sbd)
@@ -572,8 +575,26 @@ private func write(_ text: String, to path: String) throws {
     #expect(!sbd.transcriptContains(c, "Done: /go y"))
   }
 
-  /// The next UserPromptSubmit takes the armed bypass whatever its prompt is. A different prompt drops it, so the
-  /// run-here message that arrives after it is blocked.
+  /// A paused conversation holds the run-here message. The resume pastes it after the resume message, and it arms
+  /// the bypass then.
+  @Test func aHeldRunHereMessageArmsWhenTheResumePastesIt() throws {
+    let sbd = try instance()
+    let c = try workGoConversation(sbd)
+    try sbd.pauseJSON(c.id)
+    try sbd.waitForPausedExit(c.id)
+    try sbd.sb("send", c.id, "--run-here", "/go x")
+    let held = try #require(try sent(sbd, c.id, "/go x").first)
+    #expect(held.data["held"]?.bool == true)
+
+    try sbd.sb("resume", c.id)
+
+    try sbd.waitFor(c.id, "the run-here reply", timeout: 30) { $0.lastReply == "Done: /go x" }
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").count == 1)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
+  }
+
+  /// The next UserPromptSubmit clears the armed bypass, whatever its prompt is. So after a different prompt, the
+  /// run-here message is blocked.
   @Test func aDifferentPromptBeforeTheRunHereMessageDropsTheBypass() throws {
     let sbd = try instance()
     let c = try workGoConversation(sbd)

@@ -101,7 +101,7 @@ private let spentReading =
   @Test func plainOutputPrintsTheLabelNameOriginAndWhy() throws {
     let sbd = try instance()
     try writeSkill(sbd.account("A"), "go")
-    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    try writeSkill(sbd.account("A"), "flaky", "BAD-SKILL")
     try newConversation(sbd)
     try waitForLabel(sbd, "go", "work")
     try waitForError(sbd, "flaky")
@@ -119,7 +119,7 @@ private let spentReading =
     let sbd = try instance()
     try writeSkill(sbd.account("A"), "go")
     try writeSkill(sbd.account("A"), "notes", "Append to the notes file. LABEL-SAFE")
-    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    try writeSkill(sbd.account("A"), "flaky", "BAD-SKILL")
     let c = try newConversation(sbd)
     try waitForLabel(sbd, "go", "work")
     try waitForLabel(sbd, "notes", "safe")
@@ -306,9 +306,10 @@ private let spentReading =
 
   // MARK: Failures and backoff
 
+  /// A bad answer fails only its own skill, so the other skill still runs.
   @Test func failedRunShowsAnErrorAndIsNotRetriedRightAway() throws {
     let sbd = try instance()
-    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    try writeSkill(sbd.account("A"), "flaky", "BAD-SKILL")
     try newConversation(sbd)
     let flaky = try waitForError(sbd, "flaky")
     #expect(flaky["label"]?.string == nil)
@@ -393,9 +394,10 @@ private let spentReading =
   }
 
   /// The run reads the file again and saves the label under the hash of the text it read. A file edited while its
-  /// run waits gets a label for its new text, so a later scan of that text makes no new call.
+  /// run waits gets a label for its new text, so a later scan of that text makes no new call. The slow run must
+  /// end before its timeout, because a timeout makes the account's other runs fail without a call.
   @Test func fileEditedWhileItsRunWaitsIsLabeledForItsNewText() throws {
-    let sbd = try instance(config: ["managerSkills": ["timeoutSeconds": 10]])
+    let sbd = try instance(config: ["managerSkills": ["timeoutSeconds": 45]])
     try writeSkill(sbd.account("A"), "a-slow", "SLOW-SKILL")
     try writeSkill(sbd.account("A"), "go")
     try newConversation(sbd)
@@ -403,12 +405,31 @@ private let spentReading =
 
     try writeSkill(sbd.account("A"), "go", "Run the new pipeline.")
 
-    try sbd.waitFor("go's label", timeout: 30) { try cachedWorkLabels(sbd) == 1 }
+    try sbd.waitFor("go's label", timeout: 60) { try cachedWorkLabels(sbd) == 1 }
     let input = try String(contentsOfFile: "\(sbd.home.path)/skill-classify-input.txt", encoding: .utf8)
     #expect(input.contains("Run the new pipeline."), "\(input)")
     try newConversation(sbd)
     try waitForLabel(sbd, "go", "work")
     #expect(calls(sbd, "go") == 1)
+  }
+
+  /// A failed claude call fails every skill of the account the same way, so the runs queued behind it take its
+  /// failure without a call for `skillRetryMs`. `relabel` still runs at once.
+  @Test func failedClaudeCallFailsTheAccountsOtherRunsWithoutACall() throws {
+    let sbd = try instance()
+    for name in ["fail-a", "fail-b", "fail-c"] { try writeSkill(sbd.account("A"), name, "FAIL-SKILL") }
+    let c = try newConversation(sbd)
+
+    for name in ["fail-a", "fail-b", "fail-c"] { try waitForError(sbd, name) }
+
+    #expect(calls(sbd) == ["fail-a"])
+    try hookPrompt(sbd, c, "/fail-c x")
+    let unchecked = try sbd.events(c.id, kind: "skill_unchecked")
+    #expect(unchecked.map { $0.data["why"]?.string } == ["failed"], "\(unchecked.map(\.data.text))")
+    try sbd.sb("manager", "skills", "relabel", "fail-b")
+    try sbd.waitFor("a run of fail-b", timeout: 30) { calls(sbd, "fail-b") == 1 }
+    try waitForError(sbd, "fail-b")
+    #expect(calls(sbd) == ["fail-a", "fail-b"])
   }
 
   @Test func relabelRetriesAFailureAtOnce() throws {
@@ -443,18 +464,24 @@ private let spentReading =
 
   // MARK: Guard: fail-open
 
-  /// A run that fails, answers a label other than work or safe, or times out leaves the skill without a label.
-  @Test(arguments: ["FAIL-SKILL", "BAD-SKILL", "SLOW-SKILL"])
-  func failedRunLeavesNoLabel(_ marker: String) throws {
+  /// A run that fails, answers a label other than work or safe, or times out leaves the skill without a label. The
+  /// gate lets the skill run and records why. A name that no account holds records nothing.
+  @Test(arguments: [("FAIL-SKILL", "failed"), ("BAD-SKILL", "badAnswer"), ("SLOW-SKILL", "timeout")])
+  func failedRunLeavesNoLabel(_ marker: String, _ why: String) throws {
     let sbd = try instance(config: ["managerSkills": ["timeoutSeconds": 2]])
     try writeSkill(sbd.account("A"), "go", "Run the pipeline. \(marker)")
 
-    try newConversation(sbd)
+    let c = try newConversation(sbd)
 
     let go = try waitForError(sbd, "go")
     #expect(go["label"]?.string == nil)
     #expect(calls(sbd, "go") == 1)
     #expect(try cachedWorkLabels(sbd) == 0)
+    try hookPrompt(sbd, c, "/go x")
+    try hookPrompt(sbd, c, "/nope x")
+    let unchecked = try sbd.events(c.id, kind: "skill_unchecked")
+    #expect(unchecked.map { $0.data["skill"]?.string } == ["go"], "\(unchecked.map(\.data.text))")
+    #expect(unchecked.first?.data["why"]?.string == why)
   }
 
   @Test func signedOutAccountLeavesNoLabelWithoutARun() throws {
@@ -464,12 +491,14 @@ private let spentReading =
     #expect(try sbd.usage(of: "A").signedOut == true)
     try writeSkill(sbd.account("A"), "go")
 
-    try newConversation(sbd)
+    let c = try newConversation(sbd)
 
     let go = try waitForError(sbd, "go")
     #expect(go["label"]?.string == nil)
     #expect(calls(sbd).isEmpty)
     #expect(try cachedWorkLabels(sbd) == 0)
+    try hookPrompt(sbd, c, "/go x")
+    #expect(try sbd.events(c.id, kind: "skill_unchecked").first?.data["why"]?.string == "signedOut")
   }
 
   @Test func spentQuotaLeavesNoLabelWithoutARun() throws {
@@ -481,12 +510,14 @@ private let spentReading =
     #expect(try sbd.usage(of: "A").budget().isSpent)
     try writeSkill(sbd.account("A"), "go")
 
-    try newConversation(sbd)
+    let c = try newConversation(sbd)
 
     let go = try waitForError(sbd, "go")
     #expect(go["label"]?.string == nil)
     #expect(calls(sbd).isEmpty)
     #expect(try cachedWorkLabels(sbd) == 0)
+    try hookPrompt(sbd, c, "/go x")
+    #expect(try sbd.events(c.id, kind: "skill_unchecked").first?.data["why"]?.string == "noQuota")
   }
 
   /// `skillJobs` runs one classification at a time, so while one run hangs, the other skill waits unlabeled.
@@ -513,7 +544,7 @@ private let spentReading =
     try sbd.startSbd()
     try sbd.sb("account", "use", "A")
     try writeSkill(sbd.account("A"), "go")
-    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    try writeSkill(sbd.account("A"), "flaky", "BAD-SKILL")
 
     try newConversation(sbd)
 
