@@ -28,15 +28,16 @@ public enum TriageSummarizer {
     two or more choices, or asks the user to make two or more decisions.
     - summary: plain lines separated by newlines, each under \(TriageCard.lineLength) characters. Use only facts that the reply \
     states. Include a fact only if the user would misjudge or not understand an option without it. The full reply \
-    is in Details, so leave the rest out. Usually it has two to three lines. The first says what the session did. \
-    The last says what it needs from the user, or what is finished when it asks nothing. When the reply asks the \
-    user to make several decisions, such as a numbered list of questions, write one line per decision between the \
-    first and last lines, in the reply's order and with the reply's numbers when it has them. Each names the \
-    decision and the answer that the reply recommends, shortened to fit the line, such as "1. Move a due \
-    follow-up to Needs you? It recommends yes." When the reply recommends nothing for a decision, write only the \
-    decision. Write at most \(maxDecisions) decision lines, and when the reply has more, say in the last line that \
-    more remain. A list of work the session finished or of steps it took is not a list of decisions, so write it \
-    as ordinary summary lines.
+    is in Details, so leave the rest out. Usually it has two to three lines. The first line says what the session \
+    needs from the user and the answer it recommends. When it recommends no answer, the first line names only the \
+    need. When the reply asks nothing, the first line says what is finished. When the reply asks the user to make \
+    several decisions, such as a numbered list of questions, write one line per decision after the first line, in \
+    the reply's order and with the reply's numbers when it has them. Each names the decision and the answer that \
+    the reply recommends, shortened to fit the line, such as "1. Move a due follow-up to Needs you? It recommends \
+    yes." When the reply recommends nothing for a decision, write only the decision. Write at most \(maxDecisions) \
+    decision lines, and when the reply has more, say in the first line that more remain. End with at most two \
+    lines of context, such as what the session did. A list of work the session finished or of steps it took is not \
+    a list of decisions, so it counts as context.
     - options: at most \(TriageCard.maxOptions) buttons, and only choices that the reply offers or clearly asks for. Never add a \
     Cancel, Skip, or Other button, and never invent a step. Each has a short label, an optional detail, an \
     action, and recommended set to true only for the one option that the reply recommends. The action send \

@@ -414,6 +414,18 @@ extension SessionFacts {
   }
 }
 
+/// How an item's Summary shows the session's last reply.
+public enum ReplyPresentation: Equatable, Sendable {
+  /// The short reply shows as the Summary's text, in place of the model's or the fallback's summary.
+  case replacesSummary
+  /// The short reply shows under the rule's summary, because it asks something.
+  case expanded
+  /// A "Read full reply" button shows the reply in place.
+  case collapsed
+  /// The Summary shows no reply. Details still does.
+  case none
+}
+
 /// The triage list: one item for each session that needs the user or that
 /// Claude can continue, and the order the list shows them in.
 public enum Triage {
@@ -442,7 +454,9 @@ public enum Triage {
     switch kind.inboxItems {
     case .all:
       let live = liveItem(facts, verdict)
-      return (item(facts, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live))
+      return (
+        item(facts, verdict, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live)
+      )
     case .blockingPrompts:
       return (promptItem(facts, verdict), nil, false)
     case .operatorItems:
@@ -482,9 +496,10 @@ public enum Triage {
     openPrompt || cards.contains { blocks($0.kind) }
   }
 
-  private static func item(_ facts: SessionFacts, live: TriageItem?) -> TriageItem? {
+  private static func item(_ facts: SessionFacts, _ verdict: Verdict, live: TriageItem?) -> TriageItem? {
     guard var item = live else { return nil }
     if let list = facts.decisionList, item.source != .card { item.decisions = list.decisions }
+    if !verdict.removalFailed { addReplyAsk(facts, to: &item) }
     for i in item.drafts.indices {
       // Only the session's own card names a target. The model's summary reads text that can quote PR comments.
       if item.source == .session {
@@ -574,6 +589,48 @@ public enum Triage {
     facts.cards.isEmpty && facts.openPermission == nil && facts.openQuestion == nil && verdict.source == .reply
   }
 
+  /// The start of the callout title that `addReplyAsk` puts on a rule item.
+  static let replyAskPrefix = "The session asked: "
+
+  /// A reply of at most this many characters, after trimming, shows whole. A Details pane at 1024 pt shows about
+  /// that much without scrolling.
+  public static let wholeReplyCharacters = 1_200
+  /// A reply of at most this many lines, after trimming, shows whole.
+  public static let wholeReplyLines = 20
+
+  /// How an item's Summary shows the session's last reply. `reply` is the
+  /// hook's `session.lastReply`. A rule item shows the reply only when it
+  /// carries the question callout that `addReplyAsk` adds, so the app and
+  /// sbd agree. A rule item built while a turn runs has no such callout,
+  /// because its reply belongs to an earlier turn. `listOpen` is true while
+  /// the item's decision list is open.
+  public static func replyPresentation(item: TriageItem, reply: String, listOpen: Bool) -> ReplyPresentation {
+    let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return .none }
+    let short =
+      text.count <= wholeReplyCharacters
+      && text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).count <= wholeReplyLines
+    let decides = listOpen || !item.decisions.isEmpty
+    switch item.source {
+    case .card, .report: return .none
+    case .session: return .collapsed
+    case .summary, .fallback: return short && !decides ? .replacesSummary : .collapsed
+    case .rule:
+      guard item.callouts.contains(where: { $0.kind == .decision && $0.title.hasPrefix(replyAskPrefix) }) else {
+        return .none
+      }
+      return short && !decides ? .expanded : .collapsed
+    }
+  }
+
+  /// The question or the offer that the reply ends with, as `Attention.classify` finds it, or nil.
+  public static func replyAsk(_ reply: String) -> String? {
+    switch Attention.classify(reply) {
+    case .question(let ask), .offer(let ask): ask
+    case .other: nil
+    }
+  }
+
   /// Whether the turn that just ended needs a summary: the reply decides the
   /// session's state, and no summary exists yet.
   public static func needsSummary(_ facts: SessionFacts, _ verdict: Verdict) -> Bool {
@@ -647,6 +704,41 @@ public enum Triage {
       details: TriageDetails(overdueWaits: verdict.overdueWaits))
   }
 
+  /// A rule item whose session's last reply asks something leads with the
+  /// question. The rule's options lose `recommended`. A lone rule option
+  /// stays the main option through `primary`. A yes/no offer puts Yes and No first,
+  /// and Yes is the main option. A question gets no buttons, even one that
+  /// reads as yes or no. A `send` option that already sends Yes or No
+  /// stands in for that button. The question is open only while no turn runs,
+  /// because a prompt starts a turn whose Stop replaces the reply.
+  static func addReplyAsk(_ facts: SessionFacts, to item: inout TriageItem) {
+    guard item.source == .rule, !facts.turnRunning else { return }
+    let ask: String
+    let answers: [TriageOption]
+    switch Attention.classify(facts.lastReply ?? "") {
+    case .question(let question): (ask, answers) = (question, [])
+    case .offer(let offer): (ask, answers) = (offer, yesNo(offer))
+    case .other: return
+    }
+    item.callouts.insert(Callout(kind: .decision, title: oneLine(replyAskPrefix + ask, max: 120)), at: 0)
+    for i in item.options.indices { item.options[i].recommended = false }
+    var added: [TriageOption] = []
+    for var answer in answers {
+      answer.recommended = answer.message == "Yes"
+      if let i = item.options.firstIndex(where: { $0.action == .send && $0.message == answer.message }) {
+        item.options[i].recommended = answer.recommended
+      } else {
+        added.append(answer)
+      }
+    }
+    item.options.insert(contentsOf: added, at: 0)
+  }
+
+  /// Yes and No `send` options for an offer that a yes or no answers, or none.
+  static func yesNo(_ offer: String) -> [TriageOption] {
+    OfferText.isYesNo(offer) ? ["Yes", "No"].map { TriageOption(label: $0, action: .send, message: $0) } : []
+  }
+
   /// The reply's closing section as the summary. An offer's title starts
   /// with its verb, and an offer that a yes or no answers gets Yes and No.
   /// Neither is the main option, because the offer can be a delete.
@@ -660,11 +752,9 @@ public enum Triage {
       guard let asked = Attention.lastQuestion(reply), asked.question == step else {
         return TriageItem(title: title(step, max: titleLength), kind: .approval, summary: summary, source: .fallback)
       }
-      let options =
-        OfferText.isYesNo(step) ? ["Yes", "No"].map { TriageOption(label: $0, action: .send, message: $0) } : []
       return TriageItem(
         title: OfferText.title(question: step, previous: asked.previous), kind: .approval,
-        summary: summary, options: options, source: .fallback)
+        summary: summary, options: yesNo(step), source: .fallback)
     case .other:
       return TriageItem(
         title: title(verdict.reason, max: titleLength), kind: .info, summary: summary, source: .fallback)

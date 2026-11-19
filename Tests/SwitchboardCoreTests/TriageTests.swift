@@ -1000,3 +1000,39 @@ private let longOverdueWait = Wait(
     #expect(op.title == "The-flag-cache-rollout-followup to reach Done: still open after 1m")
   }
 }
+
+// MARK: Decision first in the summary (Decision 11)
+
+@Suite struct TriageReplySummaryOrder {
+  /// The `summary` bullet of the system prompt, up to the `options` bullet.
+  static var summaryRule: String {
+    let system = TriageSummarizer.system
+    guard let start = system.range(of: "- summary:"),
+      let end = system.range(of: "- options:", range: start.upperBound..<system.endIndex)
+    else { return "" }
+    return String(system[start.lowerBound..<end.lowerBound])
+  }
+
+  @Test func theFirstLineSaysWhatTheSessionNeedsAndTheAnswerItRecommends() {
+    #expect(
+      Self.summaryRule.contains(
+        "The first line says what the session needs from the user and the answer it recommends."))
+  }
+
+  @Test func theFirstLineSaysWhatIsFinishedWhenTheReplyAsksNothing() {
+    #expect(Self.summaryRule.contains("When the reply asks nothing, the first line says what is finished."))
+  }
+
+  @Test func contextComesLastInAtMostTwoLines() {
+    #expect(Self.summaryRule.contains("at most two lines of context"))
+  }
+
+  @Test func theSummaryNoLongerLeadsWithWhatTheSessionDid() {
+    #expect(!Self.summaryRule.contains("The first says what the session did."))
+    #expect(!Self.summaryRule.contains("The last says what it needs from the user"))
+  }
+
+  @Test func decisionLinesStillComeOnePerDecision() {
+    #expect(Self.summaryRule.contains("one line per decision"))
+  }
+}

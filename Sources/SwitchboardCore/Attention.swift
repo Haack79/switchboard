@@ -495,6 +495,8 @@ public struct Verdict: Equatable, Sendable {
   /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
   /// has no wait left, so it names none.
   public var overdueWaits: [String] = []
+  /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
+  public var removalFailed = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -580,7 +582,7 @@ public enum Attention {
   ) -> Verdict {
     // A failed removal comes first, because the sessions that Delete All takes are Done.
     if let removal = session.removal, removal.state == .failed {
-      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"))
+      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"), removalFailed: true)
     }
     if session.done { return Verdict(state: .done, reason: "marked done") }
     if let verdict = followupVerdict(session) { return verdict }
