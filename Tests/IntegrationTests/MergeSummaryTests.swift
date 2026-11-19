@@ -99,6 +99,11 @@ extension Instance {
     }
 
     #expect(plain(text).hasPrefix("It makes cohort results independent of child order.\n4 files"))
+    let event = try #require(try sbd.events(s.id).last { $0.kind == MergeBrief.event })
+    #expect(headlessUsage(event.data["usage"]) == stubUsage)
+    #expect(event.data["model"]?.string == "haiku")
+    let row = try sbd.waitForHeadlessUsageRow("mergeBrief", calls: 1)
+    #expect(headlessUsage(row["usage"]) == stubUsage)
     let input = try String(contentsOfFile: "\(sbd.home.path)/pr-brief-input.txt", encoding: .utf8)
     #expect(input.contains("<pr-body>"))
     #expect(input.contains("depends on child order"))
