@@ -55,11 +55,12 @@ import Testing
     try String(contentsOf: Self.readme, encoding: .utf8).components(separatedBy: "\n\n")
   }
 
-  @Test func theReadmeDescribesTheGateRightAfterTheOperatorReportsParagraph() throws {
+  /// The operator's paragraphs moved under `#### Background follow-through` at the end of The Manager (#410).
+  @Test func theReadmeDescribesTheGateRightAfterTheQuickAskParagraph() throws {
     let all = try paragraphs()
-    let reports = try #require(all.firstIndex { $0.hasPrefix("The operator tells you what it did with reports") })
+    let ask = try #require(all.firstIndex { $0.hasPrefix("`sb ask <question>` answers") })
 
-    let next = try #require(all.indices.contains(reports + 1) ? all[reports + 1] : nil)
+    let next = try #require(all.indices.contains(ask + 1) ? all[ask + 1] : nil)
 
     #expect(next.hasPrefix("A Manager conversation and the operator don't run work skills"), "\(next.prefix(120))")
   }

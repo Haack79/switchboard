@@ -210,7 +210,7 @@ public enum InboxItems: Sendable {
   /// waits on the user's next message, which the chat pane takes.
   case blockingPrompts
   /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
-  /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
+  /// replies and `sb summary set` cards never reach the Inbox, because nobody sees its chat.
   case operatorItems
 }
 

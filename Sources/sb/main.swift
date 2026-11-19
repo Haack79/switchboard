@@ -11,7 +11,8 @@ let usage = """
                                   remote, and in the groups G1 and G2, or in no
                                   group. --brief prints one line per session:
                                   its id, name, state, reason, PR, open waits,
-                                  and url
+                                  and url. The text and --brief lists leave out
+                                  the operator. --json keeps it
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -98,13 +99,19 @@ let usage = """
     operator [<text>]             open the operator, the one background Manager
                                   session that follows through on the waits that
                                   conversations hand it, creating it the first
-                                  time. With text, send it a message
+                                  time. With text, send it a message. The app
+                                  doesn't show a sidebar row for it. Its work
+                                  shows in the Loops tab's Background Activity
+                                  list, whose Transcript button opens its
+                                  transcript
     operator --log                the operator's last messages
     operator report [--needs-you] [--session S] <text>
                                   record a report. Only the operator runs it.
-                                  --needs-you puts it in the Inbox until you
-                                  answer the operator or acknowledge it. S is
-                                  the session that it is about
+                                  S is the session that it is about.
+                                  --needs-you makes it a question on S's Inbox
+                                  item, or without S, on the conversation that
+                                  handed over the work. It stays open until
+                                  you answer or acknowledge it
     operator approve <wait>       approve the merge that a "judgment needed"
                                   message asks about, after reading the
                                   session's last reply in it. Only the operator
@@ -264,7 +271,8 @@ let usage = """
     ack <session> [--undo]        acknowledge the session's Inbox item: it moves to Waiting until its
                                   reason or its PR's head commit changes or a new turn starts. Nothing
                                   else about the session changes. --undo puts it back in the Inbox.
-                                  Refuses the session that runs it
+                                  On a background follow-through question it closes the question
+                                  instead, and --undo refuses. Refuses the session that runs it
     snooze <session> [--until WHEN | --for DURATION]
                                   take the session's Inbox item out of the Inbox until WHEN (as
                                   wait --until reads it) or for DURATION, 1 hour by default. A new
