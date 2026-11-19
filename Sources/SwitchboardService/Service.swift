@@ -1819,7 +1819,7 @@ public final class Service {
   }
 
   /// Stops the claude of each session that `pick` returns on the state queue.
-  /// Then it waits off the queue up to 5 s for the Claude pane of each such
+  /// Then it waits off the queue up to `stopWaitSeconds` for the Claude pane of each such
   /// session on this Mac to die. `claudeState` reads a session as stopped only
   /// once its pane is dead, so a request that follows sees each such claude
   /// stopped, unless the pane outlived the wait. A session on a host gets no
@@ -1841,7 +1841,7 @@ public final class Service {
     }
     if !panes.isEmpty {
       let terminals = mac.terminals()
-      poll(seconds: 5) { panes.allSatisfy { terminals.isDead($0) != false } }
+      poll(seconds: config.stopWaitSeconds) { panes.allSatisfy { terminals.isDead($0) != false } }
     }
     return picked
   }

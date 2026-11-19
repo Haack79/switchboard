@@ -125,6 +125,11 @@ public struct Config: Codable, Equatable, Sendable {
   public var machineLog = false
   /// How long a request that needs a remote host waits for the host's link. Only tests change it.
   public var hostWaitSeconds: Double = 15
+  /// How long a stop waits for claude to exit after SIGTERM, and how long a pane stop then waits for the session's
+  /// processes. Only tests change it.
+  public var stopWaitSeconds: Double = 5
+  /// How long sbd waits for a gh call that requests a review or posts or lists a draft reply. Only tests change it.
+  public var reviewTimeoutSeconds: Double = 60
   /// The MCP servers that sbd runs once and shares with every session, by
   /// the name that sessions see.
   public var mcpServers: [String: MCPServer] = [:]
@@ -182,7 +187,7 @@ public struct Config: Codable, Equatable, Sendable {
   enum CodingKeys: String, CodingKey {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
-    case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
+    case testClock, machineLog, hostWaitSeconds, stopWaitSeconds, reviewTimeoutSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk, managerSkills
@@ -213,6 +218,9 @@ public struct Config: Codable, Equatable, Sendable {
     testClock = try c.decodeIfPresent(Bool.self, forKey: .testClock) ?? d.testClock
     machineLog = try c.decodeIfPresent(Bool.self, forKey: .machineLog) ?? d.machineLog
     hostWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .hostWaitSeconds) ?? d.hostWaitSeconds
+    stopWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .stopWaitSeconds) ?? d.stopWaitSeconds
+    reviewTimeoutSeconds =
+      try c.decodeIfPresent(Double.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
     // This skips a server that doesn't decode, such as a stdio one copied from
     // a Claude config. Throwing would make sbd ignore all of config.json.
     for (name, value) in try c.decodeIfPresent([String: JSON].self, forKey: .mcpServers) ?? [:] {

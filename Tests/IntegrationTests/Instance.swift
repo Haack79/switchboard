@@ -467,6 +467,11 @@ final class Instance {
     return last!
   }
 
+  /// The config.json key that makes a stop wait 2 s, in place of 5 s, for claude to exit and then for the session's
+  /// processes. A test that waits out the stop sets it. A stub claude that must outlast the first wait and exit
+  /// within a retry's wait lingers 3 s.
+  static let shortStopWait: [String: JSON] = ["stopWaitSeconds": 2]
+
   /// A CI runner has 3 CPUs, and it starts sbd, tmux, and a stub claude several times slower than a laptop does.
   /// A wait that succeeds returns at once, so only a failing wait takes longer.
   static let timeoutScale: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 3

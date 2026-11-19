@@ -83,19 +83,19 @@ extension Service {
   /// Returns once claude has exited, the Claude pane is closed, every process
   /// that `stop` recorded has exited, and no process uses the session's folder
   /// as `Processes.using` defines it. It runs off the state queue. A claude
-  /// that has not exited 5 s after SIGTERM throws, and its pane stays open, so
+  /// that has not exited `stopWaitSeconds` after SIGTERM throws, and its pane stays open, so
   /// that a later call finds it. A process that still runs or still uses the
-  /// folder 5 s after the pane closes throws. sbd does not signal those
+  /// folder `stopWaitSeconds` after the pane closes throws. sbd does not signal those
   /// processes, because the user may want to keep them.
   /// `again` is the clause, in lower case, that tells the user how to try again.
   func finishPaneStop(_ session: Session, _ stop: PaneStop, again: String) throws {
     // A process can write to the folder until it exits. `worktree remove` deletes ignored files.
     let site = self.site(for: session)
-    if let pid = stop.claudePid, try !waitForExit([pid], seconds: 5, at: site).isEmpty {
+    if let pid = stop.claudePid, try !waitForExit([pid], seconds: config.stopWaitSeconds, at: site).isEmpty {
       throw APIError("\(session.mention)'s claude has not exited. Once it has, \(again).")
     }
     try closePane(session.id, .claude, at: site)
-    let deadline = Date().addingTimeInterval(5)
+    let deadline = Date().addingTimeInterval(config.stopWaitSeconds)
     let running = try waitForExit(stop.processes, seconds: deadline.timeIntervalSinceNow, at: site)
     var users = try site.folderUsers(session.cwd).filter { !running.contains($0.pid) }
     while running.isEmpty, !users.isEmpty, Date() < deadline {
