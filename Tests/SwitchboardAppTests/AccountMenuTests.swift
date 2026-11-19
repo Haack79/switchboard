@@ -12,8 +12,9 @@ import os
     UsageLimit(kind: "weekly_scoped", label: "Week (Fable)", percent: 63.6),
   ]
 
-  func row(_ reading: AccountUsage?, active: Bool = true) -> AccountRow {
-    AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: active, sessions: 11), usage: reading)
+  func row(_ reading: AccountUsage?, active: Bool = true, sessions: Int = 11) -> AccountRow {
+    AccountRow(
+      account: AccountInfo(name: "automation", folder: "/a", active: active, sessions: sessions), usage: reading)
   }
 
   @Test func theLabelNamesTheAccountWithItsSessionAndHighestWeeklyPercent() {
@@ -69,13 +70,11 @@ import os
   }
 
   @Test func theSessionCountIsSingularForOneSession() {
-    let one = AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: true, sessions: 1), usage: nil)
-    #expect(one.sessionCount == "1 session")
+    #expect(row(nil, sessions: 1).sessionCount == "1 session")
   }
 
   @Test func theSessionCountIsNilForAnAccountWithoutSessions() {
-    let none = AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: true, sessions: 0), usage: nil)
-    #expect(none.sessionCount == nil)
+    #expect(row(nil, sessions: 0).sessionCount == nil)
   }
 }
 
