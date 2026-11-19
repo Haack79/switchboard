@@ -107,8 +107,18 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt in which <ci-log comes before any <session-reply> is
+# the CI reader's judge call. It is checked first. Each judge's prompt escapes
+# both tags in its data and names its own tag before the data, so the tag that
+# comes first names the judge. It appends the --model it
+# got as one line per call to $SB_HOME/ci-judge-calls.log, and keeps the last
+# prompt in $SB_HOME/ci-judge-input.txt. A prompt that holds FAIL-CI-JUDGE
+# makes it exit 1. Otherwise it prints $SB_HOME/ci-judge-answer.json, a
+# fixture that the test writes, or
+# {"cause":"real","message":"The tests failed."} when the file is missing, in
+# the same envelope.
 # A `claude -p` prompt that holds <session-reply> is the reply gate judge
-# call. It is checked first, because a session's reply can hold any other
+# call. It is checked next, because a session's reply can hold any other
 # tag. It appends the --model it got as one line per call to
 # $SB_HOME/judge-calls.log, and keeps the last prompt in
 # $SB_HOME/judge-input.txt. A prompt that holds FAIL-JUDGE makes it exit 1,
@@ -195,7 +205,17 @@ envelope() {
 }
 if [ "${1-}" = -p ]; then
   input=$(cat)
-  # A session's reply can hold any of the tags below, so this check comes first.
+  # Each judge's prompt names its own tag before its data, so the tag that comes first decides.
+  before_reply=${input%%"<session-reply>"*}
+  if [[ $before_reply == *"<ci-log"* ]]; then
+    model >>"$SB_HOME/ci-judge-calls.log"
+    printf '%s' "$input" >"$SB_HOME/ci-judge-input.txt"
+    [[ $input == *FAIL-CI-JUDGE* ]] && echo "CI judge failed" >&2 && exit 1
+    out=$(cat "$SB_HOME/ci-judge-answer.json" 2>/dev/null) || out='{"cause":"real","message":"The tests failed."}'
+    envelope "$out"
+    exit 0
+  fi
+  # A session's reply can hold any of the tags below, so this check comes next.
   if [[ $input == *"<session-reply>"* ]]; then
     model >>"$SB_HOME/judge-calls.log"
     printf '%s' "$input" >"$SB_HOME/judge-input.txt"

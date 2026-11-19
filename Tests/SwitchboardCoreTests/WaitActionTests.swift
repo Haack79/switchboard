@@ -761,6 +761,20 @@ extension WaitActionTests {
       #expect(!text.contains("the reply text"), Comment(rawValue: text))
     }
 
+    /// A question that is not about the action, such as failed checks, keeps the wait, so the action still runs later.
+    @Test func aQuestionThatKeepsTheWaitNeverAsksToClearIt() {
+      let wait = WaitActionTests.actionWait(.session, .merge, state: .readyToMerge)
+
+      let text = wait.judgmentMessage(
+        question: "The checks on #18303 failed again after sbd reran them", holder: Self.op, byOperator: true,
+        approvable: false, reply: nil, keepsWait: true)
+
+      #expect(!text.contains("--clear"), Comment(rawValue: text))
+      #expect(!text.contains("sb operator approve"), Comment(rawValue: text))
+      #expect(text.contains("sb operator report --needs-you"), Comment(rawValue: text))
+      #expect(text.contains("Keep the wait"), Comment(rawValue: text))
+    }
+
     /// A conversation that holds the wait can't run `sb operator report`, and `sb wait Operator` would name another
     /// session.
     @Test func aHolderThatIsNotTheOperatorIsNamedInTheClearCommand() {

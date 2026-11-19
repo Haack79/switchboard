@@ -86,6 +86,14 @@ import Testing
     #expect(Manager.operatorPrompt.contains("`needsYou`"), "\(Manager.operatorPrompt)")
   }
 
+  /// A CI judgment offers no approval but must keep the merge wait, so the clear rule yields to the message.
+  @Test func theOperatorPromptsClearRuleYieldsToAMessageThatKeepsTheWait() throws {
+    let line = try #require(
+      Manager.operatorPrompt.split(separator: "\n").first { $0.contains("offers no approval") },
+      "\(Manager.operatorPrompt)")
+    #expect(line.contains("unless the message says to keep the wait"), "\(line)")
+  }
+
   @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
     #expect(Manager.operatorPrompt.contains("ask-first rules in CLAUDE.md"), "\(Manager.operatorPrompt)")
   }

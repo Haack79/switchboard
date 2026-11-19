@@ -324,7 +324,7 @@ extension Service {
     status.retryAt = now + Int64(operatorSettings.holdRetrySeconds) * 1000
   }
 
-  private func storedWait(_ holder: String, _ id: String) -> Wait? {
+  func storedWait(_ holder: String, _ id: String) -> Wait? {
     entries[holder]?.session.waits?.first { $0.id == id }
   }
 

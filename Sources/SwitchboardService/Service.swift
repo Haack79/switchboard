@@ -130,6 +130,9 @@ public final class Service {
   var starting: Set<String> = []
   /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// The merge waits, as `holder wait`, whose CI reader runs on `followThroughQueue`. Only the state queue reads and
+  /// writes it.
+  var ciReads: Set<String> = []
   /// Runs wait actions, one at a time, off the state queue.
   let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
   /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
@@ -2653,6 +2656,7 @@ public final class Service {
       // A resolved `resume` wait and a schedule's run can launch claude.
       if !mcpStarting(now: now) {
         resolveDueWaits(now: now)
+        checkFailedCI(now: now)
         fireDueSchedules(now: now)
       }
       deferDueQuestions(now: now)

@@ -14,6 +14,29 @@ public enum Author: String, Codable, Sendable {
   }
 }
 
+/// What sbd's CI reader did about a merge action's subject whose checks failed at `head`. A new head replaces it.
+public struct CICheck: Codable, Equatable, Sendable {
+  public enum Step: String, Codable, Sendable {
+    /// A tick saw the failure at `since`. A tick at least `operator.holdRetrySeconds` later runs the reader.
+    case seen
+    /// sbd sent the session the reader's summary or asked the wait's holder. Nothing more happens at this head.
+    case judged
+    /// sbd reran the failed runs at `since`. A later failure at this head asks the wait's holder.
+    case reran
+  }
+
+  public var head: String
+  /// When the step began, on sbd's clock, in milliseconds since the epoch.
+  public var since: Int64
+  public var step: Step
+
+  public init(head: String, since: Int64, step: Step) {
+    self.head = head
+    self.since = since
+    self.step = step
+  }
+}
+
 /// Something a session waits on, and what happens when it resolves. sbd
 /// resolves the `date`, `session`, and `manual` kinds on each tick. A poller
 /// resolves the others through `Service.resolveWait`. A wait that passes its
@@ -159,6 +182,8 @@ public struct Wait: Codable, Equatable, Sendable {
   /// The session that the action acts on, for a wait whose target is not a session: the session that had the
   /// merge wait's PR open when the wait was set.
   public var subject: SessionTarget?
+  /// What sbd's CI reader did about the failed checks of a merge action's subject at one head.
+  public var ciCheck: CICheck?
 
   /// The session that the action acts on: the subject, or else the session that the wait watches.
   public var actionSubject: SessionTarget? { subject ?? session }
@@ -296,19 +321,26 @@ public struct Wait: Codable, Equatable, Sendable {
   /// whole last reply, which the approval's digest covers, in a fence that the reply can't close. A reply longer than
   /// `maxQuotedReply` is not quoted, because a cut reply would let the holder approve text it never saw. The message
   /// names `sb reply` instead. A message without a reply, or without a session to name in `sb reply`, offers no
-  /// approval.
+  /// approval. With `keepsWait`, the question is not about the action itself, so the message asks the holder to keep
+  /// the wait.
   public func judgmentMessage(
-    question: String, holder: SessionTarget, byOperator: Bool, approvable: Bool, reply: String?
+    question: String, holder: SessionTarget, byOperator: Bool, approvable: Bool, reply: String?,
+    keepsWait: Bool = false
   ) -> String {
     var text = "Switchboard: judgment needed for wait \(id) (\(summary))."
     if let handedFrom { text += " For Manager conversation \"\(handedFrom.name)\"." }
     text += " " + Wait.sentence(question)
     let about = actionSubject?.id
     let name = byOperator ? holder.name : holder.id
-    let decline =
-      (byOperator
-        ? "report with `sb operator report --needs-you\(about.map { " --session \($0)" } ?? "") <text>`"
-        : "tell the user") + ", and clear the wait with `sb wait \(name) --clear --id \(id)`."
+    let report =
+      byOperator
+      ? "report with `sb operator report --needs-you\(about.map { " --session \($0)" } ?? "") <text>`"
+      : "tell the user"
+    if keepsWait {
+      return text + " " + Triage.capitalized(report) + ", or tell the session what to fix. Keep the wait, because sbd "
+        + "still runs its action once its condition is met."
+    }
+    let decline = report + ", and clear the wait with `sb wait \(name) --clear --id \(id)`."
     let declined = " " + Triage.capitalized(decline)
     guard approvable else { return text + declined }
     guard let reply else { return text + " The session has no last reply, so don't approve." + declined }
