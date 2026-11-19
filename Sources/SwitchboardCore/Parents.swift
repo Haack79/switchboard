@@ -143,6 +143,7 @@ public enum ParentDigest {
     return parts.isEmpty ? nil : "\(sessionMention(name: name, id: id)): " + parts.joined(separator: "; ")
   }
 
+  /// `lines` holds at least one line. `Service.digest` sends nothing when no child changed.
   public static func text(_ lines: [String], elsewhere: BoardCounts) -> String {
     var out = ["Switchboard: what changed since your last turn.", "Sessions you started:"]
     out += lines.prefix(maxLines).map { "- \($0)" }
