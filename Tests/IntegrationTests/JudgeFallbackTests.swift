@@ -64,9 +64,26 @@ struct StubGate {
   func remove() { unlink(path) }
 }
 
+/// Expects the fields of a `judge` event that records one call that Fixtures/claude-stub answered with `answer`.
+/// The token measurement reads `inputTokens` and `outputTokens`, so those names are fixed.
+func expectJudgeEvent(
+  _ data: JSON, session: String, wait: String, head: String, answer: String,
+  sourceLocation: SourceLocation = #_sourceLocation
+) {
+  let comment = Comment(rawValue: data.text)
+  #expect(data["session"]?.string == session, comment, sourceLocation: sourceLocation)
+  #expect(data["wait"]?.string == wait, comment, sourceLocation: sourceLocation)
+  #expect(data["head"]?.string == head, comment, sourceLocation: sourceLocation)
+  #expect(data["model"]?.string == "sonnet", comment, sourceLocation: sourceLocation)
+  #expect(data["inputTokens"]?.int == stubUsage.input, comment, sourceLocation: sourceLocation)
+  #expect(data["outputTokens"]?.int == stubUsage.output, comment, sourceLocation: sourceLocation)
+  #expect(data["answer"]?.string == answer, comment, sourceLocation: sourceLocation)
+  #expect(data["error"] == nil, comment, sourceLocation: sourceLocation)
+}
+
 /// A merge action's question about the last reply goes to a one-shot `claude -p` judge first. `merge` merges through
 /// the approval path, `ask` records a needs-you report about the subject, and anything else sends the Operator the
-/// question that it got before the judge. Fixtures/claude-stub answers the judge from `judge-answer.json`, and
+/// question that it would get without the judge. Fixtures/claude-stub answers the judge from `judge-answer.json`, and
 /// `unsure` without one.
 ///
 /// The tests arm waits from the test runner, which counts as the user, so the Operator exists without a launch and
@@ -196,7 +213,7 @@ extension JudgeFallbackTests {
     try follow.expectNoSentToOperator(sbd)
   }
 
-  /// Stage 5's measurement reads `.data.inputTokens` and `.data.outputTokens`, so those names are fixed.
+  /// The token measurement reads `.data.inputTokens` and `.data.outputTokens`, so those names are fixed.
   @Test func aMergeAnswerRecordsAJudgeEventWithItsTokensAndModelOnTheOperator() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
@@ -208,15 +225,8 @@ extension JudgeFallbackTests {
 
     let data = event.data
     #expect(data["kind"]?.string == "reply-gate", Comment(rawValue: data.text))
-    #expect(data["session"]?.string == s.id, Comment(rawValue: data.text))
-    #expect(data["wait"]?.string == wait, Comment(rawValue: data.text))
-    #expect(data["head"]?.string == head(github), Comment(rawValue: data.text))
-    #expect(data["model"]?.string == "sonnet", Comment(rawValue: data.text))
-    #expect(data["inputTokens"]?.int == stubUsage.input, Comment(rawValue: data.text))
-    #expect(data["outputTokens"]?.int == stubUsage.output, Comment(rawValue: data.text))
+    expectJudgeEvent(data, session: s.id, wait: wait, head: head(github), answer: "merge")
     #expect(headlessUsage(data["usage"]) == stubUsage, Comment(rawValue: data.text))
-    #expect(data["answer"]?.string == "merge", Comment(rawValue: data.text))
-    #expect(data["error"] == nil, Comment(rawValue: data.text))
   }
 
   @Test func theJudgeReadsTheLastReplyThePRAndTheSession() throws {
@@ -620,7 +630,7 @@ extension JudgeFallbackTests {
     #expect(sbd.judgeInput().contains(newReply), Comment(rawValue: sbd.judgeInput()))
   }
 
-  /// Risk 6's property: sbd merges after a judge answer only at the head that the judge read. The head moves to H2
+  /// After a judge answer, sbd merges only at the head that the judge read. The head moves to H2
   /// after the first run read H1, so the judge's `merge` for H1 merges nothing, and the merge lands only after a
   /// second judge call reads H2.
   @Test func aJudgesMergeLandsOnlyAtTheHeadThatTheJudgeRead() throws {
@@ -654,7 +664,7 @@ extension JudgeFallbackTests {
     var testDescription: String { rawValue }
   }
 
-  /// Parity: the judge's `merge` and `sb operator approve` reach `gh pr merge` with the same approval, the head
+  /// The judge's `merge` and `sb operator approve` reach `gh pr merge` with the same approval, the head
   /// and the digest of the last reply. The merge gate holds `gh pr merge` while the test reads the approval that the
   /// run carries.
   @Test(arguments: ApprovalPath.allCases)

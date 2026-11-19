@@ -20,6 +20,17 @@ public enum OperatorJudge {
   /// The kind of the event that records a judge call on the Operator.
   public static let event = "judge"
 
+  /// One judge: its kind, its `claude` arguments, how it reads the output, and the word that the `judge` event
+  /// records for an answer.
+  public protocol Spec {
+    associatedtype Answer
+    static var kind: Kind { get }
+    static func arguments(model: String) -> [String]
+    static func parse(_ output: String) throws -> Answer
+    /// The `answer` field of the `judge` event.
+    static func word(_ answer: Answer) -> String
+  }
+
   /// The longest reply, in characters, that the reply gate judge reads. A longer reply goes to the Operator,
   /// because a judge that read part of a reply could approve text that it never saw.
   public static let maxReply = 20_000
@@ -31,7 +42,9 @@ public enum OperatorJudge {
   }
 
   /// Whether a merge action's question about the work session's last reply leaves anything for the user.
-  public enum ReplyGate {
+  public enum ReplyGate: Spec {
+    public static let kind = Kind.replyGate
+
     /// What the judge answered. `question` is empty unless `answer` is `ask`.
     public struct Answer: Equatable, Sendable {
       public enum Word: String, Sendable {
@@ -111,10 +124,14 @@ public enum OperatorJudge {
       if answer == .ask, line.isEmpty { throw APIError("the judge answered ask with no question") }
       return Answer(answer: answer, question: line, reason: oneLine(reason, max: TriageCard.lineLength))
     }
+
+    public static func word(_ answer: Answer) -> String { answer.answer.rawValue }
   }
 
   /// What made a merge-armed session's checks fail at one head, from the failed jobs' logs.
-  public enum CIFailure {
+  public enum CIFailure: Spec {
+    public static let kind = Kind.ciFailure
+
     /// One failed job of a GitHub Actions run, with the last lines of its failed steps' log.
     public struct Job: Equatable, Sendable {
       public var workflow: String
@@ -205,7 +222,7 @@ public enum OperatorJudge {
     /// line before it. It keeps the first `maxJobs` jobs, the last `maxLines` lines of each, and each line, without
     /// the job's name, cut to `maxLineLength` characters.
     public static func jobs(workflow: String, log: String) -> [Job] {
-      var jobs: [Job] = []
+      var jobs: [(name: String, lines: [Substring])] = []
       var current: Int?
       for line in log.split(whereSeparator: \.isNewline) {
         let text: Substring
@@ -214,17 +231,20 @@ public enum OperatorJudge {
           text = line[line.index(after: tab)...]
           current = jobs.firstIndex { $0.name == name }
           if current == nil, jobs.count < maxJobs {
-            jobs.append(Job(workflow: workflow, name: name, lines: []))
+            jobs.append((name, []))
             current = jobs.count - 1
           }
         } else {
           text = line
         }
         guard let current else { continue }
-        jobs[current].lines.append(truncated(String(text), max: maxLineLength))
-        if jobs[current].lines.count > maxLines { jobs[current].lines.removeFirst() }
+        jobs[current].lines.append(text)
       }
-      return jobs
+      return jobs.map { job in
+        Job(
+          workflow: workflow, name: job.name,
+          lines: job.lines.suffix(maxLines).map { truncated(String($0), max: maxLineLength) })
+      }
     }
 
     /// Reads the output of `claude -p --output-format json`. The message comes back on one line, at most
@@ -241,5 +261,7 @@ public enum OperatorJudge {
       if message.isEmpty { throw APIError("the CI reader's message is empty") }
       return Answer(cause: cause, message: message)
     }
+
+    public static func word(_ answer: Answer) -> String { answer.cause.rawValue }
   }
 }

@@ -30,10 +30,8 @@
 #                                   text
 #   gh run rerun <id> --repo <owner/name> ...
 #                                   run/<owner>/<name>/<id>/rerun
-# A rerun appends "<owner/name> <id>" and its flags, such as --failed, as one
-# line to $SB_HOME/gh-reruns.log, whatever the order of its arguments. It then
-# prints <key>.error to stderr and exits 1 when that file exists, and exits 0
-# otherwise.
+# A rerun prints <key>.error to stderr and exits 1 when that file exists, and
+# exits 0 otherwise.
 printf '%s\n' "$*" >>"$SB_HOME/gh-calls.log"
 
 live="$SB_HOME/gh-live"
@@ -160,7 +158,6 @@ case "$1 $2" in
   ;;
 "run rerun")
   run_args "$@"
-  printf '%s %s%s\n' "$run_repo" "$run_id" "$run_flags" >>"$SB_HOME/gh-reruns.log"
   rerun="$live/run/$run_repo/$run_id/rerun"
   if [ -f "$rerun.error" ]; then
     cat "$rerun.error" >&2

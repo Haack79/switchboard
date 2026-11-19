@@ -765,9 +765,8 @@ extension WaitActionTests {
     @Test func aQuestionThatKeepsTheWaitNeverAsksToClearIt() {
       let wait = WaitActionTests.actionWait(.session, .merge, state: .readyToMerge)
 
-      let text = wait.judgmentMessage(
-        question: "The checks on #18303 failed again after sbd reran them", holder: Self.op, byOperator: true,
-        approvable: false, reply: nil, keepsWait: true)
+      let text = wait.keepWaitMessage(
+        question: "The checks on #18303 failed again after sbd reran them", byOperator: true)
 
       #expect(!text.contains("--clear"), Comment(rawValue: text))
       #expect(!text.contains("sb operator approve"), Comment(rawValue: text))

@@ -21,12 +21,6 @@ extension Instance {
     (try? String(contentsOfFile: "\(home.path)/ci-judge-input.txt", encoding: .utf8)) ?? ""
   }
 
-  /// Each `gh run rerun` that gh-merge-stub ran, oldest first, as `<owner/name> <id>` and the call's flags.
-  func ghReruns() -> [String] {
-    let text = (try? String(contentsOfFile: "\(home.path)/gh-reruns.log", encoding: .utf8)) ?? ""
-    return text.split(separator: "\n").map(String.init)
-  }
-
   /// Makes gh-merge-stub print `runs` for `gh run list --repo <repo> --commit <head>`.
   func serveRuns(_ runs: [JSON], repo: String = MergeTests.charts, head: String) throws {
     try serveGh("run/\(repo)/commit/\(head)", .array(runs))
@@ -34,19 +28,12 @@ extension Instance {
 
   /// Makes gh-merge-stub print `log` for `gh run view <run> --repo <repo> --log-failed`.
   func serveFailedLog(_ log: String, repo: String = MergeTests.charts, run: Int) throws {
-    try writeGhLive("run/\(repo)/\(run)/log-failed.txt", log)
+    try serveGhText("run/\(repo)/\(run)/log-failed.txt", log)
   }
 
   /// Makes gh-merge-stub refuse `gh run rerun <run> --repo <repo>` with `text` on stderr.
   func ghRerunFails(repo: String = MergeTests.charts, run: Int, with text: String) throws {
-    try writeGhLive("run/\(repo)/\(run)/rerun.error", text)
-  }
-
-  private func writeGhLive(_ path: String, _ text: String) throws {
-    let file = "\(home.path)/gh-live/\(path)"
-    try FileManager.default.createDirectory(
-      atPath: (file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-    try text.write(toFile: file, atomically: true, encoding: .utf8)
+    try serveGhText("run/\(repo)/\(run)/rerun.error", text)
   }
 }
 
@@ -97,6 +84,12 @@ extension Instance {
       "\(job)\tRun bin/test\t2026-11-19T10:00:05.0000000Z \(line)",
     ].joined(separator: "\n") + "\n"
   }
+
+  /// The line that gh-merge-stub logs for sbd's `gh run rerun` of `run`.
+  static func rerunCall(_ run: Int) -> String { "run rerun \(run) --failed --repo \(charts)" }
+
+  /// The start of each `gh run rerun` line in gh-merge-stub's call log, for `ghCalls`.
+  static let reruns = "run rerun "
 
   static func operatorSettings(_ mergeRepos: [String]) -> JSON {
     ["mergeRepos": .array(mergeRepos.map(JSON.string)), "holdRetrySeconds": .number(Double(holdRetrySeconds))]
@@ -184,8 +177,8 @@ extension Instance {
     return found[count - 1]
   }
 
-  /// sbd's judgment messages to the Operator about the wait `id` that offer no approval. Stage 1's question about
-  /// the last reply offers `sb operator approve`, so it is not one of them.
+  /// sbd's judgment messages to the Operator about the wait `id` that offer no approval. The reply gate's question
+  /// about the last reply offers `sb operator approve`, so it is not one of them.
   func ciJudgments(_ sbd: Instance, _ id: String) throws -> [String] {
     try follow.operatorMessages(sbd).filter {
       $0.contains("judgment needed for wait \(id)") && !$0.contains("sb operator approve")
@@ -274,7 +267,9 @@ extension CIReaderTests {
     #expect(sbd.ciJudgeCalls().count == 1, "\(sbd.ciJudgeCalls())")
   }
 
-  @Test func aSentMessageRecordsTheHeadAsJudgedOnTheWait() throws {
+  /// A sent message records the head as judged on the wait. A `real` cause sends the Operator nothing and reruns
+  /// nothing.
+  @Test func aSentMessageRecordsTheHeadAsJudgedAndARealCauseSendsTheOperatorNothing() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let (s, wait) = try armedFailure(github, sbd)
@@ -284,19 +279,9 @@ extension CIReaderTests {
     try ciMessage(sbd, s)
     try sbd.waitFor("the judged step", timeout: 30) { try ciCheck(sbd, wait)?.step == .judged }
     #expect(try ciCheck(sbd, wait)?.head == head(github))
-  }
-
-  @Test func aRealCauseSendsTheOperatorNothingAndRerunsNothing() throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let (s, wait) = try armedFailure(github, sbd)
-    try failTwice(sbd, wait, head: head(github))
-    try ciMessage(sbd, s)
-
     try passMoreTicks(sbd)
-
     try follow.expectNoSentToOperator(sbd)
-    #expect(sbd.ghReruns().isEmpty, "\(sbd.ghReruns())")
+    #expect(sbd.ghCalls(Self.reruns).isEmpty, "\(sbd.ghCalls(Self.reruns))")
   }
 
   /// Decision 43: the reader reads the PR, the failed runs' workflow and job names, and their failed log lines.
@@ -331,7 +316,7 @@ extension CIReaderTests {
     #expect(views.allSatisfy { $0.contains("\(Self.failed)") && $0.contains("--log-failed") }, "\(views)")
   }
 
-  /// Decision 39: each judge call records a `judge` event on the Operator. Stage 5 reads `.data.inputTokens` and
+  /// Decision 39: each judge call records a `judge` event on the Operator. The token measurement reads `.data.inputTokens` and
   /// `.data.outputTokens`.
   @Test func aReaderCallRecordsACIFailureJudgeEventOnTheOperator() throws {
     let github = try FakeGitHub()
@@ -345,15 +330,7 @@ extension CIReaderTests {
       events = try ciJudgeEvents(sbd)
       return !events.isEmpty
     }
-    let data = events[0].data
-    #expect(data["session"]?.string == s.id, Comment(rawValue: data.text))
-    #expect(data["wait"]?.string == wait, Comment(rawValue: data.text))
-    #expect(data["head"]?.string == head(github), Comment(rawValue: data.text))
-    #expect(data["model"]?.string == "sonnet", Comment(rawValue: data.text))
-    #expect(data["inputTokens"]?.int == stubUsage.input, Comment(rawValue: data.text))
-    #expect(data["outputTokens"]?.int == stubUsage.output, Comment(rawValue: data.text))
-    #expect(data["answer"]?.string == "real", Comment(rawValue: data.text))
-    #expect(data["error"] == nil, Comment(rawValue: data.text))
+    expectJudgeEvent(events[0].data, session: s.id, wait: wait, head: head(github), answer: "real")
   }
 
   @Test func aReaderCallShowsInHeadlessUsageAsCIFailure() throws {
@@ -503,20 +480,16 @@ extension CIReaderTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let (s, wait) = try armedFailure(github, sbd)
-    let gate = "\(sbd.home.path)/gh-live/run/\(Self.charts)/commit/\(head(github)).gate"
-    guard mkfifo(gate, 0o600) == 0 else { throw TestError(description: "mkfifo failed") }
+    let gate = try StubGate("\(sbd.home.path)/gh-live/run/\(Self.charts)/commit/\(head(github)).gate")
+    defer { gate.remove() }
     try failTwice(sbd, wait, head: head(github))
     try sbd.waitFor("the held run list", timeout: 30) { !sbd.ghCalls("run list ").isEmpty }
 
     let pushed = FakeGitHub.sha(18_400)
     github.change(Self.number) { $0["headRefOid"] = .string(pushed) }
     try sbd.poll(all: true)
-    let writer = open(gate, O_WRONLY | O_NONBLOCK)
-    if writer >= 0 {
-      _ = "go\n".withCString { write(writer, $0, 3) }
-      close(writer)
-    }
-    unlink(gate)
+    try gate.pass()
+    gate.remove()
 
     try sbd.waitFor("the CI judge event", timeout: 30) { try !ciJudgeEvents(sbd).isEmpty }
     try sbd.waitFor("the new head seen", timeout: 30) {
@@ -567,7 +540,7 @@ extension CIReaderTests {
   }
 
   func waitForReruns(_ sbd: Instance, _ count: Int) throws {
-    try sbd.waitFor("rerun \(count)", timeout: 30) { sbd.ghReruns().count >= count }
+    try sbd.waitFor("rerun \(count)", timeout: 30) { sbd.ghCalls(Self.reruns).count >= count }
   }
 
   /// `armedFlake`, the reruns, then the checks running again and failing again at the same head.
@@ -587,70 +560,40 @@ extension CIReaderTests {
     return (s, wait)
   }
 
-  /// Decision 43: `flake` reruns each failed run with `--failed`, and not the run that passed.
-  @Test func aFlakeRerunsEachFailedRunOnce() throws {
+  /// Decision 43: `flake` reruns each failed run once with `--failed`, and not the run that passed. It records the
+  /// rerun on the wait and sends the session and the Operator nothing.
+  @Test func aFlakeRerunsEachFailedRunOnceAndSendsNothing() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
-    let (_, wait) = try armedFlake(github, sbd)
-
-    try failTwice(sbd, wait, head: head(github))
-
-    try waitForReruns(sbd, 2)
-    try passMoreTicks(sbd)
-    #expect(
-      sbd.ghReruns().sorted() == ["\(Self.charts) 501 --failed", "\(Self.charts) 502 --failed"], "\(sbd.ghReruns())")
-  }
-
-  @Test func aFlakeRecordsTheRerunOnTheWait() throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let (_, wait) = try armedFlake(github, sbd)
+    let (s, wait) = try armedFlake(github, sbd)
 
     try failTwice(sbd, wait, head: head(github))
 
     try waitForReruns(sbd, 2)
     try sbd.waitFor("the reran step", timeout: 30) { try ciCheck(sbd, wait)?.step == .reran }
     #expect(try ciCheck(sbd, wait)?.head == head(github))
-  }
-
-  @Test func aFlakeSendsTheSessionAndTheOperatorNothing() throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let (s, wait) = try armedFlake(github, sbd)
-    try failTwice(sbd, wait, head: head(github))
-    try waitForReruns(sbd, 2)
-
     try passMoreTicks(sbd)
-
+    let reruns = sbd.ghCalls(Self.reruns)
+    #expect(reruns.sorted() == [Self.rerunCall(Self.failed), Self.rerunCall(502)], "\(reruns)")
     let messages = try ciMessages(sbd, s)
     #expect(messages.isEmpty, "\(messages)")
     try follow.expectNoSentToOperator(sbd)
   }
 
-  /// Decision 43: a second failure at the head after the rerun raises one judgment message to the Operator.
-  @Test func aSecondFailureAfterTheRerunRaisesOneOperatorJudgment() throws {
+  /// Decision 43: a second failure at the head after the rerun raises one judgment message to the Operator. The wait
+  /// stores the rerun, so each head reruns once. The pending rollup between the two failures must not clear that
+  /// record.
+  @Test func aSecondFailureAfterTheRerunRaisesOneOperatorJudgmentAndRerunsNothingMore() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
-    let (_, wait) = try rerunThenFailAgain(github, sbd)
+    let (s, wait) = try rerunThenFailAgain(github, sbd)
 
     try ciJudgment(sbd, wait)
 
     try passMoreTicks(sbd)
     let judgments = try ciJudgments(sbd, wait)
     #expect(judgments.count == 1, "\(judgments)")
-  }
-
-  /// Risk "a rerun loop": one rerun per head, stored on the wait. The pending rollup between the two failures must
-  /// not clear it.
-  @Test func aSecondFailureAfterTheRerunRerunsNothingMore() throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let (s, wait) = try rerunThenFailAgain(github, sbd)
-    try ciJudgment(sbd, wait)
-
-    try passMoreTicks(sbd)
-
-    #expect(sbd.ghReruns().count == 2, "\(sbd.ghReruns())")
+    #expect(sbd.ghCalls(Self.reruns).count == 2, "\(sbd.ghCalls(Self.reruns))")
     #expect(sbd.ciJudgeCalls().count == 1, "\(sbd.ciJudgeCalls())")
     let messages = try ciMessages(sbd, s)
     #expect(messages.isEmpty, "\(messages)")
@@ -675,7 +618,7 @@ extension CIReaderTests {
     #expect(judgments.isEmpty, "\(judgments)")
     let messages = try ciMessages(sbd, s)
     #expect(messages.isEmpty, "\(messages)")
-    #expect(sbd.ghReruns().count == 2, "\(sbd.ghReruns())")
+    #expect(sbd.ghCalls(Self.reruns).count == 2, "\(sbd.ghCalls(Self.reruns))")
   }
 }
 
@@ -719,12 +662,13 @@ extension CIReaderTests {
     }
   }
 
-  /// Decision 43: no failed run, a failed read, a judge failure, or a refused rerun raises one judgment message.
+  /// Decision 43: no failed run, a failed read, a judge failure, or a refused rerun raises one judgment message, and
+  /// sends the session nothing.
   @Test(arguments: Undecided.allCases)
-  func aReaderThatCannotDecideRaisesOneOperatorJudgment(_ undecided: Undecided) throws {
+  func aReaderThatCannotDecideRaisesOneOperatorJudgmentAndSendsTheSessionNothing(_ undecided: Undecided) throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
-    let (_, wait) = try armedUndecided(undecided, github, sbd)
+    let (s, wait) = try armedUndecided(undecided, github, sbd)
     try failTwice(sbd, wait, head: head(github))
 
     try ciJudgment(sbd, wait)
@@ -732,18 +676,6 @@ extension CIReaderTests {
     try passMoreTicks(sbd)
     let judgments = try ciJudgments(sbd, wait)
     #expect(judgments.count == 1, "\(judgments)")
-  }
-
-  @Test(arguments: Undecided.allCases)
-  func aReaderThatCannotDecideSendsTheSessionNothing(_ undecided: Undecided) throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let (s, wait) = try armedUndecided(undecided, github, sbd)
-    try failTwice(sbd, wait, head: head(github))
-    try ciJudgment(sbd, wait)
-
-    try passMoreTicks(sbd)
-
     let messages = try ciMessages(sbd, s)
     #expect(messages.isEmpty, "\(messages)")
     #expect(sbd.ciJudgeCalls().count == undecided.judgeCalls, "\(sbd.ciJudgeCalls())")
@@ -812,7 +744,7 @@ extension CIReaderTests {
     #expect(try operatorsWait(sbd, wait)?.actionStatus == before)
   }
 
-  /// Success criterion: a subject whose checks pass later still merges through Stage 1's path.
+  /// A subject whose checks pass later still merges through the reply gate's path.
   @Test func aSubjectWhoseChecksPassLaterStillMerges() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)

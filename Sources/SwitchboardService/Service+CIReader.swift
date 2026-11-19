@@ -16,7 +16,10 @@ extension Service {
     var title: String
     var head: String
 
-    var key: String { "\(holder) \(wait)" }
+    var key: String { Self.key(holder: holder, wait: wait) }
+
+    /// The key of the wait `wait` of `holder` in `ciReads`.
+    static func key(holder: String, wait: String) -> String { "\(holder) \(wait)" }
 
     /// The question to the holder about the failed checks, for `reason`.
     func question(_ reason: String) -> String {
@@ -35,26 +38,25 @@ extension Service {
   }
 
   /// Moves the CI state of each merge action wait on from its subject's facts, and starts the reader on
-  /// `followThroughQueue` for a failure that two ticks at least `operator.holdRetrySeconds` apart saw at one head.
+  /// `ciReaderQueue` for a failure that two ticks at least `operator.holdRetrySeconds` apart saw at one head.
   ///
   /// It looks at a wait whose action is not running, whose subject has an open PR in `operator.mergeRepos` with
   /// failed checks, and whose subject's turn does not run and has no message on its way. A wait that no longer
   /// qualifies forgets a failure that it only saw, so pending checks or a turn start the count again. It runs no
   /// gh. `tick` calls it after `resolveDueWaits`. It runs on the state queue.
   func checkFailedCI(now: Int64) {
-    var settings: OperatorSettings?
-    func operatorSettingsOnce() -> OperatorSettings {
-      if let settings { return settings }
-      let read = operatorSettings
-      settings = read
-      return read
-    }
+    lazy var settings = self.operatorSettings
     for holder in entries.keys.sorted() {
       for wait in entries[holder]?.session.waits ?? [] where wait.action?.kind == .merge {
-        guard !ciReads.contains("\(holder) \(wait.id)") else { continue }
+        guard !ciReads.contains(CIRead.key(holder: holder, wait: wait.id)) else { continue }
+        // Nothing more happens at a head that the reader judged, so the wait needs no read of the settings.
+        if let check = wait.ciCheck, check.step == .judged,
+          check.head == wait.actionSubject.flatMap({ entries[$0.id]?.facts.pr?.headSha })
+        {
+          continue
+        }
         guard wait.actionStatus?.kind != .running, let subject = wait.actionSubject?.id, let e = entries[subject],
-          let pr = e.facts.pr, pr.state == .open, pr.checksFailed, !turnRuns(e),
-          operatorSettingsOnce().mergesIn(pr.repo)
+          let pr = e.facts.pr, pr.state == .open, pr.checksFailed, !turnRuns(e), settings.mergesIn(pr.repo)
         else {
           if wait.ciCheck?.step == .seen { setCICheck(holder, wait.id, nil) }
           continue
@@ -63,7 +65,7 @@ extension Service {
           setCICheck(holder, wait.id, CICheck(head: pr.headSha, since: now, step: .seen))
           continue
         }
-        let window = Int64(operatorSettingsOnce().holdRetrySeconds) * 1000
+        let window = Int64(settings.holdRetrySeconds) * 1000
         let read = CIRead(
           holder: holder, wait: wait.id, subject: subject, name: e.session.name, repo: pr.repo, number: pr.number,
           title: pr.title, head: pr.headSha)
@@ -73,7 +75,7 @@ extension Service {
         case .seen:
           guard now - check.since >= window else { continue }
           ciReads.insert(read.key)
-          followThroughQueue.async { [self] in readCI(read) }
+          ciReaderQueue.async { [self] in readCI(read) }
         case .reran:
           // The rerun's checks moved the subject out of its failing state, so a failing state that began after the
           // rerun is a second failure.
@@ -88,23 +90,25 @@ extension Service {
   }
 
   /// Reads the failed runs at the head, asks the judge, and sends, reruns, or asks the holder. A result for a head,
-  /// a wait, or checks that changed during the reads is dropped. It runs on `followThroughQueue`.
+  /// a wait, or checks that changed during the reads is dropped. It runs on `ciReaderQueue`.
   private func readCI(_ read: CIRead) {
     let verdict = ciVerdict(read)
-    guard case .rerun(let runs) = verdict else {
-      return queue.sync {
+    switch verdict {
+    case .tell, .ask:
+      queue.sync {
         ciReads.remove(read.key)
         guard ciCurrent(read) else { return }
-        switch verdict {
-        case .tell(let message):
-          tellAboutCI(read, message)
-        case .ask(let reason):
-          askAboutCI(read, reason)
-        case .rerun:
-          break
-        }
+        if case .tell(let message) = verdict { tellAboutCI(read, message) }
+        if case .ask(let reason) = verdict { askAboutCI(read, reason) }
       }
+    case .rerun(let runs):
+      rerunCI(read, runs)
     }
+  }
+
+  /// Records the head as rerun, then reruns the failed jobs of `runs` and asks the holder when gh refuses one. It
+  /// runs on `ciReaderQueue`.
+  private func rerunCI(_ read: CIRead, _ runs: [Int]) {
     // The step is stored before the reruns, so a restart during them never reruns the head again.
     let current = queue.sync {
       guard ciCurrent(read) else {
@@ -117,11 +121,8 @@ extension Service {
     guard current else { return }
     var refusal: String?
     for run in runs {
-      do {
-        _ = try runGh(["run", "rerun", String(run), "--failed", "--repo", read.repo], timeout: 30)
-      } catch {
-        refusal =
-          "gh refused to rerun the failed jobs of run \(run): \(oneLine("\(error)", max: TriageCard.lineLength))"
+      if let error = ghError(["run", "rerun", String(run), "--failed", "--repo", read.repo], timeout: 30) {
+        refusal = "gh refused to rerun the failed jobs of run \(run): \(oneLine(error, max: TriageCard.lineLength))"
         break
       }
     }
@@ -131,7 +132,7 @@ extension Service {
     }
   }
 
-  /// Lists the runs at the head, reads the failed runs' logs, and asks the judge. It runs on `followThroughQueue`.
+  /// Lists the runs at the head, reads the failed runs' logs, and asks the judge. It runs on `ciReaderQueue`.
   private func ciVerdict(_ read: CIRead) -> CIVerdict {
     let list: [JSON]
     do {
@@ -167,9 +168,7 @@ extension Service {
     let input = OperatorJudge.CIFailure.input(
       repo: read.repo, number: read.number, title: read.title, head: read.head, jobs: jobs)
     let result = judge(
-      .ciFailure, session: read.subject, wait: read.wait, head: read.head, input: input,
-      arguments: OperatorJudge.CIFailure.arguments(model:), parse: OperatorJudge.CIFailure.parse,
-      answer: \.cause.rawValue)
+      OperatorJudge.CIFailure.self, session: read.subject, wait: read.wait, head: read.head, input: input)
     switch result {
     case nil:
       return .ask("sbd's CI reader did not run")
@@ -212,9 +211,7 @@ extension Service {
   private func askAboutCI(_ read: CIRead, _ reason: String) {
     guard let wait = storedWait(read.holder, read.wait), let session = entries[read.holder]?.session else { return }
     setCICheck(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .judged))
-    let text = wait.judgmentMessage(
-      question: read.question(reason), holder: Wait.SessionTarget(id: read.holder, name: session.name),
-      byOperator: session.kind == .operator, approvable: false, reply: nil, keepsWait: true)
+    let text = wait.keepWaitMessage(question: read.question(reason), byOperator: session.kind == .operator)
     do {
       _ = try send(read.holder, text, by: .sbd, trigger: .wait)
     } catch {
@@ -225,14 +222,7 @@ extension Service {
   /// Stores `check` as the CI state of the wait, and changes nothing else on it. It runs on the state queue.
   private func setCICheck(_ holder: String, _ waitId: String, _ check: CICheck?) {
     do {
-      try update(holder) {
-        $0.waits = $0.waits?.map { w in
-          guard w.id == waitId else { return w }
-          var w = w
-          w.ciCheck = check
-          return w
-        }
-      }
+      try updateWait(holder, waitId) { $0.ciCheck = check }
     } catch {
       logLine("can't record the CI state of wait \(waitId) of \(holder): \(error)")
     }

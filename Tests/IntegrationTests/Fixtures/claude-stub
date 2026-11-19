@@ -126,7 +126,7 @@
 # $SB_HOME/judge-answer.json, a fixture that the test writes, or
 # {"answer":"unsure","question":"","reason":"stub"} when the file is missing,
 # in the same envelope. The default answer sends every merge question to the
-# Operator, as before the judge.
+# Operator, as it does without the judge.
 # A `claude -p` prompt that holds <skill-file> is the skill classification
 # call. It is checked next, because a skill file can hold any tag below. It
 # writes each argument with a NUL after it to $SB_HOME/skill-classify-args,

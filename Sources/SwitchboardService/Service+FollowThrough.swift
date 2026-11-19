@@ -82,11 +82,16 @@ extension Service {
   }
 
   private func setActionStatus(_ holder: String, _ waitId: String, _ status: ActionStatus?) throws {
+    try updateWait(holder, waitId) { $0.actionStatus = status }
+  }
+
+  /// Applies `change` to the stored wait `waitId` of `holder`, and changes nothing else. It runs on the state queue.
+  func updateWait(_ holder: String, _ waitId: String, _ change: (inout Wait) -> Void) throws {
     try update(holder) {
       $0.waits = $0.waits?.map { w in
         guard w.id == waitId else { return w }
         var w = w
-        w.actionStatus = status
+        change(&w)
         return w
       }
     }
@@ -141,11 +146,11 @@ extension Service {
         if status.subjectSince == nil {
           finish(holder, waitId, toHolder)
         } else {
-          parkAsk(holder, waitId, status, approval, since: subjectSince(of: wait))
+          parkAsk(holder, waitId, status, since: subjectSince(of: wait))
         }
         return nil
       }
-      guard reply.count <= OperatorJudge.maxReply, MergeGuard.replyDigest(reply) == approval.replyDigest else {
+      guard reply.count <= OperatorJudge.maxReply else {
         finish(holder, waitId, toHolder)
         return nil
       }
@@ -155,9 +160,7 @@ extension Service {
     }
     guard let call else { return }
     let result = judge(
-      .replyGate, session: call.subject, wait: waitId, head: approval.head, input: call.input,
-      arguments: OperatorJudge.ReplyGate.arguments(model:), parse: OperatorJudge.ReplyGate.parse,
-      answer: \.answer.rawValue)
+      OperatorJudge.ReplyGate.self, session: call.subject, wait: waitId, head: approval.head, input: call.input)
     queue.sync {
       guard let result else { return finish(holder, waitId, toHolder) }
       guard var wait = storedWait(holder, waitId), var status = wait.actionStatus, status.kind == .running else {
@@ -174,7 +177,7 @@ extension Service {
           let about = entries[call.subject] == nil ? nil : call.subject
           try recordReport(answer.question, needsYou: true, about: about, on: try ensureOperator(), wait: waitId)
           status.reason = answer.question
-          parkAsk(holder, waitId, status, approval, since: call.since)
+          parkAsk(holder, waitId, status, since: call.since)
         case .success(let answer):
           try setActionStatus(holder, waitId, status)
           let because = answer.reason.isEmpty ? "" : " sbd's reply judge was unsure: " + Wait.sentence(answer.reason)
@@ -191,18 +194,15 @@ extension Service {
     }
   }
 
-  /// Parks the action after the judge's `ask` for `approval`, with no message to the holder. `since` is the
-  /// subject's state when the judge read the reply, so the next change of state runs the checks again. It runs on
-  /// the state queue.
-  private func parkAsk(
-    _ holder: String, _ waitId: String, _ status: ActionStatus, _ approval: MergeGuard.Approval, since: Int64?
-  ) {
+  /// Parks the action after the judge's `ask` for the pair in `status.judged`, with no message to the holder.
+  /// `since` is the subject's state when the judge read the reply, so the next change of state runs the checks
+  /// again. It runs on the state queue.
+  private func parkAsk(_ holder: String, _ waitId: String, _ status: ActionStatus, since: Int64?) {
     var status = status
     status.kind = .awaitingJudgment
     status.since = nowMs()
     status.retryAt = nil
-    status.asked = approval
-    status.judged = approval
+    status.asked = status.judged
     status.subjectSince = since
     do {
       try setActionStatus(holder, waitId, status)
