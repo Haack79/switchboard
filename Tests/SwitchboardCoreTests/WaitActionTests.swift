@@ -345,6 +345,7 @@ extension WaitActionTests {
       status.subjectSince = 4
       status.asked = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.approval = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
+      status.judged = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.messageKey = "a@b"
       let wait = WaitActionTests.storedWait(action: WaitAction(kind: .merge), status: status)
 
@@ -758,6 +759,19 @@ extension WaitActionTests {
 
       #expect(!text.contains("sb operator approve"), Comment(rawValue: text))
       #expect(!text.contains("the reply text"), Comment(rawValue: text))
+    }
+
+    /// A question that is not about the action, such as failed checks, keeps the wait, so the action still runs later.
+    @Test func aQuestionThatKeepsTheWaitNeverAsksToClearIt() {
+      let wait = WaitActionTests.actionWait(.session, .merge, state: .readyToMerge)
+
+      let text = wait.keepWaitMessage(
+        question: "The checks on #18303 failed again after sbd reran them", byOperator: true)
+
+      #expect(!text.contains("--clear"), Comment(rawValue: text))
+      #expect(!text.contains("sb operator approve"), Comment(rawValue: text))
+      #expect(text.contains("sb operator report --needs-you"), Comment(rawValue: text))
+      #expect(text.contains("Keep the wait"), Comment(rawValue: text))
     }
 
     /// A conversation that holds the wait can't run `sb operator report`, and `sb wait Operator` would name another

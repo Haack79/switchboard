@@ -131,6 +131,9 @@ public final class Service {
   var starting: Set<String> = []
   /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// The merge waits, as `holder wait`, whose CI reader runs on `ciReaderQueue`. Only the state queue reads and
+  /// writes it.
+  var ciReads: Set<String> = []
   /// Runs wait actions, one at a time, off the state queue.
   let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
   /// Runs top-ups, one at a time, off the state queue.
@@ -140,6 +143,9 @@ public final class Service {
   /// The operator settings that `operatorSettings` last read, with config.json's modification date at that read.
   /// The lock guards it, because the follow-through and top-up queues read the settings too.
   let operatorSettingsRead = OSAllocatedUnfairLock<(stamp: Date?, settings: OperatorSettings)?>(initialState: nil)
+  /// Runs the CI reader, one read at a time, off the state queue. A judge call there never delays a due merge on
+  /// `followThroughQueue`.
+  let ciReaderQueue = DispatchQueue(label: "sbd.ci-reader")
   /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
   /// `loadSbdMerges` rebuilds it at startup.
   var lastSbdMerges: [String: SbdMergeRecord] = [:]
@@ -2716,6 +2722,7 @@ public final class Service {
       // A resolved `resume` wait and a schedule's run can launch claude.
       if !mcpStarting(now: now) {
         resolveDueWaits(now: now)
+        checkFailedCI(now: now)
         fireDueSchedules(now: now)
       }
       armTopupMerges()

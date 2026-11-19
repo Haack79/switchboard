@@ -107,8 +107,28 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt in which <ci-log comes before any <session-reply> is
+# the CI reader's judge call. It is checked first. Each judge's prompt escapes
+# both tags in its data and names its own tag before the data, so the tag that
+# comes first names the judge. It appends the --model it
+# got as one line per call to $SB_HOME/ci-judge-calls.log, and keeps the last
+# prompt in $SB_HOME/ci-judge-input.txt. A prompt that holds FAIL-CI-JUDGE
+# makes it exit 1. Otherwise it prints $SB_HOME/ci-judge-answer.json, a
+# fixture that the test writes, or
+# {"cause":"real","message":"The tests failed."} when the file is missing, in
+# the same envelope.
+# A `claude -p` prompt that holds <session-reply> is the reply gate judge
+# call. It is checked next, because a session's reply can hold any other
+# tag. It appends the --model it got as one line per call to
+# $SB_HOME/judge-calls.log, and keeps the last prompt in
+# $SB_HOME/judge-input.txt. A prompt that holds FAIL-JUDGE makes it exit 1,
+# and SLOW-JUDGE makes it exec sleep 30. Otherwise it prints
+# $SB_HOME/judge-answer.json, a fixture that the test writes, or
+# {"answer":"unsure","question":"","reason":"stub"} when the file is missing,
+# in the same envelope. The default answer sends every merge question to the
+# Operator, as it does without the judge.
 # A `claude -p` prompt that holds <skill-file> is the skill classification
-# call. It is checked first, because a skill file can hold any other tag. It
+# call. It is checked next, because a skill file can hold any tag below. It
 # writes each argument with a NUL after it to $SB_HOME/skill-classify-args,
 # replacing that file, and writes $CLAUDE_CONFIG_DIR, or nothing when that
 # variable is unset, to $SB_HOME/skill-classify-account. It appends the
@@ -179,17 +199,43 @@
 args=("$@")
 # Prints the JSON that claude -p --output-format json prints for the structured output $1, with fixed token counts
 # under the model that --model named, as claude reports them.
-envelope() {
+# Prints the --model that the call got, or haiku without one.
+model() {
   local model=haiku i
   for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --model ] && model=${args[i + 1]}; done
-  jq -nc --argjson o "$1" --arg m "$model" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson),
+  echo "$model"
+}
+envelope() {
+  jq -nc --argjson o "$1" --arg m "$(model)" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson),
     structured_output: $o, usage: {input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 300,
     cache_creation_input_tokens: 40}, modelUsage: {($m): {inputTokens: 100, outputTokens: 20,
     cacheReadInputTokens: 300, cacheCreationInputTokens: 40}}}'
 }
 if [ "${1-}" = -p ]; then
   input=$(cat)
-  # A skill file can hold any of the tags below, so this check comes first.
+  # Each judge's prompt names its own tag before its data, so the tag that comes first decides.
+  before_reply=${input%%"<session-reply>"*}
+  if [[ $before_reply == *"<ci-log"* ]]; then
+    model >>"$SB_HOME/ci-judge-calls.log"
+    printf '%s' "$input" >"$SB_HOME/ci-judge-input.txt"
+    [[ $input == *FAIL-CI-JUDGE* ]] && echo "CI judge failed" >&2 && exit 1
+    out=$(cat "$SB_HOME/ci-judge-answer.json" 2>/dev/null) || out='{"cause":"real","message":"The tests failed."}'
+    envelope "$out"
+    exit 0
+  fi
+  # A session's reply can hold any of the tags below, so this check comes next.
+  if [[ $input == *"<session-reply>"* ]]; then
+    model >>"$SB_HOME/judge-calls.log"
+    printf '%s' "$input" >"$SB_HOME/judge-input.txt"
+    case $input in
+    *FAIL-JUDGE*) echo "judge failed" >&2 && exit 1 ;;
+    *SLOW-JUDGE*) exec sleep 30 ;;
+    esac
+    out=$(cat "$SB_HOME/judge-answer.json" 2>/dev/null) || out='{"answer":"unsure","question":"","reason":"stub"}'
+    envelope "$out"
+    exit 0
+  fi
+  # A skill file can hold any of the tags below, so this check comes next.
   if [[ $input == *"<skill-file>"* ]]; then
     printf '%s\0' "$@" >"$SB_HOME/skill-classify-args"
     printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/skill-classify-account"
