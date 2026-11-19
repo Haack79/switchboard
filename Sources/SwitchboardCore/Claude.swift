@@ -372,6 +372,22 @@ public enum Transcript {
     return true
   }
 
+  /// The input context of the main conversation's latest API call since the last compaction, or nil when there
+  /// is none. Claude Code writes a synthetic assistant line for an API error, which no call produced.
+  public static func contextTokens(_ path: String, on machine: any Machine) -> Int? {
+    var tokens: Int?
+    eachLineFromEnd(path, on: machine) { data in
+      guard let line = TranscriptLine(data) else { return false }
+      if line.type == "system", line.subtype == "compact_boundary" { return true }
+      guard line.type == "assistant", line.isMainConversation, line.model != "<synthetic>",
+        let sum = line.contextTokens, sum > 0
+      else { return false }
+      tokens = sum
+      return true
+    }
+    return tokens
+  }
+
   /// A user or assistant line of the main conversation that has text. A
   /// user line that holds only tool results has none.
   static func message(_ line: Data) -> ChatMessage? {
@@ -406,6 +422,7 @@ struct TranscriptLine {
   }
 
   let type: String?
+  let subtype: String?
   let isSidechain: Bool
   /// A line of the main conversation that a chat shows. Sidechains hold
   /// subagents. A meta line is one that claude adds, such as a command's
@@ -416,15 +433,28 @@ struct TranscriptLine {
   /// The message's text and tool_use blocks in order. A string content is
   /// one text block. Other block types, such as thinking, are left out.
   let blocks: [Block]
+  let model: String?
+  /// The input tokens of the API call that wrote the line, or nil when the line has no usage. The nested
+  /// `iterations` and `cache_creation` repeat these numbers, so the sum leaves them out.
+  let contextTokens: Int?
 
   init?(_ line: Data) {
     guard let object = try? JSONCoding.decoder.decode(JSON.self, from: line) else { return nil }
     type = object["type"]?.string
+    subtype = object["subtype"]?.string
     isSidechain = object["isSidechain"]?.bool == true
     isMainConversation =
       !isSidechain
       && !["isMeta", "isCompactSummary", "isVisibleInTranscriptOnly"].contains { object[$0]?.bool == true }
     rawTimestamp = object["timestamp"]?.string
+    model = object["message"]?["model"]?.string
+    // A sum of Doubles turns a number too large for Int into nil instead of an overflow.
+    contextTokens = object["message"]?["usage"]?.object.flatMap { usage in
+      Int(
+        exactly: ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].reduce(0.0) {
+          $0 + (usage[$1]?.double ?? 0)
+        })
+    }
     let content = object["message"]?["content"]
     blocks =
       content?.string.map { [.text($0)] }

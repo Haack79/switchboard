@@ -1336,3 +1336,58 @@ extension TriageOperatorTests {
     }
   }
 }
+
+/// `SessionFacts.contextTokens`, the input context of a Manager conversation's latest turn. sbd records a `context`
+/// event after each turn, and a `/clear` or a compaction starts a context that the old value doesn't describe.
+@Suite struct ConversationContextFoldTests {
+  @Test func noContextEventLeavesTheTokensUnset() {
+    #expect(facts([event("SessionStart", 0), event("Stop", 1)]).contextTokens == nil)
+  }
+
+  @Test func aContextEventSetsTheTokens() {
+    let f = facts([event("Stop", 1), event("context", 2, ["tokens": 250_000])])
+
+    #expect(f.contextTokens == 250_000)
+  }
+
+  @Test func aLaterContextEventReplacesTheTokens() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("context", 4, ["tokens": 90_000])])
+
+    #expect(f.contextTokens == 90_000)
+  }
+
+  /// sbd records null when a read finds no value while one is stored, as after a compaction without a turn since.
+  @Test func aContextEventWithNullTokensClearsThem() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("context", 4, ["tokens": .null])])
+
+    #expect(f.contextTokens == nil)
+  }
+
+  @Test func aContextEventLeavesTheLastActivity() {
+    let f = facts([event("Stop", 1), event("context", 500, ["tokens": 250_000])])
+
+    #expect(f.lastActivity == 1)
+  }
+
+  @Test(arguments: ["clear", "compact"])
+  func aSessionStartOfANewContextClearsTheTokens(_ source: String) {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": .string(source)])])
+
+    #expect(f.contextTokens == nil)
+  }
+
+  @Test func aSessionStartThatResumesKeepsTheTokens() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": "resume"])])
+
+    #expect(f.contextTokens == 250_000)
+  }
+
+  @Test func aContextEventAfterAClearSetsTheTokensAgain() {
+    let f = facts([
+      event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": "clear"]),
+      event("context", 5, ["tokens": 12_000]),
+    ])
+
+    #expect(f.contextTokens == 12_000)
+  }
+}

@@ -53,8 +53,9 @@ extension Service {
 
   /// Sets the summary fields that only a Manager conversation has. `summary`
   /// calls it after every other field is set.
-  func addConversationFields(to out: inout SessionSummary, _ s: Session) {
+  func addConversationFields(to out: inout SessionSummary, _ s: Session, _ facts: SessionFacts) {
     out.pinned = s.pinned
+    out.contextTokens = facts.contextTokens
     // Last, because the archive rule reads the rest of the summary.
     if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
   }

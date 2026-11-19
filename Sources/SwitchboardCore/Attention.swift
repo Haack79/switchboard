@@ -197,6 +197,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
   /// is open, because a new report clears it.
   public var acknowledgedReports: [OperatorReport] = []
+  /// The input context of a Manager conversation's latest turn, from its `context` events. Nil since a `/clear`
+  /// or a compaction until the next turn's read.
+  public var contextTokens: Int?
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -233,6 +236,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     let touchedBefore = lastTouched
     applyWait(event, userPrompt: userPrompt)
     applyArtifact(event)
+    applyConversation(event)
     // A subagent's tool calls don't change what the main session waits on.
     let fromSubagent = event.fromSubagent
     let tool = d["tool_name"]?.string ?? ""
@@ -797,5 +801,19 @@ public enum Attention {
   static func minutes(_ ms: Int64) -> String {
     let m = max(0, ms) / 60_000
     return m < 1 ? "<1 min" : "\(m) min"
+  }
+}
+
+extension SessionFacts {
+  /// Folds the facts that only a Manager conversation shows.
+  mutating func applyConversation(_ event: Event) {
+    switch event.kind {
+    case "context":
+      contextTokens = event.data["tokens"]?.int
+    case "SessionStart" where ["clear", "compact"].contains(event.data["source"]?.string):
+      contextTokens = nil
+    default:
+      break
+    }
   }
 }

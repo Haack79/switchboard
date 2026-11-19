@@ -875,6 +875,7 @@ public final class Service {
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
+      if session.kind == .manager { recordContext(id) }
     case "Notification" where payload["notification_type"]?.string == "idle_prompt":
       deliverPending(id, after: 0.5)
     default:
@@ -2686,7 +2687,7 @@ public final class Service {
         facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
-    if s.kind == .manager { addConversationFields(to: &out, s) }
+    if s.kind == .manager { addConversationFields(to: &out, s, facts) }
     return out
   }
 
