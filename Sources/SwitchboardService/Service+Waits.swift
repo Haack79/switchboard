@@ -77,37 +77,15 @@ extension Service {
   /// Refuses an action that the sender may not arm or that its subject can't take, and sets the subject of
   /// `rm-worktree` on a merge wait.
   ///
-  /// Only a Manager conversation, the Operator, or the user may arm an action, and both signals of the sender must
-  /// allow it: the client's ancestry reaches no other session's pane and no part of sbd's tmux server outside the
-  /// panes, and the request's `caller`, when it has one, names a Manager conversation or the Operator. A session
-  /// never arms a merge on itself. A request from a host and a subject on a host are refused. A merge needs the
-  /// subject's PR in a repository that `operator.mergeRepos` lists. It runs on the state queue, after `install` of a
-  /// fresh snapshot.
+  /// `checkActionCaller` decides who may arm an action. A session never arms a merge on itself. A subject on a host
+  /// is refused. A merge needs the subject's PR in a repository that `operator.mergeRepos` lists. It runs on the state
+  /// queue, after `install` of a fresh snapshot.
   private func armAction(_ wait: inout Wait, _ args: JSON, origin: RequestOrigin, caller: Caller) throws {
     guard let action = wait.action?.kind else { return }
     let then = "then \(action.rawValue)"
-    guard case .mac = origin else { throw APIError("\(then) can't come from a host, because actions run on this Mac") }
-    let ancestry = try caller.ancestry(command: "sb wait --\(then)")
-    let claimed = args["caller"]?.string
-    if action == .merge, let target = wait.session?.id,
-      claimed == target || ancestry.map({ isInside(target, $0) }) == true
-    {
-      throw APIError("a session can't arm merge on itself")
-    }
-    let refusal = "only a Manager conversation, the Operator, or you can arm \(action.rawValue)"
-    let mayArm = { (id: String) in [SessionKind.manager, .operator].contains(self.entries[id]?.session.kind) }
-    if let claimed, !mayArm(claimed) {
-      throw APIError("\(refusal), and the request comes from \(entries[claimed] == nil ? claimed : mention(claimed))")
-    }
-    if let ancestry {
-      let place = callerPlace(ancestry)
-      if let other = place.inside.first(where: { !mayArm($0) }) {
-        throw APIError("\(refusal), and `sb wait` runs inside \(mention(other))")
-      }
-      if place.inside.isEmpty && place.inServer {
-        throw APIError("\(refusal), and `sb wait` runs in sbd's tmux server, where the sessions run")
-      }
-    }
+    try checkActionCaller(
+      args, origin: origin, caller: caller, command: "sb wait", option: then, arms: action.rawValue,
+      notFrom: action == .merge ? wait.session?.id : nil)
     if action == .rmWorktree, wait.kind == .merge, let pr = wait.pr, let repository = pr.repository {
       let id = try sessionByPR(["pr": .number(Double(pr.number)), "repository": .string(repository)])
       wait.subject = Wait.SessionTarget(id: id, name: entries[id]!.session.name)
@@ -123,6 +101,42 @@ extension Service {
       throw APIError(
         "sbd merges only in the repositories that operator.mergeRepos in \(home.config) lists, and it doesn't list "
           + "\(pr.repo). The user merges #\(pr.number) from the Inbox")
+    }
+  }
+
+  /// Refuses a request that arms an action when the sender may not arm it.
+  ///
+  /// Only a Manager conversation, the Operator, or the user may arm an action, and both signals of the sender must
+  /// allow it: the client's ancestry reaches no other session's pane and no part of sbd's tmux server outside the
+  /// panes, and the request's `caller`, when it has one, names a Manager conversation or the Operator. A request from
+  /// a host is refused. A request from inside the session `notFrom`, or one whose `caller` names it, is refused. The
+  /// refusals name `command`, its `option`, and the action it `arms`. It runs on the state queue, after `install` of
+  /// a fresh snapshot.
+  func checkActionCaller(
+    _ args: JSON, origin: RequestOrigin, caller: Caller, command: String, option: String, arms: String,
+    notFrom subject: String?
+  ) throws {
+    guard case .mac = origin else {
+      throw APIError("\(option) can't come from a host, because actions run on this Mac")
+    }
+    let ancestry = try caller.ancestry(command: "\(command) --\(option)")
+    let claimed = args["caller"]?.string
+    if let subject, claimed == subject || ancestry.map({ isInside(subject, $0) }) == true {
+      throw APIError("a session can't arm \(arms) on itself")
+    }
+    let refusal = "only a Manager conversation, the Operator, or you can arm \(arms)"
+    let mayArm = { (id: String) in [SessionKind.manager, .operator].contains(self.entries[id]?.session.kind) }
+    if let claimed, !mayArm(claimed) {
+      throw APIError("\(refusal), and the request comes from \(entries[claimed] == nil ? claimed : mention(claimed))")
+    }
+    if let ancestry {
+      let place = callerPlace(ancestry)
+      if let other = place.inside.first(where: { !mayArm($0) }) {
+        throw APIError("\(refusal), and `\(command)` runs inside \(mention(other))")
+      }
+      if place.inside.isEmpty && place.inServer {
+        throw APIError("\(refusal), and `\(command)` runs in sbd's tmux server, where the sessions run")
+      }
     }
   }
 

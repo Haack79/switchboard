@@ -146,17 +146,30 @@ extension Service {
   /// waits for the next run instead of trying again on each tick.
   private func fire(_ id: String, _ schedule: Schedule, now: Int64) {
     var ran = schedule
+    guard let skipped = saveNextRun(id, &ran, now: now) else { return }
+    sendAndRecord(id, ran, text: schedule.prompt, skipped: skipped, now: now)
+  }
+
+  /// Saves the schedule's next run, sets it on `schedule`, and returns how many due times the run skips. It returns
+  /// nil when the next run can't be saved.
+  private func saveNextRun(_ id: String, _ schedule: inout Schedule, now: Int64) -> Int? {
     let (next, skipped) = schedule.fired(at: now)
-    ran.next = next
     do {
       try changeSchedule(id, schedule.id) { $0.next = next }
     } catch {
       logLine("can't run schedule \(schedule.id) of \(id), because its next run can't be saved: \(error)")
-      return
+      return nil
     }
+    schedule.next = next
+    return skipped
+  }
+
+  /// Sends `text` to the session, then saves the run on `schedule` and records a `schedule-ran` event.
+  private func sendAndRecord(_ id: String, _ schedule: Schedule, text: String, skipped: Int, now: Int64) {
+    var ran = schedule
     let run: Schedule.Run
     do {
-      let delivery = try send(id, schedule.prompt, by: .sbd, trigger: .schedule)
+      let delivery = try send(id, text, by: .sbd, trigger: .schedule)
       run = Schedule.Run(t: now, outcome: .init(delivery), skipped: skipped)
     } catch {
       logLine("can't run schedule \(schedule.id) of \(id): \(error)")

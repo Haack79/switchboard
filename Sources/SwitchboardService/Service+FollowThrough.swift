@@ -436,11 +436,6 @@ extension Service {
 
   // MARK: Live reads
 
-  /// gh's output as JSON, or nil when gh failed or printed something else.
-  private func ghJSON(_ args: [String]) -> JSON? {
-    (try? runGh(args, timeout: 30)).flatMap(JSON.parse)
-  }
-
   /// The PR as GitHub has it.
   private func livePR(_ pr: PullRequest) -> MergeGuard.LivePR? {
     guard
