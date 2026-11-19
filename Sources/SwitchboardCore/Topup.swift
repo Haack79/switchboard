@@ -116,10 +116,17 @@ extension Schedule {
 
     /// Such as `topup Switchboard haacked/switchboard 3/5 · checked 2m ago: gated`.
     public func statusText(groupName: String, now: Int64 = nowMs()) -> String {
-      guard let last else { return "topup \(groupName) \(repo) · target \(target) · never checked" }
+      guard let check = checkText(now: now) else {
+        return "topup \(groupName) \(repo) · target \(target) · never checked"
+      }
+      return "topup \(groupName) \(repo) \(check)"
+    }
+
+    /// Such as `3/5 · checked 2m ago: gated`, or nil before the first check.
+    public func checkText(now: Int64 = nowMs()) -> String? {
+      guard let last else { return nil }
       let error = last.error.map { ": \($0)" } ?? ""
-      return
-        "topup \(groupName) \(repo) \(last.active)/\(last.target) · checked \(ago(last.t, now: now)) ago: \(last.result.rawValue)\(error)"
+      return "\(last.active)/\(last.target) · checked \(ago(last.t, now: now)) ago: \(last.result.rawValue)\(error)"
     }
   }
 }

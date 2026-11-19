@@ -9,7 +9,8 @@ struct ScheduleCaption {
   let status: ScheduleStatus
   /// Such as `every 30m · next in 12m`, `every 30m · paused`, or `every 30m · held: the session is marked done`.
   let timing: String
-  /// Such as `last: pasted 5m ago · 2 skipped`, `last: failed 2m ago: <error>`, or `never ran`.
+  /// Such as `last: pasted 5m ago · 2 skipped`, `last: failed 2m ago: <error>`, or `never ran`. A top-up adds its
+  /// last check, such as `top-up 3/5 · checked 2m ago: gated`, because a gated check appends no run.
   let result: String
   let toggleTitle: String
   /// Why Run Now can't run the schedule, as sbd's `run-schedule` refuses it, or nil when it can.
@@ -26,7 +27,8 @@ struct ScheduleCaption {
     prompt = schedule.prompt
     self.status = status
     timing = schedule.timingText(status.text)
-    result = schedule.lastText(now: now)
+    result = [schedule.lastText(now: now), schedule.gate?.checkText(now: now).map { "top-up \($0)" }]
+      .compactMap { $0 }.joined(separator: " · ")
     toggleTitle = schedule.paused == true ? "Resume" : "Pause"
     runNowBlocker =
       switch schedule.runBlocker(hold: hold) {

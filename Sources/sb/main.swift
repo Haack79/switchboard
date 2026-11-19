@@ -202,18 +202,18 @@ let usage = """
       --target N --template-file F --rubric-file F2 [<prompt>]
                                   a work queue top-up: on each run sbd counts
                                   the active work sessions of group G in repo
-                                  R (owner/name). When the group has its
-                                  target N (1 to 20) and none needs you, it
-                                  records the check and sends nothing.
-                                  When it is short and none needs you, sbd
-                                  starts the open issues and follow-ups
-                                  that a judge picks by the rubric F2, each
-                                  from the template F. Otherwise, or when
-                                  the top-up fails, it sends the prompt with
-                                  the status, the rubric, and the template.
-                                  Without a prompt sbd writes one. Only a
-                                  Manager conversation, the Operator, or you
-                                  can add or edit one
+                                  R (owner/name). Unless a session needs a
+                                  merge or cleanup that no wait covers, or sbd
+                                  can't read one, it sends nothing: with the
+                                  target N (1 to 20) met it records the check,
+                                  and when short it starts the open issues and
+                                  follow-ups that a judge picks by the rubric
+                                  F2, each issue with the template F as its
+                                  prompt. Otherwise, or when the top-up fails,
+                                  it sends the prompt with the status, the
+                                  rubric, and the template. Without a prompt
+                                  sbd writes one. Only a Manager conversation,
+                                  the Operator, or you can add or edit one
     schedule ls [<session>]       list the schedules, the next due first
     schedule rm <id>              remove a schedule
     schedule pause|resume <id>    pause a schedule, or resume it one interval
