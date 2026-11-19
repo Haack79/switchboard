@@ -5,11 +5,13 @@ let usage = """
   Usage: sb <command> [arguments] [--json]
 
   Sessions:
-    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped]
+    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped] [--brief]
                                   list sessions by state, or only those in the
                                   GitHub orgs O1 and O2, or with no GitHub
                                   remote, and in the groups G1 and G2, or in no
-                                  group
+                                  group. --brief prints one line per session:
+                                  its id, name, state, reason, PR, open waits,
+                                  and url
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -97,7 +99,8 @@ let usage = """
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
-    get <session>                 show one session
+    get <session> [--brief]       show one session. --brief shows only its id,
+                                  name, state, reason, PR, open waits, and url
     focus <session>               show the session in the Switchboard app, launching
                                   the app if it isn't running
     slash <session>               the commands that the session's claude takes
@@ -574,9 +577,15 @@ func decode<T: Decodable>(_ value: JSON, as type: T.Type) -> T {
 
 func summary(_ value: JSON) -> SessionSummary { decode(value, as: SessionSummary.self) }
 
+func briefJSON(_ value: JSON) -> JSON {
+  do { return try SessionBrief.json(value) } catch { die("can't read sbd's answer: \(error)") }
+}
+
+let noSessions = "No sessions. Start one with: sb new <folder>"
+
 func printTable(_ sessions: [SessionSummary]) {
   if sessions.isEmpty {
-    print("No sessions. Start one with: sb new <folder>")
+    print(noSessions)
     return
   }
   let idWidth = max(2, sessions.map(\.id.count).max() ?? 0)
@@ -658,6 +667,7 @@ func printSession(_ s: SessionSummary) {
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
+  printQueue(s)
   printWaitsAndNotes(s)
   printSchedules(s)
 }
@@ -925,13 +935,18 @@ case "ls", "list":
     if a.switches.contains("--ungrouped") { filter.group.insert(GroupFilter.ungroupedKey) }
     filter.knownGroups = Set(groups.map(\.id))
   }
+  let brief = a.switches.contains("--brief")
   if a.json && filter.isAll {
-    printJSON(result)
+    printJSON(brief ? briefJSON(result) : result)
   } else {
     let shown = decode(result, as: [SessionSummary].self).filter(filter.shows)
     if a.json {
       let ids = Set(shown.map(\.id))
-      printJSON(.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false }))
+      let list = JSON.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false })
+      printJSON(brief ? briefJSON(list) : list)
+    } else if brief {
+      if shown.isEmpty { print(noSessions) }
+      for s in shown { print(s.briefLine) }
     } else {
       printSessionList(shown, filter: filter)
     }
@@ -965,7 +980,12 @@ case "ask":
 case "operator":
   operatorCommand(a)
 case "get", "show":
-  sessionCommand("get", a)
+  if a.switches.contains("--brief") {
+    let result = call("get", ["session": .string(a.session("get"))])
+    if a.json { printJSON(briefJSON(result)) } else { print(summary(result).briefLine) }
+  } else {
+    sessionCommand("get", a)
+  }
 case "focus":
   focus(a)
 case "open":

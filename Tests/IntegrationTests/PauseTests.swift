@@ -303,7 +303,7 @@ extension Instance {
     #expect(out.contains("held until t resumes (Paused by you)"), "\(out)")
   }
 
-  @Test func aSessionThatIsNotPausedHasNoHeldMessagesField() throws {
+  @Test func aSessionThatIsNotPausedWithAnEmptyQueueHasNoHeldMessagesField() throws {
     let sbd = try Instance()
     let s = try sbd.liveIdle()
 
