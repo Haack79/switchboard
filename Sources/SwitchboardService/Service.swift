@@ -1572,13 +1572,29 @@ public final class Service {
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
     from: String? = nil, runHere: Bool = false
   ) throws -> Delivery {
+    try deliver(
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+    ).delivery
+  }
+
+  /// How `deliver` handled a message, and the `sent` event it stored.
+  struct SentMessage {
+    var delivery: Delivery
+    var sent: Event
+  }
+
+  /// As `send`, but it also returns the message's `sent` event.
+  func deliver(
+    _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    from: String? = nil, runHere: Bool = false
+  ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
     let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
-      return .queued
+      return SentMessage(delivery: .queued, sent: sent)
     }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
@@ -1589,32 +1605,34 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
+      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
       try startClaude(id, prompt: text, trigger: trigger)
       if runHere { armSkillBypass(id, text) }
-      return .resumed
+      return SentMessage(delivery: .resumed, sent: sent)
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
       let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
       paste(id, QueuedMessage(text: text, sent: sent))
-      return .pasted
+      return SentMessage(delivery: .pasted, sent: sent)
     } else {
       // A stopped session launches without a prompt when older messages wait,
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from, extra: extra)
-      return .queued
+      let sent = try queueMessage(id, text, by: by, from: from, extra: extra)
+      return SentMessage(delivery: .queued, sent: sent)
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
+  @discardableResult
   func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
-    throws
+    throws -> Event
   {
     let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
+    return sent
   }
 
   /// `extra` adds fields to the event, such as `held`.
