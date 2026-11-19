@@ -48,8 +48,9 @@ enum RemoteShellProtocol {
   ///
   /// The subshell creates `$sb_d/t` before it ends the program. It runs `true` rather than `:`
   /// for that, because a failed redirect on `:` ends a POSIX shell. The redirect fails when the
-  /// EXIT trap has already removed `$sb_d`. A program that exits 0 on the signal, as a tmux client does, then still
-  /// answers with 143, so a command that its timeout ended never reads as one that succeeded.
+  /// EXIT trap has already removed `$sb_d`. A program that exits 0 on the signal, as a tmux
+  /// client does, then still answers with 143, so a command that its timeout ended never reads as
+  /// one that succeeded.
   ///
   /// `sb_emit` runs one `wc` on both files from inside `$sb_d`, so the words of its output are
   /// `<stdout bytes> o <stderr bytes> e <sum> total` whatever the folder's name holds.
