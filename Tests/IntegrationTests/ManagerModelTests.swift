@@ -131,5 +131,11 @@ import Testing
 
     #expect(try sbd.config() == config)
     #expect(try shown(sbd) == ["model": "sonnet"])
+
+    // A save that fails leaves the model sbd launches with unchanged.
+    try sbd.set("manager", to: "x")
+    #expect(throws: (any Error).self) { try sbd.client.call("manager-model", ["model": "haiku"]) }
+    #expect(try sbd.config()["manager"] == "x")
+    #expect(try shown(sbd) == ["model": "sonnet"])
   }
 }
