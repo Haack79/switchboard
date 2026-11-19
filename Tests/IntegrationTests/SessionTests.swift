@@ -74,26 +74,26 @@ import Testing
   /// A message that arrives as claude starts waits until claude has drawn its prompt. The test sets the production
   /// wait of 1.5 s after SessionStart.
   @Test func pastesAMessageThatArrivesAsClaudeStartsOnlyAfterTheWait() throws {
-    let sbd = try Instance(config: ["pasteSettleSeconds": 1.5])
+    let sbd = try Instance(config: Instance.productionPasteSettle)
     let s = try sbd.new()
     try sbd.waitFor(s.id, "SessionStart") { $0.live }
     let start = try #require(try sbd.events(s.id).last { $0.kind == "SessionStart" }?.t)
-    try #require(try sbd.now() - start < 1_000, "the send would come too late to test the wait")
 
-    #expect(try sbd.sb("send", s.id, "early") == "queued\n")
+    let printed = try sbd.sb("send", s.id, "early")
 
+    let sent = try #require(try sbd.events(s.id, "sent", text: "early").first?.t)
+    try #require(sent - start < 1_500, "the send came \(sent - start) ms after SessionStart, too late to test the wait")
+    #expect(printed == "queued\n")
     try sbd.waitFor(s.id, "the reply") { $0.lastReply == "Done: early" }
     let pasting = try #require(try sbd.events(s.id, "pasting", text: "early").first?.t)
     #expect(pasting - start >= 1_500, "pasted \(pasting - start) ms after SessionStart")
   }
 
   @Test func sendsTwoMessagesInARowAsTwoTurns() throws {
-    let sbd = try Instance()
+    let sbd = try Instance(config: Instance.productionPasteSettle)
     let s = try sbd.new(prompt: "hello")
     try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "Done: hello" }
-    try sbd.waitFor("the prompt to settle") {
-      (try sbd.events(s.id).last.map { nowMs() - $0.t > Instance.pasteSettleMs + 100 }) ?? false
-    }
+    try sbd.waitFor("the prompt to settle") { (try sbd.events(s.id).last.map { nowMs() - $0.t > 1600 }) ?? false }
     #expect(try sbd.sb("send", s.id, "lag first --model opus") == "pasted\n")
     #expect(try sbd.sb("send", s.id, "second") == "queued\n")
     try sbd.waitFor(s.id, "the second reply", timeout: 20) { $0.lastReply == "Done: second" }
@@ -408,12 +408,10 @@ import Testing
   }
 
   @Test func pastesAMessageWithNewLinesAsOnePrompt() throws {
-    let sbd = try Instance()
+    let sbd = try Instance(config: Instance.productionPasteSettle)
     let s = try sbd.new(prompt: "hello")
     try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "Done: hello" }
-    try sbd.waitFor("the prompt to settle") {
-      (try sbd.events(s.id).last.map { nowMs() - $0.t > Instance.pasteSettleMs + 100 }) ?? false
-    }
+    try sbd.waitFor("the prompt to settle") { (try sbd.events(s.id).last.map { nowMs() - $0.t > 1600 }) ?? false }
 
     #expect(try sbd.sb("send", s.id, Self.multiline) == "pasted\n")
 

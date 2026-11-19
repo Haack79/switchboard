@@ -471,12 +471,18 @@ final class Instance {
 
   /// How long after SessionStart the sbd of a test waits before it pastes a message.
   static let pasteSettleSeconds = 0.2
-  static var pasteSettleMs: Int64 { Int64(pasteSettleSeconds * 1000) }
+
+  /// The config.json key that restores sbd's production wait of 1.5 s between SessionStart and a paste.
+  static let productionPasteSettle: [String: JSON] = ["pasteSettleSeconds": 1.5]
 
   /// The config.json key that makes a stop wait 2 s, in place of 5 s, for claude to exit and then for the session's
-  /// processes. A test that waits out the stop sets it. A stub claude that must outlast the first wait and exit
-  /// within a retry's wait lingers 3 s.
+  /// processes. A test that waits out the stop for processes other than claude sets it.
   static let shortStopWait: [String: JSON] = ["stopWaitSeconds": 2]
+
+  /// The config.json key that makes a stop wait 3 s for claude to exit. A test whose stub claude lingers 5 s to
+  /// outlast the first wait, and to exit within a retry's wait, sets it. `timeoutScale` does not stretch the wait
+  /// on CI, so each side keeps a margin of about 2 s.
+  static let lingerStopWait: [String: JSON] = ["stopWaitSeconds": 3]
 
   /// A CI runner has 3 CPUs, and it starts sbd, tmux, and a stub claude several times slower than a laptop does.
   /// A wait that succeeds returns at once, so only a failing wait takes longer.

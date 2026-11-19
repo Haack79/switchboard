@@ -367,7 +367,7 @@ extension Instance {
   /// is gone. The restarted sbd must rebuild the same order from the log. The restarted sbd has no record of the
   /// launch prompt in flight, so only the production wait after SessionStart keeps a held note from going first.
   @Test func theResumeMessageStaysFirstWhenSbdRestartsBeforeItIsPasted() throws {
-    let sbd = try Instance(config: ["pasteSettleSeconds": 1.5])
+    let sbd = try Instance(config: Instance.productionPasteSettle)
     let s = try sbd.pausedStopped()
     try sbd.sb("send", s.id, "first held note")
     try sbd.sb("send", s.id, "second held note")

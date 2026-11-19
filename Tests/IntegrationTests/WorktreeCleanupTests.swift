@@ -445,13 +445,13 @@ private func tmuxHas(_ t: Terminals, _ target: String) throws -> Bool {
   }
 
   /// A claude that has not exited could still write to the folder after the second check. The
-  /// stub outlives the first 2 s wait and exits within the retry's wait. The refusal leaves the
+  /// stub outlives the first 3 s wait and exits within the retry's wait. The refusal leaves the
   /// Claude pane open, which is how the retry finds that claude.
   @Test func refusesAClaudeThatHasNotExitedAfterTheWait() throws {
     let github = try FakeGitHub()
-    let (sbd, repo, s) = try finishedSession(github, config: Instance.shortStopWait)
-    try sbd.sb("send", s.id, "linger 3")
-    try sbd.waitFor(s.id, "the reply") { $0.lastReply == "I'll linger 3 s when I stop." }
+    let (sbd, repo, s) = try finishedSession(github, config: Instance.lingerStopWait)
+    try sbd.sb("send", s.id, "linger 5")
+    try sbd.waitFor(s.id, "the reply") { $0.lastReply == "I'll linger 5 s when I stop." }
     let pid = try #require(try sbd.waitFor(s.id, "claude's pid") { $0.claudePid != nil }.claudePid)
     let terminals = try sbd.client.terminals(s.id)
 

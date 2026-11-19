@@ -422,10 +422,10 @@ import Testing
     #expect(try sbd.get(other.id).account == sbd.account("A"))
   }
 
-  /// The stub's claude exits 3 s after SIGTERM, which outlasts the 2 s wait.
+  /// The stub's claude exits 5 s after SIGTERM, which outlasts the 3 s wait.
   @Test func theStopFlagRefusesAClaudeThatOutlivesTheWait() throws {
-    let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset, config: Instance.shortStopWait)
-    let s = try lingeringSession(sbd, seconds: 3, name: "slow")
+    let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset, config: Instance.lingerStopWait)
+    let s = try lingeringSession(sbd, seconds: 5, name: "slow")
 
     let result = try refusedMove(sbd, "--stop", "--session", "slow")
     #expect(result.moved.isEmpty)
