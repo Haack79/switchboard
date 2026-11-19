@@ -45,6 +45,24 @@ import Testing
     }
   }
 
+  /// A host whose shell can't run `sleep` still ends a timed command, at once, rather than letting it run with
+  /// no timeout.
+  @Test(.timeLimit(.minutes(1)), arguments: remoteShellPrograms)
+  func aTimeoutWhoseSleepFailsEndsTheProgram(_ program: String) throws {
+    try withRemoteShellTempFolder { folder in
+      for tool in ["/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/base64", "/usr/bin/wc", "/usr/bin/head", "/bin/rm"] {
+        try FileManager.default.createSymbolicLink(
+          atPath: folder + "/" + (tool as NSString).lastPathComponent, withDestinationPath: tool)
+      }
+      let t = try TestShell.start(program, environment: ["PATH": folder])
+      defer { t.shell.close() }
+      let started = Date()
+      let r = try t.run(["/bin/sleep", "30"], timeout: 10, deadline: 30)
+      #expect(r.status == 143)
+      #expect(Date().timeIntervalSince(started) < 8)
+    }
+  }
+
   /// Waits until no process works in `folder`, or until the timeout and its 2 s grace have long passed. It kills
   /// what is left and returns it.
   private static func waitForNoUsers(of folder: String) -> [FolderUser] {

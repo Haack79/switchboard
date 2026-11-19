@@ -43,8 +43,10 @@ enum RemoteShellProtocol {
   /// subshell does not end its child. A SIGTERM can arrive after the fork and before `sb_k` holds
   /// the pid, so the trap sets `sb_q` and the subshell checks it once `sb_k` is set. The `sleep`
   /// gets SIGKILL rather than SIGTERM, because a child that has not run exec yet still runs the
-  /// subshell's trap. No process of the subshell waits on the shell, so once the subshell starts,
-  /// it ends the program within the timeout and 2 s, also after the shell dies.
+  /// subshell's trap. Only `sb_q` stops the subshell from ending the program. A `sleep` that
+  /// fails, or that the host lacks, then ends the program at once instead of leaving it without a
+  /// timeout. No process of the subshell waits on the shell, so once the subshell starts, it ends
+  /// the program within the timeout and 2 s, also after the shell dies.
   ///
   /// The subshell creates `$sb_d/t` before it ends the program. It runs `true` rather than `:`
   /// for that, because a failed redirect on `:` ends a POSIX shell. The redirect fails when the
@@ -81,7 +83,8 @@ enum RemoteShellProtocol {
           trap 'sb_q=1; [ -z "$sb_k" ] || kill -KILL "$sb_k"' TERM
           sleep "$sb_t" & sb_k=$!
           [ -z "$sb_q" ] || kill -KILL "$sb_k"
-          wait "$sb_k" && [ -z "$sb_q" ] || exit
+          wait "$sb_k"
+          [ -z "$sb_q" ] || exit
           trap - TERM
           true >"$sb_d/t"; kill -TERM "$sb_c"; sleep 2; kill -KILL "$sb_c"
         ) >/dev/null 2>&1 & sb_w=$!
