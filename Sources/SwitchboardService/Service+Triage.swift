@@ -88,6 +88,8 @@ extension Service {
       }
       return Request(op: "review", args: ["session": session, "reviewers": .array(reviewers.map(JSON.string))])
     case .wait:
+      // A card stored before `TriageCard.clean` refused actions may still hold one.
+      if let action = option.wait?.actionKind { throw TriageCard.armsAction(action) }
       var wait = try option.wait.map { try JSON(encoding: $0).object ?? [:] } ?? [:]
       wait["session"] = session
       return Request(op: "wait", args: .object(wait))

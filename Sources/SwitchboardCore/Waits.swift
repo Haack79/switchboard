@@ -153,6 +153,12 @@ public struct Wait: Codable, Equatable, Sendable {
   public var recheck: Int64?
   /// The Manager conversation that set the wait, when sbd stored it on the operator instead.
   public var handedFrom: SessionTarget?
+  /// What sbd does when the wait's condition is met. Nil resumes or notifies as `then` says.
+  public var action: WaitAction?
+  public var actionStatus: ActionStatus?
+  /// The session that the action acts on, for a wait whose target is not a session: the session that had the
+  /// merge wait's PR open when the wait was set.
+  public var subject: SessionTarget?
 
   /// Whether the wait's resolution reads the session that holds it. A PR kind with no repository reads
   /// that session's own repository. A `ci` wait on it reads the session's checked-out branch.

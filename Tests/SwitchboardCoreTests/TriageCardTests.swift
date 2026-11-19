@@ -155,6 +155,26 @@ let sessionCard = TriageSummary(
     #expect(wait.by == nil)
   }
 
+  /// Each wait here is one that `makeWait` accepts, so only its action drops it.
+  @Test(arguments: [
+    JSON.object(["kind": "session", "target": "kid", "state": "ready_to_merge", "then": "merge"]),
+    .object(["kind": "session", "target": "kid", "state": "done", "then": "rm-worktree"]),
+    .object(["kind": "session", "target": "kid", "state": "done", "then": "rm"]),
+    .object(["kind": "session", "target": "kid", "state": "needs_you", "then": "report", "note": "tell the user"]),
+  ])
+  func dropsAWaitOptionThatArmsAnAction(_ wait: JSON) throws {
+    let then = try #require(wait["then"]?.string)
+    let request = try JSONCoding.convert(wait, to: WaitRequest.self)
+    _ = try request.makeWait(id: "w", waiter: "", now: 0) { Wait.SessionTarget(id: $0, name: $0) }
+    let raw = card(options: [["label": "Wait", "action": "wait", "wait": wait]])
+
+    let result = try cleaned(raw)
+
+    #expect(result.card.options.isEmpty)
+    #expect(result.dropped.count == 1)
+    #expect(result.dropped.first?.contains("can't take then \(then)") == true, "\(result.dropped)")
+  }
+
   @Test(arguments: [nil, "", "  \n "] as [String?])
   func aSendWithoutAMessageSendsItsLabel(_ message: String?) throws {
     var option: [String: JSON] = ["label": "Go on", "action": "send"]

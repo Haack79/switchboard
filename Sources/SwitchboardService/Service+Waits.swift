@@ -8,12 +8,13 @@ extension Service {
   /// acts on processes, so `handle` settles the session and takes a new
   /// snapshot first, as for `send`. A `clear-wait` or `resolve-wait` that names
   /// a conversation also reaches the waits that it handed to the operator. The
-  /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared.
-  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac) throws -> JSON {
+  /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared. `caller` sent the request, which
+  /// decides whether a `wait` may arm an action.
+  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac, caller: Caller) throws -> JSON {
     let id = try lookup(args)
     switch op {
     case "wait":
-      return try JSON(encoding: summary(setWait(args, waiter: id, from: origin), for: origin))
+      return try JSON(encoding: summary(setWait(args, waiter: id, from: origin, caller: caller), for: origin))
     case "clear-wait":
       let cleared = try clearWaits(id, args["wait"]?.string)
       var answer = try JSON(encoding: summary(id, for: origin)).object ?? [:]
@@ -44,14 +45,15 @@ extension Service {
   /// `here` in `args` keeps the wait on `named`. It records the `wait` event
   /// on the session that holds the wait, with `from` for a handed-off wait,
   /// and returns the id of that session. The caller holds the state queue.
-  /// A wait from a host must pass `requireGitHubWait`.
-  func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin = .mac) throws -> String {
+  /// A wait from a host must pass `requireGitHubWait`. A wait with an action must pass `armAction`.
+  func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin, caller: Caller) throws -> String {
     let session = entries[named]!.session
     try refuseNotStarted(session)
     let request = try JSONCoding.convert(args, to: WaitRequest.self)
     // The checks run against `named`, so a conversation still can't wait on itself.
     var wait = try request.makeWait(id: "", waiter: named, now: nowMs(), findSession: waitTarget)
     if case .remote(let host) = origin { try requireGitHubWait(wait, on: named, from: host) }
+    if wait.action != nil { try armAction(&wait, args, origin: origin, caller: caller) }
     if wait.kind == .ci && wait.pr == nil {
       wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
     }
@@ -67,6 +69,58 @@ extension Service {
     try update(waiter) { $0.waits = open + [wait] }
     record(waiter, "wait", try waitEventData(wait))
     return waiter
+  }
+
+  /// Refuses an action that the sender may not arm or that its subject can't take, and sets the subject of
+  /// `rm-worktree` on a merge wait. Only a Manager conversation, the Operator, or the user may arm an action, and
+  /// both signals of the sender must allow it. The client's ancestry must reach no other session's pane, and no part
+  /// of sbd's tmux server outside the panes. The request's `caller` field, when it has one, must name a Manager
+  /// conversation or the Operator, because a process that sbd can't place may send a work session's id. A session
+  /// never arms a merge on itself. Actions run only on this Mac, so a request from a host and a subject on a host are
+  /// refused. A merge needs the subject's PR in a repository that `operator.mergeRepos` lists. It runs on the state
+  /// queue, after `install` of a fresh snapshot.
+  private func armAction(_ wait: inout Wait, _ args: JSON, origin: RequestOrigin, caller: Caller) throws {
+    guard let action = wait.action?.kind else { return }
+    let then = "then \(action.rawValue)"
+    guard case .mac = origin else { throw APIError("\(then) can't come from a host, because actions run on this Mac") }
+    let ancestry = try caller.ancestry(command: "sb wait --\(then)")
+    let claimed = args["caller"]?.string
+    if action == .merge, let target = wait.session?.id,
+      claimed == target || ancestry.map({ isInside(target, $0) }) == true
+    {
+      throw APIError("a session can't arm merge on itself")
+    }
+    let refusal = "only a Manager conversation, the Operator, or you can arm \(action.rawValue)"
+    let mayArm = { (id: String) in [SessionKind.manager, .operator].contains(self.entries[id]?.session.kind) }
+    if let claimed, !mayArm(claimed) {
+      throw APIError("\(refusal), and the request comes from \(entries[claimed] == nil ? claimed : mention(claimed))")
+    }
+    if let ancestry {
+      let inside = entries.keys.sorted().filter { isInside($0, ancestry) }
+      if let other = inside.first(where: { !mayArm($0) }) {
+        throw APIError("\(refusal), and `sb wait` runs inside \(mention(other))")
+      }
+      let servers = Set(mac.snapshot.panes.values.map(\.server).filter(Processes.isValidPid))
+      if inside.isEmpty && !ancestry.isDisjoint(with: servers) {
+        throw APIError("\(refusal), and `sb wait` runs in sbd's tmux server, where the sessions run")
+      }
+    }
+    if action == .rmWorktree, wait.kind == .merge, let pr = wait.pr, let repository = pr.repository {
+      let id = try sessionByPR(["pr": .number(Double(pr.number)), "repository": .string(repository)])
+      wait.subject = Wait.SessionTarget(id: id, name: entries[id]!.session.name)
+    }
+    guard let subject = (wait.subject ?? wait.session)?.id else { return }
+    guard let e = entries[subject] else { throw APIError("\(then) acts on \(subject), which sbd no longer has") }
+    if let host = e.session.host {
+      throw APIError("\(then) acts only on a session on this Mac, and \(e.session.name) runs on \(host)")
+    }
+    guard action == .merge else { return }
+    guard let pr = e.facts.pr else { throw APIError("\(e.session.name) has no PR yet, so sbd has nothing to merge") }
+    guard config.operator.mergesIn(pr.repo) else {
+      throw APIError(
+        "sbd merges only in the repositories that operator.mergeRepos in \(home.config) lists, and it doesn't list "
+          + "\(pr.repo). The user merges #\(pr.number) from the Inbox")
+    }
   }
 
   /// The data of a `wait` or `wait-resolved` event, with `from` naming the

@@ -135,12 +135,21 @@ public enum TriageCard {
       // The user's click sets the wait, so the session can't name its author.
       wait.by = nil
       // A session target is checked when the user clicks.
-      _ = try wait.makeWait(id: "w", waiter: "", now: now) { Wait.SessionTarget(id: $0, name: $0) }
+      let made = try wait.makeWait(id: "w", waiter: "", now: now) { Wait.SessionTarget(id: $0, name: $0) }
+      if let action = made.action { throw armsAction(action.kind) }
       option.wait = wait
     default:
       break
     }
     return option
+  }
+
+  /// The refusal of a wait option that arms an action. The session or the model writes the option's label, which
+  /// need not name the action. `choose` sets the wait from inside sbd, so sbd can't check who arms it.
+  public static func armsAction(_ action: WaitAction.Kind) -> APIError {
+    APIError(
+      "a card's wait option can't take then \(action.rawValue), because only a Manager conversation, the Operator, "
+        + "or you can arm an action, with `sb wait`")
   }
 
   /// A decision keeps the reply's number, so `sb decide` names it as the

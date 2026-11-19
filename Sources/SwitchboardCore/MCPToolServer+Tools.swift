@@ -118,7 +118,9 @@ extension MCPToolServer {
         ),
         "note": string("What the wait is for."),
         "then": string(
-          "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you."),
+          "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you. Or an action that sbd runs when the wait is met, and the operator resumes when it isn't: merge (kind session, state ready_to_merge) lands the target's PR, only in a repository that operator.mergeRepos in config.json lists; rm-worktree (kind session, state done, or kind merge with an owner/name#N target) removes the session and its worktree; rm (kind session, state done) removes the session; report (any kind but manual, needs `note`) records the note as a report. Only a Manager conversation or the operator can arm an action."
+        ),
+        "needsYou": boolean("For then report, makes the report an Inbox item that needs the user."),
         "here": boolean(
           "In a Manager conversation, keeps the wait on the conversation, so it resumes the conversation and not the operator."
         ),

@@ -22,7 +22,7 @@ enum PlannedScope {
   private static let noteKeys: Set<String> = ["session", "text", "by", "kind", "note"]
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "wait", "outcome",
+    "needsYou", "wait", "outcome",
   ]
 
   /// The op table of "The scope design". `answer` also takes `always`, which it reads through `AllowExtra` as it

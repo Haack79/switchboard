@@ -27,7 +27,7 @@ func waitCommand(_ a: Args) {
   if !words.isEmpty && (clearing || a.values["--note"] != nil) { refuse(words, "wait") }
   if block && clearing { die("--block sets a wait, so it doesn't go with --clear or --resolve") }
   if block && a.values["--then"] != nil { die("--block reports the outcome itself, so it doesn't take --then") }
-  if a.values["--then"] == Wait.Then.caller.rawValue { die("then is resume or notify, not caller") }
+  if a.values["--then"] == Wait.Then.caller.rawValue { die(WaitRequest.unknownThen("caller").description) }
   if !block && a.values["--timeout"] != nil { die("--timeout goes with --block") }
   let timeout = a.values["--timeout"].map { text in
     guard let seconds = TimeInterval(text), seconds > 0 else { die("--timeout needs a positive number of seconds") }
@@ -51,13 +51,20 @@ func waitCommand(_ a: Args) {
   args["session"] = .string(session)
   args["by"] = .string(author.rawValue)
   if a.switches.contains("--here") { args["here"] = true }
+  if a.switches.contains("--needs-you") { args["needsYou"] = true }
+  // sbd reads `caller` only to check an action. A request from a host may not carry it.
+  if a.values["--then"].flatMap(WaitAction.Kind.init(rawValue:)) != nil { args.merge(callerArg) { $1 } }
   if block { BlockingWait(session: session).run(args, timeout: timeout) }
   let result = call("wait", args)
   if a.json { return printJSON(result) }
   let holder = summary(result)
   printSession(holder)
   // sbd appends the new wait, so the last wait is the one this command set.
-  if holder.waits.last?.handedFrom != nil { print("the operator follows this through") }
+  if let action = holder.waits.last?.action {
+    print(action.kind.confirmation)
+  } else if holder.waits.last?.handedFrom != nil {
+    print("the operator follows this through")
+  }
 }
 
 /// `sb note <session> <text>` adds a note, and `--todo` makes it a to-do.
@@ -127,6 +134,9 @@ func noteLine(_ n: Note) -> String {
 func listOrder(_ notes: [Note]) -> [Note] { notes.openTodos + notes.plainNotes + notes.resolvedTodos }
 
 func printWaitsAndNotes(_ s: SessionSummary) {
-  for w in s.waits { print("  wait:    \(w.id)  \(w.line) (\(w.kind.rawValue), \(w.by.rawValue), \(ago(w.created)))") }
+  for w in s.waits {
+    let then = w.action.map { ", then \($0.kind.rawValue)" } ?? ""
+    print("  wait:    \(w.id)  \(w.line) (\(w.kind.rawValue), \(w.by.rawValue)\(then), \(ago(w.created)))")
+  }
   for n in listOrder(s.notes) { print("  note:    \(noteLine(n))") }
 }

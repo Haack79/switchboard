@@ -78,7 +78,7 @@ extension Service {
       "session": .string(id), "kind": .string(Wait.Kind.queue.rawValue), "target": .string("\(pr.repo)#\(pr.number)"),
       "note": "enqueued; once it merges, finish the post-merge steps", "by": .string(Author.you.rawValue),
     ]
-    _ = try waitRequest("wait", args)
+    _ = try waitRequest("wait", args, caller: .inProcess)
   }
 
   /// The session that `session` names, or the one whose open PR has the

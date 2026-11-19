@@ -456,6 +456,16 @@ public final class Service {
       return .success(try reviewRequest(request.args))
     case "draft-post", "draft-check":
       return .success(try draftReplyRequest(request.op, request.args, caller: caller))
+    case "wait", "clear-wait", "resolve-wait":
+      // An action's check reads the client's panes, so it takes a new snapshot.
+      let arms =
+        request.op == "wait" && (try? JSONCoding.convert(request.args, to: WaitRequest.self))?.actionKind != nil
+      let fresh = arms ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try waitRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     // An advance runs a tick before the reply, so the stop rule sees the
     // new time. `tick` takes the state queue itself, so `clock` runs here
     // and not in `dispatch`.
@@ -681,8 +691,6 @@ public final class Service {
       return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
-    case "wait", "clear-wait", "resolve-wait":
-      return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
     case "schedule", "schedules", "remove-schedule", "pause-schedule":
