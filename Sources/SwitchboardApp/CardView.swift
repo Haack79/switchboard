@@ -331,7 +331,7 @@ private struct ScrollBox<Content: View>: View {
   }
 }
 
-/// A tool call's input. The part that `TriageDetails.ToolInput.markdown` names draws as Markdown. A button
+/// A tool call's input. The part that `Card.markdown(tool:input:)` names draws as Markdown. A button
 /// switches to the whole input verbatim. An input without that part shows verbatim.
 struct ToolInputBox: View {
   let text: String

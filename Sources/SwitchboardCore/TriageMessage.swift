@@ -18,18 +18,9 @@ public struct TriageDetails: Codable, Equatable, Sendable {
     /// computed, so the JSON that `sb` and the Manager read stays the same.
     /// Only a tool with a Markdown field parses `text`, which can be a large file's contents.
     public var markdown: String? {
-      guard Self.markdownField(tool) != nil else { return nil }
-      return JSON.parse(text).flatMap { Self.markdown(tool: tool, input: $0) }
+      guard Card.markdownField(tool) != nil else { return nil }
+      return JSON.parse(text).flatMap { Card.markdown(tool: tool, input: $0) }
     }
-
-    /// The input field that holds Markdown: ExitPlanMode's plan. It is nil for
-    /// every other tool and when the field is missing, empty, or not a string.
-    public static func markdown(tool: String, input: JSON) -> String? {
-      guard let field = markdownField(tool), let text = input[field]?.string, !text.isEmpty else { return nil }
-      return text
-    }
-
-    private static func markdownField(_ tool: String) -> String? { tool == "ExitPlanMode" ? "plan" : nil }
   }
 
   public struct PR: Codable, Equatable, Sendable {

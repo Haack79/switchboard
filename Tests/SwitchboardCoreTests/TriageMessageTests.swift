@@ -641,12 +641,12 @@ private func planTurn(_ input: [String: JSON]) -> [Event] {
 @Suite struct TriageToolInputMarkdown {
   @Test(arguments: trickyPlans)
   func exitPlanModeGivesItsPlanAsItIs(_ plan: String) {
-    #expect(TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: .object(planInput(plan))) == plan)
+    #expect(Card.markdown(tool: "ExitPlanMode", input: .object(planInput(plan))) == plan)
   }
 
   @Test(arguments: ["Write", "exitplanmode", "mcp__x__ExitPlanMode"])
   func anotherToolWithAPlanGivesNoMarkdown(_ tool: String) {
-    #expect(TriageDetails.ToolInput.markdown(tool: tool, input: .object(planInput("# Plan"))) == nil)
+    #expect(Card.markdown(tool: tool, input: .object(planInput("# Plan"))) == nil)
   }
 
   @Test(arguments: [
@@ -655,7 +655,7 @@ private func planTurn(_ input: [String: JSON]) -> [Event] {
     .string("# Plan"), .array([.object(["plan": .string("# Plan")])]), .null, .number(1), .bool(true),
   ])
   func exitPlanModeWithoutAPlanStringGivesNoMarkdown(_ input: JSON) {
-    #expect(TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: input) == nil)
+    #expect(Card.markdown(tool: "ExitPlanMode", input: input) == nil)
   }
 
   /// The Inbox reads the computed property and a card reads the static one,
@@ -667,7 +667,7 @@ private func planTurn(_ input: [String: JSON]) -> [Event] {
 
     let computed = TriageDetails.ToolInput(tool: "ExitPlanMode", text: text).markdown
 
-    #expect(computed == TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: input))
+    #expect(computed == Card.markdown(tool: "ExitPlanMode", input: input))
     #expect(computed == plan)
   }
 

@@ -178,7 +178,16 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
   }
 
   /// The part of the input that the app draws as Markdown, such as ExitPlanMode's plan.
-  public var markdown: String? { TriageDetails.ToolInput.markdown(tool: tool, input: input) }
+  public var markdown: String? { Self.markdown(tool: tool, input: input) }
+
+  /// The input field that holds Markdown: ExitPlanMode's plan. It is nil for
+  /// every other tool and when the field is missing, empty, or not a string.
+  public static func markdown(tool: String, input: JSON) -> String? {
+    guard let field = markdownField(tool), let text = input[field]?.string, !text.isEmpty else { return nil }
+    return text
+  }
+
+  static func markdownField(_ tool: String) -> String? { tool == "ExitPlanMode" ? "plan" : nil }
 
   /// The card with the given id, or the session's only card. A session with
   /// several cards needs the id, so an answer never reaches the wrong one.

@@ -449,6 +449,17 @@ private func lines(_ count: Int) -> String {
   (1...count).map { "line \($0)" }.joined(separator: "\n")
 }
 
+/// `count` Markdown list items. Each item is its own row in `MarkdownView`. Lines without a blank line between them
+/// would join into one paragraph.
+private func listItems(_ count: Int) -> String {
+  (1...count).map { "- item \($0)" }.joined(separator: "\n")
+}
+
+/// An ExitPlanMode call whose plan is `plan`.
+private func planInput(_ plan: String) -> TriageDetails.ToolInput {
+  .init(tool: "ExitPlanMode", text: JSON.object(["plan": .string(plan)]).prettyText)
+}
+
 /// The height that `view` takes at `width`, hosted in a window that is never shown. The window is tall, so its
 /// height can't be what stops a view from growing.
 @MainActor
@@ -507,6 +518,14 @@ private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", t
     #expect(detailsHeight(steps: 1, toolInput: long) > detailsHeight(steps: 1, toolInput: short))
   }
 
+  /// A plan drawn as Markdown grows in Details the same way.
+  @Test func detailsGrowsWithThePlansMarkdown() {
+    let short = planInput(listItems(100))
+    let long = planInput(listItems(200))
+
+    #expect(detailsHeight(steps: 1, toolInput: long) > detailsHeight(steps: 1, toolInput: short))
+  }
+
   // MARK: Text box
 
   /// In the Inbox's detail pane a box grows with its text instead of scrolling.
@@ -522,6 +541,14 @@ private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", t
 
     #expect(long == fittingHeight(CardView.textBox(lines(100), maxHeight: 200)))
     #expect(long > 200 && long < 240)
+  }
+
+  /// A plan drawn as Markdown on a permission card stops at the same kind of maximum height.
+  @Test func aPlanBoxOutsideTheDetailPaneStopsAtItsMaximumHeight() {
+    let long = fittingHeight(ToolInputBox(text: "{}", markdown: listItems(200), maxHeight: 160))
+
+    #expect(long == fittingHeight(ToolInputBox(text: "{}", markdown: listItems(100), maxHeight: 160)))
+    #expect(long > 160 && long < 240)
   }
 
   // MARK: Pane
