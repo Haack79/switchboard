@@ -476,11 +476,16 @@ final class Instance {
   /// A wait that succeeds returns at once, so only a failing wait takes longer.
   static let timeoutScale: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 3
 
+  /// How long `waitFor` polls every 10 ms before it polls every 100 ms. Most waits end within it, such as the start
+  /// of sbd. A CI runner is short on CPU, so it polls every 100 ms from the start.
+  static let fastPollSeconds: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 0.5 : 0
+
   func waitFor(_ what: String, timeout: Double = 15, _ condition: () throws -> Bool) throws {
-    let deadline = Date().addingTimeInterval(timeout * Instance.timeoutScale)
+    let start = Date()
+    let deadline = start.addingTimeInterval(timeout * Instance.timeoutScale)
     while Date() < deadline {
       if try condition() { return }
-      usleep(100_000)
+      usleep(Date().timeIntervalSince(start) < Instance.fastPollSeconds ? 10_000 : 100_000)
     }
     let log = (try? String(contentsOfFile: home.log, encoding: .utf8)) ?? ""
     throw TestError(description: "timed out waiting for \(what). sbd log:\n\(log)")
