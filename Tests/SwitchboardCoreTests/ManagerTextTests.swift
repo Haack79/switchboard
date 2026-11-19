@@ -100,7 +100,7 @@ import Testing
       Manager.operatorPrompt.split(separator: "\n").first { $0.contains("failed CI logs") },
       "\(Manager.operatorPrompt)")
     let keep = try #require(line.range(of: "Keep the merge wait."), "\(line)")
-    let report = try #require(line.range(of: "report it with `--needs-you`"), "\(line)")
+    let report = try #require(line.range(of: "report it with `--needs-you --session S`"), "\(line)")
     #expect(keep.upperBound <= report.lowerBound, "\(line)")
     #expect(line.contains("`sb send`"), "\(line)")
   }
