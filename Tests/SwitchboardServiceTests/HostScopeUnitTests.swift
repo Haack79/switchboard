@@ -893,13 +893,14 @@ private func text(_ answer: Response) -> String {
 
   // MARK: Events
 
-  @Test(.timeLimit(.minutes(1)))
-  func eventsToTheHostLoseTheDataOfAnUnlistedPRAndKeepAListedOne() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func eventsToTheHostLoseTheDataOfAnUnlistedPRAndKeepAListedOne(full: Bool) throws {
     try withSessions(hosts: listedHosts) { service in
+      let args: JSON = ["session": "m1", "full": .bool(full)]
       try service.givePR("m1", listed: false)
-      let unlisted = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let unlisted = service.handle(Request(op: "events", args: args), origin: .remote("mini"))
       try service.givePR("m1", listed: true)
-      let listed = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let listed = service.handle(Request(op: "events", args: args), origin: .remote("mini"))
 
       let first = unlisted.result?.array?.first { $0["kind"] == "pr" }
       #expect(first?["data"] == .object([:]))
@@ -909,8 +910,8 @@ private func text(_ answer: Response) -> String {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func aGitHubWaitsOutcomeLeavesTheHostsEventsUnlessTheRepoIsListed() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func aGitHubWaitsOutcomeLeavesTheHostsEventsUnlessTheRepoIsListed(full: Bool) throws {
     try withSessions(hosts: listedHosts) { service in
       try service.givePR("m1", listed: false)
       func resolved(_ kind: Wait.Kind, _ outcome: String) throws {
@@ -921,7 +922,8 @@ private func text(_ answer: Response) -> String {
       try resolved(.date, "the date came")
       try resolved(.ci, "Vault sentinel title checks passed")
 
-      let answer = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let answer = service.handle(
+        Request(op: "events", args: ["session": "m1", "full": .bool(full)]), origin: .remote("mini"))
       let get = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
       let onMac = service.handle(Request(op: "get", args: ["session": "m1"]))
 

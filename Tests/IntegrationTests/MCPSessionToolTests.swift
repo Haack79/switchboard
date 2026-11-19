@@ -83,7 +83,7 @@ import Testing
   @Test(arguments: [false, true]) func eventsWithoutALimitListsTheNewest20(scoped: Bool) throws {
     let sbd = try Instance()
     let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
-    for i in 0..<25 { try sbd.addNote(s.id, "note \(i)") }
+    for i in 0..<25 { try sbd.addPlainNote(s.id, "note \(i)") }
     let newest = try sbd.events(s.id).suffix(20).map(\.id)
 
     let events = try mcp.call("events", args).decode([Event].self)
@@ -94,8 +94,8 @@ import Testing
   @Test(arguments: [false, true]) func eventsPassesKindsThrough(scoped: Bool) throws {
     let sbd = try Instance()
     let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
-    try sbd.addNote(s.id, "one")
-    try sbd.addNote(s.id, "two")
+    try sbd.addPlainNote(s.id, "one")
+    try sbd.addPlainNote(s.id, "two")
     try sbd.postProbe(s.id)
     let notes = try sbd.events(s.id).filter { $0.kind == "note" }.map(\.id)
 

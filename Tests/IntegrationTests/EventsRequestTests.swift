@@ -3,11 +3,6 @@ import SwitchboardCore
 import Testing
 
 extension Instance {
-  /// Records a note on the session. sbd records it before it answers.
-  func addNote(_ id: String, _ text: String) throws {
-    _ = try client.call("note", ["session": .string(id), "text": .string(text), "by": "you"])
-  }
-
   /// Sends a hook of the session's claude, as `sb hook` does for a local claude. `fields` go into the payload
   /// next to `hook_event_name` and `session_id`.
   func postHook(_ id: String, _ kind: String, _ fields: [String: JSON] = [:]) throws {
@@ -30,7 +25,7 @@ extension Instance {
     let mark = try lastEventId(s.id)
     try postHook(s.id, "PostToolUse", ["tool_name": "Bash", "tool_use_id": "toolu_other"])
     try postProbe(s.id)
-    for i in 1...3 { try addNote(s.id, "note \(i)") }
+    for i in 1...3 { try addPlainNote(s.id, "note \(i)") }
     try postProbe(s.id)
     try postProbe(s.id)
     return (s.id, mark)
@@ -150,6 +145,16 @@ enum SlimFixtures {
     #expect(listed.isEmpty, "\(listed.map(\.kind))")
   }
 
+  @Test(arguments: [.string("Stop"), .array([.string("Stop"), .number(1)])] as [JSON])
+  func kindsThatIsNotAListOfStringsFails(kinds: JSON) throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+
+    let message = failure(sbd, "events", ["session": .string(s.id), "kinds": kinds])
+
+    #expect(message.contains("kinds needs a list of event kinds"), "\(message)")
+  }
+
   // MARK: Slim data
 
   /// The tool event of a PostToolUse hook with the fields, read without `full`.
@@ -263,7 +268,7 @@ enum SlimFixtures {
   @Test func withoutALimitItListsTheNewest200() throws {
     let sbd = try Instance()
     let s = try sbd.idleSession()
-    for i in 0...200 { try sbd.addNote(s.id, "note \(i)") }
+    for i in 0...200 { try sbd.addPlainNote(s.id, "note \(i)") }
     let newest = try sbd.events(s.id).suffix(200).map(\.id)
 
     let listed = try sbd.sbEvents("--session", s.id)
