@@ -20,10 +20,9 @@ import Testing
       ("", [], false),
     ] as [(String, [Callout], Bool)])
   func onlyASummaryWithCalloutsSplits(summary: String, callouts: [Callout], splits: Bool) {
-    let item = TriageItem(
-      title: "Pick how to land #98", kind: .decision, summary: summary, callouts: callouts, source: .session)
+    let layout = DecisionCard.summaryLayout(summary: summary, callouts: callouts, listOpen: false)
 
-    #expect(DecisionCard.splitsSummary(item) == splits)
+    #expect((layout == .columns) == splits)
   }
 
   @Test func aWidePaneSplits55To45() throws {

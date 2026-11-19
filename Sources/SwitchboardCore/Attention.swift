@@ -38,6 +38,10 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// arrives as a prompt. This count leaves it out.
   public var prompts = 0
   public var lastReply: String?
+  /// Whether a prompt arrived after `lastReply` was written. A turn can end
+  /// without a Stop. The reply then belongs to a turn that the user already
+  /// answered.
+  public var promptSinceReply = false
   public var lastActivity: Int64 = 0
   /// The number of replies that claude finished in the main session. Only a
   /// chat's or a Manager conversation's summary shows it.
@@ -264,6 +268,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       // The transcript's last line, not the import, is the session's last activity.
       if let t = d["lastActivity"]?.int { lastActivity = Int64(t) }
       lastReply = d["lastReply"]?.string
+      promptSinceReply = false
       // A reply means that the user sent a prompt before it.
       if d["hasReplies"]?.bool == true { prompts = max(prompts, 1) }
     case "job":
@@ -278,6 +283,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       subagents = []
     case "UserPromptSubmit":
       if userPrompt { prompts += 1 }
+      promptSinceReply = true
       startTurn(event.t)
       jobsEndedAt = nil
       runningTool = nil
@@ -330,6 +336,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       endTurn()
       jobsEndedAt = nil
       lastReply = d["last_assistant_message"]?.string
+      promptSinceReply = false
     case "StopFailure", "idle":
       // An API or usage limit error ends the turn without a Stop. So does
       // Escape, which sbd finds out from `claude agents` and records as idle.

@@ -129,15 +129,16 @@ private struct WaitPanelRow: View {
   let row: WaitPanel.Row
 
   var body: some View {
+    let now = nowMs()
     VStack(alignment: .leading, spacing: 6) {
       InlineText(plain: (row.kind == .date ? "Waits " : "Waits on ") + row.summary).fontWeight(.semibold)
         .fixedSize(horizontal: false, vertical: true)
-      Text(verbatim: facts).font(.caption).foregroundStyle(.secondary)
+      Text(verbatim: WaitPanel.facts(row, now: now)).font(.caption).foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
       if let note = row.note {
         InlineText(plain: "Note: \(note)").font(.callout).fixedSize(horizontal: false, vertical: true)
       }
-      ForEach(targetLines, id: \.self) { line in
+      ForEach(WaitPanel.targetLines(row, now: now), id: \.self) { line in
         Text(verbatim: line).font(.callout).fixedSize(horizontal: false, vertical: true)
       }
       if case .pullRequest(_, .loading)? = row.target {
@@ -157,7 +158,7 @@ private struct WaitPanelRow: View {
         if let pr = row.pr {
           Button("Check now") { model.checkReference(pr) }
             .help("Read the PR from GitHub again. The wait resolves at sbd's next poll.")
-            .accessibilityLabel("Check \(pr.repo) #\(pr.number) now")
+            .accessibilityLabel("Check now: \(pr.repo) #\(pr.number)")
           Button("Open PR") { openURL(pr.url) }
             .help("Open \(pr.repo) #\(pr.number) on GitHub")
         }
@@ -168,19 +169,22 @@ private struct WaitPanelRow: View {
     .calloutChrome(.secondary)
     .task(id: row.pr?.key) { if let pr = row.pr { model.loadReference(pr) } }
   }
+}
 
+extension WaitPanel {
   /// Who set the wait and when, when sbd rechecked it, and what happens when it resolves.
-  private var facts: String {
+  static func facts(_ row: Row, now: Int64) -> String {
     var parts = [row.set]
-    if let rechecked = row.rechecked { parts.append("rechecked \(ago(rechecked)) ago") }
+    if let rechecked = row.rechecked { parts.append("rechecked \(ago(rechecked, now: now)) ago") }
     parts.append("\(row.then.outcome) when it resolves")
     return parts.joined(separator: " · ")
   }
 
-  private var targetLines: [String] {
+  /// The state of the wait's target, one line each.
+  static func targetLines(_ row: Row, now: Int64) -> [String] {
     switch row.target {
     case .pullRequest(let pr, let load)?:
-      let content = ReferenceCardContent(pr, load: load, sessions: [], now: nowMs())
+      let content = ReferenceCardContent(pr, load: load, sessions: [], now: now)
       var lines: [String] = []
       if let chip = content.chip {
         lines.append(([chip.text] + content.prLines).joined(separator: " · "))

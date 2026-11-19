@@ -469,6 +469,50 @@ private let decision = PendingDecision(
     #expect(built.options == v.options)
   }
 
+  /// A turn that ends without a Stop keeps the reply that the prompt answered.
+  @Test(arguments: [
+    event("StopFailure", 4, ["error": "rate_limit"]), event("idle", 4), event("exited", 4), event("stopped", 4),
+  ])
+  func aTurnThatEndsWithoutAStopLeavesTheAnsweredQuestionOff(_ end: Event) throws {
+    let text = try replyFixture("rule-hides-question")
+    var f = try depotFacts(text)
+    let v = try depotVerdict(f)
+    f.apply(event("UserPromptSubmit", 3, ["prompt": "Yes"]))
+    f.apply(end)
+    try #require(!f.turnRunning)
+    try #require(f.lastReply == text, "the turn's end kept the reply that asks")
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    try #require(built.source == .rule)
+    #expect(!hasAsk(built))
+    #expect(built.options == v.options)
+  }
+
+  @Test func aStopAfterThePromptOpensTheNewReplysQuestion() throws {
+    var f = try depotFacts(asksNothing)
+    let v = try depotVerdict(f)
+    f.apply(event("UserPromptSubmit", 3, ["prompt": "go on"]))
+    f.apply(event("Stop", 4, ["last_assistant_message": .string(yesNoOffer)]))
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(hasAsk(built))
+  }
+
+  @Test func anImportedReplysQuestionIsOpen() throws {
+    var f = try depotFacts(asksNothing)
+    let v = try depotVerdict(f)
+    f.apply(event("UserPromptSubmit", 3, ["prompt": "go on"]))
+    f.apply(event("idle", 4))
+    f.apply(event("imported", 5, ["lastReply": .string(yesNoOffer), "hasReplies": .bool(true)]))
+    try #require(!f.turnRunning)
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(hasAsk(built))
+  }
+
   @Test func aCardItemGetsNoQuestion() throws {
     var f = try depotFacts(try replyFixture("rule-hides-question"))
     let v = try depotVerdict(f)

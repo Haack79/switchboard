@@ -102,12 +102,6 @@ struct DecisionCard: View {
     return summary.isEmpty || callouts.isEmpty ? .stack : .columns
   }
 
-  /// Whether the card shows its summary and its callouts as two columns
-  /// when it is wide enough. A card without either one keeps a single stack.
-  static func splitsSummary(_ item: TriageItem) -> Bool {
-    summaryLayout(summary: item.summary, callouts: item.callouts, listOpen: false) == .columns
-  }
-
   /// Whether the card shows Before you merge. The step view takes the card
   /// while a decision list is open.
   static func showsReview(_ item: TriageItem, listOpen: Bool) -> Bool {

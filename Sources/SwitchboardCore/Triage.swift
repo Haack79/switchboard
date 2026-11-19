@@ -707,10 +707,11 @@ public enum Triage {
   /// stays the main option through `primary`. A yes/no offer puts Yes and No first,
   /// and Yes is the main option. A question gets no buttons, even one that
   /// reads as yes or no. A `send` option that already sends Yes or No
-  /// stands in for that button. The question is open only while no turn runs,
-  /// because a prompt starts a turn whose Stop replaces the reply.
+  /// stands in for that button. The question is open only while no prompt
+  /// has arrived since the Stop that wrote the reply. A turn that ends
+  /// without a Stop keeps the answered reply.
   static func addReplyAsk(_ facts: SessionFacts, to item: inout TriageItem) {
-    guard item.source == .rule, !facts.turnRunning else { return }
+    guard item.source == .rule, !facts.turnRunning, !facts.promptSinceReply else { return }
     let kind = Attention.classify(facts.lastReply ?? "")
     guard let ask = kind.ask else { return }
     let answers = kind.isQuestion ? [] : yesNo(ask)
@@ -740,8 +741,7 @@ public enum Triage {
     let summary = closingSection(reply)
     switch Attention.classify(reply) {
     case .question:
-      return TriageItem(
-        title: title(verdict.reason), kind: .question, summary: summary, source: .fallback)
+      return TriageItem(title: title(verdict.reason), kind: .question, summary: summary, source: .fallback)
     case .offer(let step):
       guard let asked = Attention.lastQuestion(reply), asked.question == step else {
         return TriageItem(title: title(step), kind: .approval, summary: summary, source: .fallback)
@@ -750,8 +750,7 @@ public enum Triage {
         title: OfferText.title(question: step, previous: asked.previous), kind: .approval,
         summary: summary, options: yesNo(step), source: .fallback)
     case .other:
-      return TriageItem(
-        title: title(verdict.reason), kind: .info, summary: summary, source: .fallback)
+      return TriageItem(title: title(verdict.reason), kind: .info, summary: summary, source: .fallback)
     }
   }
 

@@ -217,18 +217,6 @@ import Testing
   @Test func anItemWithNeitherStacks() {
     #expect(layout(summary: "", callouts: [], listOpen: false) == .stack)
   }
-
-  /// The columns layout and `splitsSummary` must not disagree about a closed list.
-  @Test(
-    arguments: [("Two review items are open.", callouts), ("Two review items are open.", []), ("", callouts), ("", [])]
-      as [(String, [Callout])])
-  func columnsShowExactlyWhenTheSummarySplits(summary: String, callouts: [Callout]) {
-    let item = TriageItem(
-      title: "Pick how to land #98", kind: .decision, summary: summary, callouts: callouts, source: .session)
-
-    #expect(
-      (layout(summary: summary, callouts: callouts, listOpen: false) == .columns) == DecisionCard.splitsSummary(item))
-  }
 }
 
 /// "No summary yet. Details holds the last reply." shows only for a fallback

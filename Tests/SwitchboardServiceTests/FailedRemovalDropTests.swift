@@ -468,6 +468,40 @@ struct ParityRemoval: Sendable, CustomTestStringConvertible {
   }
 }
 
+/// `update` changes the entry before the store saves it, so a save that fails must put the removal back.
+@Suite struct FailedRemovalStoreRefuses {
+  private func blockSessionWrites(_ h: FailedRemovalHarness) throws {
+    // `Store.save` writes with INSERT OR REPLACE.
+    let r = try runCommand(
+      "/usr/bin/sqlite3",
+      [h.home.database, "CREATE TRIGGER block BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'blocked'); END;"])
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+  }
+
+  @Test(arguments: DropEvent.drops)
+  func aDropThatTheStoreRefusesKeepsTheRemoval(_ trigger: DropEvent) throws {
+    let h = try FailedRemovalHarness()
+    let session = try CleanRemoval.noTrashPath.make(h)
+    try h.add(session)
+    try blockSessionWrites(h)
+
+    h.record(trigger)
+
+    #expect(h.removal() == session.removal)
+    #expect(try h.stored()?.removal == session.removal)
+  }
+
+  @Test func aKeepThatTheStoreRefusesKeepsTheRemoval() throws {
+    let h = try FailedRemovalHarness()
+    let session = try CleanRemoval.noTrashPath.make(h)
+    try h.add(session)
+    try blockSessionWrites(h)
+
+    #expect(!h.keep().ok)
+    #expect(h.removal() == session.removal)
+  }
+}
+
 /// The session with each path under the first harness's home moved under the second's, so two homes compare.
 private func withHome(_ session: Session, from: FailedRemovalHarness, to: FailedRemovalHarness) -> Session {
   var s = session

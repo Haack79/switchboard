@@ -20,7 +20,8 @@ final class ReferenceStore: ObservableObject {
   /// The keys whose `ref-details` request has not answered yet.
   var inFlight: Set<String> = []
   /// How many fresh reads each key has started. An answer is stored only when no fresh read started after its own
-  /// request, so a cached answer never replaces a fresh one.
+  /// request. A cached answer to a request that started before a fresh read is dropped. A cached answer to a
+  /// request that started after it replaces the fresh one.
   var freshReads: [String: Int] = [:]
 
   /// Clears the store before it holds more than `maxEntries` items.

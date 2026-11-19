@@ -119,6 +119,26 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
 
     #expect(try onlyRow(holder(waits: [w])).rechecked == now - 2 * hour)
   }
+
+  /// A manual wait's summary is its note, so the row doesn't repeat it.
+  @Test func aManualWaitsRowHasNoNote() throws {
+    let w = wait(.manual, note: "Ask Ann", recheck: nil, until: now - 2 * hour)
+
+    #expect(try onlyRow(holder(waits: [w])).note == nil)
+  }
+
+  @Test func theFactsLineSaysWhoSetTheWaitWhenSbdRecheckedItAndWhatHappensNext() throws {
+    let row = try onlyRow(holder(waits: [wait(.ci, created: now - 3 * hour, then: .notify, recheck: now - hour)]))
+
+    #expect(
+      WaitPanel.facts(row, now: now) == "Set 3h ago by you · rechecked 1h ago · moves to Needs you when it resolves")
+  }
+
+  @Test func theFactsLineOfAWaitThatSbdNeverRecheckedLeavesTheRecheckOut() throws {
+    let row = try onlyRow(holder(waits: [wait(.date, created: now - 3 * hour, recheck: nil, until: now)]))
+
+    #expect(WaitPanel.facts(row, now: now) == "Set 3h ago by you · resumes claude when it resolves")
+  }
 }
 
 // MARK: The target and its state
@@ -327,6 +347,43 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
   @Test(arguments: [Wait.Kind.ci, .botReview, .queue, .merge, .deploy])
   func otherKindsSayNothingAboutTheReviewer(_ kind: Wait.Kind) throws {
     #expect(try requested(kind, load: .loaded(prDetails(requests: ["alice"]))) == nil)
+  }
+
+  private func targetLines(who: String? = "alice", requests: [String]?) throws -> [String] {
+    let ref = gitHubRef("acme/widgets", 7)
+    let w = wait(.review, pr: Wait.PullRequest(repository: "acme/widgets", number: 7), who: who)
+    let row = try onlyRow(holder(waits: [w]), loads: [ref.key: .loaded(prDetails(requests: requests))])
+    return WaitPanel.targetLines(row, now: now)
+  }
+
+  @Test func aStillRequestedReviewerReadsStillRequested() throws {
+    let lines = try targetLines(requests: ["bob", "alice"])
+
+    #expect(lines.contains("Review still requested: alice"))
+    #expect(!lines.contains("Review no longer requested: alice"))
+  }
+
+  @Test func aReviewerNoLongerRequestedReadsNoLongerRequested() throws {
+    let lines = try targetLines(requests: ["bob"])
+
+    #expect(lines.contains("Review no longer requested: alice"))
+    #expect(!lines.contains("Review still requested: alice"))
+  }
+
+  @Test func aTeamReviewerReadsAsItsSlug() throws {
+    #expect(
+      try targetLines(who: "PostHog/clickhouse", requests: ["clickhouse"]).contains(
+        "Review still requested: clickhouse"))
+  }
+
+  @Test func thePendingRequestsShowAsOneLine() throws {
+    #expect(try targetLines(requests: ["bob", "clickhouse"]).contains("Pending review requests: bob, clickhouse"))
+  }
+
+  @Test func anUnreadRequestListShowsNoReviewerLine() throws {
+    let lines = try targetLines(requests: nil)
+
+    #expect(!lines.contains { $0.hasPrefix("Review ") || $0.hasPrefix("Pending review requests") })
   }
 }
 
