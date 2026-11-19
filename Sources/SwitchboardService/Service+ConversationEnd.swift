@@ -31,17 +31,20 @@ extension Service {
   // MARK: The end hint
 
   /// The conversation's end hint. Its spawned sessions are those that its events recorded and those whose parent it
-  /// is, which takes in a follow-up that it captured. It runs on the state queue.
-  func endHint(_ e: Entry, _ facts: SessionFacts, cards: [Card], openPrompt: Bool) -> EndHint? {
+  /// is, which includes a follow-up that it captured. It runs on the state queue.
+  func endHint(_ e: Entry, _ facts: SessionFacts) -> EndHint? {
     let id = e.session.id
     let ids = facts.spawned.union(entries.filter { $0.value.session.parent == id }.keys)
     // A session that sbd holds but never tracked is not gone.
     let spawned = Dictionary(
       uniqueKeysWithValues: ids.map { child in (child, entries[child].map { $0.facts.lastState ?? .notStarted }) })
+    let own = e.session.ownItems
+    let openPrompt = facts.openPermission != nil || facts.openQuestion != nil
     return EndHint.evaluate(
-      spawned: spawned, ownWaits: e.session.resolvableWaits.count, ownSchedules: e.session.schedules?.count ?? 0,
-      turnRunning: facts.turnRunning || facts.jobs > 0, messageOnItsWay: e.hasMessageOnItsWay,
-      needsMe: ChatMark.needsMe(cards: cards, openPrompt: openPrompt), contextTokens: facts.contextTokens,
+      spawned: spawned, ownWaits: own.count(where: { $0.kind != .schedule }),
+      ownSchedules: own.count(where: { $0.kind == .schedule }), turnRunning: facts.inTurnOrJob,
+      messageOnItsWay: e.hasMessageOnItsWay,
+      needsMe: ChatMark.needsMe(cards: facts.cards, openPrompt: openPrompt), contextTokens: facts.contextTokens,
       threshold: config.conversationHintTokens, dismissed: facts.endHintDismissed)
   }
 
@@ -56,7 +59,9 @@ extension Service {
     }
     guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
     let id = try managerConversation(ref)
-    if dismiss, let key = summary(id).endHint?.key { record(id, "end-hint-dismissed", ["key": .string(key)]) }
+    if dismiss, let key = endHint(entries[id]!, shownFacts(id, for: .mac))?.key {
+      record(id, "end-hint-dismissed", ["key": .string(key)])
+    }
     return try JSON(encoding: summary(id))
   }
 
@@ -75,13 +80,10 @@ extension Service {
     let session = e.session
     if e.hasMessageOnItsWay { throw messagesRefusal(e) }
     let drops = endingDrops[id] ?? []
-    let waits = session.resolvableWaits
-    let schedules = session.schedules ?? []
-    let unnamed =
-      waits.filter { !drops.contains($0.id) }.map { "  \($0.id)  \(ownWaitLine($0, of: session))" }
-      + schedules.filter { !drops.contains($0.id) }.map { "  \($0.id)  \(oneLine($0.prompt))" }
+    let own = session.ownItems
+    let unnamed = own.filter { !drops.contains($0.id) }.map { "  \($0.id)  \($0.line)" }
     guard !unnamed.isEmpty else { return }
-    let flags = (waits.map(\.id) + schedules.map(\.id)).map { "--drop \($0)" }.joined(separator: " ")
+    let flags = own.map { "--drop \($0.id)" }.joined(separator: " ")
     throw APIError(
       "\(session.name) has waits or schedules of its own that removing it would drop:\n"
         + unnamed.joined(separator: "\n")
@@ -91,10 +93,10 @@ extension Service {
   /// The refusal for a conversation that holds messages, with the step that delivers them in its state.
   private func messagesRefusal(_ e: Entry) -> APIError {
     let id = e.session.id
-    let count = e.pending.count + (e.inFlight == nil ? 0 : 1)
     let lines =
       e.pending.map { "  \(oneLine($0.text))" }
       + (e.inFlight == nil ? [] : ["  a message that claude has not confirmed yet"])
+    let count = lines.count
     let remedy =
       if e.session.pause != nil {
         "Resume it to deliver them first, with: sb resume \(id)"
@@ -109,16 +111,11 @@ extension Service {
         + lines.joined(separator: "\n") + "\n" + remedy)
   }
 
-  /// The wait's line, or for the pause condition the pause's line and the message that the resume would send.
-  private func ownWaitLine(_ wait: Wait, of session: Session) -> String {
-    guard let pause = session.pause, pause.until?.id == wait.id else { return wait.line }
-    return pause.line + (pause.message.map { ". The resume would send: \(oneLine($0))" } ?? "")
-  }
-
   /// The `manager-end` request, which removes a Manager conversation, and with `new` starts one in its place
   /// with the same account, MCP servers, and pin. `drop` names the conversation's own waits, pause condition, and
-  /// schedules that the removal may drop. Only the user ends a conversation: it refuses a request that names a `caller`, and a
-  /// client below any local session's live Claude pane. It runs off the state queue, because `remove` does.
+  /// schedules that the removal may drop. Only the user ends a conversation, so it refuses a request that names a
+  /// `caller` and a client below any local session's live Claude pane. It runs off the state queue, because `remove`
+  /// does.
   func managerEnd(_ args: JSON, caller: Caller) throws -> JSON {
     if let from = args["caller"]?.string {
       let name = queue.sync { entries[from]?.session.name } ?? from
@@ -139,25 +136,26 @@ extension Service {
       }
       let id = try managerConversation(ref)
       let e = entries[id]!
-      if e.facts.turnRunning || e.facts.jobs > 0 {
+      if e.facts.inTurnOrJob {
         throw APIError(
           "\(e.session.name) is in a turn or runs a background job. Wait for it to finish, or stop it with: sb stop \(id)"
         )
       }
-      if removing.contains(id) || endingDrops[id] != nil { throw APIError("\(mention(id)) is being deleted") }
+      if let refusal = beingDeletedRefusal(id) { throw refusal }
+      if endingDrops[id] != nil { throw APIError("\(mention(id)) is being deleted") }
       endingDrops[id] = drops
-      let own = e.session.resolvableWaits.map(\.id) + (e.session.schedules ?? []).map(\.id)
       return Ending(
-        id: id, session: e.session, findTranscript: transcriptFinder(id), dropped: own.filter(drops.contains))
+        session: e.session, findTranscript: transcriptFinder(id),
+        dropped: e.session.ownItems.map(\.id).filter(drops.contains))
     }
-    defer { queue.sync { endingDrops[ending.id] = nil } }
-    let transcript = ending.findTranscript()
-    _ = try remove(["session": .string(ending.id)], caller: caller)
     let session = ending.session
+    defer { queue.sync { endingDrops[session.id] = nil } }
+    let transcript = ending.findTranscript()
+    _ = try remove(["session": .string(session.id)], caller: caller)
     var answer: [String: JSON] = [
-      "ended": .string(ending.id), "name": .string(session.name), "transcript": transcript.map(JSON.string) ?? .null,
+      "ended": .string(session.id), "name": .string(session.name), "transcript": transcript.map(JSON.string) ?? .null,
       "claudeSessionId": .string(session.claudeSessionId),
-      "handed": .array(queue.sync { handedOff(from: ending.id)?.waits ?? [] }.map { .string($0.id) }),
+      "handed": .array(queue.sync { handedOff(from: session.id)?.waits ?? [] }.map { .string($0.id) }),
       "dropped": .array(ending.dropped.map(JSON.string)),
     ]
     if args["new"]?.bool == true {
@@ -174,7 +172,6 @@ extension Service {
 
   /// What `managerEnd` reads on the state queue before the removal.
   struct Ending {
-    var id: String
     var session: Session
     var findTranscript: () -> String?
     /// The ids of the conversation's own waits, pause condition, and schedules that `drop` names.
@@ -184,10 +181,7 @@ extension Service {
   /// A local session whose live Claude pane's pid is in `ancestry`. A shell pane does not count, so the user may
   /// end a conversation from a session's shell pane. It runs on the state queue.
   func localClaudePane(holding ancestry: Set<Int>) -> String? {
-    entries.keys.sorted().first { id in
-      guard entries[id]?.session.host == nil, let row = paneRow(id, .claude), !row.dead else { return false }
-      return Processes.isValidPid(row.pid) && ancestry.contains(row.pid)
-    }
+    entries.keys.sorted().first { isInside($0, ancestry, panes: [.claude]) }
   }
 
   /// Starts an untitled conversation, or one named `name`, with the account, MCP servers, and pin of `ended`.

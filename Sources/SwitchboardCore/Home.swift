@@ -195,6 +195,21 @@ public struct Config: Codable, Equatable, Sendable {
     case testTrashOtherVolume
   }
 
+  /// The whole number under `key` when it is from 0 to `max`, or nil. A bad value logs and returns nil, so it keeps
+  /// the default. Throwing would make sbd ignore all of config.json.
+  private static func decodeBounded(
+    _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys, upTo max: Int, unit: String
+  ) throws -> Int? {
+    switch try c.decodeIfPresent(JSON.self, forKey: key) {
+    case nil, .null:
+      return nil
+    case let value?:
+      if let n = value.int, (0...max).contains(n) { return n }
+      logLine("skipping \(key.stringValue): its value must be a whole number of \(unit) from 0 to \(max)")
+      return nil
+    }
+  }
+
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = Config()
@@ -245,31 +260,12 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
-    // A bad value keeps the default. Throwing would make sbd ignore all of config.json.
-    switch try c.decodeIfPresent(JSON.self, forKey: .removalDelaySeconds) {
-    case nil, .null:
-      break
-    case let value?:
-      if let seconds = value.int, (0...Self.maxRemovalDelaySeconds).contains(seconds) {
-        removalDelaySeconds = seconds
-      } else {
-        logLine(
-          "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
-            + "\(Self.maxRemovalDelaySeconds)")
-      }
-    }
-    switch try c.decodeIfPresent(JSON.self, forKey: .conversationHintTokens) {
-    case nil, .null:
-      break
-    case let value?:
-      if let tokens = value.int, (0...Self.maxConversationHintTokens).contains(tokens) {
-        conversationHintTokens = tokens
-      } else {
-        logLine(
-          "skipping conversationHintTokens: its value must be a whole number of tokens from 0 to "
-            + "\(Self.maxConversationHintTokens)")
-      }
-    }
+    removalDelaySeconds =
+      try Self.decodeBounded(c, .removalDelaySeconds, upTo: Self.maxRemovalDelaySeconds, unit: "seconds")
+      ?? d.removalDelaySeconds
+    conversationHintTokens =
+      try Self.decodeBounded(c, .conversationHintTokens, upTo: Self.maxConversationHintTokens, unit: "tokens")
+      ?? d.conversationHintTokens
     testTrashOtherVolume =
       try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)

@@ -11,7 +11,6 @@ extension BoardModel {
     /// to it, newest first. It is nil while the log has not loaded. It is also nil when the log holds no user
     /// message that has a time and is not a notice or a built-in command's output.
     var changed: [SessionSummary]?
-    var endHint: EndHint?
   }
 
   func managerStatus(for conversation: SessionSummary) -> ManagerStatus {
@@ -27,8 +26,7 @@ extension BoardModel {
       changed: cutoff.map { cutoff in
         listedBoard.filter { $0.parent == conversation.id && $0.since > cutoff }
           .sorted { ($0.since, $0.id) > ($1.since, $1.id) }
-      },
-      endHint: conversation.endHint)
+      })
   }
 
   /// Ends the conversation, opens a new one in its place, and selects it. `drop` names the conversation's own

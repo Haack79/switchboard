@@ -57,7 +57,7 @@ extension Service {
     let s = e.session
     out.pinned = s.pinned
     out.contextTokens = facts.contextTokens
-    out.endHint = endHint(e, facts, cards: out.cards, openPrompt: out.openPrompt)
+    out.endHint = endHint(e, facts)
     let handed = handedOff(from: s.id)?.waits ?? []
     out.handedWaits = handed.isEmpty ? nil : handed
     // Last, because the archive rule reads the rest of the summary.

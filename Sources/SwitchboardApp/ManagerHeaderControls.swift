@@ -10,7 +10,7 @@ struct ManagerHeaderControls: View {
     Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
       .help("Start a session that this conversation follows")
       .fixedSize()
-    // The name gives up its width before the button drops to its icon.
+    // The name shrinks before the button drops to its icon.
     EndConversationButton(session: session)
       .layoutPriority(1)
   }
@@ -45,7 +45,7 @@ struct EndConversationButton: View {
     .confirmationDialog(
       ending?.title ?? "", isPresented: isConfirming, titleVisibility: .visible, presenting: ending
     ) { text in
-      Button(text.button, role: .destructive) { model.endConversation(session, drop: text.drop) }
+      Button(EndConversationText.button, role: .destructive) { model.endConversation(session, drop: text.drop) }
     } message: { text in
       Text(text.message)
     }
@@ -54,20 +54,16 @@ struct EndConversationButton: View {
 
 /// The confirmation that End Conversation shows for a conversation's summary.
 struct EndConversationText: Equatable {
+  static let button = "End Conversation"
+
   var title: String
   var message: String
-  var button: String
   /// The ids of the conversation's own waits, its pause condition, and its schedules, in the order that the message
   /// lists them. sbd refuses the end while the conversation holds one of these that the request does not name.
   var drop: [String]
 
   init(_ s: SessionSummary) {
-    var dropped = s.waits.map { (id: $0.id, line: $0.line) }
-    if let pause = s.pause, let until = pause.until {
-      dropped.append((until.id, pause.line + (pause.message.map { ". The resume would send: \(oneLine($0))" } ?? "")))
-    }
-    dropped += (s.schedules ?? []).map { ($0.id, "Loop: \(oneLine($0.prompt))") }
-
+    let dropped = s.ownItems
     var parts = [
       "A new conversation opens in its place with the same account, MCP servers, and pin. "
         + "The transcript stays on disk."
@@ -85,7 +81,6 @@ struct EndConversationText: Equatable {
 
     title = "End \(s.name)?"
     message = parts.joined(separator: "\n\n")
-    button = "End Conversation"
     drop = dropped.map(\.id)
   }
 }

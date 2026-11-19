@@ -30,7 +30,7 @@ struct ManagerStatusStrip: View {
         }
         Spacer()
       }
-      if let hint = status.endHint { EndConversationHint(session: session, hint: hint) }
+      if let hint = session.endHint { EndConversationHint(session: session, hint: hint) }
     }
     .buttonStyle(.borderless)
     .font(.caption)

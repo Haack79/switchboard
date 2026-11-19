@@ -106,20 +106,13 @@ enum EndFixtures {
   }
 
   @Test func theDestructiveButtonEndsTheConversation() {
-    let text = EndConversationText(EndFixtures.conversation())
-
-    #expect(text.button.hasPrefix("End"))
+    #expect(EndConversationText.button.hasPrefix("End"))
   }
 
-  @Test func withNoWaitsTheMessageSaysTheTranscriptStaysOnDisk() {
+  @Test func withNoWaitsTheMessageSaysTheTranscriptStaysOnDiskAndNothingIsDropped() {
     let text = EndConversationText(EndFixtures.conversation())
 
     #expect(text.message.localizedCaseInsensitiveContains("transcript"))
-  }
-
-  @Test func withNoWaitsNothingIsDropped() {
-    let text = EndConversationText(EndFixtures.conversation())
-
     #expect(text.drop == [])
   }
 
@@ -129,47 +122,29 @@ enum EndFixtures {
     #expect(!text.message.contains(Manager.operatorName))
   }
 
-  @Test func oneOwnWaitIsListedByItsLine() {
+  @Test func oneOwnWaitIsListedByItsLineAndDropped() {
     let text = EndConversationText(EndFixtures.conversation(waits: [EndFixtures.mergeWait]))
 
     #expect(text.message.contains(EndFixtures.mergeWait.line))
-  }
-
-  @Test func oneOwnWaitIsDropped() {
-    let text = EndConversationText(EndFixtures.conversation(waits: [EndFixtures.mergeWait]))
-
     #expect(text.drop == ["w1"])
   }
 
-  @Test func twoOwnWaitsAndAScheduleAreEachListed() {
+  @Test func twoOwnWaitsAndAScheduleAreEachListedAndDroppedWaitsFirst() {
     let text = EndConversationText(
       EndFixtures.conversation(
         waits: [EndFixtures.mergeWait, EndFixtures.dateWait], schedules: [EndFixtures.schedule]))
 
     #expect(text.message.contains(EndFixtures.mergeWait.line))
     #expect(text.message.contains(EndFixtures.dateWait.line))
-    #expect(text.message.contains(EndFixtures.schedule.prompt))
-  }
-
-  @Test func twoOwnWaitsAndAScheduleAreDroppedWaitsFirst() {
-    let text = EndConversationText(
-      EndFixtures.conversation(
-        waits: [EndFixtures.mergeWait, EndFixtures.dateWait], schedules: [EndFixtures.schedule]))
-
+    #expect(text.message.contains("Loop: \(EndFixtures.schedule.prompt)"))
     #expect(text.drop == ["w1", "w2", "s1"])
   }
 
-  @Test func handedWaitsAloneDropNothing() {
+  @Test func handedWaitsAreCountedAsTheOperatorsAndNotListedOrDropped() {
     let text = EndConversationText(
       EndFixtures.conversation(handed: [EndFixtures.handedWait, EndFixtures.secondHandedWait]))
 
     #expect(text.drop == [])
-  }
-
-  @Test func handedWaitsAreCountedAsTheOperatorsAndNotListedAsDropped() {
-    let text = EndConversationText(
-      EndFixtures.conversation(handed: [EndFixtures.handedWait, EndFixtures.secondHandedWait]))
-
     #expect(text.message.contains(Manager.operatorName))
     #expect(text.message.contains("2 waits"))
     #expect(!text.message.contains(EndFixtures.handedWait.line))
@@ -227,13 +202,13 @@ enum EndFixtures {
     #expect(!text.message.contains("open request"))
   }
 
-  /// sbd's guard refuses the end unless `drop` names every id in the conversation's own waits, its pause
-  /// condition, and its schedules. The app's `drop` has to be exactly that set, so it neither drops a handed wait
-  /// nor leaves the guard an id to refuse on.
+  /// sbd's guard refuses the end unless `drop` names every id in the session's `ownItems`. The app reads the
+  /// summary's `ownItems`, which has to hold exactly those ids, so it neither drops a handed wait nor leaves the
+  /// guard an id to refuse on.
   @Test(arguments: EndShape.allCases)
   func dropMatchesTheIdsThatSbdsGuardRefusesOn(_ shape: EndShape) {
     let session = EndFixtures.session(shape)
-    let guarded = session.resolvableWaits.map(\.id) + (session.schedules ?? []).map(\.id)
+    let guarded = session.ownItems.map(\.id)
 
     let text = EndConversationText(EndFixtures.summary(of: session, handed: shape.handed))
 

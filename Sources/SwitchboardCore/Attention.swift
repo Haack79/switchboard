@@ -477,6 +477,10 @@ extension SessionFacts {
   /// Whether a background job runs, or claude may still report one that exited.
   public func jobsRunning(now: Int64) -> Bool { jobs > 0 || mayReportJob(now: now) }
 
+  /// Whether a turn runs or a background job that claude reported has not exited. It leaves out a job that claude
+  /// may still report.
+  public var inTurnOrJob: Bool { turnRunning || jobs > 0 }
+
   /// Whether a subagent runs that sent an event within `Attention.subagentQuietMs`.
   public func subagentsRunning(now: Int64) -> Bool {
     !subagents.isEmpty && now - (lastSubagentEvent ?? 0) <= Attention.subagentQuietMs

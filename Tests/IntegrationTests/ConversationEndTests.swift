@@ -5,8 +5,7 @@ import Testing
 /// `sb manager end` removes a Manager conversation once nothing of the user's would go with it unseen. A wait, a
 /// pause condition, or a schedule that stays on the conversation blocks the end until `--drop` names it. A message
 /// that is queued for the conversation, or that claude has not confirmed, blocks the end whatever `--drop` names.
-/// A wait handed to the operator
-/// never blocks and stays there. Only the user ends a conversation, so sbd refuses a session caller, a process in
+/// A wait handed to the operator never blocks and stays there. Only the user ends a conversation, so sbd refuses a session caller, a process in
 /// any session's Claude pane, and sb refuses inside Claude Code. `--new` starts a conversation in its place.
 /// `sb rm` on a conversation gets the same wait and schedule check.
 ///
