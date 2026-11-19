@@ -41,8 +41,8 @@ public struct SessionBrief: Codable, Equatable, Sendable {
     waitLine = Self.waitLine(s.waits)
   }
 
-  /// The waits' summaries without repeats, each cut to `waitMax`. It adds
-  /// summaries while the line, with its "and N more" ending, fits in
+  /// The waits' summaries without repeats, each cut to `waitMax`. It shows
+  /// the most summaries whose line, with its "and N more" ending, fits in
   /// `waitLineMax`. Repeats drop before the cut, so two notes that differ
   /// only after the cut both count.
   static func waitLine(_ waits: [Wait]) -> String? {
@@ -53,8 +53,9 @@ public struct SessionBrief: Codable, Equatable, Sendable {
       let more = texts.count - shown.count
       return shown.joined(separator: "; ") + (more > 0 ? "; and \(more) more" : "")
     }
-    var count = 1
-    while count < texts.count, line(texts.prefix(count + 1)).count <= waitLineMax { count += 1 }
+    // The full line has no "and N more" ending, so it can fit when the line one summary shorter does not.
+    var count = texts.count
+    while count > 1, line(texts.prefix(count)).count > waitLineMax { count -= 1 }
     return line(texts.prefix(count))
   }
 

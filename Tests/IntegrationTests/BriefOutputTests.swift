@@ -176,15 +176,21 @@ import Testing
   /// `sb ls --removed` ignores `--brief`, as it ignores `--org` and `--local`.
   @Test func lsRemovedIgnoresBrief() throws {
     let sbd = try Instance()
-    _ = try sbd.new(name: "alpha")
+    let alpha = try sbd.new(name: "alpha")
+    try sbd.sb("rm", alpha.id)
 
     let text = try sbd.sb("ls", "--removed", "--brief")
     let json = try sbd.sb("ls", "--removed", "--brief", "--json")
     let plainText = try sbd.sb("ls", "--removed")
     let plainJSON = try sbd.sb("ls", "--removed", "--json")
 
-    #expect(text == plainText)
     #expect(json == plainJSON)
+    #expect(json.contains(alpha.id))
+    // The text ends with the time since removal in whole seconds, which can differ between the two runs.
+    let prefix = "\(alpha.id)  alpha  removed "
+    for output in [text, plainText] {
+      #expect(output.split(whereSeparator: \.isNewline).map { $0.hasPrefix(prefix) } == [true], "\(output)")
+    }
   }
 
   // MARK: The brief list holds the full list's sessions

@@ -316,4 +316,15 @@ import Testing
 
     #expect(tool["description"]?.string?.contains("artifacts") == true, "\(tool["description"]?.string ?? "")")
   }
+
+  @Test(arguments: ["list_sessions", "get_session"])
+  func theSessionToolsSchemasTakeFull(_ name: String) throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let tool = try #require(try mcp.tools().first { $0["name"]?.string == name })
+
+    let properties = try #require(tool["inputSchema"]?["properties"]?.object)
+    #expect(properties["full"]?["type"]?.string == "boolean")
+  }
 }

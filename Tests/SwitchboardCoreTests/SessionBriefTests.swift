@@ -204,6 +204,16 @@ private func longCIWait(_ number: Int, id: String? = nil) -> Wait {
     #expect(line.count <= 200)
   }
 
+  /// Three of these four waits with "; and 1 more" take 202 characters, and all four take 197.
+  @Test func everyWaitShowsWhenTheLineFitsOnlyWithoutTheCount() throws {
+    let s = Shape.fitsOnlyWithoutTheCount.summary
+
+    let line = try #require(try waitLine(s))
+
+    #expect(line == s.waits.map(\.summary).joined(separator: "; "))
+    #expect(line.count == 197)
+  }
+
   /// N counts the distinct texts left after duplicates collapse, not the waits.
   @Test func theMoreCountCountsDistinctTextsOnly() throws {
     let numbers = [1, 1, 2, 3, 4, 5, 6, 6]
@@ -309,7 +319,7 @@ private func longCIWait(_ number: Int, id: String? = nil) -> Wait {
   enum Shape: String, CaseIterable, Sendable {
     case plain, noURL, acknowledged, notAcknowledged, snoozed, snoozeNote
     case openPR, mergedPR, closedPR, prWithoutChecks
-    case oneWait, duplicateWaits, sevenWaits, sessionWait, callerWait, manualLongNote, dateWait
+    case oneWait, duplicateWaits, sevenWaits, fitsOnlyWithoutTheCount, sessionWait, callerWait, manualLongNote, dateWait
     case multiLineReason, longReason, emptyReason
     case chat, manager, `operator`, docketRow, notStarted
 
@@ -329,6 +339,8 @@ private func longCIWait(_ number: Int, id: String? = nil) -> Wait {
       case .oneWait: s.waits = [ciWait(422, repository: "haacked/switchboard")]
       case .duplicateWaits: s.waits = [ciWait(422, id: "w1"), ciWait(422, id: "w2")]
       case .sevenWaits: s.waits = (1...7).map { ciWait($0) }
+      case .fitsOnlyWithoutTheCount:
+        s.waits = zip(["a", "b", "c", "d"], [80, 80, 26, 5]).map { manualWait(String(repeating: $0, count: $1)) }
       case .sessionWait: s.waits = [targetWait("fix-cache", reaching: .readyToMerge)]
       case .callerWait: s.waits = [ciWait(422, then: .caller)]
       case .manualLongNote: s.waits = [manualWait("Ask Alex\n" + String(repeating: "a", count: 500))]
@@ -353,7 +365,7 @@ private func longCIWait(_ number: Int, id: String? = nil) -> Wait {
   }
 
   @Test(arguments: Shape.allCases)
-  func theBriefHoldsOnlyDecision4Keys(_ shape: Shape) throws {
+  func theBriefHoldsOnlyTheBriefKeys(_ shape: Shape) throws {
     let b = try brief(shape.summary)
 
     #expect(try keys(b).isSubset(of: briefKeys), "\(b.text)")
