@@ -899,6 +899,31 @@ extension CIReaderTests {
     let judgments = try ciJudgments(sbd, wait)
     #expect(judgments.count == 1, "\(judgments)")
   }
+
+  /// A question that sbd could not send is about the failure, so checks that stop failing drop it. Pending checks
+  /// keep the subject away from Ready to merge, so the merge action does not run.
+  @Test func anUnsentCIJudgmentIsDroppedOnceTheChecksStopFailing() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (_, wait) = try armedUndecided(.judgeFails, github, sbd)
+    let op = try follow.theOperator(sbd)
+    try sbd.sb("stop", op.id)
+    try sbd.waitFor(op.id, "the Operator's claude to stop", timeout: 30) { !$0.live }
+    let away = op.cwd + ".away"
+    try FileManager.default.moveItem(atPath: op.cwd, toPath: away)
+    try failTwice(sbd, wait, head: head(github))
+    try sbd.waitFor("the unsent question", timeout: 30) { try ciCheck(sbd, wait)?.unsent != nil }
+
+    github.checks(Self.number, "PENDING")
+    try sbd.poll(all: true)
+    try sbd.waitFor("the dropped question", timeout: 30) { try ciCheck(sbd, wait)?.unsent == nil }
+    try FileManager.default.moveItem(atPath: away, toPath: op.cwd)
+    try sbd.advanceClock(Self.pastHoldRetry)
+    try passMoreTicks(sbd)
+
+    let judgments = try ciJudgments(sbd, wait)
+    #expect(judgments.isEmpty, "\(judgments)")
+  }
 }
 
 // MARK: The merge action

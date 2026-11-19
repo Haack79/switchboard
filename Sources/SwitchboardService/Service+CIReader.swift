@@ -51,10 +51,16 @@ extension Service {
         guard !ciReads.contains(CIRead.key(holder: holder, wait: wait.id)) else { continue }
         // At a head that the reader judged, only a question that sbd could not send is left to do.
         if let check = wait.ciCheck, check.step == .judged,
-          check.head == wait.actionSubject.flatMap({ entries[$0.id]?.facts.pr?.headSha })
+          let pr = wait.actionSubject.flatMap({ entries[$0.id]?.facts.pr }), check.head == pr.headSha
         {
-          if let text = check.unsent, now - check.since >= Int64(settings.holdRetrySeconds) * 1000 {
-            sendCIQuestion(holder, wait.id, check, text)
+          if let text = check.unsent {
+            if pr.state != .open || !pr.checksFailed {
+              var answered = check
+              answered.unsent = nil
+              setCICheck(holder, wait.id, answered)
+            } else if now - check.since >= Int64(settings.holdRetrySeconds) * 1000 {
+              sendCIQuestion(holder, wait.id, check, text)
+            }
           }
           continue
         }
