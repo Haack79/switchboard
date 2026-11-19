@@ -152,6 +152,9 @@ public struct Config: Codable, Equatable, Sendable {
   /// the session back with nothing stopped.
   public var removalDelaySeconds = 5
   public static let maxRemovalDelaySeconds = 86_400
+  /// The context size in tokens at which a Manager conversation's header suggests ending it. 0 turns that hint off.
+  public var conversationHintTokens = 120_000
+  public static let maxConversationHintTokens = 10_000_000
   /// Makes the removal job treat the trash as on another volume than every
   /// worktree. sbd reads it only with `testClock`.
   public var testTrashOtherVolume = false
@@ -183,7 +186,7 @@ public struct Config: Codable, Equatable, Sendable {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
-      cleanupDeletes, supacode, removalDelaySeconds
+      cleanupDeletes, supacode, removalDelaySeconds, conversationHintTokens
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk, managerSkills
     case manager
@@ -253,6 +256,18 @@ public struct Config: Codable, Equatable, Sendable {
         logLine(
           "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
             + "\(Self.maxRemovalDelaySeconds)")
+      }
+    }
+    switch try c.decodeIfPresent(JSON.self, forKey: .conversationHintTokens) {
+    case nil, .null:
+      break
+    case let value?:
+      if let tokens = value.int, (0...Self.maxConversationHintTokens).contains(tokens) {
+        conversationHintTokens = tokens
+      } else {
+        logLine(
+          "skipping conversationHintTokens: its value must be a whole number of tokens from 0 to "
+            + "\(Self.maxConversationHintTokens)")
       }
     }
     testTrashOtherVolume =

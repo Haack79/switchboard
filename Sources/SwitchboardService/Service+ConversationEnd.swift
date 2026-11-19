@@ -28,6 +28,38 @@ extension Service {
     }
   }
 
+  // MARK: The end hint
+
+  /// The conversation's end hint. Its spawned sessions are those that its events recorded and those whose parent it
+  /// is, which takes in a follow-up that it captured. It runs on the state queue.
+  func endHint(_ e: Entry, _ facts: SessionFacts, cards: [Card], openPrompt: Bool) -> EndHint? {
+    let id = e.session.id
+    let ids = facts.spawned.union(entries.filter { $0.value.session.parent == id }.keys)
+    // A session that sbd holds but never tracked is not gone.
+    let spawned = Dictionary(
+      uniqueKeysWithValues: ids.map { child in (child, entries[child].map { $0.facts.lastState ?? .notStarted }) })
+    return EndHint.evaluate(
+      spawned: spawned, ownWaits: e.session.resolvableWaits.count, ownSchedules: e.session.schedules?.count ?? 0,
+      turnRunning: facts.turnRunning || facts.jobs > 0, messageOnItsWay: e.hasMessageOnItsWay,
+      needsMe: ChatMark.needsMe(cards: cards, openPrompt: openPrompt), contextTokens: facts.contextTokens,
+      threshold: config.conversationHintTokens, dismissed: facts.endHintDismissed)
+  }
+
+  /// The `manager-hint` request, which answers the summary of the Manager conversation that `session` names. With
+  /// `dismiss`, it first records the key of the hint that shows, which hides the hint until its key changes. Only the
+  /// user dismisses a hint, so it refuses a dismissal that names a `caller`. It runs on the state queue.
+  func managerHint(_ args: JSON) throws -> JSON {
+    let dismiss = args["dismiss"]?.bool == true
+    if dismiss, let caller = args["caller"]?.string {
+      let name = entries[caller]?.session.name ?? caller
+      throw APIError("\(name) can't dismiss a conversation's end hint. Only the user dismisses it")
+    }
+    guard let ref = args["session"]?.string, !ref.isEmpty else { throw APIError("name a Manager conversation") }
+    let id = try managerConversation(ref)
+    if dismiss, let key = summary(id).endHint?.key { record(id, "end-hint-dismissed", ["key": .string(key)]) }
+    return try JSON(encoding: summary(id))
+  }
+
   // MARK: Ending
 
   static let endCommand = "sb manager end"

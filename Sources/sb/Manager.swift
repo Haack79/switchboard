@@ -2,7 +2,7 @@ import Foundation
 import SwitchboardCore
 
 /// `sb manager [ls | new [--name N] [text] | mcp <conv> … | model [<name>] | skills … | pin <conv> | unpin <conv> |
-/// end <conv> [--drop <id>]… [--new [--name N]] | <conv> [text] [--log | --read]]`.
+/// end <conv> [--drop <id>]… [--new [--name N]] | hint <conv> [--dismiss] | <conv> [text] [--log | --read]]`.
 /// Without a conversation it opens the most recent one.
 func manager(_ a: Args) {
   var words = a.positional[...]
@@ -15,6 +15,7 @@ func manager(_ a: Args) {
       if let unread = s.activity?.unread, unread > 0 { marks.append("\(unread) unread") }
       if s.pinned == true { marks.append("pinned") }
       if s.activity?.archived == true { marks.append("archived") }
+      if s.endHint != nil { marks.append("suggest ending") }
       let extra = marks.map { "  \($0)" }.joined()
       print("\(s.id)  \(s.name)  \(s.state.title)  \(Manager.serversText(s.mcp))\(extra)".printable)
     }
@@ -38,6 +39,9 @@ func manager(_ a: Args) {
   case "end":
     words.removeFirst()
     return managerEnd(a, Array(words))
+  case "hint":
+    words.removeFirst()
+    return managerHint(a, Array(words))
   case "new":
     words.removeFirst()
     var args: [String: JSON] = ["new": true]
@@ -91,6 +95,20 @@ private func managerEnd(_ a: Args, _ words: [String]) {
     let s = summary(started)
     print("Started \(s.name) (\(s.id))".printable)
   }
+}
+
+/// `sb manager hint <conv> [--dismiss]`. sbd refuses a dismissal from a session, because the hint is the user's.
+private func managerHint(_ a: Args, _ words: [String]) {
+  guard let ref = words.first else { die("manager hint needs a conversation") }
+  var args: [String: JSON] = ["session": .string(ref)]
+  if a.switches.contains("--dismiss") {
+    args.merge(callerArg) { $1 }
+    args["dismiss"] = true
+  }
+  let result = call("manager-hint", args)
+  if a.json { return printJSON(result) }
+  let s = summary(result)
+  print("\(s.name): \(s.endHint?.text ?? "No suggestion")".printable)
 }
 
 /// `sb manager model [<name>]`.

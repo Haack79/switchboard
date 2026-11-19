@@ -211,6 +211,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The input context of a Manager conversation's latest turn, from its `context` events. Nil since a `/clear`
   /// or a compaction until the next turn's read.
   public var contextTokens: Int?
+  /// The sessions that the session created or that `sb parent` linked under it, less those it unlinked. A removed
+  /// session stays in it.
+  public var spawned: Set<String> = []
+  /// The key of the end hint that the user dismissed last.
+  public var endHintDismissed: String?
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -853,6 +858,13 @@ extension SessionFacts {
       contextTokens = event.data["tokens"]?.int
     case "SessionStart" where ["clear", "compact"].contains(event.data["source"]?.string):
       contextTokens = nil
+    // The child's own `linked` and `unlinked` events name its parent and no child.
+    case "child", "linked":
+      if let child = event.data["child"]?.string { spawned.insert(child) }
+    case "unlinked":
+      if let child = event.data["child"]?.string { spawned.remove(child) }
+    case "end-hint-dismissed":
+      endHintDismissed = event.data["key"]?.string
     default:
       break
     }

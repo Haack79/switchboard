@@ -1392,6 +1392,69 @@ extension TriageOperatorTests {
   }
 }
 
+/// The sessions that a Manager conversation spawned, folded from the conversation's own events: `child` when it
+/// created one, `linked` when `sb parent` linked one in, and `unlinked` when `sb parent --clear` took one out. The
+/// set keeps a child after its removal. `end-hint-dismissed` records the key of the hint that the user dismissed.
+@Suite struct ConversationSpawnFoldTests {
+  @Test func noEventsLeaveNothingSpawnedAndNothingDismissed() {
+    let f = facts([event("SessionStart", 0), event("Stop", 1)])
+
+    #expect(f.spawned.isEmpty)
+    #expect(f.endHintDismissed == nil)
+  }
+
+  @Test func aChildEventAddsTheChild() {
+    #expect(facts([event("child", 2, ["child": "k1"])]).spawned == ["k1"])
+  }
+
+  @Test func aLinkedEventWithAChildAddsTheChild() {
+    #expect(facts([event("linked", 2, ["child": "k1", "by": "you"])]).spawned == ["k1"])
+  }
+
+  /// sbd records `linked` on the child too, with `parent` and no `child`. The child spawned nothing.
+  @Test func aLinkedEventThatNamesOnlyAParentAddsNothing() {
+    #expect(facts([event("linked", 2, ["parent": "m1", "by": "you"])]).spawned.isEmpty)
+  }
+
+  @Test func anUnlinkedEventRemovesTheChild() {
+    let f = facts([
+      event("child", 2, ["child": "k1"]), event("child", 3, ["child": "k2"]),
+      event("unlinked", 4, ["child": "k1", "by": "you"]),
+    ])
+
+    #expect(f.spawned == ["k2"])
+  }
+
+  @Test func anUnlinkedEventThatNamesOnlyAParentRemovesNothing() {
+    let f = facts([event("child", 2, ["child": "k1"]), event("unlinked", 4, ["parent": "m1", "by": "you"])])
+
+    #expect(f.spawned == ["k1"])
+  }
+
+  @Test func theDismissedEventRecordsTheKey() {
+    #expect(facts([event("end-hint-dismissed", 2, ["key": "done:1"])]).endHintDismissed == "done:1")
+  }
+
+  @Test func aLaterDismissalReplacesTheKey() {
+    let f = facts([
+      event("end-hint-dismissed", 2, ["key": "context:2"]), event("end-hint-dismissed", 4, ["key": "context:3"]),
+    ])
+
+    #expect(f.endHintDismissed == "context:3")
+  }
+
+  /// None of these kinds moves `lastActivity`, so none holds off the idle stop or brings back an archived
+  /// conversation.
+  @Test(arguments: [
+    event("child", 500, ["child": "k1"]), event("linked", 500, ["child": "k1", "by": "you"]),
+    event("unlinked", 500, ["child": "k1", "by": "you"]), event("end-hint-dismissed", 500, ["key": "done:1"]),
+    event("context", 500, ["tokens": 250_000]),
+  ])
+  func aConversationEventLeavesTheLastActivity(_ e: Event) {
+    #expect(facts([event("Stop", 1), e]).lastActivity == 1)
+  }
+}
+
 /// A `skill_blocked` event ends the turn that a blocked prompt started, because Claude Code sends no Stop after a
 /// UserPromptSubmit block. A blocked tool call clears the running tool and leaves the turn running.
 @Suite struct SkillBlockedAttentionTests {

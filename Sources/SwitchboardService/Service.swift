@@ -789,6 +789,8 @@ public final class Service {
       return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
+    case "manager-hint":
+      return try managerHint(args)
     case "manager-model":
       return try managerModelRequest(args)
     case "rename":
@@ -1347,6 +1349,9 @@ public final class Service {
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
+    if let parent = session.parent, entries[parent]?.session.kind == .manager {
+      record(parent, "child", ["child": .string(id)])
+    }
     if session.kind.showsAsChat { recordRead(id, 0) }
     try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
     try launch(id, prompt: args.prompt, trigger: .create)
@@ -2818,7 +2823,7 @@ public final class Service {
         facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
-    if s.kind == .manager { addConversationFields(to: &out, s, facts) }
+    if s.kind == .manager { addConversationFields(to: &out, e, facts) }
     return out
   }
 

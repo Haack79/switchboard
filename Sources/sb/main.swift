@@ -83,6 +83,11 @@ let usage = """
                                   each one. Waits it handed to the operator stay.
                                   --new starts a conversation with its account,
                                   MCP servers, and pin
+    manager hint <conv> [--dismiss]
+                                  the suggestion to end the conversation: every
+                                  session it started is done, or its context
+                                  passed conversationHintTokens. --dismiss hides
+                                  it until it changes
     manager mcp <conv> [add <server>… | rm <server>… | --all | --none]
                                   show or change the MCP servers that the
                                   conversation loads besides switchboard. A new
