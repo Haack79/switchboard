@@ -926,6 +926,7 @@ public final class Service {
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
+      dropStaleFailedRemoval(id, event: event)
     }
     releaseCards(id)
     return event

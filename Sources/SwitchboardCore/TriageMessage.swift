@@ -35,6 +35,8 @@ public struct TriageDetails: Codable, Equatable, Sendable {
   public var toolInput: ToolInput?
   public var pullRequest: PR?
   public var waits: [String]
+  /// The ids of the overdue waits that raised the item, from `Verdict.overdueWaits`.
+  public var overdueWaits: [String]
   public var notes: [String]
   /// The sessions that a group message goes to, as `name (id)`.
   public var targets: [String]
@@ -42,6 +44,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
   /// The names of the parts that this item has, in the order the app lists them.
   public var parts: [String] {
     var parts: [String] = []
+    if !overdueWaits.isEmpty { parts.append("overdue waits") }
     if toolInput != nil { parts.append("tool input") }
     if !targets.isEmpty { parts.append("targets") }
     if pullRequest != nil { parts.append("pull request") }
@@ -53,19 +56,20 @@ public struct TriageDetails: Codable, Equatable, Sendable {
 
   public init(
     openByDefault: Bool = false, lastReply: String? = nil, toolInput: ToolInput? = nil, pullRequest: PR? = nil,
-    waits: [String] = [], notes: [String] = [], targets: [String] = []
+    waits: [String] = [], overdueWaits: [String] = [], notes: [String] = [], targets: [String] = []
   ) {
     self.openByDefault = openByDefault
     self.lastReply = lastReply
     self.toolInput = toolInput
     self.pullRequest = pullRequest
     self.waits = waits
+    self.overdueWaits = overdueWaits
     self.notes = notes
     self.targets = targets
   }
 
   private enum CodingKeys: String, CodingKey {
-    case openByDefault, lastReply, toolInput, pullRequest, waits, notes, targets
+    case openByDefault, lastReply, toolInput, pullRequest, waits, overdueWaits, notes, targets
   }
 
   public init(from decoder: Decoder) throws {
@@ -75,6 +79,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
     toolInput = try c.decodeIfPresent(ToolInput.self, forKey: .toolInput)
     pullRequest = try c.decodeIfPresent(PR.self, forKey: .pullRequest)
     waits = try c.decodeIfPresent([String].self, forKey: .waits) ?? []
+    overdueWaits = try c.decodeIfPresent([String].self, forKey: .overdueWaits) ?? []
     notes = try c.decodeIfPresent([String].self, forKey: .notes) ?? []
     targets = try c.decodeIfPresent([String].self, forKey: .targets) ?? []
   }
@@ -86,6 +91,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
     try c.encodeIfPresent(toolInput, forKey: .toolInput)
     try c.encodeIfPresent(pullRequest, forKey: .pullRequest)
     if !waits.isEmpty { try c.encode(waits, forKey: .waits) }
+    if !overdueWaits.isEmpty { try c.encode(overdueWaits, forKey: .overdueWaits) }
     if !notes.isEmpty { try c.encode(notes, forKey: .notes) }
     if !targets.isEmpty { try c.encode(targets, forKey: .targets) }
   }

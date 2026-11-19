@@ -536,16 +536,28 @@ func replyFixture(_ name: String) throws -> String {
     #expect(summary.summary == Self.eightLines)
   }
 
-  @Test func keepsOneLinePerDecisionUpToTheMostItAsksFor() throws {
-    let lines =
-      ["It planned."] + (1...TriageSummarizer.maxDecisions).map { "\($0). Decision \($0)." } + [
-        "It needs them.", "extra",
-      ]
+  static let fullSummary =
+    ["It asks ten things."] + (1...TriageSummarizer.maxDecisions).map { "\($0). Decision \($0)." } + [
+      "It planned.", "It needs them.",
+    ]
+
+  @Test func keepsTheFirstLineEveryDecisionAndTwoLinesOfContext() throws {
+    let text = Self.fullSummary.joined(separator: "\n")
+    let payload: JSON = ["title": "Decide", "kind": "decision", "summary": .string(text)]
+
+    let summary = try TriageSummarizer.parse(envelope(payload), reply: "")
+
+    #expect(Self.fullSummary.count == 1 + TriageSummarizer.maxDecisions + 2)
+    #expect(summary.summary == text)
+  }
+
+  @Test func dropsTheLinesAfterTheMostItAsksFor() throws {
+    let lines = Self.fullSummary + ["extra"]
     let payload: JSON = ["title": "Decide", "kind": "decision", "summary": .string(lines.joined(separator: "\n"))]
 
     let summary = try TriageSummarizer.parse(envelope(payload), reply: "")
 
-    #expect(summary.summary == lines.dropLast().joined(separator: "\n"))
+    #expect(summary.summary == Self.fullSummary.joined(separator: "\n"))
     #expect(!summary.summary.contains("extra"))
   }
 
@@ -886,5 +898,154 @@ private func readyVerdict(_ f: SessionFacts) throws -> Verdict {
     let built = try #require(Triage.item(f, Verdict(state: .needsYou, reason: "tidy the folder"), kind: .work))
 
     #expect(built.review == nil)
+  }
+}
+
+// MARK: Rule titles
+
+/// A rule reason of 71 characters, past the 60 that model and session titles keep.
+private let longRuleReason = "merge main in; #1204 conflicts with main after the release branch moved"
+
+/// A cardless permission prompt whose command makes a reason longer than 60 characters.
+private func longCardlessPrompt() -> SessionFacts {
+  let command = "git push origin haacked/371-inbox-decision-context --force-with-lease"
+  var f = SessionFacts()
+  f.openPermission = ToolCall(tool: "Bash", summary: command, since: 1, input: ["command": .string(command)])
+  return f
+}
+
+/// An overdue session wait whose reason is 66 characters.
+private let longOverdueWait = Wait(
+  id: "w1", kind: .session, session: Wait.SessionTarget(id: "k1", name: "the-flag-cache-rollout-followup"),
+  state: .done, created: 0, recheck: 500)
+
+@Suite struct TriageRuleTitles {
+  @Test func ruleTitlesAreLongerThanModelTitles() {
+    #expect(Triage.ruleTitleLength == 100)
+    #expect(Triage.titleLength == 60)
+  }
+
+  @Test func aSixtyFiveCharacterReasonStaysWhole() throws {
+    let reason = "a review from PostHog/clickhouse on #135173: still open after 1 d"
+    try #require(reason.count == 65)
+
+    #expect(Triage.ruleTitle(reason) == "A review from PostHog/clickhouse on #135173: still open after 1 d")
+  }
+
+  @Test func aHundredCharacterReasonStaysWhole() {
+    let reason = String(repeating: "x", count: 100)
+
+    #expect(Triage.ruleTitle(reason) == "X" + String(repeating: "x", count: 99))
+  }
+
+  @Test(arguments: [101, 120, 300])
+  func aLongerReasonIsCutAtAHundred(_ length: Int) {
+    let title = Triage.ruleTitle(String(repeating: "x", count: length))
+
+    #expect(title == "X" + String(repeating: "x", count: 98) + "…")
+  }
+
+  @Test func theTitleStillTurnsTheFirstSemicolonIntoAColon() {
+    #expect(
+      Triage.ruleTitle(longRuleReason) == "Merge main in: #1204 conflicts with main after the release branch moved")
+  }
+
+  @Test func aRuleItemKeepsItsLongTitleWhole() throws {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"])])
+
+    let built = try #require(Triage.item(f, Verdict(state: .needsYou, reason: longRuleReason), kind: .work))
+
+    #expect(built.title == "Merge main in: #1204 conflicts with main after the release branch moved")
+    #expect(built.ref == "rule:Merge main in: #1204 conflicts with main after the release branch moved")
+  }
+
+  /// The rule callout that `addRule` puts on the session's card uses the same title.
+  @Test func theRuleCalloutOnASessionCardKeepsTheLongTitleWhole() throws {
+    let f = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion),
+    ])
+
+    let built = try #require(Triage.item(f, Verdict(state: .needsYou, reason: longRuleReason), kind: .work))
+
+    #expect(built.source == .session)
+    #expect(built.callouts.first?.title == "Merge main in: #1204 conflicts with main after the release branch moved")
+  }
+}
+
+// MARK: The ref of a long rule title agrees across its builders
+
+@Suite struct TriageRuleRefParity {
+  /// `liveItem` and `promptItem` build the open prompt's item, and `ItemContext` matches it by ref.
+  @Test(arguments: [SessionKind.work, .manager])
+  func aCardlessPromptWithALongReasonAnchorsAtItsCall(_ kind: SessionKind) throws {
+    let f = longCardlessPrompt()
+    let open = try #require(Attention.openPromptVerdict(f))
+    try #require(open.reason.count > Triage.titleLength)
+
+    let built = try #require(Triage.item(f, open, kind: kind))
+
+    #expect(built.title == Triage.capitalized(open.reason))
+    #expect(built.ref == Triage.ruleRef(Triage.ruleTitle(open.reason)))
+    #expect(
+      TranscriptAnchor.of(item: built, facts: f) == .toolCall(tool: "Bash", input: f.openPermission?.input ?? [:]))
+  }
+
+  @Test func theOperatorsWaitItemAndAWorkItemOfTheSameLongReasonShareARef() throws {
+    let f = facts(opIdle)
+    let v = Attention.evaluate(operatorSession(waits: [longOverdueWait]), f, now: 1000)
+    try #require(v.byWaitRule, "\(v.state) \(v.reason)")
+    try #require(v.reason.count > Triage.titleLength)
+
+    let op = try #require(Triage.item(f, v, kind: .operator))
+    let work = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(op.title == Triage.capitalized(v.reason))
+    #expect(op.ref == Triage.ruleRef(Triage.ruleTitle(v.reason)))
+    #expect(op.ref == work.ref)
+  }
+
+  @Test func theOperatorsWaitItemHasTheWholeLongReason() throws {
+    let f = facts(opIdle)
+    let v = Attention.evaluate(operatorSession(waits: [longOverdueWait]), f, now: 1000)
+
+    let op = try #require(Triage.item(f, v, kind: .operator))
+
+    #expect(op.title == "The-flag-cache-rollout-followup to reach Done: still open after 1m")
+  }
+}
+
+// MARK: Decision first in the summary
+
+@Suite struct TriageReplySummaryOrder {
+  /// The `summary` bullet of the system prompt, up to the `options` bullet.
+  static var summaryRule: String {
+    let system = TriageSummarizer.system
+    guard let start = system.range(of: "- summary:"),
+      let end = system.range(of: "- options:", range: start.upperBound..<system.endIndex)
+    else { return "" }
+    return String(system[start.lowerBound..<end.lowerBound])
+  }
+
+  @Test func theFirstLineSaysWhatTheSessionNeedsAndTheAnswerItRecommends() {
+    #expect(
+      Self.summaryRule.contains(
+        "The first line says what the session needs from the user and the answer it recommends."))
+  }
+
+  @Test func theFirstLineSaysWhatIsFinishedWhenTheReplyAsksNothing() {
+    #expect(Self.summaryRule.contains("When the reply asks nothing, the first line says what is finished."))
+  }
+
+  @Test func contextComesLastInAtMostTwoLines() {
+    #expect(Self.summaryRule.contains("at most two lines of context"))
+  }
+
+  @Test func theSummaryNoLongerLeadsWithWhatTheSessionDid() {
+    #expect(!Self.summaryRule.contains("The first says what the session did."))
+    #expect(!Self.summaryRule.contains("The last says what it needs from the user"))
+  }
+
+  @Test func decisionLinesStillComeOnePerDecision() {
+    #expect(Self.summaryRule.contains("one line per decision"))
   }
 }

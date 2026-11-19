@@ -216,12 +216,13 @@ private final class Harness {
     return text.split(separator: "\n").count
   }
 
-  /// Adds a session whose polled PR is `pr`.
-  func addSession(_ id: String, pr: PullRequest) {
+  /// Adds a session whose PR the poller read at `polled`, in milliseconds since the epoch.
+  func addSession(_ id: String, pr: PullRequest, polled: Int64? = nil) {
     service.queue.sync {
       let s = Session(id: id, name: id, cwd: home.path, claudeSessionId: "uuid-\(id)", created: 0)
       var entry = Service.Entry(session: s)
       entry.facts.pr = pr
+      entry.facts.prRead = polled
       service.entries[id] = entry
     }
   }
@@ -550,6 +551,198 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
 
     #expect(!message.isEmpty)
     #expect(h.api.requests.isEmpty)
+  }
+
+  // MARK: Fresh reads
+
+  /// GitHub's title changes after the first read. A plain call answers from sbd's cache, a fresh call reads GitHub,
+  /// and sbd stores the fresh answer for the next plain call.
+  @Test func aFreshCallReadsGitHubAndStoresTheAnswer() throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7, title: "Old title"))
+    _ = try h.details("acme/widgets#7")
+    h.api.put(7, issueNode(7, title: "New title"))
+
+    let cached = try h.details("acme/widgets#7")
+    let fresh = try h.details(["ref": "acme/widgets#7", "fresh": true])
+    let after = try h.details("acme/widgets#7")
+
+    #expect([cached["title"], fresh["title"], after["title"]] == ["Old title", "New title", "New title"])
+    #expect(h.api.requests.count == 2)
+  }
+
+  /// "Check now" on a wait for the session's own PR must read GitHub, not the poll that sbd stored.
+  @Test func aFreshCallSkipsASessionsPR() throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42, title: "Polled title"))
+    h.api.put(42, issueNode(42, title: "Fetched title"))
+
+    let details = try h.details(["ref": "acme/widgets#42", "fresh": true])
+
+    #expect(details["source"] == "fetch")
+    #expect(details["title"] == "Fetched title")
+    #expect(h.api.requests.map(\.key) == ["acme/widgets#42"])
+  }
+
+  /// "Check now" stores a read that is newer than the poll, so a later plain call must not undo it.
+  @Test func aPlainCallAfterAFreshReadAnswersWithTheFreshRead() throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42, title: "Polled title"), polled: nowMs() - 30_000)
+    h.api.put(42, issueNode(42, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#42", "fresh": true])
+
+    let after = try h.details("acme/widgets#42")
+
+    #expect(after["title"] == "Fetched title")
+    #expect(after["source"] == "fetch")
+    #expect(h.api.requests.count == 1)
+  }
+
+  @Test func aPollNewerThanTheFreshReadAnswersAgain() throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42, title: "Polled title"), polled: nowMs() - 30_000)
+    h.api.put(42, issueNode(42, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#42", "fresh": true])
+    h.addSession("s1", pr: pullRequest(42, title: "Newer poll"), polled: nowMs() + 1_000)
+
+    let after = try h.details("acme/widgets#42")
+
+    #expect(after["title"] == "Newer poll")
+    #expect(after["source"] == "session")
+  }
+
+  @Test func aPlainCallAfterAFreshReadAnswersWithTheFreshReadOfACachedIssue() throws {
+    let h = try Harness()
+    h.cache([inboxIssue(7, title: "Cached title")])
+    h.service.queue.sync { h.service.issueCache.polledAt = nowMs() - 30_000 }
+    h.api.put(7, issueNode(7, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#7", "fresh": true])
+
+    let after = try h.details("acme/widgets#7")
+
+    #expect(after["title"] == "Fetched title")
+  }
+
+  @Test func aFreshCallSkipsACachedIssue() throws {
+    let h = try Harness()
+    h.cache([inboxIssue(7, title: "Cached title")])
+    h.api.put(7, issueNode(7, title: "Fetched title"))
+
+    let details = try h.details(["ref": "acme/widgets#7", "fresh": true])
+
+    #expect(details["source"] == "fetch")
+    #expect(details["title"] == "Fetched title")
+    #expect(h.api.requests.count == 1)
+  }
+
+  /// A cached GitHub error does not stop a fresh read, and the fresh answer replaces it.
+  @Test func aFreshCallReplacesACachedError() throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7))
+    h.api.queue(.init(status: 502, body: #"{"message":"Server Error"}"#))
+    _ = try h.refusal("acme/widgets#7")
+
+    let fresh = try h.details(["ref": "acme/widgets#7", "fresh": true])
+    let after = try h.details("acme/widgets#7")
+
+    #expect(fresh["title"] == "Fetched title")
+    #expect(after == fresh)
+    #expect(h.api.requests.count == 2)
+  }
+
+  @Test func aFreshCallOfAnItemGitHubDoesNotHaveIsNotFound() throws {
+    let h = try Harness()
+    h.api.put(1, issueNode(1))
+
+    #expect(
+      try h.details(["ref": "acme/widgets#7", "fresh": true]) == [
+        "notFound": true, "repo": "acme/widgets", "number": 7,
+      ])
+  }
+
+  /// Every way to name a session's PR reads GitHub when the call is fresh.
+  @Test(
+    arguments: [
+      ["ref": "acme/widgets#42"], ["ref": "ACME/Widgets#42"], ["ref": "https://github.com/acme/widgets/pull/42"],
+      ["ref": "https://github.com/acme/widgets/issues/42"], ["repo": "acme/widgets", "number": 42],
+      ["repo": "Acme/Widgets", "number": 42],
+    ] as [JSON])
+  func everyFormOfAFreshReferenceReadsGitHub(_ args: JSON) throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42))
+    h.api.put(42, issueNode(42))
+    var fresh = args.object ?? [:]
+    fresh["fresh"] = true
+
+    let details = try h.details(.object(fresh))
+
+    #expect(details["source"] == "fetch")
+    #expect(h.api.requests.count == 1)
+  }
+
+  /// Without `fresh`, and with `fresh: false`, the order stays: the session's PR, the Issues cache, sbd's cache.
+  @Test(arguments: [nil, false] as [Bool?])
+  func aCallThatIsNotFreshKeepsTheSourceOrder(_ flag: Bool?) throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7))
+    h.api.put(42, issueNode(42))
+    h.addSession("s1", pr: pullRequest(42))
+    h.cache([inboxIssue(8)])
+    func args(_ ref: String) -> JSON {
+      var a: [String: JSON] = ["ref": .string(ref)]
+      if let flag { a["fresh"] = .bool(flag) }
+      return .object(a)
+    }
+    _ = try h.details(args("acme/widgets#7"))
+
+    let sources = try ["acme/widgets#42", "acme/widgets#8", "acme/widgets#7"].map { try h.details(args($0))["source"] }
+
+    #expect(sources == ["session", "issues", "fetch"])
+    #expect(h.api.requests.count == 1)
+  }
+
+  /// A fresh call still refuses a bad reference before it asks GitHub.
+  @Test(arguments: [["ref": "acme/widgets"], ["ref": "acme/widgets#0"], ["repo": "acme/widgets"]] as [JSON])
+  func aFreshCallRefusesABadReferenceWithoutARequest(_ args: JSON) throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7))
+    var fresh = args.object ?? [:]
+    fresh["fresh"] = true
+
+    let message = try h.refusal(.object(fresh))
+
+    #expect(!message.isEmpty)
+    #expect(h.api.requests.isEmpty)
+  }
+
+  /// Fresh calls that arrive while a read for their key runs wait for that read, so "Check now" clicked twice costs
+  /// one request.
+  @Test func concurrentFreshCallsShareOneRead() throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7))
+    h.api.hold()
+    releaseLater(h.api)
+
+    let results = try concurrently(20) { _ in h.call(["ref": "acme/widgets#7", "fresh": true]) }
+
+    #expect(results.compactMap(\.error) == [])
+    #expect(results.map { $0.result?["title"] } == Array(repeating: "Fetched title", count: 20))
+    #expect(h.api.requests.count == 1)
+  }
+
+  /// A fresh call that arrives while a plain read for its key runs joins that read, which started after the click.
+  @Test func aFreshCallJoinsAPlainReadThatRuns() throws {
+    let h = try Harness()
+    h.api.put(7, issueNode(7))
+    h.api.hold()
+    releaseLater(h.api)
+
+    let results = try concurrently(10) { i in
+      h.call(i == 0 ? ["ref": "acme/widgets#7"] : ["ref": "acme/widgets#7", "fresh": true])
+    }
+
+    #expect(results.compactMap(\.error) == [])
+    #expect(h.api.requests.count == 1)
   }
 
   // MARK: In-flight sharing

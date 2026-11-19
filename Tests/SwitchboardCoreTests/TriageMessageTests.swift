@@ -27,6 +27,14 @@ private func longCommandTurn() -> [Event] {
   return promptTurn(call, tool("Bash", ["command": .string(longCommand)]))
 }
 
+/// A session whose CI wait `w7` went overdue two hours after it was set, and its verdict.
+private func overdueCI() -> (SessionFacts, Wait, Verdict) {
+  let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), stop(1, 1, "Pushed.")])
+  var wait = Wait(id: "w7", kind: .ci, created: 0)
+  wait.recheck = 2 * 3_600_000
+  return (f, wait, Attention.evaluate(withWaits([wait]), f, now: 2 * 3_600_000))
+}
+
 @Suite struct TriageMessageSections {
   @Test func aPermissionCardPutsTheCallInSummaryAndTheButtonsInAction() throws {
     let m = try #require(message(facts(permissionTurn())))
@@ -189,6 +197,25 @@ private func longCommandTurn() -> [Event] {
     #expect(m.details.pullRequest == .init(line: pr.line, title: pr.title, url: pr.url))
   }
 
+  @Test func detailsKeepTheOverdueWaitsBesideTheWaitLines() throws {
+    let (f, wait, verdict) = overdueCI()
+
+    let m = try #require(message(f, verdict, waits: [wait]))
+
+    #expect(m.details.overdueWaits == ["w7"])
+    #expect(m.details.waits == [wait.line])
+  }
+
+  @Test func aRuleThatIsNotAWaitHasNoOverdueWaitsBesideItsWaitLines() throws {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"])])
+    let wait = Wait(id: "w1", kind: .manual, note: "later", created: 1)
+
+    let m = try #require(message(f, Verdict(state: .needsYou, reason: "tidy the folder"), waits: [wait]))
+
+    #expect(m.details.overdueWaits.isEmpty)
+    #expect(m.details.waits == [wait.line])
+  }
+
   @Test func aGroupMessageCardPutsItsTargetsAndTextInDetails() throws {
     var f = facts(permissionTurn())
     var card = f.cards[0]
@@ -290,6 +317,55 @@ private func longCommandTurn() -> [Event] {
 
     let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
 
+    #expect(decoded == built)
+  }
+
+  @Test func anOverdueWaitItemNamesItsWaitsUnderDetails() throws {
+    let (f, wait, verdict) = overdueCI()
+    let m = try #require(message(f, verdict, waits: [wait]))
+
+    #expect(try encoded(m)["details"]?["overdueWaits"] == ["w7"])
+  }
+
+  @Test func overdueWaitsEncodeWhenNotEmpty() throws {
+    var details = TriageDetails()
+    details.overdueWaits = ["w1", "w2"]
+
+    #expect(try JSON(encoding: details)["overdueWaits"] == ["w1", "w2"])
+  }
+
+  @Test func emptyOverdueWaitsAreLeftOut() throws {
+    let details = TriageDetails(waits: ["CI on the session's PR"])
+
+    let keys = try #require(try JSON(encoding: details).object).keys
+
+    #expect(!keys.contains("overdueWaits"))
+    #expect(keys.contains("waits"))
+  }
+
+  @Test func detailsFromAnOlderSbdHaveNoOverdueWaits() throws {
+    let old: JSON = ["openByDefault": false, "waits": ["CI on the session's PR: still open after 2 h"]]
+
+    let decoded = try JSONCoding.convert(old, to: TriageDetails.self)
+
+    #expect(decoded.overdueWaits.isEmpty)
+    #expect(decoded.waits == ["CI on the session's PR: still open after 2 h"])
+  }
+
+  @Test func theItemRoundTripsWithItsOverdueWaits() throws {
+    let (f, wait, verdict) = overdueCI()
+    var s = SessionSummary(
+      id: "s1", name: "s1", cwd: "/", repo: nil, branch: nil, claudeSessionId: "s1", state: verdict.state,
+      reason: verdict.reason, since: 0, lastActivity: 0, live: true, claudePid: nil, attached: false,
+      lastReply: f.lastReply, waits: [wait], notes: [], cards: f.cards)
+    s.triage = Triage.item(f, verdict, kind: .work)
+    let details = Triage.details(for: s)
+    s.triage?.details = details
+    let built = try #require(s.triage)
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
+
+    #expect(decoded.details.overdueWaits == ["w7"])
     #expect(decoded == built)
   }
 
