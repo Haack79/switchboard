@@ -23,14 +23,17 @@ extension Service {
 
   /// Runs `claude` with the arguments and the input on stdin, in the folder,
   /// ends it after `timeout` seconds or once `cancelled` returns true, and
-  /// returns what it printed.
-  func runHeadless(
-    _ arguments: [String], input: String, env: [String: String], folder: String, timeout: Double,
+  /// returns what it printed with the tokens and the model that its envelope
+  /// reports. It throws only when claude prints no answer. Every one-shot call
+  /// that sbd makes runs through it. Runs off the state queue.
+  func headlessCall(
+    arguments: [String], input: String, env: [String: String], folder: String, timeout: Double,
     cancelled: @escaping @Sendable () -> Bool = { false }
-  ) throws -> String {
+  ) throws -> HeadlessReply {
     guard let claude = findExecutable(config.claude) else { throw APIError("can't find \(config.claude)") }
-    return try Headless.run(
-      claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
-      cancelled: cancelled)
+    return Headless.reply(
+      try Headless.run(
+        claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
+        cancelled: cancelled))
   }
 }

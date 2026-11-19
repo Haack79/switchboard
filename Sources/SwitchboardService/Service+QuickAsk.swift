@@ -22,10 +22,10 @@ extension Service {
     if clientGone() { throw APIError("cancelled") }
     let model = config.quickAsk.model
     do {
-      let output = try runHeadless(
-        QuickAsk.arguments(model: model), input: input, env: env, folder: home.path,
+      let reply = try headlessCall(
+        arguments: QuickAsk.arguments(model: model), input: input, env: env, folder: home.path,
         timeout: min(config.quickAsk.timeoutSeconds, QuickAsk.maxTimeout), cancelled: clientGone)
-      return try JSON(encoding: QuickAskAnswer(answer: QuickAsk.parse(output), model: model))
+      return try JSON(encoding: QuickAskAnswer(answer: QuickAsk.parse(reply.output), model: model))
     } catch {
       logLine("quick ask failed: \(error)")
       throw error

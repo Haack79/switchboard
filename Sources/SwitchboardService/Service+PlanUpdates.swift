@@ -190,11 +190,11 @@ extension Service {
     do {
       var stats = GitHubPoller.Stats()
       let text = try github.queue.sync { try github.readDocument(job.plan.source, stats: &stats) }
-      let output = try runHeadless(
-        PlanUpdates.arguments(model: config.planUpdates.model), input: PlanUpdates.input(rows: job.rows), env: job.env,
-        folder: job.folder, timeout: config.planUpdates.timeoutSeconds)
+      let reply = try headlessCall(
+        arguments: PlanUpdates.arguments(model: config.planUpdates.model), input: PlanUpdates.input(rows: job.rows),
+        env: job.env, folder: job.folder, timeout: config.planUpdates.timeoutSeconds)
       let edits = try PlanUpdates.edits(
-        PlanUpdates.parse(output), rows: job.rows, markdown: text,
+        PlanUpdates.parse(reply.output), rows: job.rows, markdown: text,
         today: Date(timeIntervalSince1970: Double(now) / 1000))
       guard !edits.isEmpty else {
         queue.sync { updatePlan(id) { $0.settled = key } }

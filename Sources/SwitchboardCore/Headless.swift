@@ -79,6 +79,27 @@ public enum Headless {
 
   private enum RunEnd: Sendable { case exited, timedOut, cancelled }
 
+  /// The output with the model and the tokens that its envelope reports. It reads them even when the answer is an
+  /// error or holds no JSON object, because the call spent the tokens either way.
+  public static func reply(_ output: String) -> HeadlessReply {
+    guard let envelope = JSON.parse(output)?.object else { return HeadlessReply(output: output) }
+    if let models = envelope["modelUsage"]?.object, !models.isEmpty {
+      let usage = models.values.map {
+        HeadlessUsage(
+          input: $0["inputTokens"]?.int ?? 0, output: $0["outputTokens"]?.int ?? 0,
+          cacheRead: $0["cacheReadInputTokens"]?.int ?? 0, cacheWrite: $0["cacheCreationInputTokens"]?.int ?? 0)
+      }.reduce(HeadlessUsage(), +)
+      return HeadlessReply(output: output, usage: usage, model: models.keys.sorted().joined(separator: "+"))
+    }
+    guard let usage = envelope["usage"]?.object else { return HeadlessReply(output: output) }
+    return HeadlessReply(
+      output: output,
+      usage: HeadlessUsage(
+        input: usage["input_tokens"]?.int ?? 0, output: usage["output_tokens"]?.int ?? 0,
+        cacheRead: usage["cache_read_input_tokens"]?.int ?? 0,
+        cacheWrite: usage["cache_creation_input_tokens"]?.int ?? 0))
+  }
+
   /// The JSON object that the output of `claude -p --output-format json` answers with.
   public static func answer(_ output: String) throws -> [String: JSON] {
     guard let envelope = JSON.parse(output) else {
@@ -102,5 +123,40 @@ public enum Headless {
       lines.removeLast()
     }
     return lines.joined(separator: "\n")
+  }
+}
+
+/// The tokens of one `claude -p` call. `cacheWrite` counts the input tokens that the call wrote to the cache.
+public struct HeadlessUsage: Codable, Equatable, Sendable {
+  public var input = 0
+  public var output = 0
+  public var cacheRead = 0
+  public var cacheWrite = 0
+
+  public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite: Int = 0) {
+    self.input = input
+    self.output = output
+    self.cacheRead = cacheRead
+    self.cacheWrite = cacheWrite
+  }
+
+  public static func + (a: HeadlessUsage, b: HeadlessUsage) -> HeadlessUsage {
+    HeadlessUsage(
+      input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead,
+      cacheWrite: a.cacheWrite + b.cacheWrite)
+  }
+}
+
+/// What a `claude -p` call printed, with the tokens and the model that its envelope reports. A model that ran
+/// alongside another one, as when claude hands part of the turn to a smaller model, joins the name with `+`.
+public struct HeadlessReply: Sendable {
+  public var output: String
+  public var usage: HeadlessUsage?
+  public var model: String?
+
+  public init(output: String, usage: HeadlessUsage? = nil, model: String? = nil) {
+    self.output = output
+    self.usage = usage
+    self.model = model
   }
 }

@@ -254,7 +254,9 @@ extension Service {
 
   /// Runs one `claude -p` call under the triage settings, off the state queue.
   private func triageCall(_ arguments: [String], _ input: String, _ env: [String: String]) throws -> String {
-    try runHeadless(arguments, input: input, env: env, folder: home.path, timeout: config.triage.timeoutSeconds)
+    try headlessCall(
+      arguments: arguments, input: input, env: env, folder: home.path, timeout: config.triage.timeoutSeconds
+    ).output
   }
 
   /// Why the turn summary does not run: the session wrote its card, or the budget is spent.
