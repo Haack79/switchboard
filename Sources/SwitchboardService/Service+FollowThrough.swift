@@ -283,7 +283,11 @@ extension Service {
     let mergeRepos = operatorSettings.mergeRepos
     let read = queue.sync { mergeFacts(subject, wait) }
     let facts = read.facts
-    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, subject, read.name, liveCommit: nil) }
+    // A recorded merge of the current head comes from a gh merge that succeeded. The action treats it as merged
+    // before the poller reads the merge from GitHub.
+    if let pr = facts.pr, pr.state == .merged || facts.currentMerge?.result == .merged {
+      return alreadyMerged(pr, subject, read.name, liveCommit: nil)
+    }
     if read.busy, let pr = facts.pr { return .hold(reason: "\(read.name) is merging #\(pr.number) or being deleted") }
     if let verdict = MergeGuard.checkFacts(mergeRepos: mergeRepos, verdict: read.verdict, facts: facts) {
       return outcome(of: verdict, input: nil)
@@ -332,19 +336,26 @@ extension Service {
   /// the merge.
   ///
   /// The merge runs only for a wait that is still running, at the head that the guard read, for the reply that the
-  /// holder approved, while the subject is still Ready to merge. It runs on the state queue.
+  /// holder approved, while the subject is still Ready to merge and its facts still pass `MergeGuard.checkFacts`. It
+  /// runs on the state queue.
   private func takeForMerge(
     _ holder: String, _ waitId: String, _ subject: String, _ pr: PullRequest, _ approval: MergeGuard.Approval
   ) -> ActionOutcome? {
     guard storedWait(holder, waitId)?.actionStatus?.kind == .running else { return .rearm }
-    let e: Entry
+    let (e, verdict): (Entry, Verdict)
     switch mergeAdmission(subject) {
     case .busy: return .hold(reason: "the session is merging #\(pr.number) or being deleted")
     case .notReady: return .rearm
-    case .ready(let entry, _): e = entry
+    case .ready(let entry, let v): (e, verdict) = (entry, v)
     }
     guard e.facts.pr?.headSha == pr.headSha else {
       return .hold(reason: "the head of #\(pr.number) moved during the checks")
+    }
+    // Ready to merge allows open review threads, so a poll during the live reads can add one at the same head.
+    if let changed = MergeGuard.checkFacts(
+      mergeRepos: operatorSettings.mergeRepos, verdict: verdict, facts: e.facts)
+    {
+      return outcome(of: changed, input: nil)
     }
     let digest = MergeGuard.replyDigest(e.facts.lastReply)
     guard digest == approval.replyDigest else {
@@ -493,8 +504,20 @@ extension Service {
 
   // MARK: Removal and report
 
-  /// Removes the subject as `sb rm` does, with its worktree for `rm-worktree`, when `RemovalGuard` allows it. Each
-  /// refusal of `remove` becomes a question that quotes it. It runs on `followThroughQueue`.
+  /// `remove`'s refusal, with `whileIdle`, of a session whose turn runs or whose message is on its way after
+  /// `RemovalGuard` passed.
+  struct TurnRunsError: Error, CustomStringConvertible {
+    var name: String
+    var description: String { "the turn of \(name) runs" }
+  }
+
+  /// Whether the session's turn runs or a message is on its way to it, either of which a removal would stop. It runs
+  /// on the state queue.
+  func turnRuns(_ e: Entry) -> Bool { e.facts.turnRunning || messageWaiting(e, now: nowMs()) }
+
+  /// Removes the subject as `sb rm` does, with its worktree for `rm-worktree`, when `RemovalGuard` allows it. A turn
+  /// that starts during `remove`'s checks holds the removal. Each other refusal of `remove` becomes a question that
+  /// quotes it. It runs on `followThroughQueue`.
   private func runRemoval(_ wait: Wait, worktree: Bool) throws -> ActionOutcome {
     guard let target = wait.actionSubject else {
       return .judgment(question: "the wait names no session to remove")
@@ -519,7 +542,9 @@ extension Service {
       break
     }
     do {
-      _ = try remove(["session": .string(subject), "worktree": .bool(worktree)], caller: .inProcess)
+      _ = try remove(["session": .string(subject), "worktree": .bool(worktree)], caller: .inProcess, whileIdle: true)
+    } catch let error as TurnRunsError {
+      return .hold(reason: error.description)
     } catch {
       return .judgment(question: "sbd could not remove \(target.name): \(error)")
     }

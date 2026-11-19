@@ -195,6 +195,17 @@ extension MergeGuardTests {
       #expect(verdict.holds, "\(verdict)")
     }
 
+    /// A `/trunk merge` comment names no commit, so sbd can't bind the enqueue to the head it checked.
+    @Test(arguments: [true, false, nil] as [Bool?])
+    func aTrunkRepositoryAsksForJudgment(_ mergeQueue: Bool?) throws {
+      let verdict = try MergeGuardTests.check {
+        $0.facts.pr?.trunkConfig = true
+        $0.facts.pr?.mergeQueue = mergeQueue
+      }
+
+      #expect(verdict.question?.contains("Trunk") == true, "\(verdict)")
+    }
+
     @Test func missingMergeDetailsHold() throws {
       let verdict = try MergeGuardTests.check { $0.facts.pr?.mergeDetails = nil }
 

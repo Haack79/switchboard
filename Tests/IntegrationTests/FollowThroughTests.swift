@@ -555,6 +555,34 @@ extension FollowThroughTests {
     #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
   }
 
+  /// A poll records an unresolved review thread at the same head while sbd's live reads run after the approval.
+  /// Ready to merge stays, with the merge option demoted to "anyway", so sbd must check the threads again before it
+  /// merges.
+  @Test func aReviewThreadOpenedDuringTheChecksHoldsTheMerge() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (s, wait) = try askedMerge(github, sbd)
+    let reads = compareReads(sbd)
+    let release = try holdCompare(sbd, LiveGitHub(github))
+    let r = try approve(sbd, wait)
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+    try sbd.waitFor("the compare read", timeout: 30) { compareReads(sbd) > reads }
+
+    github.reviewThreads(Self.number, resolved: [false])
+    try sbd.advanceClock(600_000)
+    try sbd.poll(all: true)
+    try sbd.waitFor("the open thread", timeout: 30) {
+      try sbd.getJSON(s.id)["triage"]?["message"]?["review"]?["threads"]?["open"]?.int == 1
+    }
+    release()
+
+    try sbd.waitFor("the run's end", timeout: 30) { try operatorsWait(sbd, wait)?.actionStatus?.kind != .running }
+    let status = try operatorsWait(sbd, wait)?.actionStatus
+    #expect(status?.kind == .held, "\(String(describing: status))")
+    #expect(status?.reason?.contains("unresolved review threads") == true, "\(String(describing: status))")
+    #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
+  }
+
   /// The user takes the repository off `operator.mergeRepos` after the wait was armed. sbd reads config.json again
   /// before the merge, so nothing merges and the Operator is asked.
   @Test func aRepositoryTakenOffTheAllowlistAfterArmingMergesNothing() throws {
@@ -1019,6 +1047,29 @@ extension FollowThroughTests {
     #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
     #expect(try sbd.messagesFromSbd(op.id).allSatisfy { !$0.contains("sbd did not merge") })
   }
+
+  /// sbd recorded a merge of the PR's head before the action ran. The poller has not read the merge yet. sbd
+  /// leaves this state when it dies between `landPR`'s record and the end of the action. The record finishes the
+  /// action as merged, so GitHub's later Done does not resolve the wait unmet.
+  @Test func aMergeThatSbdRecordedBeforeTheRunFinishesAsMerged() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (s, wait) = try askedMerge(github, sbd)
+    let op = try theOperator(sbd)
+    try sbd.sb("merge", s.id)
+
+    let r = try approve(sbd, wait)
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+    try sbd.waitFor("the run's end", timeout: 30) { try operatorsWait(sbd, wait)?.actionStatus?.kind != .running }
+    mergeOnGitHub(github)
+    try sbd.poll(all: true)
+
+    try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
+    let resolved = try #require(try resolvedEvent(sbd, wait))
+    #expect(resolved.data["action"]?["result"]?.string == "merged", Comment(rawValue: resolved.data.text))
+    #expect(try sbd.messagesFromSbd(op.id).allSatisfy { !$0.contains("sbd did not merge") })
+    #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
+  }
 }
 
 // MARK: A PR that merged before the run
@@ -1101,6 +1152,70 @@ extension FollowThroughTests {
     try sbd.advanceClock(Self.pastHoldRetry)
 
     try sbd.waitFor("the removal", timeout: 60) { try !sessionIds(sbd).contains(s.id) }
+  }
+
+  /// Restarts sbd with a `git` script ahead of the real one on `PATH`. Only `rm`'s checks run
+  /// `status --porcelain -z` without `--ignored=matching`. For that call, the script creates the file `started` and
+  /// then blocks on a FIFO until `release` runs. The poller's cleanup checks pass `--ignored=matching`, so they never
+  /// block. `release` deletes the FIFO, so later calls run at once.
+  func holdRemovalChecks(_ sbd: Instance) throws -> (started: String, release: () -> Void) {
+    let dir = "\(sbd.home.path)/git-gate"
+    let gate = "\(dir)/gate"
+    let started = "\(dir)/started"
+    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    guard mkfifo(gate, 0o600) == 0 else { throw TestError(description: "mkfifo failed") }
+    let script = """
+      #!/bin/sh
+      case " $* " in
+        *" --ignored=matching "*) ;;
+        *" status --porcelain -z "*) if [ -p '\(gate)' ]; then : > '\(started)'; cat '\(gate)' > /dev/null; fi;;
+      esac
+      exec /usr/bin/git "$@"
+      """
+    try script.write(toFile: "\(dir)/git", atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: "\(dir)/git")
+    sbd.stopSbd()
+    sbd.sbdEnvironment["PATH"] = "\(dir):" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+    try sbd.startSbd()
+    return (
+      started,
+      {
+        let writer = open(gate, O_WRONLY | O_NONBLOCK)
+        if writer >= 0 {
+          _ = "go\n".withCString { write(writer, $0, 3) }
+          close(writer)
+        }
+        unlink(gate)
+      }
+    )
+  }
+
+  /// A turn starts while `remove` runs its checks, after the guard found the session idle. sbd holds the removal
+  /// instead of stopping the new turn.
+  @Test func rmWorktreeHoldsForATurnThatStartsDuringTheRemovalChecks() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let gate = try holdRemovalChecks(sbd)
+    let s = try chartsWorktreeSession(sbd)
+    let wait = try arm(sbd, rmWorktreeArgs(s))
+    let idle = try sbd.get(s.id)
+    try #require(idle.live)
+
+    try mergeAndWaitForDone(github, sbd, s)
+    try sbd.waitFor("the removal checks", timeout: 60) { FileManager.default.fileExists(atPath: gate.started) }
+    try sbd.sb("send", s.id, "slow held")
+    try sbd.waitFor("the held turn", timeout: 30) {
+      try sbd.events(s.id).contains { $0.kind == "UserPromptSubmit" && $0.data["prompt"]?.string == "slow held" }
+    }
+    gate.release()
+
+    try sbd.waitFor("the run's end", timeout: 60) { try operatorsWait(sbd, wait)?.actionStatus?.kind != .running }
+    let status = try operatorsWait(sbd, wait)?.actionStatus
+    #expect(status?.kind == .held, "\(String(describing: status))")
+    let after = try sbd.get(s.id)
+    #expect(after.live)
+    #expect(after.claudePid == idle.claudePid)
+    #expect(FileManager.default.fileExists(atPath: s.cwd))
   }
 
   /// `--kind merge --then rm-worktree` stores the session with that open PR when it is set, and removes it after

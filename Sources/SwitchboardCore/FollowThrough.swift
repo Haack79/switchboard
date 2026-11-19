@@ -5,7 +5,7 @@ import Foundation
 /// action, which the request's `then` names.
 public struct WaitAction: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, CaseIterable, Sendable {
-    /// Lands the subject's PR the way `sb merge` does.
+    /// Lands the subject's PR the way `sb merge` does, except in a Trunk repository, where it asks the holder.
     case merge
     /// Removes the subject and its worktree, as `sb rm <subject> --worktree` does.
     case rmWorktree = "rm-worktree"
@@ -221,6 +221,11 @@ public enum MergeGuard {
     }
     guard facts.mergeMethod != .unknown else {
       return .hold(reason: "sbd can't tell yet how \(pr.repo) merges", message: nil)
+    }
+    guard facts.mergeMethod != .trunk else {
+      return .judgment(
+        question: "\(pr.repo) merges through Trunk's queue, and a /trunk merge comment can't name the head that sbd "
+          + "checked, so sbd won't enqueue #\(pr.number). The user enqueues it")
     }
     guard let details = pr.mergeDetails else {
       return .hold(reason: "sbd has not read the review threads of #\(pr.number)", message: nil)
