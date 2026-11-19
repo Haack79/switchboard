@@ -78,6 +78,13 @@ public enum JSON: Codable, Equatable, Sendable {
     return nil
   }
 
+  /// The value as a list of strings, or nil unless it is a list whose every item is a string.
+  public var strings: [String]? {
+    guard let items = array else { return nil }
+    let strings = items.compactMap(\.string)
+    return strings.count == items.count ? strings : nil
+  }
+
   /// The value as compact JSON text.
   public var text: String {
     let data = (try? JSONCoding.encoder.encode(self)) ?? Data()

@@ -70,7 +70,7 @@ import os
     await #expect(throws: Thrown.self) { try await scope(trait) { throw Thrown() } }
     // A leaked slot would suspend this body forever, so the test polls for it.
     let running = Running()
-    Task { try await scope(trait) { running.enter() } }
+    _ = Task { try await scope(trait) { running.enter() } }
     for _ in 0..<250 where running.peak == 0 { try await Task.sleep(for: .milliseconds(20)) }
     #expect(running.peak == 1)
   }

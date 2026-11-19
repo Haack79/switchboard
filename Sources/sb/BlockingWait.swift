@@ -40,7 +40,8 @@ final class BlockingWait: @unchecked Sendable {
   private var signalSources: [DispatchSourceSignal] = []
 
   init(session: String) {
-    cursor = EventCursor(since: nil, session: session)
+    // The wait prints the event that ends it, so it reads whole events.
+    cursor = EventCursor(since: nil, session: session, full: true)
   }
 
   private var session: String { lock.withLock { cursor.session ?? "" } }

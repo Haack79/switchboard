@@ -26,6 +26,10 @@ public struct MCPToolServer: Sendable {
   /// client stops waiting on a tool call long before an unbounded wait ends.
   static let maxPendingWait = 120
 
+  /// The number of events that the `events` tool lists when it names no `limit`. Its answer stays in the
+  /// conversation, so the default is far below sbd's `Event.defaultLimit`.
+  static let defaultEventLimit = 20
+
   /// The `timeout` argument, clamped to 0 through `maxPendingWait` seconds. Default 30.
   static func pendingWait(_ timeout: JSON?) -> TimeInterval {
     TimeInterval(min(max(timeout?.int ?? 30, 0), maxPendingWait))
@@ -334,7 +338,8 @@ public struct MCPToolServer: Sendable {
 
   /// A scoped server without a session asks for its members' events.
   private func events(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
-    var request = pick(args, ["since", "limit"])
+    var request = pick(args, ["since", "limit", "kinds", "full"])
+    request["limit"] = request["limit"] ?? .number(Double(MCPToolServer.defaultEventLimit))
     if args["session"] != nil {
       request["session"] = try sessionID(args, scoped)
     } else if let scoped {
