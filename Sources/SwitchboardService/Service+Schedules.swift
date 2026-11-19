@@ -8,19 +8,22 @@ extension Service {
   /// `group` and `caller`, which a scoped MCP server sends. With `group`, a
   /// request acts only on the group's sessions and on the caller. It runs on
   /// the state queue, so the scope check and the change happen in one step.
-  func scheduleRequest(_ op: String, _ args: JSON) throws -> JSON {
+  /// `origin` and `caller` sent the request, which decides whether it may add
+  /// or edit a schedule with a top-up gate. It runs after `install` of a fresh
+  /// snapshot when it adds a gate or edits a schedule.
+  func scheduleRequest(_ op: String, _ args: JSON, origin: RequestOrigin, caller: Caller) throws -> JSON {
     switch op {
-    case "schedule": return try addSchedule(args)
+    case "schedule": return try addSchedule(args, origin: origin, caller: caller)
     case "schedules": return try listSchedules(args)
     case "remove-schedule": return try removeSchedule(args)
     case "pause-schedule": return try pauseSchedule(args)
-    case "edit-schedule": return try editSchedule(args)
+    case "edit-schedule": return try editSchedule(args, origin: origin, caller: caller)
     case "run-schedule": return try runSchedule(args)
     default: throw APIError("unknown request \(op)")
     }
   }
 
-  private func addSchedule(_ args: JSON) throws -> JSON {
+  private func addSchedule(_ args: JSON, origin: RequestOrigin, caller: Caller) throws -> JSON {
     let id: String
     do {
       id = try lookup(args)
@@ -38,11 +41,34 @@ extension Service {
       )
     }
     let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
+    let group = try request.gate.map { try topupGroup($0, args, origin: origin, caller: caller) }
     let taken = entries.values.flatMap { $0.session.schedules ?? [] }.map(\.id)
-    let schedule = try request.makeSchedule(id: shortId("r", taken: taken), now: nowMs())
+    let schedule = try request.makeSchedule(
+      id: shortId("r", taken: taken), now: nowMs(), groupID: group?.id, groupName: group?.name)
+    if let duplicate = Schedule.duplicate(of: schedule, in: open) { throw APIError(duplicate) }
     try update(id) { $0.schedules = open + [schedule] }
     record(id, "schedule", ["schedule": try JSON(encoding: schedule)])
     return try JSON(encoding: scheduleRow(id, schedule))
+  }
+
+  /// The group that a top-up's gate names, after the checks of `checkTopupCaller`.
+  private func topupGroup(_ gate: ScheduleRequest.Gate, _ args: JSON, origin: RequestOrigin, caller: Caller) throws
+    -> (id: String, name: String)
+  {
+    try checkTopupCaller(args, origin: origin, caller: caller)
+    guard let ref = gate.group, !ref.isEmpty else { throw APIError("a top-up needs a group") }
+    let id = try lookupGroup(["group": .string(ref)])
+    return (id, groups[id]?.name ?? id)
+  }
+
+  /// Refuses a request that adds or edits a top-up when the sender may not arm actions, because sbd arms actions
+  /// for a top-up in process. A request scoped to a group is refused too.
+  private func checkTopupCaller(_ args: JSON, origin: RequestOrigin, caller: Caller) throws {
+    if args["group"] != nil {
+      throw APIError("a group chat can't add or edit a top-up, because sbd starts sessions and arms actions for it")
+    }
+    try checkActionCaller(
+      args, origin: origin, caller: caller, command: "sb schedule", option: "topup", arms: "a top-up", notFrom: nil)
   }
 
   private func listSchedules(_ args: JSON) throws -> JSON {
@@ -85,8 +111,9 @@ extension Service {
 
   /// Changes the interval, the prompt, or both. It sends nothing: a next run
   /// that the edit makes due fires through `fireDueSchedules`.
-  private func editSchedule(_ args: JSON) throws -> JSON {
+  private func editSchedule(_ args: JSON, origin: RequestOrigin, caller: Caller) throws -> JSON {
     let (id, found) = try ownedSchedule(args)
+    if found.gate != nil { try checkTopupCaller(args, origin: origin, caller: caller) }
     let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
     let schedule = try found.edited(every: request.every, prompt: request.prompt, now: nowMs())
     guard schedule != found else { return try JSON(encoding: scheduleRow(id, found)) }
@@ -122,6 +149,10 @@ extension Service {
   /// the resume message. A session that the removal job holds runs none of
   /// them either, because the job may be stopping its claude. Its schedules
   /// stay due, so Undo lets them run.
+  ///
+  /// A schedule with a gate checks the gate first. A closed gate sends
+  /// nothing, so its check runs while the session is busy. An open gate sends
+  /// the fallback message only when the session is free.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
       e.session.scheduleHold == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
@@ -130,13 +161,26 @@ extension Service {
       guard let session = entries[id]?.session else { continue }
       let due = (session.schedules ?? []).filter { $0.isDue(now: now) }
         .sorted { ($0.next, $0.id) < ($1.next, $1.id) }
-      // A run makes the session busy, so the guard runs again before each schedule.
       for schedule in due {
+        var text = schedule.prompt
+        var check: Schedule.Gate.Check?
+        if let gate = schedule.gate {
+          let status = QueueStatus.compute(queueRows(gate), gate: gate)
+          switch status.decision {
+          case .gated:
+            recordGated(id, schedule, status: status, now: now)
+            continue
+          case .open, .topup:
+            text = gate.fallbackMessage(status: status, prompt: schedule.prompt)
+            check = Self.gateCheck(.prompted, status, now: now)
+          }
+        }
+        // A run makes the session busy, so the guard runs again before each schedule.
         guard let e = entries[id],
           Schedule.blocker(facts: e.facts, process: promptProcess(id), messageWaiting: messageWaiting(e, now: now))
             == nil
-        else { break }
-        fire(id, schedule, now: now)
+        else { continue }
+        fire(id, schedule, text: text, check: check, now: now)
       }
     }
   }
@@ -144,10 +188,68 @@ extension Service {
   /// Saves the next run before the send and the result after it, so a crash
   /// between the two loses the run instead of sending it twice. A failed send
   /// waits for the next run instead of trying again on each tick.
-  private func fire(_ id: String, _ schedule: Schedule, now: Int64) {
+  private func fire(_ id: String, _ schedule: Schedule, text: String, check: Schedule.Gate.Check?, now: Int64) {
     var ran = schedule
     guard let skipped = saveNextRun(id, &ran, now: now) else { return }
-    sendAndRecord(id, ran, text: schedule.prompt, skipped: skipped, now: now)
+    sendAndRecord(id, ran, text: text, skipped: skipped, check: check, now: now)
+  }
+
+  /// A due time where the gate closed: saves the next run, the count of gated due times, and the check, and records
+  /// a `schedule-gated` event. It appends no run and sends nothing.
+  private func recordGated(_ id: String, _ schedule: Schedule, status: QueueStatus, now: Int64) {
+    let (next, _) = schedule.fired(at: now)
+    let check = Self.gateCheck(.gated, status, now: now)
+    var gated = schedule
+    let mark = { (s: inout Schedule) in
+      s.next = next
+      let pending = s.gate?.gated ?? 0
+      s.gate?.gated = pending + 1
+      s.gate?.last = check
+    }
+    mark(&gated)
+    do {
+      try changeSchedule(id, schedule.id, mark)
+    } catch {
+      logLine("can't save the gated check of schedule \(schedule.id) of \(id): \(error)")
+      return
+    }
+    var data: [String: JSON] = ["status": .array(status.lines.map(JSON.string))]
+    data["schedule"] = try? eventJSON(gated)
+    record(id, "schedule-gated", .object(data))
+  }
+
+  private static func gateCheck(_ result: Schedule.Gate.Check.Result, _ status: QueueStatus, now: Int64)
+    -> Schedule.Gate.Check
+  {
+    Schedule.Gate.Check(
+      t: now, result: result, active: status.counted.count, target: status.target, started: [], skipped: [])
+  }
+
+  /// The gate's rows: the work sessions in the gate's group, with the facts that `QueueStatus.compute` reads. It
+  /// runs on the state queue.
+  func queueRows(_ gate: Schedule.Gate) -> [QueueStatus.Row] {
+    var merging = Set<String>()
+    var removing = Set<String>()
+    for e in entries.values {
+      for wait in e.session.waits ?? [] {
+        guard let action = wait.action?.kind, let subject = wait.actionSubject?.id else { continue }
+        switch action {
+        case .merge: merging.insert(subject)
+        case .rmWorktree, .rm: removing.insert(subject)
+        case .report: break
+        }
+      }
+    }
+    let now = nowMs()
+    return entries.values.filter { $0.session.kind == .work && $0.session.group == gate.group }.map { e in
+      let s = e.session
+      return QueueStatus.Row(
+        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: checkout(s).flatMap { repository($0, of: s) },
+        markedDone: s.done, paused: Pause.blocker(s) != nil, removing: s.removal?.holdsSession == true,
+        state: Attention.evaluate(s, e.facts, now: now, stateOf: lastState).state, unreadHost: e.facts.unread != nil,
+        prMerged: e.facts.pr?.state == .merged, hasMergeAction: merging.contains(s.id),
+        hasRemovalAction: removing.contains(s.id), started: !s.waitsToStart)
+    }.sorted { $0.id < $1.id }
   }
 
   /// Saves the schedule's next run, sets it on `schedule`, and returns how many due times the run skips. It returns
@@ -164,8 +266,11 @@ extension Service {
     return skipped
   }
 
-  /// Sends `text` to the session, then saves the run on `schedule` and records a `schedule-ran` event.
-  private func sendAndRecord(_ id: String, _ schedule: Schedule, text: String, skipped: Int, now: Int64) {
+  /// Sends `text` to the session, then saves the run on `schedule` and records a `schedule-ran` event. A gated
+  /// schedule's `check` is saved as the gate's last check in the same save, as failed when the send fails.
+  private func sendAndRecord(
+    _ id: String, _ schedule: Schedule, text: String, skipped: Int, check: Schedule.Gate.Check? = nil, now: Int64
+  ) {
     var ran = schedule
     let run: Schedule.Run
     do {
@@ -175,9 +280,18 @@ extension Service {
       logLine("can't run schedule \(schedule.id) of \(id): \(error)")
       run = Schedule.Run(t: now, outcome: .failed, skipped: skipped, error: "\(error)")
     }
-    ran.record(run)
+    var check = check
+    if run.outcome == .failed {
+      check?.result = .failed
+      check?.error = run.error
+    }
+    let save = { (s: inout Schedule) in
+      s.record(run)
+      if let check { s.gate?.last = check }
+    }
+    save(&ran)
     do {
-      try changeSchedule(id, schedule.id) { $0.record(run) }
+      try changeSchedule(id, schedule.id, save)
     } catch {
       logLine("can't save the run of schedule \(schedule.id) of \(id): \(error)")
     }

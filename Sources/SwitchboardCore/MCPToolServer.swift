@@ -239,6 +239,11 @@ public struct MCPToolServer: Sendable {
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)
       request["by"] = MCPToolServer.byClaude
+      if let topup = args["topup"] {
+        request["gate"] = topup
+        // sbd checks who may add a top-up, so the caller goes with it unscoped too.
+        if let caller { request["caller"] = .string(caller) }
+      }
       return try scheduleCall("schedule", request, group: scoped?.group.id)
     case "list_schedules":
       let request = try args["session"].map { _ in ["session": try sessionID(args, scoped)] } ?? [:]

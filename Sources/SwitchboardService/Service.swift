@@ -513,6 +513,16 @@ public final class Service {
           install(fresh)
           return try approveWait(request.args, caller: caller)
         })
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
+      // A top-up's caller check reads the client's panes, so it takes a new snapshot.
+      let checksCaller =
+        (request.op == "schedule" && request.args["gate"] != nil) || request.op == "edit-schedule"
+      let fresh = checksCaller ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try scheduleRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     case "wait", "clear-wait", "resolve-wait":
       // An action's check reads the client's panes, so it takes a new snapshot.
       let arms =
@@ -755,8 +765,6 @@ public final class Service {
       return try chatReadRequest(args)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
-      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":

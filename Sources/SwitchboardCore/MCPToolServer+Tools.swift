@@ -182,8 +182,26 @@ extension MCPToolServer {
       [
         "session": session,
         "every": string("The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m."),
-        "prompt": string("The prompt to send on each run."),
-      ], required: ["every", "prompt"]),
+        "prompt": string(
+          "The prompt to send on each run. Required without `topup`. With `topup` and no prompt, Switchboard writes one."
+        ),
+        "topup": [
+          "type": "object",
+          "description": .string(
+            "Makes the schedule a work queue top-up. On each run Switchboard counts the active work sessions of the group in the repository. When the group has its target and no session needs attention, it records the check and sends nothing. Otherwise it sends the prompt with the queue status, the rubric, and the template in front of the session. Only a Manager conversation, the Operator, or the user can add one, and a group chat can't."
+          ),
+          "properties": [
+            "group": group,
+            "repo": string("The repository as owner/name."),
+            "target": integer("How many active work sessions the group should have, 1 to 20."),
+            "template": string(
+              "The prompt of each session started from an issue, with the placeholders {url}, {title}, {number}, {repo}, and {body}."
+            ),
+            "rubric": string("How to rank the open issues and follow-ups, most important first."),
+          ],
+          "required": ["group", "repo", "target", "template", "rubric"],
+        ],
+      ], required: ["every"]),
     Tool(
       "list_schedules",
       "Lists the schedules with their session, prompt, interval, next run, and last result, the next due first. Pass a session to list only its schedules. A next run in the past means the run waits for the session to be free.",
