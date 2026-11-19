@@ -75,7 +75,7 @@ extension Service {
     input.liveCap = liveCap(onHost: e.session.host)
     guard let process = promptProcess(id) else { return "\(e.session.host ?? "its host") is not connected" }
     input.process = process
-    input.busy = e.messageWaiting(now: now)
+    input.busy = messageWaiting(e, now: now)
     input.onScreen = attached(id)
     input.lastViewed = e.lastViewed
     input.live = e.session.host.map { liveCount(onHost: $0) } ?? live

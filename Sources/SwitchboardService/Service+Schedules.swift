@@ -90,7 +90,7 @@ extension Service {
       // A run makes the session busy, so the guard runs again before each schedule.
       for schedule in due {
         guard let e = entries[id],
-          Schedule.blocker(facts: e.facts, process: promptProcess(id), messageWaiting: e.messageWaiting(now: now))
+          Schedule.blocker(facts: e.facts, process: promptProcess(id), messageWaiting: messageWaiting(e, now: now))
             == nil
         else { break }
         fire(id, schedule, now: now)
