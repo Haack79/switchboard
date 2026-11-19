@@ -657,7 +657,7 @@ enum AcknowledgedItem: String, CaseIterable, Sendable {
 
 /// A session whose CI wait went overdue, and an `ack` of the overdue reason at its recheck time.
 private struct OverdueWaitAck {
-  let reason = "CI on #1: still open after 2 h"
+  let reason = "CI on #1: still open after 2h"
   let ackAt: Int64 = 2 * 3_600_000
   let session: Session
   let facts: SessionFacts
@@ -799,6 +799,25 @@ extension AcknowledgeTests {
       #expect(v.state == .needsYou)
       #expect(v.reason == expired(o.reason, acknowledgedAt: o.ackAt))
       #expect(!v.acknowledged)
+    }
+
+    /// `Attention.acknowledged` changes the reason of a copy, which must keep the waits that raised it.
+    @Test func anOverdueWaitThatReturnsAfterItsAcknowledgmentKeepsItsWaitIds() throws {
+      let o = try OverdueWaitAck()
+
+      let v = verdict(o.facts, o.session, at: o.ackAt + acknowledgedMs)
+
+      #expect(v.overdueWaits == ["w1"])
+    }
+
+    @Test func theItemOfAnOverdueWaitThatReturnsAfterItsAcknowledgmentKeepsItsWaitIds() throws {
+      let o = try OverdueWaitAck()
+      let v = verdict(o.facts, o.session, at: o.ackAt + acknowledgedMs)
+      try #require(v.reason == expired(o.reason, acknowledgedAt: o.ackAt))
+
+      let item = try #require(Triage.item(o.facts, v, kind: .work))
+
+      #expect(item.details.overdueWaits == ["w1"])
     }
 
     @Test func unackAfterTheRecheckLeavesTheReasonPlain() throws {

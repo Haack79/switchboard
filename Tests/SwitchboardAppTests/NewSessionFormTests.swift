@@ -220,4 +220,110 @@ import Testing
 
     #expect(request.parent == nil)
   }
+
+  // MARK: The repository that a spawned prompt names
+
+  static let switchboard = KnownRepo(path: "/Users/me/dev/switchboard", name: "haacked/switchboard", used: 10)
+
+  /// The request of "Spawn a session with this" for the prompt, from conversation `m`.
+  static func spawn(_ prompt: String, group: String? = nil) -> NewSessionView.Form {
+    NewSessionView.Form(
+      request: NewSessionRequest(group: group, prompt: prompt, parent: "m", fromOffer: true))
+  }
+
+  @Test func aSpawnedPromptThatNamesNoRepoSelectsNone() {
+    let repos = [Self.alpha, Self.beta]
+    #expect(KnownRepos.preferred(repos, group: nil, sessions: []) == Self.alpha)
+    let form = Self.spawn("/go Fix the cache bug.")
+
+    form.offer(repos)
+
+    #expect(form.repo == nil)
+  }
+
+  @Test func aSpawnedPromptThatNamesNoRepoSelectsNoneForAGroup() {
+    let sessions = [Self.member(Self.beta.path), Self.member(Self.beta.path)]
+    #expect(KnownRepos.preferred([Self.alpha, Self.beta], group: "g1", sessions: sessions) == Self.beta)
+    let form = Self.spawn("/go Fix the cache bug.", group: "g1")
+
+    form.offer([Self.alpha, Self.beta], sessions: sessions)
+
+    #expect(form.repo == nil)
+  }
+
+  @Test func aSpawnedPromptThatNamesNoRepoSelectsNoneAfterAGroupChange() {
+    let form = Self.spawn("/go Fix the cache bug.")
+    form.offer([Self.alpha, Self.beta], sessions: [Self.member(Self.beta.path)])
+
+    form.choose(group: "g1")
+
+    #expect(form.repo == nil)
+  }
+
+  @Test func aSpawnedPromptThatNamesAKnownRepoSelectsIt() {
+    let form = Self.spawn("/go In haacked/switchboard, fix the cache bug.")
+
+    form.offer([Self.alpha, Self.switchboard])
+
+    #expect(form.repo == Self.switchboard)
+  }
+
+  @Test func aSpawnedPromptThatNamesAPathInsideAKnownRepoSelectsIt() {
+    let form = Self.spawn("/go Fix the bug that /Users/me/dev/switchboard/docs/bug.md describes.")
+
+    form.offer([Self.alpha, Self.switchboard])
+
+    #expect(form.repo == Self.switchboard)
+  }
+
+  @Test func aSpawnedPromptThatNamesAnUnknownRepoSelectsNone() {
+    let form = Self.spawn("/go In acme/widgets, fix the cache bug.")
+
+    form.offer([Self.alpha, Self.switchboard])
+
+    #expect(form.repo == nil)
+  }
+
+  /// The sheet first offers the list kept from its last opening, which may not hold the named repository yet.
+  @Test func sbdsListSelectsTheNamedRepoThatTheKeptListLacked() {
+    let form = Self.spawn("/go In haacked/switchboard, fix the cache bug.")
+
+    form.offer([Self.alpha])
+    #expect(form.repo == nil)
+    form.offer([Self.alpha, Self.switchboard])
+
+    #expect(form.repo == Self.switchboard)
+  }
+
+  @Test func aSpawnedPromptKeepsTheRepoThatTheUserPicked() {
+    let form = Self.spawn("/go In haacked/switchboard, fix the cache bug.")
+    form.offer([Self.alpha, Self.switchboard])
+
+    form.pick(Self.alpha)
+    form.offer([Self.switchboard, Self.alpha])
+
+    #expect(form.repo == Self.alpha)
+  }
+
+  @Test func aSpawnedFormClearsTheConversationsDraftOfThePrompt() throws {
+    let clears = try #require(Self.spawn("/go Fix the cache bug.").clearsDraft)
+
+    #expect(clears.session == "m")
+    #expect(clears.text == "/go Fix the cache bug.")
+  }
+
+  @Test func aPlainFormClearsNoDraft() {
+    #expect(NewSessionView.Form(parent: "m").clearsDraft == nil)
+  }
+
+  @Test func theSpawnedRequestCarriesThePromptAndTheConversation() throws {
+    let form = Self.spawn("/go Fix the cache bug.")
+    form.offer([Self.alpha])
+    form.pick(Self.alpha)
+
+    let request = try #require(form.request(worktree: false, groups: []))
+
+    #expect(request.prompt == "/go Fix the cache bug.")
+    #expect(request.parent == "m")
+  }
 }

@@ -84,7 +84,8 @@ enum HostScope {
     for op in ["rm", "cleanup", "rm-done"] { refused[op] = stops }
     for op in [
       "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe",
-      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log", "parent",
+      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "manager-skills", "chat", "chat-log",
+      "parent",
     ] {
       refused[op] = reaches
     }
@@ -94,7 +95,8 @@ enum HostScope {
       "operator-report", "operator-reports", "wait-approve", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
       "highlight",
       "schedule",
-      "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
+      "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
+      "rm-cancel", "rm-keep", "rm-retry",
       "removal-notices", "removal-notice-dismiss",
       "host-disconnect", "live", "live-next", "autocontinue", "snapshots", "poll", "repos", "repo-add", "clock",
       "triage", "choose", "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard",

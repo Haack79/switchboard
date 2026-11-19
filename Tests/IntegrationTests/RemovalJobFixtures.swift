@@ -11,6 +11,11 @@ let holdRemoval = "hold-removal"
 /// removal recorded `released`, before the branch deletes.
 let holdReleased = "hold-removal-released"
 
+/// The gate file that holds the removal worker on the trash path after the rename and before the trash check. The
+/// folder is at the trash path, and git still has the worktree's record. A removal that deletes in place never
+/// waits here.
+let holdTrashCheck = "hold-removal-trash"
+
 /// A recorded PR in PostHog/posthog and its head branch.
 struct RemovalPR {
   let number: Int
@@ -174,6 +179,17 @@ extension Instance {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub)
     try restart(setting: "supacode", to: .string(stub))
     return calls
+  }
+
+  /// The folder that a removal moves the session's worktree to.
+  func trashFolder(_ id: String) -> String { "\(home.path)/trash/\(id)" }
+
+  /// Waits until the session's worktree folder sits at its trash path and not at `cwd`.
+  func waitForFolderInTrash(_ s: SessionSummary, timeout: Double = 60) throws {
+    try waitFor("\(s.id)'s folder to move to the trash", timeout: timeout) {
+      let fm = FileManager.default
+      return fm.fileExists(atPath: trashFolder(s.id)) && !fm.fileExists(atPath: s.cwd)
+    }
   }
 
   func lockForSupacode(_ repo: String, _ cwd: String) throws {

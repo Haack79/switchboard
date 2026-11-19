@@ -16,6 +16,7 @@ extension BoardModel {
     case .inbox: return .inbox
     case .board: return .board
     case .issues: return .issues
+    case .loops: return .loops
     }
   }
 
@@ -64,12 +65,14 @@ extension BoardModel {
       }
     case .issues:
       moveIssue(by: step)
+    case .loops:
+      moveLoop(by: step)
     }
     requestListFocus()
   }
 
   /// The session whose Claude terminal ⌘T and Return go into: the selected session, else the current Inbox
-  /// item or Board card.
+  /// item or Board card. The Issues and Loops views draw no terminal.
   var terminalTarget: SessionSummary? {
     switch visibleView {
     case nil: return selected
@@ -79,7 +82,7 @@ extension BoardModel {
     case .board:
       let id = currentBoardCard
       return board.first { $0.id == id }
-    case .issues: return nil
+    case .issues, .loops: return nil
     }
   }
 
@@ -127,7 +130,7 @@ extension BoardModel {
     switch visibleView {
     case nil: return target
     case .inbox: return inboxShowsTerminal(target) ? target : nil
-    case .board, .issues: return nil
+    case .board, .issues, .loops: return nil
     }
   }
 

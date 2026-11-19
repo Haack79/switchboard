@@ -19,6 +19,8 @@ struct MessageField: View {
   var onEmptyEscape: (() -> Void)?
   /// Runs after sbd accepts a message from this field.
   var onSent: (() -> Void)?
+  /// Takes Send's draft in place of the plain submit, so a Manager's pane can check it first.
+  var intercept: ((Draft) -> Void)?
   @FocusState private var focused: Bool
   /// The paste monitor reads this view's focus here. The draft can't hold it, because several views share one draft.
   @State private var focus = Focus()
@@ -201,7 +203,13 @@ struct MessageField: View {
     .accessibilityAction { draft.remove(image.id) }
   }
 
-  private func send() { draft.submit(session, ref: ref, to: model, then: onSent) }
+  private func send() {
+    if let intercept {
+      intercept(draft)
+    } else {
+      draft.submit(session, ref: ref, to: model, then: onSent)
+    }
+  }
 
   /// The chip's VoiceOver label. Activating the chip removes the image.
   static func chipLabel(_ name: String) -> String { "Image: \(name), remove" }

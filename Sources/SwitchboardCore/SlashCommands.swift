@@ -13,11 +13,15 @@ public struct SlashCommand: Codable, Equatable, Sendable {
   public let name: String
   public let description: String?
   public let source: Source
+  /// The gate's label of the command, which sbd sets only for a Manager conversation or the operator. It is nil
+  /// for a command that the gate lets through without a label, and for a built-in.
+  public var label: SkillLabel?
 
-  public init(name: String, description: String?, source: Source) {
+  public init(name: String, description: String?, source: Source, label: SkillLabel? = nil) {
     self.name = name
     self.description = description
     self.source = source
+    self.label = label
   }
 
   /// Claude Code's own commands that the listing never carries. The bundled
@@ -183,12 +187,23 @@ public enum SkillListing {
 
 /// A skill or a legacy command file, read from its frontmatter.
 public struct ScannedSkill: Equatable, Sendable {
+  /// The folder that a file came from, in the order of `SkillFolders.scan`.
+  public enum Origin: Sendable {
+    case accountSkill
+    case cwdSkill
+    case accountCommand
+    case cwdCommand
+  }
+
   public let name: String
   public let description: String?
   /// False when the frontmatter says `user-invocable: false`.
   public let userInvocable: Bool
   /// False when the frontmatter says `disable-model-invocation: true`.
   public let modelInvocable: Bool
+  /// The file's path as the scan built it, without resolving links.
+  public let path: String
+  public let origin: Origin
 }
 
 /// Reads the skill and command folders that Claude Code loads for a session.
@@ -199,29 +214,41 @@ public enum SkillFolders {
   /// before a command, and the account's before the cwd's. A nil account
   /// scans only the cwd.
   public static func scan(account: String?, cwd: String, on machine: any Machine) -> [ScannedSkill] {
-    let folders = [account, "\(cwd)/.claude"].compactMap { $0 }
-    let skills = folders.flatMap { folder in
-      machine.list("\(folder)/skills").sorted().compactMap { name in
-        head("\(folder)/skills/\(name)/SKILL.md", on: machine).map { skill($0, named: name) }
-      }
-    }
-    let commands = folders.flatMap { folder in
-      machine.list("\(folder)/commands").filter { $0.hasSuffix(".md") }.sorted().compactMap { file in
-        head("\(folder)/commands/\(file)", on: machine).map {
-          skill($0, named: String(file.dropLast(3)), isCommand: true)
-        }
-      }
-    }
-    return (skills + commands).filter { !$0.name.isEmpty }
+    let folders: [(folder: String, skill: ScannedSkill.Origin, command: ScannedSkill.Origin)] =
+      (account.map { [($0, .accountSkill, .accountCommand)] } ?? []) + [("\(cwd)/.claude", .cwdSkill, .cwdCommand)]
+    let skills = folders.flatMap { folder, origin, _ in self.skills(in: folder, origin: origin, on: machine) }
+    let commands = folders.flatMap { folder, _, origin in self.commands(in: folder, origin: origin, on: machine) }
+    return skills + commands
+  }
+
+  /// The skills in `<folder>/skills/*/SKILL.md`, sorted by folder name.
+  static func skills(in folder: String, origin: ScannedSkill.Origin, on machine: any Machine) -> [ScannedSkill] {
+    machine.list("\(folder)/skills").sorted().compactMap { name in
+      let path = "\(folder)/skills/\(name)/SKILL.md"
+      return headText(path, on: machine).map { skill($0, named: name, path: path, origin: origin) }
+    }.filter { !$0.name.isEmpty }
+  }
+
+  /// The commands in `<folder>/commands/*.md`, sorted by file name.
+  static func commands(in folder: String, origin: ScannedSkill.Origin, on machine: any Machine) -> [ScannedSkill] {
+    machine.list("\(folder)/commands").filter { $0.hasSuffix(".md") }.sorted().compactMap { file in
+      let path = "\(folder)/commands/\(file)"
+      return headText(path, on: machine).map { skill($0, named: String(file.dropLast(3)), path: path, origin: origin) }
+    }.filter { !$0.name.isEmpty }
   }
 
   /// The frontmatter and the first body line fit well inside this many bytes.
   private static let maxFileBytes = 64 << 10
 
-  /// The start of the file. A repo can commit a skill as a symlink to a
-  /// device such as /dev/zero, which never reaches its end.
-  private static func head(_ path: String, on machine: any Machine) -> String? {
-    machine.read(path, from: 0, count: maxFileBytes).map { String(decoding: $0, as: UTF8.self) }
+  /// The file's first 64 KiB, or nil when it can't be read. A repo can
+  /// commit a skill as a symlink to a device such as /dev/zero, which never
+  /// reaches its end.
+  public static func head(_ path: String, on machine: any Machine) -> Data? {
+    machine.read(path, from: 0, count: maxFileBytes)
+  }
+
+  private static func headText(_ path: String, on machine: any Machine) -> String? {
+    head(path, on: machine).map { String(decoding: $0, as: UTF8.self) }
   }
 
   /// The `skillOverrides` of the account's settings.json, from skill name to
@@ -236,7 +263,8 @@ public enum SkillFolders {
   /// A file has frontmatter only when its first line is `---`. The
   /// frontmatter ends at the next `---` line. Its `name` replaces `fallback`
   /// for a skill. A command is always named after its file, as in Claude Code.
-  static func skill(_ text: String, named fallback: String, isCommand: Bool = false) -> ScannedSkill {
+  static func skill(_ text: String, named fallback: String, path: String, origin: ScannedSkill.Origin) -> ScannedSkill {
+    let isCommand = origin == .accountCommand || origin == .cwdCommand
     let lines = text.replacingOccurrences(of: "\r\n", with: "\n").trimmingPrefix("\u{FEFF}")
       .components(separatedBy: "\n")
     var scalars: [String: String] = [:]
@@ -254,7 +282,7 @@ public enum SkillFolders {
       name: name ?? fallback,
       description: described ?? body.lazy.compactMap { trimmed($0[...]) }.first,
       userInvocable: scalars["user-invocable"]?.lowercased() != "false",
-      modelInvocable: scalars["disable-model-invocation"]?.lowercased() != "true")
+      modelInvocable: scalars["disable-model-invocation"]?.lowercased() != "true", path: path, origin: origin)
   }
 }
 

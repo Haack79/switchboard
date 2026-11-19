@@ -5,33 +5,63 @@ extension Service {
   /// The `slash-commands` request: the commands that the user can type in
   /// the session's claude. It reads the transcript and the folders off the
   /// state queue. A repeat request on the same transcript reads only the
-  /// lines added since the last one.
+  /// lines added since the last one. For a Manager conversation or the
+  /// operator, each row carries the label of the hook's decision, and the
+  /// rows include the plugin skills that only the user can call.
   func slashCommands(_ args: JSON) throws -> JSON {
-    let (id, findTranscript, account, cwd, machine, cached) = try queue.sync {
-      () -> (String, () -> String?, String?, String, any Machine, (path: String, state: SkillListing.State)?) in
+    let (id, findTranscript, account, cwd, machine, cached, decide) = try queue.sync {
+      () -> (
+        String, () -> String?, String?, String, any Machine, (path: String, state: SkillListing.State)?,
+        SkillDecider?
+      ) in
       let id = try lookup(args)
       let session = entries[id]!.session
       // Until a host answers, its folder is unknown. The scan then reads only the cwd.
       let account = try? claudeFolder(of: session)
-      return (id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id])
+      return (
+        id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id],
+        managerSkillDecider(id)
+      )
     }
-    var state = SkillListing.State()
-    if let path = findTranscript() {
-      let read: Bool
-      if let cached, cached.path == path {
-        state = cached.state
-        read = SkillListing.read(path, from: state.offset, into: &state, on: machine)
-      } else {
-        read = SkillListing.read(path, into: &state, on: machine)
-      }
-      // A failed read drops the entry, so that the next request reads the transcript from the end again.
-      queue.sync {
-        if entries[id] != nil { slashListings[id] = read ? (path, state) : nil }
-      }
+    let listing = skillListing(id, findTranscript: findTranscript, machine: machine, cached: cached)
+    // Claude Code's listing leaves out a skill that the model can't call. So the gate's plugin skills come from a scan.
+    var scanned = SkillFolders.scan(account: account, cwd: cwd, on: machine)
+    if decide != nil, let account {
+      scanned += SkillCatalog.pluginSkills(account: account, cwd: cwd, listing: listing, machine: machine)
     }
-    let commands = SlashCommands.merge(
-      listing: state.commands, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
+    var commands = SlashCommands.merge(
+      listing: listing, scanned: scanned,
       overrides: SkillFolders.overrides(account: account, on: machine))
-    return ["commands": try JSON(encoding: commands), "listing": .bool(state.commands != nil)]
+    if let decide {
+      for i in commands.indices { commands[i].label = decide(commands[i].name).label }
+    }
+    return ["commands": try JSON(encoding: commands), "listing": .bool(listing != nil)]
+  }
+
+  /// The session's latest transcript skill listing, or nil when the
+  /// transcript holds none or can't be found. It reads off the state queue
+  /// and saves the folded state in `slashListings[id]`, so that a later read
+  /// of the same transcript from `cached` reads only the lines added since.
+  /// The caller takes `findTranscript`, `machine`, and `cached` (the
+  /// session's `slashListings` entry) on the state queue.
+  func skillListing(
+    _ id: String, findTranscript: () -> String?, machine: any Machine,
+    cached: (path: String, state: SkillListing.State)?
+  ) -> [SlashCommand]? {
+    dispatchPrecondition(condition: .notOnQueue(queue))
+    guard let path = findTranscript() else { return nil }
+    var state = SkillListing.State()
+    let read: Bool
+    if let cached, cached.path == path {
+      state = cached.state
+      read = SkillListing.read(path, from: state.offset, into: &state, on: machine)
+    } else {
+      read = SkillListing.read(path, into: &state, on: machine)
+    }
+    // A failed read drops the entry, so that the next request reads the transcript from the end again.
+    queue.sync {
+      if entries[id] != nil { slashListings[id] = read ? (path, state) : nil }
+    }
+    return state.commands
   }
 }

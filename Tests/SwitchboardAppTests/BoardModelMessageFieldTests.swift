@@ -11,7 +11,7 @@ import Testing
 @Suite struct BoardModelMessageField {
   /// Where the window shows the session.
   enum Place: CaseIterable {
-    case selection, inboxSummary, inboxTerminal, board, issues
+    case selection, inboxSummary, inboxTerminal, board, issues, loops
   }
 
   /// The sessions the target tests cover, with the Terminal toggle where it matters.
@@ -61,7 +61,7 @@ import Testing
     switch place {
     case .selection: return kind.hasClaudeTerminal && kind.toggle != false
     case .inboxTerminal: return kind.hasClaudeTerminal
-    case .inboxSummary, .board, .issues: return false
+    case .inboxSummary, .board, .issues, .loops: return false
     }
   }
 
@@ -72,6 +72,8 @@ import Testing
 
   /// A model whose current target at `place` is `target`. The session is in the Inbox list.
   static func model(_ target: SessionSummary, at place: Place, toggle: Bool? = nil) throws -> BoardModel {
+    var target = target
+    if place == .loops { target.schedules = [scheduleFixture("rl")] }
     let model = appliedModel([target, needsItem("other")])
     switch place {
     case .selection:
@@ -89,6 +91,9 @@ import Testing
       try #require(model.currentBoardCard == target.id)
     case .issues:
       model.show(.issues)
+    case .loops:
+      model.show(.loops)
+      model.loopFocus = "rl"
     }
     return model
   }
@@ -157,6 +162,14 @@ import Testing
 
   @Test func theIssuesViewHasNoTarget() throws {
     #expect(try Self.model(needsItem("a"), at: .issues).messageFieldTarget == nil)
+  }
+
+  /// The Loops view's current row names a session, but the view draws no `SessionView`.
+  @Test func theLoopsViewHasNoTarget() throws {
+    let model = try Self.model(needsItem("a"), at: .loops)
+    try #require(model.currentLoop?.session.id == "a")
+
+    #expect(model.messageFieldTarget == nil)
   }
 
   @Test(arguments: [Kind.docketRow, .followupNotStarted, .unstartedFollowupWithFolder, .cleanedUp])
