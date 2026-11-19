@@ -4,9 +4,9 @@ import Testing
 @testable import SwitchboardCore
 
 /// Which item sources reach the Inbox for each session kind (Risk D). The table records what `Triage.inInbox` gave
-/// before `Triage.itemSourceAllowed` existed. Each row lists a kind, a source (nil for no item), and the answer
-/// without and with a blocking prompt. The rows are data. Neither function computes them, so a change to either
-/// function that changes an answer fails here.
+/// before `Triage.itemSourceAllowed` existed, except that a `.report` item reaches the Inbox on every kind (#410).
+/// Each row lists a kind, a source (nil for no item), and the answer without and with a blocking prompt. The rows
+/// are data. Neither function computes them, so a change to either function that changes an answer fails here.
 struct SourceRow: CustomTestStringConvertible, Sendable {
   var kind: SessionKind
   var source: TriageSource?
@@ -33,7 +33,7 @@ let itemSourceTable: [SourceRow] = [
   SourceRow(kind: .manager, source: .rule, unblocked: false, blocked: true),
   SourceRow(kind: .manager, source: .summary, unblocked: false, blocked: true),
   SourceRow(kind: .manager, source: .fallback, unblocked: false, blocked: true),
-  SourceRow(kind: .manager, source: .report, unblocked: false, blocked: true),
+  SourceRow(kind: .manager, source: .report, unblocked: true, blocked: true),
 
   SourceRow(kind: .chat, source: nil, unblocked: false, blocked: false),
   SourceRow(kind: .chat, source: .card, unblocked: false, blocked: true),
@@ -41,7 +41,7 @@ let itemSourceTable: [SourceRow] = [
   SourceRow(kind: .chat, source: .rule, unblocked: false, blocked: true),
   SourceRow(kind: .chat, source: .summary, unblocked: false, blocked: true),
   SourceRow(kind: .chat, source: .fallback, unblocked: false, blocked: true),
-  SourceRow(kind: .chat, source: .report, unblocked: false, blocked: true),
+  SourceRow(kind: .chat, source: .report, unblocked: true, blocked: true),
 
   SourceRow(kind: .operator, source: nil, unblocked: false, blocked: false),
   SourceRow(kind: .operator, source: .card, unblocked: false, blocked: true),
@@ -141,30 +141,31 @@ extension ItemSourceTableTests {
     }
   }
 
-  /// The report verdict takes its reports as an argument and reads no session, so any owner can show one.
-  @Suite struct ReportVerdict {
+  /// The ask verdict takes the owner's routed items and reads no session, so any owner can show one.
+  @Suite struct AskVerdict {
     let reports = [opReport(10, "Merge it?"), opReport(11, "Remove kid?")].compactMap(OperatorReport.init)
 
-    @Test func noReportsGiveNoVerdict() {
-      #expect(Attention.reportVerdict([]) == nil)
+    @Test func noAsksGiveNoVerdict() {
+      #expect(Attention.askVerdict(OperatorItems()) == nil)
     }
 
-    @Test func openReportsGiveNeedsYou() {
-      #expect(Attention.reportVerdict(reports)?.state == .needsYou)
+    @Test func asksGiveNeedsYou() {
+      #expect(Attention.askVerdict(OperatorItems(asks: reports))?.state == .needsYou)
     }
 
-    @Test func openReportsGiveTheLatestReportsReason() {
-      #expect(Attention.reportVerdict(reports)?.reason == OperatorReport.reason(reports))
+    @Test func asksGiveTheOperatorAndTheLatestReportsReason() {
+      #expect(
+        Attention.askVerdict(OperatorItems(asks: reports))?.reason == "Operator: " + OperatorReport.reason(reports))
     }
 
-    @Test func openReportsGiveAQuestion() {
-      #expect(Attention.reportVerdict(reports)?.kind == .question)
+    @Test func asksGiveAQuestion() {
+      #expect(Attention.askVerdict(OperatorItems(asks: reports))?.kind == .question)
     }
 
-    @Test func oneReportGivesItsTextAsTheReason() throws {
+    @Test func oneAskGivesItsTextAfterTheOperatorAsTheReason() throws {
       let one = try #require(OperatorReport(opReport(10, "Merge it?")))
 
-      #expect(Attention.reportVerdict([one])?.reason == "Merge it?")
+      #expect(Attention.askVerdict(OperatorItems(asks: [one]))?.reason == "Operator: Merge it?")
     }
   }
 }

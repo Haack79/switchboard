@@ -37,6 +37,9 @@ public struct TriageDetails: Codable, Equatable, Sendable {
   public var waits: [String]
   /// The ids of the overdue waits that raised the item, from `Verdict.overdueWaits`.
   public var overdueWaits: [String]
+  /// The session that holds `overdueWaits` when it is not the item's session: the operator, for the waits that
+  /// background follow-through routed to the item's session.
+  public var waitsHolder: String?
   public var notes: [String]
   /// The sessions that a group message goes to, as `name (id)`.
   public var targets: [String]
@@ -69,7 +72,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case openByDefault, lastReply, toolInput, pullRequest, waits, overdueWaits, notes, targets
+    case openByDefault, lastReply, toolInput, pullRequest, waits, overdueWaits, waitsHolder, notes, targets
   }
 
   public init(from decoder: Decoder) throws {
@@ -80,6 +83,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
     pullRequest = try c.decodeIfPresent(PR.self, forKey: .pullRequest)
     waits = try c.decodeIfPresent([String].self, forKey: .waits) ?? []
     overdueWaits = try c.decodeIfPresent([String].self, forKey: .overdueWaits) ?? []
+    waitsHolder = try c.decodeIfPresent(String.self, forKey: .waitsHolder)
     notes = try c.decodeIfPresent([String].self, forKey: .notes) ?? []
     targets = try c.decodeIfPresent([String].self, forKey: .targets) ?? []
   }
@@ -92,6 +96,7 @@ public struct TriageDetails: Codable, Equatable, Sendable {
     try c.encodeIfPresent(pullRequest, forKey: .pullRequest)
     if !waits.isEmpty { try c.encode(waits, forKey: .waits) }
     if !overdueWaits.isEmpty { try c.encode(overdueWaits, forKey: .overdueWaits) }
+    try c.encodeIfPresent(waitsHolder, forKey: .waitsHolder)
     if !notes.isEmpty { try c.encode(notes, forKey: .notes) }
     if !targets.isEmpty { try c.encode(targets, forKey: .targets) }
   }

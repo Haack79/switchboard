@@ -205,6 +205,14 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
   /// is open, because a new report clears it.
   public var acknowledgedReports: [OperatorReport] = []
+  /// The session that owns each routed report, by report id, from the operator's `report-routed` events.
+  public var reportOwners: [Int64: String] = [:]
+  /// The Manager conversation that handed off the wait message that the operator works on: the `handedFrom` of
+  /// the last `sent` event, or nil when that event has none.
+  public var workFrom: String?
+  /// The operator's asks and waits that this session owns. sbd sets them with `OperatorItems.assign`, and no event
+  /// folds them.
+  public var operatorItems = OperatorItems()
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -510,14 +518,18 @@ public struct Verdict: Equatable, Sendable {
   public var summarizesPR = false
   /// The "Before you merge" panel. Only the Ready to merge verdict has one.
   public var review: MergeReview?
-  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
-  /// blocking prompts, the operator's Inbox admits only this one.
+  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. The operator's Inbox admits it
+  /// for a `notify` outcome.
   public var byWaitRule = false
   /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
   /// has no wait left, so it names none.
   public var overdueWaits: [String] = []
   /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
   public var removalFailed = false
+  /// The session that holds the overdue waits of a verdict from `Attention.heldWaitVerdict`: the operator.
+  public var waitsHolder: String?
+  /// True for a verdict that the operator's routed asks or waits gave. Its item has source `.report`.
+  public var fromOperator = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -614,25 +626,35 @@ public enum Attention {
       return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"), removalFailed: true)
     }
     if session.done { return Verdict(state: .done, reason: "marked done") }
+    if session.kind == .operator { return operatorRules(session, facts, now: now) }
     if let verdict = followupVerdict(session) { return verdict }
     if let verdict = docketVerdict(session, facts) { return verdict }
     if let unread = facts.unread { return unreadVerdict(session, facts, unread, stateOf: stateOf) }
-    if let card = facts.cards.first {
+    let ask = askVerdict(facts.operatorItems)
+    // An ask outranks a card that doesn't block, which a conversation's Inbox would not show (Decision 55).
+    if let card = facts.cards.first,
+      ask == nil
+        || Triage.hasBlockingPrompt(
+          cards: facts.cards, openPrompt: facts.openPermission != nil || facts.openQuestion != nil)
+    {
       return Verdict(state: .needsYou, reason: oneLine(card.reason))
     }
-    if facts.exitedAtTrust {
-      return Verdict(
-        state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
-    }
+    if facts.exitedAtTrust { return trustExitVerdict }
     if let v = openPromptVerdict(facts) { return v }
-    if let v = reportVerdict(session.kind == .operator ? facts.openReports : []) { return v }
+    if let ask { return ask }
     if let v = finishedPR(session, facts, now: now) { return v }
-    if facts.turnRunning {
-      if let tool = facts.runningTool {
-        return Verdict(state: .working, reason: oneLine("\(tool.summary) (\(minutes(now - tool.since)))"))
-      }
-      return Verdict(state: .working, reason: "working (\(minutes(now - (facts.turnStarted ?? now))))")
-    }
+    if facts.turnRunning { return workingVerdict(facts, now: now) }
+    let idle = idleRules(session, facts, now: now, stateOf: stateOf)
+    // A merge wait watches for Ready to merge, which `openPR` gives below the session's own waits, so a routed held
+    // wait must not hide it (Risk B). It comes before every other idle verdict, the session's own waits included.
+    if idle.state != .readyToMerge, let held = heldWaitVerdict(facts.operatorItems, now: now) { return held }
+    return idle
+  }
+
+  /// The rules for a session whose turn doesn't run and that no prompt, ask, or finished PR decides.
+  private static func idleRules(
+    _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState?
+  ) -> Verdict {
     if let verdict = waitVerdict(session, facts, now: now) { return verdict }
     if facts.prompts == 0 && facts.lastReply == nil {
       return Verdict(state: .needsYou, reason: "give it a first prompt")
@@ -658,6 +680,17 @@ public enum Attention {
     }
     if let v = unreviewedPR(facts) { return v }
     return replyVerdict(facts.lastReply ?? "")
+  }
+
+  static let trustExitVerdict = Verdict(
+    state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
+
+  /// Working, with the running tool or the turn's age.
+  static func workingVerdict(_ facts: SessionFacts, now: Int64) -> Verdict {
+    if let tool = facts.runningTool {
+      return Verdict(state: .working, reason: oneLine("\(tool.summary) (\(minutes(now - tool.since)))"))
+    }
+    return Verdict(state: .working, reason: "working (\(minutes(now - (facts.turnStarted ?? now))))")
   }
 
   /// The verdict of a session whose host sbd can't read: the state that the session had when the link

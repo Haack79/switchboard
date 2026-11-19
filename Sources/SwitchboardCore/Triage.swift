@@ -455,11 +455,13 @@ public enum Triage {
     switch kind.inboxItems {
     case .all:
       let live = liveItem(facts, verdict)
+      // The owner's decision list stays in its facts while an ask shows, and comes back once the ask closes.
+      if live?.source == .report { return (live, nil, false) }
       return (
         item(facts, verdict, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live)
       )
     case .blockingPrompts:
-      return (promptItem(facts, verdict), nil, false)
+      return (promptItem(facts, verdict) ?? operatorSourcedItem(facts, verdict), nil, false)
     case .operatorItems:
       return (operatorItem(facts, verdict), nil, false)
     }
@@ -537,11 +539,14 @@ public enum Triage {
     return "summary:\(facts.sessionSummaryId)"
   }
 
-  /// The item that the session's card, summary, rule, or reply gives.
+  /// The item that background follow-through, the session's card, summary, rule, or reply gives. A verdict from
+  /// the operator's items comes only while no prompt blocks, so its item comes before a card that doesn't block.
   static func liveItem(_ facts: SessionFacts, _ verdict: Verdict) -> TriageItem? {
     guard AttentionState.inbox.contains(verdict.state) else { return nil }
     var item: TriageItem
-    if let card = facts.cards.first {
+    if let routed = operatorSourcedItem(facts, verdict) {
+      item = routed
+    } else if let card = facts.cards.first {
       item = cardItem(card)
       item.ref = card.ref
     } else if let own = facts.sessionSummary, let ref = sessionSummaryRef(facts) {
@@ -887,12 +892,14 @@ public enum Triage {
   /// Whether an item from `source` (nil for no item) may reach the Inbox on a session of `kind`. `blocking` says
   /// whether the session shows a prompt that stops its turn.
   public static func itemSourceAllowed(kind: SessionKind, source: TriageSource?, blocking: Bool) -> Bool {
-    switch kind.inboxItems {
+    // Background follow-through routes its asks and overdue waits to a session of any kind (#410).
+    if source == .report { return true }
+    return switch kind.inboxItems {
     case .all: true
     case .blockingPrompts: source != nil && blocking
     case .operatorItems:
-      // The summary doesn't say which rule gave a `.rule` item. sbd gives the operator one only for the wait
-      // rule or a dialog without a card, and both reach the Inbox.
+      // The summary doesn't say which rule gave a `.rule` item. sbd gives the operator one only for a dialog
+      // without a card, an exit at the trust dialog, or a `notify` outcome, and each reaches the Inbox.
       switch source {
       case .report, .rule: true
       case .card: blocking
@@ -909,7 +916,7 @@ public enum Triage {
     case .work: s.name
     case .chat: groupName.map { Chat.name(group: $0) } ?? s.name
     case .manager: s.name == Manager.name ? s.name : "Manager: \(s.name)"
-    case .operator: Manager.operatorName
+    case .operator: "Background follow-through"
     }
   }
 
