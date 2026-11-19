@@ -44,7 +44,8 @@ enum PlannedScope {
     "wait": Row(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Row(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Row(keys: waitKeys, refs: ["session"]),
-    "events": Row(keys: ["session", "sessions", "since", "limit"], refs: ["session"], refLists: ["sessions"]),
+    "events": Row(
+      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
     "send": Row(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Row(
       keys: ["session", "card", "behavior", "autoMode", "always", "message", "answers"], refs: ["session"]),
@@ -118,8 +119,9 @@ enum PlannedScope {
         case "card" where op == "summary-set": ["summary": "a turn"]
         case "since", "limit", "card": 3
         case "answers": ["yes"]
+        case "kinds": ["Stop"]
         case "colors", "open", "terminals", "done", "clear", "worktree", "autoMode", "always", "planMode",
-          "manualMode":
+          "manualMode", "full":
           true
         default: .string("\(key) value")
         }
