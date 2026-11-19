@@ -763,13 +763,17 @@ public final class Service {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
       let limit = args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":
@@ -792,6 +796,8 @@ public final class Service {
       return try activityReport(args)
     case "activity-clear":
       return try activityClear()
+    case "headless-usage":
+      return try headlessUsage(args)
     case "live":
       return try liveRequest(args)
     case "live-next":
@@ -1350,11 +1356,15 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
-  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
-  /// comes first. A blank line separates it from the triage prompt.
+  /// The text of a launch's `--append-system-prompt`, or nil to pass none. The triage prompt is written for work
+  /// sessions, so a Manager conversation and the operator get their own prompt instead.
   func appendedSystemPrompt(for session: Session) -> String? {
-    let role = session.kind == .operator ? Manager.operatorPrompt : ""
-    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    let text =
+      switch session.kind {
+      case .manager: Manager.conversationPrompt
+      case .operator: Manager.operatorPrompt
+      case .work, .chat: config.triage.systemPrompt
+      }
     return text.isEmpty ? nil : text
   }
 
@@ -1382,6 +1392,9 @@ public final class Service {
       try writeClaudeSettings(id, session)
       args += ["--settings", home.claudeSettings(id)]
       args += launchMCPArgs(id, session)
+      // Claude in Chrome loads even under `--strict-mcp-config`. Nobody reads the operator's chat, so it has no use
+      // for a browser.
+      if session.kind == .operator { args.append("--no-chrome") }
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
@@ -1397,7 +1410,8 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    if session.kind == .manager { config.manager.apply(to: &env) }
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(

@@ -166,6 +166,7 @@ public struct Config: Codable, Equatable, Sendable {
   public var planUpdates = PlanUpdateSettings()
   public var quickAsk = QuickAskSettings()
   public var managerSkills = ManagerSkillSettings()
+  public var manager = ManagerSettings()
   public var recheck = RecheckSettings()
   /// Where the Issues view reads issues from, the team, and the Start presets.
   public var issues = IssueSettings()
@@ -179,6 +180,7 @@ public struct Config: Codable, Equatable, Sendable {
       cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk, managerSkills
+    case manager
     case issues
     case recheck = "recheckSeconds"
     case testTrashOtherVolume
@@ -261,6 +263,7 @@ public struct Config: Codable, Equatable, Sendable {
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
     quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
     managerSkills = ManagerSkillSettings(parsing: try c.decodeIfPresent(JSON.self, forKey: .managerSkills))
+    manager = try c.decodeIfPresent(ManagerSettings.self, forKey: .manager) ?? d.manager
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     // sbd logs a bad `issues` section and keeps the defaults. Throwing would make sbd ignore all of config.json.
     do {

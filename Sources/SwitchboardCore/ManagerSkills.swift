@@ -509,12 +509,13 @@ public enum ManagerSkillGate {
   }
 
   /// The reason of a UserPromptSubmit block, which Claude Code shows to the user. It holds only the skill's name,
-  /// so neither the skill's file nor the classifier's reason reaches it.
-  public static func promptReason(skill: String, conversation: String) -> String {
+  /// so neither the skill's file nor the classifier's reason reaches it. `session` is the conversation's id, which
+  /// a shell reads as one word, unlike a name that can hold spaces.
+  public static func promptReason(skill: String, session: String) -> String {
     "Switchboard blocked /\(skill) in this Manager conversation. /\(skill) is a work skill, and a Manager rereads "
       + "everything it loads on every later turn. Start a session for it instead: in Switchboard's chat pane, "
       + "send it again and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
-      + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(conversation) "
+      + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(session) "
       + "--run-here \"/\(skill) …\" in a terminal. sb manager skills lists the labels."
   }
 

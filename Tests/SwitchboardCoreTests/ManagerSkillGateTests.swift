@@ -277,14 +277,14 @@ private func blocks(_ decision: ManagerSkillGate.Decision) -> Bool {
   // MARK: Reasons
 
   @Test func thePromptReasonIsTheTextOfD17() {
-    let reason = ManagerSkillGate.promptReason(skill: "go", conversation: "Fix cache")
+    let reason = ManagerSkillGate.promptReason(skill: "go", session: "swb_ab12c")
 
     #expect(
       reason
         == "Switchboard blocked /go in this Manager conversation. /go is a work skill, and a Manager rereads "
         + "everything it loads on every later turn. Start a session for it instead: in Switchboard's chat pane, "
         + "send it again and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
-        + "--prompt \"/go …\". To run it here once, pick Run here anyway, or run sb send Fix cache --run-here "
+        + "--prompt \"/go …\". To run it here once, pick Run here anyway, or run sb send swb_ab12c --run-here "
         + "\"/go …\" in a terminal. sb manager skills lists the labels.")
   }
 
@@ -300,11 +300,11 @@ private func blocks(_ decision: ManagerSkillGate.Decision) -> Bool {
   }
 
   @Test func bothReasonsNameThePluginSkillThatTheyRefuse() {
-    let prompt = ManagerSkillGate.promptReason(skill: "p:s", conversation: "Operator")
+    let prompt = ManagerSkillGate.promptReason(skill: "p:s", session: "swb_op001")
     let tool = ManagerSkillGate.toolReason(skill: "p:s")
 
     #expect(prompt.hasPrefix("Switchboard blocked /p:s in this Manager conversation. /p:s is a work skill"))
-    #expect(prompt.contains("sb send Operator --run-here \"/p:s …\""))
+    #expect(prompt.contains("sb send swb_op001 --run-here \"/p:s …\""))
     #expect(tool.hasPrefix("Switchboard denied the p:s skill."))
     #expect(tool.contains("--prompt \"/p:s <args>\""))
   }
@@ -313,7 +313,7 @@ private func blocks(_ decision: ManagerSkillGate.Decision) -> Bool {
   @Test func neitherReasonHoldsTheClassifiersReason() {
     let haiku = goWork.labels.values.first!.reason
 
-    #expect(!ManagerSkillGate.promptReason(skill: "go", conversation: "c").contains(haiku))
+    #expect(!ManagerSkillGate.promptReason(skill: "go", session: "c").contains(haiku))
     #expect(!ManagerSkillGate.toolReason(skill: "go").contains(haiku))
   }
 }

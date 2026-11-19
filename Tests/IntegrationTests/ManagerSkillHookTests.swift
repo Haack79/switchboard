@@ -3,11 +3,11 @@ import SwitchboardCore
 import Testing
 
 /// The UserPromptSubmit block of D17 for a work skill typed in a conversation named `conversation`.
-private func promptReason(_ skill: String, conversation: String) -> String {
+private func promptReason(_ skill: String, session: String) -> String {
   "Switchboard blocked /\(skill) in this Manager conversation. /\(skill) is a work skill, and a Manager rereads "
     + "everything it loads on every later turn. Start a session for it instead: in Switchboard's chat pane, "
     + "send it again and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
-    + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(conversation) --run-here "
+    + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(session) --run-here "
     + "\"/\(skill) …\" in a terminal. sb manager skills lists the labels."
 }
 
@@ -43,7 +43,7 @@ private func write(_ text: String, to path: String) throws {
     #expect(blocked.first?.data["via"]?.string == "prompt")
     #expect(blocked.first?.data["by"]?.string == "haiku")
     let answer = try sbd.waitFor("the stub's block", fetch: { blocks(sbd, c).first }, until: { _ in true })
-    #expect(answer["reason"]?.string == promptReason("go", conversation: try sbd.get(c.id).name))
+    #expect(answer["reason"]?.string == promptReason("go", session: c.id))
   }
 
   /// The block's reason goes to the user, so neither the skill's file nor the classifier's reason may be in it.
@@ -125,7 +125,7 @@ private func write(_ text: String, to path: String) throws {
     try prompt(sbd, c, "what changed")
 
     let given = contexts(sbd, c).dropFirst(before)
-    let line = "- kid (\(kid.id)): needs you: read its last reply and decide what's next"
+    let line = "- kid (\(kid.id)): needs you"
     #expect(given.contains { $0.contains(line) }, "\(Array(given))")
   }
 

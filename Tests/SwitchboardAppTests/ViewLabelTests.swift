@@ -23,7 +23,7 @@ import Testing
 
   /// The block reason of sbd's hook names the first two buttons, so a user who reads it finds them.
   @Test func theBlockReasonNamesTheSpawnAndRunHereButtons() {
-    let reason = ManagerSkillGate.promptReason(skill: "go", conversation: "m")
+    let reason = ManagerSkillGate.promptReason(skill: "go", session: "m")
 
     #expect(reason.contains(WorkSkillOfferBar.spawnTitle), "\(reason)")
     #expect(reason.contains(WorkSkillOfferBar.runHereTitle), "\(reason)")

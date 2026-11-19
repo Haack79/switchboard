@@ -105,20 +105,19 @@ extension Service {
     } else {
       return failure(.failed, "\(entry.name) has neither a file nor a description")
     }
-    let output: String
-    do {
-      output = try runHeadless(
-        SkillClassifier.arguments(model: settings.model), input: SkillClassifier.input(name: entry.name, text: text),
-        env: headlessEnv(session: nil, account: ClaudeAccount(folder: account)), folder: home.path,
-        timeout: settings.timeoutSeconds)
-    } catch let error as Headless.TimedOut {
+    let outcome = headlessCall(
+      .skillLabel, session: nil, arguments: SkillClassifier.arguments(model: settings.model),
+      input: SkillClassifier.input(name: entry.name, text: text),
+      env: headlessEnv(session: nil, account: ClaudeAccount(folder: account)), folder: home.path,
+      timeout: settings.timeoutSeconds, parse: SkillClassifier.parse)
+    switch outcome.result {
+    case .success(let answer):
+      return .success((SkillLabelCache.key(hash: hash, model: settings.model), answer))
+    case .failure(let error as Headless.TimedOut):
       return failure(.timeout, "\(error)")
-    } catch {
+    case .failure(let error) where outcome.reply == nil || error is Headless.ExitError:
       return failure(.failed, "\(error)")
-    }
-    do {
-      return .success((SkillLabelCache.key(hash: hash, model: settings.model), try SkillClassifier.parse(output)))
-    } catch {
+    case .failure(let error):
       return failure(.badAnswer, "\(error)")
     }
   }
@@ -236,7 +235,7 @@ extension Service {
       deliverPending(id, after: 0.5)
       return [
         "decision": "block",
-        "reason": .string(ManagerSkillGate.promptReason(skill: name, conversation: session.name)),
+        "reason": .string(ManagerSkillGate.promptReason(skill: name, session: id)),
       ]
     case .unchecked(let failure):
       recordSkillUnchecked(id, name, account: account, failure)

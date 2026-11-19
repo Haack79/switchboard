@@ -47,6 +47,19 @@ private let spentReading =
     #expect(input.contains("Run the pipeline."), "\(input)")
   }
 
+  @Test func classificationRunIsCountedInHeadlessUsage() throws {
+    let sbd = try instance()
+    try writeSkill(sbd.account("A"), "go")
+
+    try newConversation(sbd)
+
+    try waitForLabel(sbd, "go", "work")
+    let row = try sbd.waitForHeadlessUsageRow("skillLabel", calls: 1)
+    #expect(headlessUsage(row["usage"]) == stubUsage)
+    #expect(row["models"]?.array?.compactMap(\.string) == ["haiku"])
+    #expect(row["errors"]?.int == 0)
+  }
+
   @Test func labelSafeSkillComesOutSafe() throws {
     let sbd = try instance()
     try writeSkill(sbd.account("A"), "notes", "Append to the notes file. LABEL-SAFE")
