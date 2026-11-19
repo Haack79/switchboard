@@ -4,13 +4,14 @@ import os
 
 extension Service {
   /// The `ref-details` request. It answers from a session's PR, then from the Issues cache, then from sbd's cache of
-  /// earlier reads, and only then reads the item from GitHub. It runs off the state queue, because a read waits on
-  /// GitHub.
+  /// earlier reads, and only then reads the item from GitHub. With `fresh: true` it skips those answers and reads
+  /// GitHub, unless a read of the item already runs. It runs off the state queue, because a read waits on GitHub.
   func referenceDetails(_ args: JSON) throws -> ReferenceReply {
     let ref = try Self.reference(args)
-    if let local = queue.sync(execute: { localReferenceDetails(ref) }) { return .found(local) }
+    let fresh = args["fresh"]?.bool == true
+    if !fresh, let local = queue.sync(execute: { localReferenceDetails(ref) }) { return .found(local) }
     guard let github else { throw APIError("GitHub polling is off, so sbd can't read \(ref.repo)#\(ref.number)") }
-    switch references.answer(ref.key, read: { github.readReference(ref) }) {
+    switch references.answer(ref.key, fresh: fresh, read: { github.readReference(ref) }) {
     case .found(let details): return .found(details)
     case .notFound: return .notFound(repo: ref.repo, number: ref.number)
     case .failed(let message): throw APIError(message)
@@ -71,11 +72,11 @@ final class ReferenceFetches: Sendable {
 
   private let state = OSAllocatedUnfairLock(initialState: State())
 
-  /// The fresh cached answer for `key`, the answer of the read that runs for it, or the answer of a new read. The
-  /// lock is never held while `read` runs.
-  func answer(_ key: String, read: () -> ReferenceCache.Answer) -> ReferenceCache.Answer {
+  /// The fresh cached answer for `key`, the answer of the read that runs for it, or the answer of a new read. With
+  /// `fresh`, it skips the cached answer. The lock is never held while `read` runs.
+  func answer(_ key: String, fresh: Bool, read: () -> ReferenceCache.Answer) -> ReferenceCache.Answer {
     let step: Step = state.withLock { s in
-      if let answer = s.cache.fresh(key, now: nowMs()) { return .answered(answer) }
+      if !fresh, let answer = s.cache.fresh(key, now: nowMs()) { return .answered(answer) }
       if let running = s.running[key] { return .wait(running) }
       let started = Read()
       s.running[key] = started

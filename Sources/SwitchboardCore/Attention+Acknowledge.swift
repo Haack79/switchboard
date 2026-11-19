@@ -81,16 +81,30 @@ extension Attention {
   /// the acknowledgment. After that the verdict stays in the Inbox, and its
   /// reason says when the user acknowledged it.
   static func acknowledged(_ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64) -> Verdict {
-    guard AttentionState.inbox.contains(verdict.state), let ack = facts.acknowledgment, ack.covers(verdict, facts)
-    else { return verdict }
+    guard let ack = covering(verdict, facts) else { return verdict }
     var out = verdict
-    let at = ack.at ?? now
-    if now >= at + acknowledgedMs {
-      out.reason = "\(verdict.reason) (acknowledged \(Wait.formatTime(at)), time to recheck)"
+    if acknowledgmentExpired(verdict, facts, now: now, acknowledgedMs: acknowledgedMs) {
+      out.reason = "\(verdict.reason) (acknowledged \(Wait.formatTime(ack.at ?? now)), time to recheck)"
       return out
     }
     out.state = .waiting
     out.acknowledged = true
     return out
+  }
+
+  /// Whether the user acknowledged this Inbox verdict and `acknowledgedMs` passed since, so `shown` keeps it in
+  /// the Inbox with "time to recheck".
+  public static func acknowledgmentExpired(
+    _ verdict: Verdict, _ facts: SessionFacts, now: Int64, acknowledgedMs: Int64
+  ) -> Bool {
+    guard let ack = covering(verdict, facts) else { return false }
+    return now >= (ack.at ?? now) + acknowledgedMs
+  }
+
+  /// The session's acknowledgment when it covers this Inbox verdict, or nil.
+  private static func covering(_ verdict: Verdict, _ facts: SessionFacts) -> Acknowledgment? {
+    guard AttentionState.inbox.contains(verdict.state), let ack = facts.acknowledgment, ack.covers(verdict, facts)
+    else { return nil }
+    return ack
   }
 }

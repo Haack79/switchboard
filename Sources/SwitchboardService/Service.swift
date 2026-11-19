@@ -62,6 +62,9 @@ public final class Service {
     var mergeBriefAttempt: String?
     /// Whether the budget skipped the brief of `mergeBriefAttempt`.
     var mergeBriefSkipped = false
+    /// The expired acknowledgment that last put the session's PR in the poller's `recheck` set. Each
+    /// acknowledgment does that once per run of sbd.
+    var recheckedAcknowledgment: Acknowledgment?
     /// When a start of claude queued behind the live cap.
     var queuedSince: Int64?
     /// What caused the queued start. It is set and cleared with `queuedSince`.
@@ -909,6 +912,7 @@ public final class Service {
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
+      dropStaleFailedRemoval(id, event: event)
     }
     releaseCards(id)
     return event
@@ -920,6 +924,19 @@ public final class Service {
     startSummaries(id, verdict)
     resolveDraftTargets(id, verdict)
     clearHighlightOnDone(id, verdict)
+    recheckOnExpiredAcknowledgment(id, verdict)
+  }
+
+  /// Puts the session's PR in the poller's `recheck` set when the user's acknowledgment of a rule verdict expired,
+  /// so the re-raised item shows what GitHub shows now. It runs on the state queue.
+  func recheckOnExpiredAcknowledgment(_ id: String, _ verdict: Verdict) {
+    guard let github, verdict.source == .rule, let e = entries[id], let prId = e.facts.pr?.id,
+      let ack = e.facts.acknowledgment, ack != e.recheckedAcknowledgment,
+      Attention.acknowledgmentExpired(verdict, e.facts, now: nowMs(), acknowledgedMs: config.recheck.acknowledgedMs)
+    else { return }
+    entries[id]?.recheckedAcknowledgment = ack
+    // The poller's queue waits on the state queue during a poll, so a sync call here could deadlock.
+    github.queue.async { github.recheck.insert(prId) }
   }
 
   // MARK: Sessions

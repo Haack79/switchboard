@@ -59,7 +59,8 @@ final class GitHubPoller {
   var queuedWaits: Set<String> = []
   var deploys = Deploys()
   /// The PRs of edges that left a session's list before the poller read
-  /// their PR again. The next poll reads them whether or not they are due.
+  /// their PR again, and the PRs of sessions whose acknowledgment expired.
+  /// The next poll reads them whether or not they are due.
   var recheck: Set<String> = []
   /// What the poller knows about each plan document, by plan id.
   var trackedPlans: [String: TrackedPlan] = [:]
