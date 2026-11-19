@@ -42,7 +42,7 @@ extension Service {
   /// Rebuilds `lastSbdMerges` from the newest `wait-resolved` events of merge actions that merged, so a restart
   /// keeps the hold on a base whose checks run on sbd's own merge. It runs on the state queue.
   func loadSbdMerges() {
-    let events = (try? store.events(kind: "wait-resolved", limit: 500, newest: true)) ?? []
+    let events = (try? store.events(kinds: ["wait-resolved"], limit: 500, newest: true)) ?? []
     for event in events.sorted(by: { $0.id < $1.id }) {
       let action = event.data["action"]
       guard action?["kind"]?.string == WaitAction.Kind.merge.rawValue,
@@ -492,7 +492,7 @@ extension Service {
         name: e?.session.name ?? target.name, exists: e != nil,
         busy: beingDeletedRefusal(subject) != nil || busyRefusal(subject) != nil, host: e?.session.host,
         worktree: worktree, pr: e?.facts.pr, turnRunning: e?.facts.turnRunning ?? false,
-        messageWaiting: e?.messageWaiting(now: nowMs()) ?? false)
+        messageWaiting: e.map { messageWaiting($0, now: nowMs()) } ?? false)
     }
     switch RemovalGuard.check(input) {
     case .gone:
