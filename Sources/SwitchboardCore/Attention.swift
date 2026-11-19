@@ -203,7 +203,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
   public var openReports: [OperatorReport] = []
   /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
-  /// is open, because a new report clears it.
+  /// is open, because a new report clears it. A `conversation-reset` clears it too, because the new conversation
+  /// never saw those reports.
   public var acknowledgedReports: [OperatorReport] = []
   /// The session that owns each routed report, by report id, from the operator's `report-routed` events.
   public var reportOwners: [Int64: String] = [:]
@@ -213,6 +214,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The operator's asks and waits that this session owns. sbd sets them with `OperatorItems.assign`, and no event
   /// folds them.
   public var operatorItems = OperatorItems()
+  /// The main session's `UserPromptSubmit` events since the last `conversation-reset`, each of which starts a turn.
+  public var turnsSinceReset = 0
+  /// When sbd last started a fresh conversation for the session, from its last `conversation-reset`.
+  public var conversationStarted: Int64?
+  /// The Claude session ids of the conversations that the session had before each `conversation-reset`.
+  public var pastConversations: [String] = []
 
   /// The hook events that sbd's settings file subscribes claude to.
   public static let hookKinds = [
@@ -265,6 +272,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       live = true
     case "account-moved":
       transcriptPath = nil
+    case OperatorReset.event:
+      transcriptPath = nil
+      turnsSinceReset = 0
+      conversationStarted = event.t
+      acknowledgedReports = []
+      if let from = d["from"]?.string { pastConversations.append(from) }
     case "docket":
       docket.apply(d)
     case "started", "resumed":
@@ -293,6 +306,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       subagents = []
     case "UserPromptSubmit":
       if userPrompt { prompts += 1 }
+      if !fromSubagent { turnsSinceReset += 1 }
       promptSinceReply = true
       startTurn(event.t)
       jobsEndedAt = nil

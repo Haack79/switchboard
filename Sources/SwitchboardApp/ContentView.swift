@@ -1086,6 +1086,12 @@ extension SessionSummary {
 
   /// Needs you is not a column, so its card keeps its column and gets an orange edge.
   var hasNeedsYouEdge: Bool { state == .needsYou }
+
+  /// A paused card draws its text at this opacity, so it reads as greyed out.
+  var boardCardOpacity: Double { pause == nil ? 1 : 0.45 }
+
+  /// The color of the card's fill and edge. A paused card uses gray in place of its state's color.
+  var boardCardTint: Color { pause == nil ? state.color : .gray }
 }
 
 extension BoardHolder {
@@ -1198,13 +1204,14 @@ struct BoardCard: View {
               .font(.caption2).foregroundStyle(.tertiary)
           }
         }
+        .opacity(s.boardCardOpacity)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(
           RoundedRectangle(cornerRadius: 8)
             .fill(
               !selected
-                ? s.state.color.opacity(0.08)
+                ? s.boardCardTint.opacity(0.08)
                 : Color(
                   nsColor: emphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor)
             )
@@ -1213,7 +1220,7 @@ struct BoardCard: View {
         .overlay {
           RoundedRectangle(cornerRadius: 8)
             .stroke(
-              s.hasNeedsYouEdge ? AttentionState.needsYou.color : s.state.color.opacity(0.3),
+              s.hasNeedsYouEdge ? AttentionState.needsYou.color : s.boardCardTint.opacity(0.3),
               lineWidth: s.hasNeedsYouEdge ? 2 : 1)
         }
         .overlay {
@@ -1241,6 +1248,7 @@ struct BoardCard: View {
               .foregroundStyle(pr.status.color)
               .help(pr.tooltip)
               .accessibilityValue(pr.status.rawValue)
+              .opacity(s.boardCardOpacity)
               .frame(width: rect.width, height: rect.height)
               .offset(x: rect.minX, y: rect.minY)
           }

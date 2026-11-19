@@ -83,6 +83,9 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    manager model [<name>]        show or set the model of each Manager conversation,
+                                  sonnet by default. It applies from the next time a
+                                  conversation's claude starts, and not to the operator
     manager skills [<conv>]       list the skills that the Manager conversations
                                   and the operator can load, or only those of
                                   the conversation's account, each labeled work
@@ -104,7 +107,10 @@ let usage = """
                                   shows in the Loops tab's Background Activity
                                   list, whose Transcript button opens its
                                   transcript
-    operator --log                the operator's last messages
+    operator --log                the last messages of the operator's current
+                                  conversation. sbd starts a fresh one after
+                                  operator.maxTurns turns (20) or
+                                  operator.resetEverySeconds (1 day)
     operator report [--needs-you] [--session S] <text>
                                   record a report. Only the operator runs it.
                                   S is the session that it is about.
@@ -253,6 +259,10 @@ let usage = """
                                   and sb waits for it. --no-wait prints what the job queued
                                   and returns. Without a terminal or inside Claude, it needs
                                   --yes. With --json and without --yes, it removes nothing
+    rm --keep <session>           cancel the session's failed delete and keep the session, as the
+                                  Inbox's Keep button does: move its folder back from the trash
+                                  and clear the delete. Refuses a session whose delete didn't fail,
+                                  whose folder can't move back, or whose worktree git dropped
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits
                                   after the merge, a running turn, and a folder sbd didn't make.
@@ -298,10 +308,11 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--kind K]... [--limit N] [--full]
-        [--follow]
+    events [--session S] [--since ID] [--kind K]... [--limit N | --all]
+        [--full] [--follow]
                                   the newest events, or those after an id,
-                                  \(Event.defaultLimit) at a time. --kind, which
+                                  \(Event.defaultLimit) at a time. --all reads
+                                  every matching event. --kind, which
                                   repeats, shows only those kinds. --json
                                   leaves out tool output and cuts long
                                   strings unless --full
@@ -376,6 +387,11 @@ let usage = """
     group describe <group> <text> | --clear
                                   set or clear the group's description, at
                                   most \(SessionGroup.descriptionLimit) characters
+    group link add <group> <url> [--title T]
+                                  add an http or https link, such as an RFC;
+                                  the title defaults to the URL. Only you add
+                                  links: inside Claude it is refused
+    group link rm <group> <link-id>
     group account <group> [<account> | --clear]
                                   show, set, or clear the Claude account that the
                                   group's sessions run under. A stopped session
@@ -827,11 +843,12 @@ func watch(_ a: Args) -> Never {
 func events(_ a: Args) -> Never {
   var cursor = EventCursor(
     since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
-    full: a.switches.contains("--full"))
+    full: a.switches.contains("--full"), all: a.switches.contains("--all"))
   let limit = a.values["--limit"].map { value -> Int in
     guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
     return limit
   }
+  if cursor.all, limit != nil { die("pass --all or --limit, not both") }
   while true {
     let list: [Event]
     do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
@@ -1076,6 +1093,12 @@ case "send" where a.values["--group"] != nil:
   sendGroup(a, group: a.values["--group"]!)
 case "send":
   sendCommand(a)
+case "rm" where a.switches.contains("--keep"):
+  let other =
+    ["--done", "--worktree", "--delete-branch", "--delete-remote-branch"].filter(a.switches.contains)
+    + (a.values["--resolve"] == nil ? [] : ["--resolve"])
+  if let flag = other.first { die("--keep and \(flag) conflict") }
+  sessionCommand("rm-keep", a, session: a.session("rm --keep"))
 case "rm" where a.switches.contains("--done"):
   removeDone(a)
 case "rm":

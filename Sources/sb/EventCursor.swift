@@ -10,6 +10,8 @@ struct EventCursor {
   var kinds: [String]?
   /// Reads each event's whole payload instead of the slimmed one.
   var full = false
+  /// Reads every matching event instead of at most a limit.
+  var all = false
 
   /// The events after `since`, oldest first, or the newest events when
   /// `since` is nil. It reads at most `limit` events, `Event.defaultLimit`
@@ -20,6 +22,7 @@ struct EventCursor {
     if let session { args["session"] = .string(session) }
     if let kinds { args["kinds"] = .array(kinds.map(JSON.string)) }
     if full { args["full"] = true }
+    if all { args["all"] = true }
     if let limit { args["limit"] = .number(Double(limit)) }
     let events = try client.call("events", args, as: [Event].self)
     since = events.last?.id ?? since ?? 0

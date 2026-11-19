@@ -473,7 +473,7 @@ struct CardDetails: View {
           case .toolInput:
             if let input = details.toolInput {
               section(details.targets.isEmpty ? "Tool call: \(input.tool)" : "Message") {
-                CardView.textBox(input.text, maxHeight: 200)
+                ToolInputBox(text: input.text, markdown: input.markdown, maxHeight: 200)
               }
             }
           case .targets:

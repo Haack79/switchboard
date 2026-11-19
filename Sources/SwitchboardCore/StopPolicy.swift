@@ -58,7 +58,7 @@ public struct StopPolicy: Sendable {
   /// Whether claude sits idle with nothing that a stop would lose: no turn,
   /// prompt, trust dialog, queued or in-flight message, or background job,
   /// and no terminal on screen. The idle stop and the live cap both need it.
-  func isQuiet(_ c: Claude) -> Bool {
+  public func isQuiet(_ c: Claude) -> Bool {
     let f = c.facts
     return f.live && !f.turnRunning && f.openPermission == nil && f.openQuestion == nil && f.trustCard == nil
       && !c.messageWaiting && !c.attached && c.jobs == 0
