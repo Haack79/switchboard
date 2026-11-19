@@ -212,21 +212,25 @@ public enum SkillFolders {
   public static func scan(account: String?, cwd: String, on machine: any Machine) -> [ScannedSkill] {
     let folders: [(folder: String, skill: ScannedSkill.Origin, command: ScannedSkill.Origin)] =
       (account.map { [($0, .accountSkill, .accountCommand)] } ?? []) + [("\(cwd)/.claude", .cwdSkill, .cwdCommand)]
-    let skills = folders.flatMap { folder, origin, _ in
-      machine.list("\(folder)/skills").sorted().compactMap { name in
-        let path = "\(folder)/skills/\(name)/SKILL.md"
-        return headText(path, on: machine).map { skill($0, named: name, path: path, origin: origin) }
-      }
-    }
-    let commands = folders.flatMap { folder, _, origin in
-      machine.list("\(folder)/commands").filter { $0.hasSuffix(".md") }.sorted().compactMap { file in
-        let path = "\(folder)/commands/\(file)"
-        return headText(path, on: machine).map {
-          skill($0, named: String(file.dropLast(3)), path: path, origin: origin)
-        }
-      }
-    }
-    return (skills + commands).filter { !$0.name.isEmpty }
+    let skills = folders.flatMap { folder, origin, _ in self.skills(in: folder, origin: origin, on: machine) }
+    let commands = folders.flatMap { folder, _, origin in self.commands(in: folder, origin: origin, on: machine) }
+    return skills + commands
+  }
+
+  /// The skills in `<folder>/skills/*/SKILL.md`, sorted by folder name.
+  static func skills(in folder: String, origin: ScannedSkill.Origin, on machine: any Machine) -> [ScannedSkill] {
+    machine.list("\(folder)/skills").sorted().compactMap { name in
+      let path = "\(folder)/skills/\(name)/SKILL.md"
+      return headText(path, on: machine).map { skill($0, named: name, path: path, origin: origin) }
+    }.filter { !$0.name.isEmpty }
+  }
+
+  /// The commands in `<folder>/commands/*.md`, sorted by file name.
+  static func commands(in folder: String, origin: ScannedSkill.Origin, on machine: any Machine) -> [ScannedSkill] {
+    machine.list("\(folder)/commands").filter { $0.hasSuffix(".md") }.sorted().compactMap { file in
+      let path = "\(folder)/commands/\(file)"
+      return headText(path, on: machine).map { skill($0, named: String(file.dropLast(3)), path: path, origin: origin) }
+    }.filter { !$0.name.isEmpty }
   }
 
   /// The frontmatter and the first body line fit well inside this many bytes.
