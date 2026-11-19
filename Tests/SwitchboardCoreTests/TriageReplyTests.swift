@@ -513,6 +513,20 @@ private let decision = PendingDecision(
     #expect(hasAsk(built))
   }
 
+  /// A Stop that sbd never saw leaves the transcript's reply for `reconciled` to recover.
+  @Test func aReconciledReplysQuestionIsOpen() throws {
+    var f = try depotFacts(asksNothing)
+    let v = try depotVerdict(f)
+    f.apply(event("UserPromptSubmit", 3, ["prompt": "go on"]))
+    f.apply(event("idle", 4))
+    f.apply(event("reconciled", 5, ["lastReply": .string(yesNoOffer)]))
+    try #require(!f.turnRunning)
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(hasAsk(built))
+  }
+
   @Test func aCardItemGetsNoQuestion() throws {
     var f = try depotFacts(try replyFixture("rule-hides-question"))
     let v = try depotVerdict(f)

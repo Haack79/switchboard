@@ -1178,7 +1178,7 @@ private func withId(_ wait: Wait, _ id: String) -> Wait {
     let item = try #require(Triage.item(idle, v, kind: .work))
 
     #expect(item.title == "A review from PostHog/clickhouse on #135173: still open after 1d")
-    #expect(item.ref == "rule:A review from PostHog/clickhouse on #135173: still open after 1d")
+    #expect(item.ref.hasPrefix("rule:A review from PostHog/clickhouse on #135173: still open after 1d"))
   }
 }
 

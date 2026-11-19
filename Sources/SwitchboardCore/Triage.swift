@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum TriageKind: String, Codable, Sendable {
@@ -709,7 +710,10 @@ public enum Triage {
   /// reads as yes or no. A `send` option that already sends Yes or No
   /// stands in for that button. The question is open only while no prompt
   /// has arrived since the Stop that wrote the reply. A turn that ends
-  /// without a Stop keeps the answered reply.
+  /// without a Stop keeps the answered reply. The item's ref gains a
+  /// fingerprint of the ask, so a choice that the user made against the item
+  /// with the ask is stale once the ask goes, and its option numbers no longer
+  /// point at the same options.
   static func addReplyAsk(_ facts: SessionFacts, to item: inout TriageItem) {
     guard item.source == .rule, !facts.turnRunning, !facts.promptSinceReply else { return }
     let kind = Attention.classify(facts.lastReply ?? "")
@@ -727,6 +731,7 @@ public enum Triage {
       }
     }
     item.options.insert(contentsOf: added, at: 0)
+    item.ref += "#ask:" + SHA256.hash(data: Data(ask.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
   }
 
   /// Yes and No `send` options for an offer that a yes or no answers, or none.

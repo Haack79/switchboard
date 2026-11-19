@@ -216,12 +216,13 @@ private final class Harness {
     return text.split(separator: "\n").count
   }
 
-  /// Adds a session whose polled PR is `pr`.
-  func addSession(_ id: String, pr: PullRequest) {
+  /// Adds a session whose PR the poller read at `polled`, in milliseconds since the epoch.
+  func addSession(_ id: String, pr: PullRequest, polled: Int64? = nil) {
     service.queue.sync {
       let s = Session(id: id, name: id, cwd: home.path, claudeSessionId: "uuid-\(id)", created: 0)
       var entry = Service.Entry(session: s)
       entry.facts.pr = pr
+      entry.facts.prRead = polled
       service.entries[id] = entry
     }
   }
@@ -581,6 +582,45 @@ private func releaseLater(_ api: FakeReferenceAPI, after logged: Int = 0) {
     #expect(details["source"] == "fetch")
     #expect(details["title"] == "Fetched title")
     #expect(h.api.requests.map(\.key) == ["acme/widgets#42"])
+  }
+
+  /// "Check now" stores a read that is newer than the poll, so a later plain call must not undo it.
+  @Test func aPlainCallAfterAFreshReadAnswersWithTheFreshRead() throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42, title: "Polled title"), polled: nowMs() - 30_000)
+    h.api.put(42, issueNode(42, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#42", "fresh": true])
+
+    let after = try h.details("acme/widgets#42")
+
+    #expect(after["title"] == "Fetched title")
+    #expect(after["source"] == "fetch")
+    #expect(h.api.requests.count == 1)
+  }
+
+  @Test func aPollNewerThanTheFreshReadAnswersAgain() throws {
+    let h = try Harness()
+    h.addSession("s1", pr: pullRequest(42, title: "Polled title"), polled: nowMs() - 30_000)
+    h.api.put(42, issueNode(42, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#42", "fresh": true])
+    h.addSession("s1", pr: pullRequest(42, title: "Newer poll"), polled: nowMs() + 1_000)
+
+    let after = try h.details("acme/widgets#42")
+
+    #expect(after["title"] == "Newer poll")
+    #expect(after["source"] == "session")
+  }
+
+  @Test func aPlainCallAfterAFreshReadAnswersWithTheFreshReadOfACachedIssue() throws {
+    let h = try Harness()
+    h.cache([inboxIssue(7, title: "Cached title")])
+    h.service.queue.sync { h.service.issueCache.polledAt = nowMs() - 30_000 }
+    h.api.put(7, issueNode(7, title: "Fetched title"))
+    _ = try h.details(["ref": "acme/widgets#7", "fresh": true])
+
+    let after = try h.details("acme/widgets#7")
+
+    #expect(after["title"] == "Fetched title")
   }
 
   @Test func aFreshCallSkipsACachedIssue() throws {

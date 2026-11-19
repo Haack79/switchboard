@@ -30,7 +30,8 @@ struct WaitPanel: View {
     var note: String?
     /// "Set 3h ago by you".
     var set: String
-    var rechecked: Int64?
+    /// When sbd rechecks the wait, or for a manual wait when it returns to Needs you.
+    var recheck: Int64?
     var target: Target?
     var who: String?
     /// Whether GitHub still requests a review from `who`, or nil when the panel can't tell.
@@ -74,7 +75,7 @@ struct WaitPanel: View {
       id: wait.id, kind: wait.kind, summary: wait.summary, then: wait.then,
       note: wait.kind == .manual ? nil : wait.note,
       set: "Set \(ago(wait.created, now: now)) ago by \(wait.by.rawValue)",
-      rechecked: wait.kind == .manual ? wait.until : wait.recheck, who: wait.who)
+      recheck: wait.kind == .manual ? wait.until : wait.recheck, who: wait.who)
     switch wait.kind {
     case .session:
       row.target = wait.session.map { target in
@@ -172,10 +173,15 @@ private struct WaitPanelRow: View {
 }
 
 extension WaitPanel {
-  /// Who set the wait and when, when sbd rechecked it, and what happens when it resolves.
+  /// Who set the wait and when, when its recheck is due, and what happens when it resolves.
   static func facts(_ row: Row, now: Int64) -> String {
     var parts = [row.set]
-    if let rechecked = row.rechecked { parts.append("rechecked \(ago(rechecked, now: now)) ago") }
+    if let recheck = row.recheck {
+      let future = recheck > now
+      let when = future ? fromNow(recheck, now: now) : "\(ago(recheck, now: now)) ago"
+      let lead = row.kind == .manual ? "due" : future ? "rechecks" : "recheck was due"
+      parts.append("\(lead) \(when)")
+    }
     parts.append("\(row.then.outcome) when it resolves")
     return parts.joined(separator: " · ")
   }

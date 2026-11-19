@@ -4,12 +4,18 @@ import os
 
 extension Service {
   /// The `ref-details` request. It answers from a session's PR, then from the Issues cache, then from sbd's cache of
-  /// earlier reads, and only then reads the item from GitHub. With `fresh: true` it skips those answers and reads
+  /// earlier reads, and only then reads the item from GitHub. A fresh answer in sbd's cache that is newer than the
+  /// session's PR or the Issues cache wins over it. With `fresh: true` it skips those answers and reads
   /// GitHub, unless a read of the item already runs. It runs off the state queue, because a read waits on GitHub.
   func referenceDetails(_ args: JSON) throws -> ReferenceReply {
     let ref = try Self.reference(args)
     let fresh = args["fresh"]?.bool == true
-    if !fresh, let local = queue.sync(execute: { localReferenceDetails(ref) }) { return .found(local) }
+    if !fresh, let local = queue.sync(execute: { localReferenceDetails(ref) }) {
+      if let at = local.at, case .found(let read)? = references.fresh(ref.key), (read.read ?? .min) > at {
+        return .found(read)
+      }
+      return .found(local.details)
+    }
     guard let github else { throw APIError("GitHub polling is off, so sbd can't read \(ref.repo)#\(ref.number)") }
     switch references.answer(ref.key, fresh: fresh, read: { github.readReference(ref) }) {
     case .found(let details): return .found(details)
@@ -36,15 +42,15 @@ extension Service {
     return ref
   }
 
-  /// A session's PR or a cached issue that `ref` names. A cached issue's read time is the end of the last poll that
-  /// read the Issues sources. It runs on the state queue.
-  private func localReferenceDetails(_ ref: GitHubRef) -> ReferenceDetails? {
-    let pr = entries.values.lazy.compactMap(\.facts.pr).first { ref.same(repo: $0.repo, number: $0.number) }
-    if let pr { return ReferenceDetails(pr: pr) }
+  /// A session's PR or a cached issue that `ref` names, with the time it was read, or nil when that is unknown. A cached
+  /// issue's read time is the end of the last poll that read the Issues sources. It runs on the state queue.
+  private func localReferenceDetails(_ ref: GitHubRef) -> (details: ReferenceDetails, at: Int64?)? {
+    let owner = entries.values.lazy.first { $0.facts.pr.map { ref.same(repo: $0.repo, number: $0.number) } == true }
+    if let pr = owner?.facts.pr { return (ReferenceDetails(pr: pr), owner?.facts.prRead) }
     guard let issue = issueCache.issues.first(where: { $0.id == ref.key }) else { return nil }
     var details = ReferenceDetails(issue: issue)
     details.read = issueCache.polledAt
-    return details
+    return (details, issueCache.polledAt)
   }
 }
 
@@ -71,6 +77,9 @@ final class ReferenceFetches: Sendable {
   }
 
   private let state = OSAllocatedUnfairLock(initialState: State())
+
+  /// The cached answer for `key` while it is fresh, else nil.
+  func fresh(_ key: String) -> ReferenceCache.Answer? { state.withLock { $0.cache.fresh(key, now: nowMs()) } }
 
   /// The fresh cached answer for `key`, the answer of the read that runs for it, or the answer of a new read. With
   /// `fresh`, it skips the cached answer. The lock is never held while `read` runs.

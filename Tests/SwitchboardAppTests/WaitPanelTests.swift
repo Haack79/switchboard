@@ -107,17 +107,17 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
   }
 
   @Test(arguments: prKinds + [.session])
-  func aWaitWasRecheckedAtItsRecheckTime(_ kind: Wait.Kind) throws {
+  func aRowCarriesTheWaitsRecheckTime(_ kind: Wait.Kind) throws {
     let w = wait(kind, recheck: now - hour, until: now - 2 * hour)
 
-    #expect(try onlyRow(holder(waits: [w])).rechecked == now - hour)
+    #expect(try onlyRow(holder(waits: [w])).recheck == now - hour)
   }
 
-  /// A manual wait has no `recheck`: its `until` is when it returned to Needs you.
-  @Test func aManualWaitWasRecheckedAtItsUntil() throws {
+  /// A manual wait has no `recheck`: its `until` is when it returns to Needs you.
+  @Test func aManualWaitsRowCarriesItsUntil() throws {
     let w = wait(.manual, note: "Ask Ann", recheck: nil, until: now - 2 * hour)
 
-    #expect(try onlyRow(holder(waits: [w])).rechecked == now - 2 * hour)
+    #expect(try onlyRow(holder(waits: [w])).recheck == now - 2 * hour)
   }
 
   /// A manual wait's summary is its note, so the row doesn't repeat it.
@@ -127,11 +127,29 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
     #expect(try onlyRow(holder(waits: [w])).note == nil)
   }
 
-  @Test func theFactsLineSaysWhoSetTheWaitWhenSbdRecheckedItAndWhatHappensNext() throws {
+  @Test func theFactsLineSaysWhoSetTheWaitWhenItsRecheckWasDueAndWhatHappensNext() throws {
     let row = try onlyRow(holder(waits: [wait(.ci, created: now - 3 * hour, then: .notify, recheck: now - hour)]))
 
     #expect(
-      WaitPanel.facts(row, now: now) == "Set 3h ago by you · rechecked 1h ago · moves to Needs you when it resolves")
+      WaitPanel.facts(row, now: now)
+        == "Set 3h ago by you · recheck was due 1h ago · moves to Needs you when it resolves")
+  }
+
+  @Test func theFactsLineOfAFutureRecheckSaysWhenItComes() throws {
+    let row = try onlyRow(holder(waits: [wait(.ci, created: now - 3 * hour, then: .notify, recheck: now + 3 * hour)]))
+
+    #expect(
+      WaitPanel.facts(row, now: now) == "Set 3h ago by you · rechecks in 3h · moves to Needs you when it resolves")
+  }
+
+  @Test(arguments: [(-2, "due 2h ago"), (3, "due in 3h")])
+  func theFactsLineOfAManualWaitSaysWhenItIsDue(_ hours: Int64, _ phrase: String) throws {
+    let w = wait(
+      .manual, note: "Ask Ann", created: now - 3 * hour, then: .notify, recheck: nil, until: now + hours * hour)
+
+    #expect(
+      WaitPanel.facts(try onlyRow(holder(waits: [w])), now: now)
+        == "Set 3h ago by you · \(phrase) · moves to Needs you when it resolves")
   }
 
   @Test func theFactsLineOfAWaitThatSbdNeverRecheckedLeavesTheRecheckOut() throws {

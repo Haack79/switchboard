@@ -102,6 +102,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var sbdMessages: [String] = []
   /// The session's PR, as the GitHub poller last read it.
   public var pr: PullRequest?
+  /// When the `pr` event that set `pr` was recorded.
+  public var prRead: Int64?
   /// The number of every PR that the session has had, including one that
   /// dropped out since.
   public var prNumbers: Set<Int> = []
@@ -350,7 +352,10 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     case "link_up":
       unread = nil
     case "reconciled":
-      if let reply = d["lastReply"]?.string { lastReply = reply }
+      if let reply = d["lastReply"]?.string {
+        lastReply = reply
+        promptSinceReply = false
+      }
       if let activity = d["lastActivity"]?.int { lastActivity = Int64(activity) }
     case "SubagentStart":
       if let id = d["agent_id"]?.string { subagents.insert(id) }
@@ -360,6 +365,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       let next = d["pr"].flatMap { try? JSONCoding.convert($0, to: PullRequest.self) }
       noteBoard(from: pr, to: next, at: event.t)
       pr = next
+      prRead = event.t
       if let number = next?.number { prNumbers.insert(number) }
       if pr?.ready == true { readySince = readySince ?? event.t } else { readySince = nil }
       applyReviewListing()
