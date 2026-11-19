@@ -13,7 +13,7 @@ extension Service {
       return .success(
         try queue.sync {
           try requireOnHost(request, origin: origin)
-          return try setSummary(args)
+          return try setSummary(args, origin: origin)
         })
     case "item-context":
       return .success(try itemContext(args))
@@ -23,12 +23,15 @@ extension Service {
   }
 
   /// Records the card that the session wrote for its current turn. A new
-  /// prompt drops it.
-  private func setSummary(_ args: JSON) throws -> JSON {
+  /// prompt drops it. When the card asks the user something, `childItems`
+  /// lists the session's children that ask the user in their own Inbox item,
+  /// so the CLI can say not to ask their questions again.
+  private func setSummary(_ args: JSON, origin: RequestOrigin) throws -> JSON {
     let id = try lookup(args)
     guard let raw = args["card"] else { throw APIError("summary set needs the card as JSON") }
     let cleaned = try TriageCard.clean(raw, now: nowMs())
     let event = record(id, Triage.sessionEvent, try JSON(encoding: cleaned.card))
+    let asks = !cleaned.card.options.isEmpty || !cleaned.card.decisions.isEmpty
     return [
       "session": .string(id), "event": .number(Double(event.id)),
       "options": .number(Double(cleaned.card.options.count)),
@@ -36,7 +39,24 @@ extension Service {
       "decisions": .number(Double(cleaned.card.decisions.count)),
       "drafts": .number(Double(cleaned.card.drafts.count)),
       "dropped": .array(cleaned.dropped.map(JSON.string)),
+      "childItems": .array(asks ? childItems(of: id, for: origin) : []),
     ]
+  }
+
+  /// The children of `id` that ask the user in their Inbox item, sorted by name. A child asks when it is in Needs
+  /// you, or when its item is the card that it wrote. The list leaves out a Ready to merge child that shows only
+  /// sbd's merge item, because whether to merge is the parent's own decision.
+  private func childItems(of id: String, for origin: RequestOrigin) -> [JSON] {
+    let children: [SessionSummary] = entries.values.filter { parentOf($0.session) == id }
+      .map { summary($0.session.id, for: origin) }
+    var items: [JSON] = []
+    for child in children.sorted(by: { $0.name < $1.name }) {
+      guard let item = child.triage, child.state == .needsYou || item.source == .session else { continue }
+      let url = SessionLink.url(for: child.id).absoluteString
+      items.append(
+        ["session": .string(child.id), "name": .string(child.name), "url": .string(url), "title": .string(item.title)])
+    }
+    return items
   }
 
   /// The request that does what a click on the option does. Each action is a

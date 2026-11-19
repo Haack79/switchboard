@@ -18,7 +18,7 @@ private func heard(_ prs: [Int?]) -> [ChildMark] {
 
   @Test func saysWhenAChildNeedsYou() {
     let result = lines(.fresh, ChildMark(state: .needsYou, pr: nil))
-    #expect(result == ["fix (s1) needs you: answer: which?"])
+    #expect(result == ["fix (s1) needs you in its own Inbox item (switchboard://session/s1): answer: which?"])
   }
 
   @Test func saysWhenAChildIsDone() {
@@ -55,12 +55,15 @@ private func heard(_ prs: [Int?]) -> [ChildMark] {
   @Test func saysAgainWhenADocketRowInNeedsYouNeedsSomethingElse() {
     let failed = ChildMark(state: .needsYou, pr: nil, needs: "can't read docket")
     let drafted = ChildMark(state: .needsYou, pr: nil, needs: "draft ready to submit")
-    #expect(lines(failed, drafted, reason: "draft ready to submit") == ["fix (s1) needs you: draft ready to submit"])
+    #expect(
+      lines(failed, drafted, reason: "draft ready to submit") == [
+        "fix (s1) needs you in its own Inbox item (switchboard://session/s1): draft ready to submit"
+      ])
     #expect(lines(drafted, drafted).isEmpty)
     #expect(lines(drafted, ChildMark(state: .working, pr: nil)).isEmpty)
     #expect(
       ParentDigest.line(name: "fix", id: "s1", heard: failed, now: drafted, reason: "draft ready to submit", prURL: nil)
-        == "fix (s1): needs you: draft ready to submit")
+        == "fix (s1): needs you in its own Inbox item (switchboard://session/s1): draft ready to submit")
   }
 
   func announced(_ prs: [Int?]) -> [String] {
@@ -122,7 +125,10 @@ private func heard(_ prs: [Int?]) -> [ChildMark] {
 
   @Test func putsEveryChangeOfAChildOnOneLine() {
     let result = line(.fresh, ChildMark(state: .needsYou, pr: 7), url: "https://github.com/o/r/pull/7")
-    #expect(result == "fix (s1): opened PR #7: https://github.com/o/r/pull/7; needs you: answer: which?")
+    #expect(
+      result
+        == "fix (s1): opened PR #7: https://github.com/o/r/pull/7; needs you in its own Inbox item (switchboard://session/s1): answer: which?"
+    )
     #expect(line(.fresh, ChildMark(state: .done, pr: nil)) == "fix (s1): done")
     #expect(line(.fresh, ChildMark(state: .readyToMerge, pr: nil)) == "fix (s1): answer: which?")
   }
