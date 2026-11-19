@@ -119,7 +119,7 @@ extension Service {
     }
     guard action == .merge else { return }
     guard let pr = e.facts.pr else { throw APIError("\(e.session.name) has no PR yet, so sbd has nothing to merge") }
-    guard home.loadConfig().operator.mergesIn(pr.repo) else {
+    guard operatorSettings.mergesIn(pr.repo) else {
       throw APIError(
         "sbd merges only in the repositories that operator.mergeRepos in \(home.config) lists, and it doesn't list "
           + "\(pr.repo). The user merges #\(pr.number) from the Inbox")

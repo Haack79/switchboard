@@ -19,6 +19,19 @@ extension Service {
     case judgment(question: String, approval: MergeGuard.Approval? = nil, reply: String? = nil)
   }
 
+  /// config.json's `operator` settings, read again on each use so that an edit takes effect without a restart. A
+  /// config.json that doesn't decode allows no merges and keeps the hold timing that sbd started with.
+  var operatorSettings: OperatorSettings {
+    do {
+      return try home.readConfig().operator
+    } catch {
+      logLine("ignoring \(home.config) for operator settings: \(error)")
+      var settings = config.operator
+      settings.mergeRepos = []
+      return settings
+    }
+  }
+
   /// Marks the action running, stores it, and runs it on `followThroughQueue`.
   ///
   /// The run keeps a hold's start time, its message key, and an approval. `approval` replaces the stored one. It runs
@@ -143,9 +156,9 @@ extension Service {
       case .hold(let reason, let message, let key):
         var status = old
         if old.reason != reason { status.since = now }
-        let limit = Int64(config.operator.holdLimitSeconds) * 1000
-        if now - status.since >= limit {
-          let hours = config.operator.holdLimitSeconds / 3600
+        let limitSeconds = operatorSettings.holdLimitSeconds
+        if now - status.since >= Int64(limitSeconds) * 1000 {
+          let hours = limitSeconds / 3600
           return finish(holder, waitId, .judgment(question: "still held after \(hours) h: \(reason)"))
         }
         hold(&status, reason, now: now)
@@ -202,7 +215,7 @@ extension Service {
   private func hold(_ status: inout ActionStatus, _ reason: String, now: Int64) {
     status.kind = .held
     status.reason = reason
-    status.retryAt = now + Int64(config.operator.holdRetrySeconds) * 1000
+    status.retryAt = now + Int64(operatorSettings.holdRetrySeconds) * 1000
   }
 
   private func storedWait(_ holder: String, _ id: String) -> Wait? {
@@ -267,10 +280,10 @@ extension Service {
     guard let subject = wait.session?.id else {
       return .judgment(question: "the wait names no session to merge")
     }
-    let mergeRepos = home.loadConfig().operator.mergeRepos
+    let mergeRepos = operatorSettings.mergeRepos
     let read = queue.sync { mergeFacts(subject, wait) }
     let facts = read.facts
-    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, subject, read.name) }
+    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, subject, read.name, liveCommit: nil) }
     if read.busy, let pr = facts.pr { return .hold(reason: "\(read.name) is merging #\(pr.number) or being deleted") }
     if let verdict = MergeGuard.checkFacts(mergeRepos: mergeRepos, verdict: read.verdict, facts: facts) {
       return outcome(of: verdict, input: nil)
@@ -279,7 +292,9 @@ extension Service {
     var input = MergeGuard.Input(
       mergeRepos: mergeRepos, verdict: read.verdict, facts: facts, live: livePR(pr), behindBy: nil, baseTip: nil,
       baseRollup: nil, files: nil, earlierFiles: [], lastSbdMerge: read.lastSbdMerge, approval: read.approval)
-    if input.live?.state == .merged { return alreadyMerged(pr, subject, read.name) }
+    if let live = input.live, live.state == .merged {
+      return alreadyMerged(pr, subject, read.name, liveCommit: live.mergeCommit)
+    }
     if let verdict = MergeGuard.checkLive(input) { return outcome(of: verdict, input: input) }
     let live = input.live!
     let compared = compare(pr.repo, base: live.base, head: live.head)
@@ -378,14 +393,17 @@ extension Service {
 
   /// The outcome for a PR that merged before this run, such as a merge that landed before a restart. It counts as
   /// sbd's last merge in the repository, with unknown files. sbd holds the next merge while the base's checks run on
-  /// its merge commit. A merge commit that sbd can't read matches any base tip.
-  private func alreadyMerged(_ pr: PullRequest, _ subject: String, _ name: String) -> ActionOutcome {
+  /// its merge commit. A merge commit that sbd can't read matches any base tip. `liveCommit` is the merge commit from
+  /// the live read, which comes first.
+  private func alreadyMerged(_ pr: PullRequest, _ subject: String, _ name: String, liveCommit: String?)
+    -> ActionOutcome
+  {
     changedFilesRead[filesKey(pr.repo, pr.number)] = nil
     return .done(
       result: MergeAttempt.Result.merged.rawValue, detail: "#\(pr.number) of \(name) is merged", reports: true,
       merged: SbdMergeRecord(
         subject: subject, repo: pr.repo, number: pr.number, files: nil,
-        commit: pr.mergeCommit ?? mergeCommit(of: pr)))
+        commit: liveCommit ?? pr.mergeCommit ?? mergeCommit(of: pr)))
   }
 
   /// The action's outcome for a verdict that does not act. A hold's message goes once per head and base tip. A
@@ -417,13 +435,14 @@ extension Service {
     guard
       let json = ghJSON([
         "pr", "view", String(pr.number), "--repo", pr.repo, "--json",
-        "headRefOid,state,isDraft,mergeable,baseRefName,statusCheckRollup",
+        "headRefOid,state,isDraft,mergeable,baseRefName,statusCheckRollup,mergeCommit",
       ]), let head = json["headRefOid"]?.string, let state = json["state"]?.string.flatMap(PRState.init(rawValue:)),
       let draft = json["isDraft"]?.bool, let base = json["baseRefName"]?.string
     else { return nil }
     return MergeGuard.LivePR(
       head: head, state: state, draft: draft, mergeable: json["mergeable"]?.string.flatMap(Mergeable.init(rawValue:)),
-      base: base, rollup: ChecksRollup(contexts: json["statusCheckRollup"]?.array ?? []))
+      base: base, rollup: ChecksRollup(contexts: json["statusCheckRollup"]?.array ?? []),
+      mergeCommit: json["mergeCommit"]?["oid"]?.string)
   }
 
   /// The merge commit of a merged PR, or nil when gh failed or GitHub has none yet.

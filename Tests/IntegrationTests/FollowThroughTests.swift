@@ -570,6 +570,21 @@ extension FollowThroughTests {
     try tick(sbd, 2)
     #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
   }
+
+  /// A config.json that doesn't decode refuses the merge, the way an empty allowlist does.
+  @Test func aConfigFileThatDoesNotDecodeMergesNothing() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (_, wait) = try askedMerge(github, sbd)
+    try "{".write(toFile: sbd.home.config, atomically: true, encoding: .utf8)
+
+    let r = try approve(sbd, wait)
+
+    #expect(r.status == 0, Comment(rawValue: r.stderr))
+    try operatorMessage(sbd, holding: "operator.mergeRepos")
+    try tick(sbd, 2)
+    #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
+  }
 }
 
 // MARK: Two merges in one repository
@@ -795,6 +810,19 @@ extension FollowThroughTests {
     #expect(sbd.ghMerges().isEmpty)
   }
 
+  /// sbd reads `operator.holdLimitSeconds` again on each hold, so a limit that the user lowers during the hold applies.
+  @Test func aHoldLimitLoweredDuringTheHoldAsksTheOperatorAtTheNewLimit() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (_, wait) = try settledBehindHold(github, sbd)
+    try sbd.set("operator", to: ["mergeRepos": [.string(Self.charts)], "holdLimitSeconds": 7200])
+
+    try sbd.advanceClock(7_200_001)
+
+    let text = try operatorMessage(sbd, holding: "still held after 2 h")
+    #expect(text.contains(wait), Comment(rawValue: text))
+  }
+
   /// After the session merged the base in, the guard goes on to the question.
   @Test func aHeldMergeGoesOnOnceTheHeadContainsTheBase() throws {
     let github = try FakeGitHub()
@@ -990,6 +1018,37 @@ extension FollowThroughTests {
     try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
     #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
     #expect(try sbd.messagesFromSbd(op.id).allSatisfy { !$0.contains("sbd did not merge") })
+  }
+}
+
+// MARK: A PR that merged before the run
+
+extension FollowThroughTests {
+  /// The live read shows the PR merged, so the action finishes with the merge commit from that read and asks gh for
+  /// nothing more.
+  @Test func aPRThatTheLiveReadShowsMergedFinishesWithItsLiveMergeCommit() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    var live = LiveGitHub(github)
+    live.state = "MERGED"
+    live.mergeCommit = FakeGitHub.sha(9100)
+    try sbd.serve(live)
+    let s = try arming.readyTarget(sbd)
+    let conversation = try arming.conversation(sbd)
+
+    // The action can finish before `arm` reads the Operator's waits, so the test finds the wait by its event.
+    let r = try sbd.run(["wait", "--json", conversation.id] + arming.mergeArgs(s))
+
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+    let op = try theOperator(sbd)
+    let resolved = try sbd.waitFor(
+      "the merge wait to resolve", timeout: 30,
+      fetch: { try sbd.events(op.id).last { $0.kind == "wait-resolved" && $0.data["action"] != nil } },
+      until: { _ in true })
+    #expect(resolved.data["action"]?["result"]?.string == "merged", Comment(rawValue: resolved.data.text))
+    #expect(resolved.data["action"]?["commit"]?.string == FakeGitHub.sha(9100), Comment(rawValue: resolved.data.text))
+    #expect(!sbd.ghCalls("pr view ").contains { $0.hasSuffix("--json mergeCommit") }, "\(sbd.ghCalls())")
+    #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
   }
 }
 

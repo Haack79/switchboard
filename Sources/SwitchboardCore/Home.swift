@@ -68,10 +68,15 @@ public struct Home: Sendable {
       atPath: path, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
   }
 
-  public func loadConfig() -> Config {
+  /// The settings in config.json. A missing file gives the defaults, and a file that doesn't decode throws.
+  public func readConfig() throws -> Config {
     guard let data = FileManager.default.contents(atPath: config) else { return Config() }
+    return try JSONCoding.decoder.decode(Config.self, from: data)
+  }
+
+  public func loadConfig() -> Config {
     do {
-      return try JSONCoding.decoder.decode(Config.self, from: data)
+      return try readConfig()
     } catch {
       FileHandle.standardError.write(Data("sbd: ignoring \(config): \(error)\n".utf8))
       return Config()

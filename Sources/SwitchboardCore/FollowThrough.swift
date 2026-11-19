@@ -121,9 +121,12 @@ public enum MergeGuard {
     public var base: String
     /// The head's check rollup, or nil without checks.
     public var rollup: ChecksRollup?
+    /// The merge commit of a merged PR, or nil when GitHub has none.
+    public var mergeCommit: String?
 
     public init(
-      head: String, state: PRState, draft: Bool, mergeable: Mergeable?, base: String, rollup: ChecksRollup?
+      head: String, state: PRState, draft: Bool, mergeable: Mergeable?, base: String, rollup: ChecksRollup?,
+      mergeCommit: String? = nil
     ) {
       self.head = head
       self.state = state
@@ -131,6 +134,7 @@ public enum MergeGuard {
       self.mergeable = mergeable
       self.base = base
       self.rollup = rollup
+      self.mergeCommit = mergeCommit
     }
   }
 
@@ -362,33 +366,6 @@ public enum MergeGuard {
   }
 
   static func short(_ sha: String) -> String { String(sha.prefix(7)) }
-}
-
-extension ChecksRollup {
-  /// One state for a list of check runs and statuses: failed when any failed or has a state that `ChecksRollup`
-  /// does not know, running when any still runs, and passed when all passed. A check run carries `status` and
-  /// `conclusion`, and a status carries `state`. An empty list has no state.
-  public init?(contexts: [JSON]) {
-    guard !contexts.isEmpty else { return nil }
-    var running = false
-    for c in contexts {
-      if let state = c["state"]?.string?.uppercased() {
-        switch ChecksRollup(state) {
-        case .passed?: continue
-        case .running?: running = true
-        case .failed?, nil:
-          self = .failed
-          return
-        }
-      } else if c["status"]?.string?.uppercased() != "COMPLETED" {
-        running = true
-      } else if !["SUCCESS", "NEUTRAL", "SKIPPED"].contains(c["conclusion"]?.string?.uppercased() ?? "") {
-        self = .failed
-        return
-      }
-    }
-    self = running ? .running : .passed
-  }
 }
 
 /// Decides whether sbd removes the subject of an `rm` or `rm-worktree` action now. A worktree goes only after the
