@@ -64,8 +64,18 @@ import os
     #expect(AccountMenu.limitRow(limits[1], now: 0) == "Week (all models): 21%")
   }
 
-  @Test func theTitleCountsTheAccountsSessions() {
-    #expect(row(nil).title == "automation (11)")
+  @Test func theSessionCountNamesTheAccountsSessions() {
+    #expect(row(nil).sessionCount == "11 sessions")
+  }
+
+  @Test func theSessionCountIsSingularForOneSession() {
+    let one = AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: true, sessions: 1), usage: nil)
+    #expect(one.sessionCount == "1 session")
+  }
+
+  @Test func theSessionCountIsNilForAnAccountWithoutSessions() {
+    let none = AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: true, sessions: 0), usage: nil)
+    #expect(none.sessionCount == nil)
   }
 }
 
