@@ -212,6 +212,15 @@ extension OperatorResetTests {
       #expect(OperatorReset.blocker(waits: [], facts: facts) != nil)
     }
 
+    /// An open card, such as a question that sbd deferred after its turn ended, waits for an answer that only this
+    /// conversation can act on.
+    @Test func anOpenCardBlocks() throws {
+      var facts = SessionFacts()
+      facts.cards = [try suggestionCard(nil)]
+
+      #expect(OperatorReset.blocker(waits: [], facts: facts) != nil)
+    }
+
     /// The new conversation never saw the reports that an ack closed before the reset, so an undo reopens none.
     @Test func anUndoAfterAResetReopensNoReport() {
       let acked = T.folded([Self.report(id: 1, needsYou: true), T.event("ack", id: 2), T.reset(t: T.created + 5)])

@@ -16,21 +16,35 @@ extension Service {
     switch claudeState(id) {
     case .running(let pid):
       let jobs = backgroundJobs(pid, in: processes(of: id))
-      guard stopPolicy.isQuiet(stopInput(e, jobs: jobs, now: now)), e.facts.subagents.isEmpty, !e.facts.exiting
+      // A job's process exits shortly before claude starts the turn that reports it.
+      guard stopPolicy.isQuiet(stopInput(e, jobs: jobs, now: now)), e.facts.subagents.isEmpty, !e.facts.exiting,
+        now - e.lastJobSeen >= StopPolicy.capJobGraceMs
       else { return }
       do { try stop(id, reason: "its conversation restarts") } catch {
         logLine("can't stop the operator \(id) for a fresh conversation: \(error)")
       }
     case .stopped:
-      let from = e.session.claudeSessionId
-      let to = UUID().uuidString.lowercased()
-      do { try update(id) { $0.claudeSessionId = to } } catch {
+      // The new id and the event that keeps the old id owned are stored together, or neither changes.
+      var session = e.session
+      session.claudeSessionId = UUID().uuidString.lowercased()
+      do {
+        try store.save(session)
+        do {
+          try recordStored(
+            id, OperatorReset.event,
+            [
+              "from": .string(e.session.claudeSessionId), "to": .string(session.claudeSessionId),
+              "turns": .number(Double(e.facts.turnsSinceReset)),
+            ])
+        } catch {
+          try? store.save(e.session)
+          throw error
+        }
+      } catch {
         logLine("can't start a fresh conversation for the operator \(id): \(error)")
         return
       }
-      record(
-        id, OperatorReset.event,
-        ["from": .string(from), "to": .string(to), "turns": .number(Double(e.facts.turnsSinceReset))])
+      entries[id]?.session = session
     case .starting, .unknown:
       return
     }
