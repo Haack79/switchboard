@@ -252,8 +252,13 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--follow]
-                                  the newest events, or those after an id
+    events [--session S] [--since ID] [--kind K]... [--limit N] [--full]
+        [--follow]
+                                  the newest events, or those after an id,
+                                  \(Event.defaultLimit) at a time. --kind, which
+                                  repeats, shows only those kinds. --json
+                                  leaves out tool output and cuts long
+                                  strings unless --full
 
   What needs you:
     triage                        the sessions that need you or that Claude can
@@ -759,12 +764,18 @@ func watch(_ a: Args) -> Never {
 }
 
 /// Prints the newest events, or the events after --since, and with --follow
-/// keeps printing new ones.
+/// keeps printing new ones. --kind, which repeats, prints only those kinds.
 func events(_ a: Args) -> Never {
-  var cursor = EventCursor(since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"])
+  var cursor = EventCursor(
+    since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
+    full: a.switches.contains("--full"))
+  let limit = a.values["--limit"].map { value -> Int in
+    guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
+    return limit
+  }
   while true {
     let list: [Event]
-    do { list = try cursor.next() } catch { die("\(error)") }
+    do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
     for e in list {
       if a.json {
         printJSON((try? JSON(encoding: e)) ?? .null)

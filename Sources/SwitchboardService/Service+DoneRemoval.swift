@@ -249,9 +249,7 @@ extension Service {
   /// The session ids in `args[key]`, each once, in the order given. It throws, naming `op`, unless the value is
   /// a list of strings.
   func idList(_ args: JSON, key: String, op: String) throws -> [String] {
-    guard let items = args[key]?.array else { throw APIError("\(op) needs \(key) as a list of session ids") }
-    let ids = items.compactMap(\.string)
-    guard ids.count == items.count else { throw APIError("\(op) needs \(key) as a list of session ids") }
+    guard let ids = args[key]?.strings else { throw APIError("\(op) needs \(key) as a list of session ids") }
     var seen = Set<String>()
     return ids.filter { seen.insert($0).inserted }
   }

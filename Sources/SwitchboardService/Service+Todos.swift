@@ -49,9 +49,7 @@ extension Service {
   /// non-empty list that a request by Claude sends.
   func resolveArgument(_ args: JSON) throws -> Set<String> {
     guard let value = args["resolve"], value != .null else { return [] }
-    guard let items = value.array else { throw APIError("resolve is a list of note ids") }
-    let ids = items.compactMap(\.string)
-    guard ids.count == items.count else { throw APIError("resolve is a list of note ids") }
+    guard let ids = value.strings else { throw APIError("resolve is a list of note ids") }
     if !ids.isEmpty { try refuseClaudeResolving(args) }
     return Set(ids)
   }

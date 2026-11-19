@@ -525,7 +525,8 @@ final class Instance {
 
   func events(_ id: String, after: Int64 = 0) throws -> [Event] {
     try client.call(
-      "events", ["session": .string(id), "since": .number(Double(after)), "limit": 10_000], as: [Event].self)
+      "events", ["session": .string(id), "since": .number(Double(after)), "limit": 10_000, "full": true],
+      as: [Event].self)
   }
 }
 
@@ -947,7 +948,7 @@ extension Instance {
 
   /// Every event in the log, of every session, oldest first.
   func allEvents() throws -> [Event] {
-    try client.call("events", ["since": 0, "limit": 1_000_000], as: [Event].self)
+    try client.call("events", ["since": 0, "limit": 1_000_000, "full": true], as: [Event].self)
   }
 
   /// The events whose payload names the marker, oldest first.
