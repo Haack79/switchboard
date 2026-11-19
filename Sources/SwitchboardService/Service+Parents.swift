@@ -9,8 +9,6 @@ struct ParentNotices {
   var marks: [String: ChildMark] = [:]
   /// The lines for each parent, oldest first.
   var unsent: [String: [Line]] = [:]
-  /// The counts that each Manager or chat got in its last digest.
-  var heardCounts: [String: BoardCounts] = [:]
 
   /// A line of a notice, with the id of the child that it is about.
   struct Line: Equatable {
@@ -20,7 +18,7 @@ struct ParentNotices {
 }
 
 extension Service {
-  private func parentOf(_ session: Session) -> String? {
+  func parentOf(_ session: Session) -> String? {
     SessionTree.parentID(
       of: session.id, parent: session.parent, followup: session.followup, isKnown: { entries[$0] != nil })
   }
@@ -59,12 +57,10 @@ extension Service {
 
   private func hearsNotices(_ parent: String) -> Bool { entries[parent]?.session.kind.hearsChildNotices ?? true }
 
-  /// Records what each child shows now, every PR number it has had, and the
-  /// counts that each Manager and chat would get now, so sbd tells no parent
-  /// about what happened before it started.
+  /// Records what each child shows now and every PR number it has had, so sbd
+  /// tells no parent about what happened before it started.
   func seedParentMarks(now: Int64) {
     for (id, e) in entries where parentOf(e.session) != nil { seedMark(id, now: now) }
-    for id in entries.keys where !hearsNotices(id) { parentNotices.heardCounts[id] = otherCounts(id) }
   }
 
   /// Records what the child shows now and every PR number it has had, so its
@@ -133,12 +129,14 @@ extension Service {
       ).map { ParentNotices.Line(child: id, text: $0) }
     }
     parentNotices.marks = parentNotices.marks.filter { children.contains($0.key) }
-    parentNotices.heardCounts = parentNotices.heardCounts.filter { entries[$0.key] != nil }
   }
 
   /// What changed for a Manager or a chat since its last digest: a line for
-  /// each of its children that moved, and `otherCounts`. It is nil for a work session, and when nothing changed. sbd
-  /// counts the digest as heard once it returns it.
+  /// each of its children that moved, and `otherCounts`. It is nil for a work
+  /// session, and when none of the parent's children moved. A change in the
+  /// counts alone sends no digest, because each digest stays in the
+  /// conversation's context for every later call. sbd counts the digest as
+  /// heard once it returns it.
   func digest(_ parent: String, now: Int64) -> String? {
     guard !hearsNotices(parent) else { return nil }
     var lines: [String] = []
@@ -151,11 +149,8 @@ extension Service {
         lines.append(line)
       }
     }
-    let counts = otherCounts(parent)
-    let countsChanged = parentNotices.heardCounts[parent] != counts
-    parentNotices.heardCounts[parent] = counts
-    guard !lines.isEmpty || countsChanged else { return nil }
-    return ParentDigest.text(lines, elsewhere: counts)
+    guard !lines.isEmpty else { return nil }
+    return ParentDigest.text(lines, elsewhere: otherCounts(parent))
   }
 
   /// The digest that a Manager conversation or the operator gets when its
@@ -169,6 +164,7 @@ extension Service {
   }
 
   func canTakeNotice(_ e: Entry, now: Int64) -> Bool {
-    Pause.blocker(e.session) == nil && !e.messageWaiting(now: now) && !e.facts.turnRunning && !mcpStarting(now: now)
+    Pause.blocker(e.session) == nil && !messageWaiting(e, now: now) && !e.facts.turnRunning
+      && !mcpStarting(now: now)
   }
 }

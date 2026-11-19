@@ -50,7 +50,8 @@ enum HostScope {
     "wait": Rule(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Rule(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Rule(keys: waitKeys, refs: ["session"]),
-    "events": Rule(keys: ["session", "sessions", "since", "limit"], refs: ["session"], refLists: ["sessions"]),
+    "events": Rule(
+      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
     // No `images`, so the path that reads image files never runs.
     "send": Rule(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Rule(
@@ -101,7 +102,8 @@ enum HostScope {
       "plan-artifact-apply", "plan-artifact-reject", "plan-artifact-report", "plan-followup", "plan-ls", "plan-get",
       "plan-detach", "plan-auto", "plan-proposals", "plan-reject", "followup-add", "followup-ls", "followup-start",
       "followup-rm", "followup-import", "docket-start", "merge", "review", "ack", "resolved-todos",
-      "dependency-resolved", "activity", "activity-report", "activity-clear", "draft-post", "draft-check", "issues",
+      "dependency-resolved", "activity", "activity-report", "activity-clear", "headless-usage", "draft-post",
+      "draft-check", "issues",
       "issues-refresh", "issues-start", "issues-clone", "issues-source-add", "issues-source-rm", "issues-settings",
       "issues-dismiss",
     ] {

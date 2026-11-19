@@ -224,7 +224,9 @@ public enum TriageCard {
               must then be a send option. A single pick sends its message, and several send one message
               that lists each picked option's message on its own line.
     decisions Optional. Use it in place of "options" when the turn ends with two or more separate decisions
-              for the user, each with its own options. Still write the summary.
+              for the user, each with its own options. Still write the summary. Write only your own decisions.
+              A session you started asks its own questions in its own Inbox item, so link to that session
+              in the summary instead of copying its questions here.
               Up to \(TriageSummarizer.maxDecisions) decisions, each with:
                 number      the decision's number in your reply, from 1, each one different. When your reply
                             doesn't number its decisions, use each one's position.

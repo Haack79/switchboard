@@ -58,7 +58,7 @@ import Testing
 
     #expect(refused.isError)
     #expect(refused.text.contains("is not in group"))
-    #expect(try allowed.decode(SessionSummary.self).id == member.id)
+    #expect(try allowed.decode(SessionBrief.self).id == member.id)
 
     try replied(sbd, flags.id, "hello")
     try sbd.sb("stop", c.id)

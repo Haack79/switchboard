@@ -37,17 +37,20 @@ extension MCPToolServer {
 
   static let session = string("A session: an id, a unique id prefix, or a unique name.")
   static let group = string("A group: an id, a unique id prefix, or a unique name.")
+  static let full = boolean("True returns every field. False, the default, returns the brief form.")
 
   static let allTools = sessionTools + pauseTools
 
   static let sessionTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."
+      "Lists the sessions, with the ones that need the user first. Each one shows its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as the last reply, notes, cards, and artifacts.",
+      ["full": full]
     ),
     Tool(
-      "get_session", "Shows one session, with its group's name and description, and its artifacts.",
-      ["session": session],
+      "get_session",
+      "Shows one session: its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as its folder, branch, last reply, notes, cards, its group's name and description, and its artifacts. Get the full form before you act on the session.",
+      ["session": session, "full": full],
       required: ["session"]),
     Tool(
       "read_reply", "Reads the session's last reply from its transcript, as Markdown.", ["session": session],
@@ -58,11 +61,13 @@ extension MCPToolServer {
     ),
     Tool(
       "events",
-      "Lists events from sessions. Without `since`, it lists the newest events. With `since`, it lists the events after that id.",
+      "Lists events from sessions. Without `since`, it lists the newest events. With `since`, it lists the events after that id. Without `full`, each event leaves out a tool's output (`tool_response`) and cuts strings longer than \(Event.slimStringLimit) characters.",
       [
         "since": integer("An event id. The answer lists the events after it."),
         "session": session,
-        "limit": integer("The maximum number of events to list. Default \(Event.defaultLimit)."),
+        "limit": integer("The maximum number of events to list. Default \(MCPToolServer.defaultEventLimit)."),
+        "kinds": strings("Lists only events of these kinds, such as Stop, UserPromptSubmit, or PostToolUse."),
+        "full": boolean("Lists each event's whole payload, including tool output. Default false."),
       ]),
     Tool(
       "send",

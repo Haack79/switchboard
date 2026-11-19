@@ -23,8 +23,9 @@ public final class Service {
   struct Entry {
     var session: Session
     var facts = SessionFacts()
-    /// Messages for a session whose turn runs or whose claude is starting.
-    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one.
+    /// Messages that wait for a paste: for a turn to end, for claude to start, or for a paused session's resume.
+    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one. A stopped claude's
+    /// messages wait for its next launch.
     var pending: [QueuedMessage] = []
     /// When the tick first saw a running claude that no SessionStart reported.
     var unreportedSince: Int64?
@@ -79,15 +80,6 @@ public final class Service {
     /// until a launch starts claude or the running claude reports SessionStart.
     var resumeLaunch: LaunchTrigger?
 
-    /// Whether a message is queued for the session or on its way. A launch's
-    /// prompt stays on its way until SessionStart, for up to `startingMs`.
-    func messageWaiting(now: Int64) -> Bool {
-      guard pending.isEmpty else { return true }
-      guard let sent = inFlight else { return false }
-      let starting = !facts.startedSinceLaunch && now - (facts.lastLaunch ?? 0) < Service.startingMs
-      return starting || now - sent < Service.inFlightMs
-    }
-
     var dialogs = DialogWatch()
   }
 
@@ -97,6 +89,22 @@ public final class Service {
     /// The message's `sent` event, or nil for a message that sbd restored
     /// from the log. A paste checks that the log still holds it.
     var sent: Event?
+  }
+
+  /// Whether a message is queued for the session or on its way, so a prompt sent now could land in its turn.
+  /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A paste stays on its way
+  /// for `inFlightMs`, even after claude exits, because the paste queue may not have run it yet. The queue of
+  /// a stopped claude in a session that is not paused does not count. A send launches that claude, and the
+  /// launch takes the queued messages in order before the new one. A claude that exits before its
+  /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
+  /// because a send then only adds to the queue that the start delivers.
+  func messageWaiting(_ e: Entry, now: Int64) -> Bool {
+    if let sent = e.inFlight {
+      let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
+      if starting || now - sent < Service.inFlightMs { return true }
+    }
+    guard !e.pending.isEmpty else { return false }
+    return e.queuedSince != nil || Pause.blocker(e.session) != nil || claudeState(e.session.id) != .stopped
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.
@@ -757,13 +765,17 @@ public final class Service {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
       let limit = args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":
@@ -786,6 +798,8 @@ public final class Service {
       return try activityReport(args)
     case "activity-clear":
       return try activityClear()
+    case "headless-usage":
+      return try headlessUsage(args)
     case "live":
       return try liveRequest(args)
     case "live-next":
@@ -1334,11 +1348,15 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
-  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
-  /// comes first. A blank line separates it from the triage prompt.
+  /// The text of a launch's `--append-system-prompt`, or nil to pass none. The triage prompt is written for work
+  /// sessions, so a Manager conversation and the operator get their own prompt instead.
   func appendedSystemPrompt(for session: Session) -> String? {
-    let role = session.kind == .operator ? Manager.operatorPrompt : ""
-    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    let text =
+      switch session.kind {
+      case .manager: Manager.conversationPrompt
+      case .operator: Manager.operatorPrompt
+      case .work, .chat: config.triage.systemPrompt
+      }
     return text.isEmpty ? nil : text
   }
 
@@ -1366,6 +1384,9 @@ public final class Service {
       try writeClaudeSettings(id, session)
       args += ["--settings", home.claudeSettings(id)]
       args += launchMCPArgs(id, session)
+      // Claude in Chrome loads even under `--strict-mcp-config`. Nobody reads the operator's chat, so it has no use
+      // for a browser.
+      if session.kind == .operator { args.append("--no-chrome") }
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
@@ -1381,7 +1402,8 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    if session.kind == .manager { config.manager.apply(to: &env) }
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
@@ -2602,7 +2624,7 @@ public final class Service {
   func stopInput(_ e: Entry, jobs: Int, now: Int64) -> StopPolicy.Claude {
     StopPolicy.Claude(
       session: e.session, facts: e.facts, lastJobSeen: e.lastJobSeen, jobs: jobs,
-      messageWaiting: e.messageWaiting(now: now), attached: attached(e.session.id))
+      messageWaiting: messageWaiting(e, now: now), attached: attached(e.session.id))
   }
 
   // MARK: Summaries
@@ -2700,9 +2722,9 @@ public final class Service {
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }
     if verdict.state == .readyForReview, let ready = facts.readySince { out.since = ready }
+    if s.pause != nil || !e.pending.isEmpty { out.heldMessages = e.pending.count }
     if let pause = s.pause {
       out.pause = pause
-      out.heldMessages = e.pending.count
       // A replay tracks each event under the current session, so the tracked state can start before the pause.
       if !s.done { out.since = pause.since }
     }

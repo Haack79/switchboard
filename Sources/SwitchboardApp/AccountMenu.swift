@@ -8,7 +8,11 @@ struct AccountRow: Identifiable, Equatable {
   var usage: AccountUsage?
   var id: String { account.folder }
 
-  var title: String { "\(account.name) (\(account.sessions))" }
+  /// The account's session count, such as `4 sessions`, or nil when it has none.
+  var sessionCount: String? {
+    let n = account.sessions
+    return n > 0 ? "\(n) session\(n == 1 ? "" : "s")" : nil
+  }
   var signedOut: Bool { usage?.signedOut == true }
   /// The account's name in a menu that moves sessions to it, which names a signed-out account as such.
   var choiceTitle: String { signedOut ? "\(account.name) (not signed in)" : account.name }
@@ -195,8 +199,12 @@ private struct AccountBlock: View {
         .accessibilityHidden(!row.account.active)
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
-          Text(row.title).fontWeight(.semibold).foregroundStyle(row.signedOut ? .secondary : .primary)
+          Text(row.account.name).fontWeight(.semibold).foregroundStyle(row.signedOut ? .secondary : .primary)
           if let email = row.usage?.email { Text(email).foregroundStyle(.secondary) }
+          if let sessions = row.sessionCount {
+            Spacer(minLength: 6)
+            Text(sessions).monospacedDigit().foregroundStyle(.secondary)
+          }
         }
         .font(.callout)
         details
