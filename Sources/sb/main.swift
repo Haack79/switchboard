@@ -78,6 +78,9 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    manager model [<name>]        show or set the model of each Manager conversation,
+                                  sonnet by default. It applies from the next time a
+                                  conversation's claude starts, and not to the operator
     ask <question>                answer a question about Switchboard from a
                                   snapshot of its state. The answer comes from
                                   claude with no tools, so it changes nothing.

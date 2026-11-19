@@ -1,7 +1,8 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | pin <conv> | unpin <conv> | <conv> [text] [--log | --read]]`.
+/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | model [<name>] | pin <conv> | unpin <conv> |
+/// <conv> [text] [--log | --read]]`.
 /// Without a conversation it opens the most recent one.
 func manager(_ a: Args) {
   var words = a.positional[...]
@@ -21,6 +22,9 @@ func manager(_ a: Args) {
   case "mcp":
     words.removeFirst()
     return managerMCP(a, Array(words))
+  case "model":
+    words.removeFirst()
+    return managerModel(a, Array(words))
   case "pin", "unpin":
     let verb = words.removeFirst()
     guard let ref = words.first else { die("manager \(verb) needs a conversation") }
@@ -46,6 +50,22 @@ func manager(_ a: Args) {
   let text = words.joined(separator: " ")
   if !text.isEmpty { args["text"] = .string(text) }
   printOpenOrSend(a, call("manager", args, timeout: 300))
+}
+
+/// `sb manager model [<name>]`.
+private func managerModel(_ a: Args, _ words: [String]) {
+  var args: [String: JSON] = [:]
+  if let model = words.first {
+    guard words.count == 1 else { die("manager model takes one model name") }
+    // A conversation that read injected instructions could otherwise move every conversation to a pricier model.
+    refuseInsideClaudeCode("manager model <name> needs the user, so it doesn't run inside Claude Code")
+    args["model"] = .string(model)
+  }
+  let result = call("manager-model", args)
+  if a.json { return printJSON(result) }
+  let model = result["model"]?.string ?? ""
+  print("Manager conversations run \(model)".printable)
+  if !args.isEmpty { print("A running conversation switches when its claude next starts.") }
 }
 
 /// `sb manager mcp <conv> [add <server>… | rm <server>… | --all | --none]`.
