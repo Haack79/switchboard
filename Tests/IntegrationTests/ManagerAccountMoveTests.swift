@@ -21,7 +21,7 @@ import Testing
   }
 
   /// The last run of the stub claude for this session.
-  func lastLaunch(_ sbd: Instance, _ s: SessionSummary) -> (account: String, agent: String, args: String)? {
+  func lastLaunch(_ sbd: Instance, _ s: SessionSummary) -> Instance.StubCall? {
     sbd.stubCalls().last { $0.args.contains(s.claudeSessionId) }
   }
 

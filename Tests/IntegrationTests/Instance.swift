@@ -166,6 +166,8 @@ final class Instance {
     env["CLAUDE_CONFIG_DIR"] = inheritedAccount
     // A fixed agent lets a test tell sbd's own SSH agent from a terminal's.
     env["SSH_AUTH_SOCK"] = sbdAgent
+    // A runner that exports its own window would otherwise reach every stub claude.
+    env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = nil
     env.merge(sbdEnvironment) { $1 }
     p.environment = env
     let log = FileHandle(forWritingAtPath: home.log)!
@@ -481,18 +483,23 @@ final class Instance {
 
   func stubArgs() -> [String] { stubCalls().map(\.args) }
 
+  /// One run of the stub claude, as `stub-calls.log` records it.
+  typealias StubCall = (account: String, agent: String, compactWindow: String, args: String)
+
   /// Each run of the stub claude, oldest first: its CLAUDE_CONFIG_DIR, its
-  /// SSH_AUTH_SOCK, and its arguments. A variable that was unset reads as
-  /// empty.
-  func stubCalls() -> [(account: String, agent: String, args: String)] { stubCalls(in: home.path) }
+  /// SSH_AUTH_SOCK, its CLAUDE_CODE_AUTO_COMPACT_WINDOW, and its arguments. A
+  /// variable that was unset reads as empty.
+  func stubCalls() -> [StubCall] {
+    stubCalls(in: home.path)
+  }
 
   /// The runs that the stub logged in the folder, which was its SB_HOME.
-  func stubCalls(in folder: String) -> [(account: String, agent: String, args: String)] {
+  func stubCalls(in folder: String) -> [StubCall] {
     let text = (try? String(contentsOfFile: "\(folder)/stub-calls.log", encoding: .utf8)) ?? ""
     // The text after the last NUL is empty, or a record that the stub is writing.
     return text.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map { record in
-      let fields = record.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-      return (account: fields[0], agent: fields[1], args: fields[2])
+      let fields = record.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+      return (account: fields[0], agent: fields[1], compactWindow: fields[2], args: fields[3])
     }
   }
 
@@ -766,7 +773,9 @@ extension Instance {
   }
 
   /// Each run of the stub claude on the box, oldest first. A remote pane's SB_HOME is the box's `.sb`.
-  func boxStubCalls() -> [(account: String, agent: String, args: String)] { stubCalls(in: boxSB) }
+  func boxStubCalls() -> [StubCall] {
+    stubCalls(in: boxSB)
+  }
 
   /// The arguments of each run of the stub claude in a pane on the box, without its `agents` runs.
   func boxStubArgs() -> [String] { boxStubCalls().map(\.args).filter { !$0.hasPrefix("agents") } }
