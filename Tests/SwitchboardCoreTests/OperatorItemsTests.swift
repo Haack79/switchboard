@@ -305,14 +305,6 @@ extension OperatorItemsTests {
       #expect(owners(ofWait: "w1", in: result) == [op])
     }
 
-    @Test func heldWaitsNameTheOperatorAsTheirHolder() {
-      let w = heldWait("w1", action: .merge, watching: "k1")
-
-      let result = assigned([], waits: [w], live: ["k1"], conversation: nil)
-
-      #expect(result["k1"]?.holder == op)
-    }
-
     /// `heldWaits` may hold a wait that is not overdue yet. Its owner shows no held verdict until it is.
     @Test func aWaitThatIsNotOverdueGivesItsOwnerNoHeldVerdict() {
       let w = heldWait("w1", action: .merge, watching: "k1", overdue: false)
@@ -528,24 +520,6 @@ extension OperatorItemsTests {
     @Test func noSentLeavesWorkFromEmpty() {
       #expect(facts(opIdle).workFrom == nil)
     }
-
-    @Test func anAckClosesAsksWhenTheOwnerHasAnAskAndNoBlockingPrompt() {
-      let f = withItems(facts(opIdle + [sendPending()]), OperatorItems(asks: [askReport(10)]))
-
-      #expect(f.ackClosesAsks)
-    }
-
-    @Test func anAckDoesNotCloseAsksWhileAPromptBlocks() {
-      let f = withItems(facts(permissionTurn()), OperatorItems(asks: [askReport(10)]))
-
-      #expect(!f.ackClosesAsks)
-    }
-
-    @Test func anAckDoesNotCloseAsksWithoutAnAsk() {
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")], holder: op))
-
-      #expect(!f.ackClosesAsks)
-    }
   }
 }
 
@@ -565,26 +539,9 @@ extension OperatorItemsTests {
 
     @Test func operatorItemsRoundTrip() throws {
       let items = OperatorItems(
-        asks: [askReport(10, about: "k1")], heldWaits: [heldWait("w1", action: .merge)], holder: op)
+        asks: [askReport(10, about: "k1")], heldWaits: [heldWait("w1", action: .merge)])
 
       #expect(try JSONCoding.decode(OperatorItems.self, from: try JSONCoding.encode(items)) == items)
-    }
-
-    @Test func detailsWithoutAWaitsHolderEncodeNoKey() throws {
-      #expect(try JSON(encoding: TriageDetails())["waitsHolder"] == nil)
-    }
-
-    @Test func detailsDecodedWithoutAWaitsHolderHaveNone() throws {
-      #expect(try JSONCoding.decode(TriageDetails.self, from: #"{"openByDefault": false}"#).waitsHolder == nil)
-    }
-
-    @Test func aWaitsHolderRoundTrips() throws {
-      var details = TriageDetails(overdueWaits: ["w1"])
-      details.waitsHolder = op
-
-      let decoded = try JSONCoding.decode(TriageDetails.self, from: try JSONCoding.encode(details))
-
-      #expect(decoded.waitsHolder == op)
     }
   }
 }
@@ -598,7 +555,7 @@ extension OperatorItemsTests {
     }
 
     @Test func heldWaitsAloneGiveNoAskVerdict() {
-      #expect(Attention.askVerdict(OperatorItems(heldWaits: [heldWait("w1")], holder: op)) == nil)
+      #expect(Attention.askVerdict(OperatorItems(heldWaits: [heldWait("w1")])) == nil)
     }
 
     @Test func anAskGivesNeedsYouWithTheOperatorsText() {
@@ -629,7 +586,7 @@ extension OperatorItemsTests {
     }
 
     @Test func aHeldWaitThatIsNotOverdueGivesNoVerdict() {
-      let items = OperatorItems(heldWaits: [heldWait("w1", action: .merge, overdue: false)], holder: op)
+      let items = OperatorItems(heldWaits: [heldWait("w1", action: .merge, overdue: false)])
 
       #expect(Attention.heldWaitVerdict(items, now: oiNow) == nil)
     }
@@ -638,7 +595,7 @@ extension OperatorItemsTests {
     func anOverdueActionWaitSaysWhatSbdStillWaitsToDo(_ action: WaitAction.Kind) {
       let w = heldWait("w1", action: action)
 
-      let v = Attention.heldWaitVerdict(OperatorItems(heldWaits: [w], holder: op), now: oiNow)
+      let v = Attention.heldWaitVerdict(OperatorItems(heldWaits: [w]), now: oiNow)
 
       #expect(v == Verdict(state: .needsYou, reason: "sbd still waits to \(action.skipped): \(w.overdueLine)"))
     }
@@ -646,26 +603,20 @@ extension OperatorItemsTests {
     @Test func anOverdueWaitWithoutAnActionSaysBackgroundFollowThroughStillWaits() {
       let w = heldWait("w1")
 
-      let v = Attention.heldWaitVerdict(OperatorItems(heldWaits: [w], holder: op), now: oiNow)
+      let v = Attention.heldWaitVerdict(OperatorItems(heldWaits: [w]), now: oiNow)
 
       #expect(v == Verdict(state: .needsYou, reason: "Background follow-through still waits: \(w.overdueLine)"))
     }
 
     @Test func theVerdictNamesOnlyTheOverdueWaits() {
       let items = OperatorItems(
-        heldWaits: [heldWait("w1"), heldWait("w2", overdue: false), heldWait("w3", action: .merge)], holder: op)
+        heldWaits: [heldWait("w1"), heldWait("w2", overdue: false), heldWait("w3", action: .merge)])
 
       #expect(Attention.heldWaitVerdict(items, now: oiNow)?.overdueWaits == ["w1", "w3"])
     }
 
-    @Test func theVerdictNamesTheWaitsHolder() {
-      let items = OperatorItems(heldWaits: [heldWait("w1")], holder: op)
-
-      #expect(Attention.heldWaitVerdict(items, now: oiNow)?.waitsHolder == op)
-    }
-
     @Test func aHeldWaitVerdictComesFromTheOperator() {
-      let items = OperatorItems(heldWaits: [heldWait("w1")], holder: op)
+      let items = OperatorItems(heldWaits: [heldWait("w1")])
 
       #expect(Attention.heldWaitVerdict(items, now: oiNow)?.fromOperator == true)
     }
@@ -733,10 +684,10 @@ let operatorVerdictShapes: [OperatorVerdictShape] = [
     items: OperatorItems(asks: [OperatorReport(opReport(10, "Merge it?"))!]), state: .needsYou),
   OperatorVerdictShape(
     name: "an overdue wait with no owner", events: { opIdle }, waits: [overdueWait],
-    items: OperatorItems(heldWaits: [overdueWait], holder: "s1"), state: .needsYou),
+    items: OperatorItems(heldWaits: [overdueWait]), state: .needsYou),
   OperatorVerdictShape(
     name: "an overdue wait with no owner while a turn runs", events: { [opPrompt(1, "go")] }, waits: [overdueWait],
-    items: OperatorItems(heldWaits: [overdueWait], holder: "s1"), state: .working),
+    items: OperatorItems(heldWaits: [overdueWait]), state: .working),
 ]
 
 extension OperatorItemsTests {
@@ -782,17 +733,16 @@ extension OperatorItemsTests {
     }
 
     @Test func anOverdueWaitWithNoOwnerGivesTheHeldVerdict() {
-      let items = OperatorItems(heldWaits: [overdueWait], holder: "s1")
+      let items = OperatorItems(heldWaits: [overdueWait])
 
       let v = Attention.evaluate(operatorSession(waits: [overdueWait]), withItems(facts(opIdle), items), now: oiNow)
 
       #expect(v.fromOperator)
       #expect(v.overdueWaits == [overdueWait.id])
-      #expect(v.waitsHolder == "s1")
     }
 
     @Test func aNotifyOutcomeComesBeforeAHeldWait() throws {
-      let items = OperatorItems(heldWaits: [overdueWait], holder: "s1")
+      let items = OperatorItems(heldWaits: [overdueWait])
 
       let v = Attention.evaluate(
         operatorSession(waits: [overdueWait]), withItems(facts(opIdle + [try opNotified(5)]), items), now: oiNow)
@@ -850,20 +800,20 @@ extension OperatorItemsTests {
     }
 
     @Test(arguments: everyOwnerKind) func aHeldWaitGivesAReportItem(_ kind: SessionKind) throws {
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)], holder: op))
+      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)]))
 
       #expect(try #require(oiItem(kindSession(kind), f)).source == .report)
     }
 
     @Test(arguments: everyOwnerKind) func aHeldWaitsRefNamesItsWait(_ kind: SessionKind) throws {
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)], holder: op))
+      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)]))
 
       #expect(try #require(oiItem(kindSession(kind), f)).ref == "held:w1")
     }
 
     @Test func severalHeldWaitsAreAllNamedInTheRef() throws {
       let f = withItems(
-        facts(opIdle), OperatorItems(heldWaits: [heldWait("w1"), heldWait("w2", action: .rm)], holder: op))
+        facts(opIdle), OperatorItems(heldWaits: [heldWait("w1"), heldWait("w2", action: .rm)]))
 
       let ref = try #require(oiItem(kindSession(.work), f)).ref
 
@@ -872,21 +822,15 @@ extension OperatorItemsTests {
     }
 
     @Test(arguments: everyOwnerKind) func aHeldWaitOffersNoOptions(_ kind: SessionKind) throws {
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)], holder: op))
+      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1", action: .merge)]))
 
       #expect(try #require(oiItem(kindSession(kind), f)).options.isEmpty)
     }
 
     @Test(arguments: everyOwnerKind) func aHeldWaitsDetailsNameTheOverdueWaits(_ kind: SessionKind) throws {
-      let items = OperatorItems(heldWaits: [heldWait("w1"), heldWait("w2", overdue: false)], holder: op)
+      let items = OperatorItems(heldWaits: [heldWait("w1"), heldWait("w2", overdue: false)])
 
       #expect(try #require(oiItem(kindSession(kind), withItems(facts(opIdle), items))).details.overdueWaits == ["w1"])
-    }
-
-    @Test(arguments: everyOwnerKind) func aHeldWaitsDetailsNameTheWaitsHolder(_ kind: SessionKind) throws {
-      let items = OperatorItems(heldWaits: [heldWait("w1")], holder: op)
-
-      #expect(try #require(oiItem(kindSession(kind), withItems(facts(opIdle), items))).details.waitsHolder == op)
     }
 
     @Test(arguments: everyOwnerKind) func aBlockingCardAboveAnAskIsTheItem(_ kind: SessionKind) throws {
@@ -899,7 +843,7 @@ extension OperatorItemsTests {
     @Test(arguments: everyOwnerKind, [false, true])
     func inInboxAdmitsTheItemThatSbdBuilds(_ kind: SessionKind, _ held: Bool) {
       let items =
-        held ? OperatorItems(heldWaits: [heldWait("w1")], holder: op) : OperatorItems(asks: [askReport(10)])
+        held ? OperatorItems(heldWaits: [heldWait("w1")]) : OperatorItems(asks: [askReport(10)])
 
       let s = opSummary(kindSession(kind), withItems(facts(opIdle), items))
 
@@ -968,7 +912,7 @@ extension OperatorItemsTests {
     }
 
     @Test func aHeldWaitItemCarriesNoDecisionsOrQuestion() throws {
-      let f = withItems(ownerFacts(), OperatorItems(heldWaits: [heldWait("w1")], holder: op))
+      let f = withItems(ownerFacts(), OperatorItems(heldWaits: [heldWait("w1")]))
 
       let built = try #require(oiItem(session(), f))
 
@@ -1052,7 +996,7 @@ extension OperatorItemsTests {
     @Test func aHeldWaitLeavesReadyToMerge() throws {
       let f = try prFacts(readyPR())
 
-      let v = prVerdict(withItems(f, OperatorItems(heldWaits: [Self.heldAtPRNow], holder: op)))
+      let v = prVerdict(withItems(f, OperatorItems(heldWaits: [Self.heldAtPRNow])))
 
       #expect(v.state == .readyToMerge, "\(v.reason)")
     }
@@ -1062,20 +1006,20 @@ extension OperatorItemsTests {
       let f = try prFacts(samplePR(state: .merged), dirty: 0)
       try #require(prVerdict(f).state == .done)
 
-      let v = prVerdict(withItems(f, OperatorItems(heldWaits: [Self.heldAtPRNow], holder: op)))
+      let v = prVerdict(withItems(f, OperatorItems(heldWaits: [Self.heldAtPRNow])))
 
       #expect(v.state == .done, "\(v.reason)")
     }
 
     @Test func aHeldWaitLeavesAMarkedDoneSessionDone() {
       let v = oiVerdict(
-        session(done: true), withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")], holder: op)))
+        session(done: true), withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")])))
 
       #expect(v.state == .done)
     }
 
     @Test func aHeldWaitLeavesARunningTurnWorking() {
-      let f = withItems(facts([opPrompt(1, "go")]), OperatorItems(heldWaits: [heldWait("w1")], holder: op))
+      let f = withItems(facts([opPrompt(1, "go")]), OperatorItems(heldWaits: [heldWait("w1")]))
 
       #expect(oiVerdict(session(), f).state == .working)
     }
@@ -1108,7 +1052,7 @@ extension OperatorItemsTests {
     @Test func aHeldWaitComesBeforeTheOwnersOwnOverdueWait() {
       var s = session()
       s.waits = [Wait(id: "own", kind: .manual, note: "own", created: 0, then: .notify, recheck: oiNow / 2)]
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")], holder: op))
+      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")]))
 
       let v = oiVerdict(s, f)
 
@@ -1119,7 +1063,7 @@ extension OperatorItemsTests {
     @Test func aHeldWaitComesBeforeTheOwnersOpenWait() {
       var s = session()
       s.waits = [Wait(id: "own", kind: .manual, note: "own", created: 0, then: .notify, recheck: oiNow * 10)]
-      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")], holder: op))
+      let f = withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")]))
 
       let v = oiVerdict(s, f)
 
@@ -1132,7 +1076,7 @@ extension OperatorItemsTests {
     func aHeldWaitThatIsNotOverdueChangesNothing(_ kind: SessionKind, _ shape: ReportParityShape) throws {
       let s = kindSession(kind, waits: shape.waits)
       let without = facts(try shape.events())
-      let with = withItems(without, OperatorItems(heldWaits: [heldWait("w9", overdue: false)], holder: op))
+      let with = withItems(without, OperatorItems(heldWaits: [heldWait("w9", overdue: false)]))
 
       #expect(oiVerdict(s, with) == oiVerdict(s, without))
       #expect(oiItem(s, with) == oiItem(s, without))

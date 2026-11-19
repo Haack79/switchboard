@@ -55,7 +55,6 @@ import Testing
     try String(contentsOf: Self.readme, encoding: .utf8).components(separatedBy: "\n\n")
   }
 
-  /// The operator's paragraphs moved under `#### Background follow-through` at the end of The Manager (#410).
   @Test func theReadmeDescribesTheGateRightAfterTheQuickAskParagraph() throws {
     let all = try paragraphs()
     let ask = try #require(all.firstIndex { $0.hasPrefix("`sb ask <question>` answers") })

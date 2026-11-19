@@ -523,7 +523,7 @@ import Testing
   }
 
   /// Decision 55: an ask outranks a card that doesn't block. An ack closes the ask, records no ack on the owner, and
-  /// the card shows again. This supersedes the Tests Required line "sb ack acknowledges the card".
+  /// the card shows again.
   @Test func anAskOutranksANonBlockingSendCardAndTheCardReturnsAfterTheAck() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)
@@ -747,9 +747,9 @@ import Testing
 
   // MARK: Overdue waits that the Operator holds (criterion 8)
 
-  @Test func anOverdueActionWaitGivesItsSubjectAHeldItemNamingTheOperator() throws {
+  @Test func anOverdueActionWaitGivesItsSubjectAHeldItem() throws {
     let sbd = try Instance()
-    let op = try idleOperator(sbd)
+    _ = try idleOperator(sbd)
     let kid = try sbd.new(name: "kid")
     let c = try conversation(sbd, "Plan the cache fix")
     try sbd.sb("wait", c.id, "--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm")
@@ -765,7 +765,6 @@ import Testing
     #expect(item.ref == "held:\(wait.id)")
     #expect(item.options.isEmpty, "\(item.options)")
     #expect(item.details.overdueWaits == [wait.id])
-    #expect(item.details.waitsHolder == op.id)
   }
 
   @Test func anOverdueActionWaitLeavesTheOperatorOutOfNeedsYou() throws {
@@ -783,9 +782,9 @@ import Testing
     #expect(s.triage == nil, "\(String(describing: s.triage))")
   }
 
-  @Test func theHeldItemsDetailsNameTheOperatorInSbGetJSON() throws {
+  @Test func theHeldItemsDetailsNameTheOverdueWaitsInSbGetJSON() throws {
     let sbd = try Instance()
-    let op = try idleOperator(sbd)
+    _ = try idleOperator(sbd)
     let kid = try sbd.new(name: "kid")
     let c = try conversation(sbd, "Plan the cache fix")
     try sbd.sb("wait", c.id, "--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm")
@@ -796,7 +795,6 @@ import Testing
     let details = try sbd.getJSON(kid.id)["triage"]?["message"]?["details"]
 
     #expect(details?["overdueWaits"] == .array([.string(wait.id)]), "\(String(describing: details))")
-    #expect(details?["waitsHolder"]?.string == op.id, "\(String(describing: details))")
   }
 
   /// A wait with no action goes to the conversation that handed it off (Decision 38).
@@ -815,7 +813,6 @@ import Testing
     let due = try sbd.waitFor(c.id, "the held item") { $0.triage?.ref.hasPrefix("held:") == true }
     #expect(due.reason.hasPrefix("Background follow-through still waits: "), "\(due.reason)")
     #expect(due.triage?.details.overdueWaits == [wait.id])
-    #expect(due.triage?.details.waitsHolder == op.id)
     #expect(try sbd.get(op.id).state != .needsYou)
     #expect(try sbd.get(kid.id).triage?.ref.hasPrefix("held:") != true)
   }
@@ -884,7 +881,7 @@ import Testing
     #expect(rows.contains { $0["id"]?.string == op.id }, "\(rows)")
   }
 
-  // MARK: A report recorded before this change (Decision 51)
+  // MARK: A report recorded before routing (Decision 51)
 
   @Test func anOpenReportWithNoRoutingShowsAsOneItemOnItsSession() throws {
     let sbd = try Instance()

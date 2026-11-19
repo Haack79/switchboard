@@ -603,10 +603,13 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
-  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd. It reads
-  /// every listed session, because the filter can hide the operator.
-  var operatorSession: SessionSummary? {
-    allSessions.filter { !$0.isBeingRemoved && $0.kind == .operator }.min {
+  /// The operator. It reads every listed session, because the filter can hide the operator.
+  var operatorSession: SessionSummary? { Self.operatorSession(in: allSessions) }
+
+  /// The operator among `sessions`, or nil before sbd first creates it. With more than one, it is the oldest, as in
+  /// sbd.
+  static func operatorSession(in sessions: [SessionSummary]) -> SessionSummary? {
+    sessions.filter { !$0.isBeingRemoved && $0.kind == .operator }.min {
       ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id)
     }
   }

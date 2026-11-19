@@ -9,13 +9,15 @@ public struct OperatorItems: Codable, Equatable, Sendable {
   public var asks: [OperatorReport] = []
   /// Every Operator wait that this session owns, overdue or not. The verdict names only the overdue ones.
   public var heldWaits: [Wait] = []
-  /// The id of the session that holds `heldWaits`, which is the Operator. It is nil while `heldWaits` is empty.
-  public var holder: String?
 
-  public init(asks: [OperatorReport] = [], heldWaits: [Wait] = [], holder: String? = nil) {
+  public init(asks: [OperatorReport] = [], heldWaits: [Wait] = []) {
     self.asks = asks
     self.heldWaits = heldWaits
-    self.holder = holder
+  }
+
+  /// The first of `candidates` that may own an item and is not the Operator, or nil when none is.
+  public static func owner(among candidates: [String?], operatorID: String?, isLive: (String) -> Bool) -> String? {
+    candidates.lazy.compactMap { $0 }.first { $0 != operatorID && isLive($0) }
   }
 
   /// The items of each owner, keyed by the owner's id. An owner with nothing is absent. Every open report and every
@@ -36,9 +38,8 @@ public struct OperatorItems: Codable, Equatable, Sendable {
     openReports: [OperatorReport], reportOwners: [Int64: String], waits: [Wait], operatorID: String,
     isLive: (String) -> Bool, newestConversation: String?
   ) -> [String: OperatorItems] {
-    let fallback = newestConversation.flatMap { isLive($0) ? $0 : nil } ?? operatorID
     func owner(_ candidates: String?...) -> String {
-      candidates.lazy.compactMap { $0 }.first { $0 != operatorID && isLive($0) } ?? fallback
+      Self.owner(among: candidates + [newestConversation], operatorID: operatorID, isLive: isLive) ?? operatorID
     }
     var out: [String: OperatorItems] = [:]
     for report in openReports {
@@ -48,7 +49,6 @@ public struct OperatorItems: Codable, Equatable, Sendable {
     for wait in waits {
       let id = owner(wait.action == nil ? nil : wait.actionSubject?.id, wait.handedFrom?.id)
       out[id, default: OperatorItems()].heldWaits.append(wait)
-      out[id]?.holder = operatorID
     }
     return out
   }
@@ -59,15 +59,6 @@ extension KeyedDecodingContainer {
   /// and throws for a missing key, so `SessionFacts` decodes the key through this overload instead.
   func decode(_ type: OperatorItems.Type, forKey key: Key) throws -> OperatorItems {
     try decodeIfPresent(type, forKey: key) ?? OperatorItems()
-  }
-}
-
-extension SessionFacts {
-  /// Whether an `ack` now would close the asks that background follow-through routed to this session. An ack
-  /// doesn't close them while a prompt blocks the session, because the Inbox then shows that prompt.
-  public var ackClosesAsks: Bool {
-    !operatorItems.asks.isEmpty
-      && !Triage.hasBlockingPrompt(cards: cards, openPrompt: openPermission != nil || openQuestion != nil)
   }
 }
 
@@ -90,7 +81,7 @@ extension Attention {
     // The prefix of an action wait alone can take 55 characters, so the default 70 would cut the wait's own line.
     return Verdict(
       state: .needsYou, reason: oneLine(lines.joined(separator: "; "), max: 200), kind: .info,
-      overdueWaits: overdue.map(\.id), waitsHolder: items.holder, fromOperator: true)
+      overdueWaits: overdue.map(\.id), fromOperator: true)
   }
 
   /// The Operator's verdict (Decision 43). Its open reports and waits show on the sessions that sbd routes them to,
@@ -115,7 +106,7 @@ extension Attention {
 
 extension Triage {
   /// The item of a verdict that background follow-through gave: the asks' report item, or for overdue waits an item
-  /// that names them and their holder and offers no options. Nil for any other verdict.
+  /// that names them and offers no options. Nil for any other verdict.
   static func operatorSourcedItem(_ facts: SessionFacts, _ verdict: Verdict) -> TriageItem? {
     guard verdict.fromOperator, AttentionState.inbox.contains(verdict.state) else { return nil }
     guard !verdict.overdueWaits.isEmpty else {
@@ -124,8 +115,7 @@ extension Triage {
     var item = ruleItem(verdict)
     item.source = .report
     item.options = []
-    item.ref = "held:" + verdict.overdueWaits.joined(separator: ",")
-    item.details.waitsHolder = verdict.waitsHolder
+    item.ref = heldRef(verdict.overdueWaits)
     return item
   }
 }

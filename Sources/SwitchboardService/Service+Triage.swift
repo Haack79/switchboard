@@ -138,7 +138,7 @@ extension Service {
   /// closes exactly those reports.
   private func operatorReply(_ id: String, _ item: TriageItem, _ text: String, insideClaude: JSON) throws -> Request {
     guard let op = operatorID() else { throw APIError("there is no operator to answer") }
-    guard let latest = Int64(item.ref.dropFirst("report:".count)), item.ref.hasPrefix("report:") else {
+    guard let latest = Triage.reportID(ref: item.ref) else {
       throw APIError("\(entries[id]!.session.name) has no question from the operator to answer")
     }
     let ids = entries[id]!.facts.operatorItems.asks.map(\.id).filter { $0 <= latest }

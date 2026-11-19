@@ -452,16 +452,17 @@ public enum Triage {
   public static func itemAndDecisions(_ facts: SessionFacts, _ verdict: Verdict, kind: SessionKind) -> (
     item: TriageItem?, decisions: DecisionList?, decisionsSent: Bool
   ) {
+    // A verdict from the operator's items comes only while no prompt blocks, so its item comes first. The owner's
+    // decision list stays in its facts while an ask shows, and comes back once the ask closes.
+    if let routed = operatorSourcedItem(facts, verdict) { return (routed, nil, false) }
     switch kind.inboxItems {
     case .all:
       let live = liveItem(facts, verdict)
-      // The owner's decision list stays in its facts while an ask shows, and comes back once the ask closes.
-      if live?.source == .report { return (live, nil, false) }
       return (
         item(facts, verdict, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live)
       )
     case .blockingPrompts:
-      return (promptItem(facts, verdict) ?? operatorSourcedItem(facts, verdict), nil, false)
+      return (promptItem(facts, verdict), nil, false)
     case .operatorItems:
       return (operatorItem(facts, verdict), nil, false)
     }
@@ -539,14 +540,11 @@ public enum Triage {
     return "summary:\(facts.sessionSummaryId)"
   }
 
-  /// The item that background follow-through, the session's card, summary, rule, or reply gives. A verdict from
-  /// the operator's items comes only while no prompt blocks, so its item comes before a card that doesn't block.
+  /// The item that the session's card, summary, rule, or reply gives.
   static func liveItem(_ facts: SessionFacts, _ verdict: Verdict) -> TriageItem? {
     guard AttentionState.inbox.contains(verdict.state) else { return nil }
     var item: TriageItem
-    if let routed = operatorSourcedItem(facts, verdict) {
-      item = routed
-    } else if let card = facts.cards.first {
+    if let card = facts.cards.first {
       item = cardItem(card)
       item.ref = card.ref
     } else if let own = facts.sessionSummary, let ref = sessionSummaryRef(facts) {
@@ -816,11 +814,29 @@ public enum Triage {
     return sentences[0] + " " + pick
   }
 
-  /// A reason line as a title: its first letter capitalized, and the first
-  /// "; " a colon.
   /// The ref of a rule item with this title.
   static func ruleRef(_ title: String) -> String { "rule:\(title)" }
 
+  private static let reportPrefix = "report:"
+  private static let heldPrefix = "held:"
+
+  /// The ref of an ask item whose latest report is `id`.
+  static func reportRef(_ id: Int64) -> String { reportPrefix + String(id) }
+
+  public static func isReportRef(_ ref: String) -> Bool { ref.hasPrefix(reportPrefix) }
+
+  /// The id of the latest report that an ask item's ref names, or nil for any other ref.
+  public static func reportID(ref: String) -> Int64? {
+    isReportRef(ref) ? Int64(ref.dropFirst(reportPrefix.count)) : nil
+  }
+
+  /// The ref of the item of the Operator's overdue waits with these ids.
+  static func heldRef(_ waitIDs: [String]) -> String { heldPrefix + waitIDs.joined(separator: ",") }
+
+  public static func isHeldRef(_ ref: String) -> Bool { ref.hasPrefix(heldPrefix) }
+
+  /// A reason line as a title: its first letter capitalized, and the first
+  /// "; " a colon.
   static func title(_ reason: String, max: Int = titleLength) -> String {
     let text = capitalized(reason).replacingOccurrences(of: "; ", with: ": ")
     return oneLine(text, max: max)

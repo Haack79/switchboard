@@ -1342,8 +1342,8 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
-    // The operator's waits decide which sessions show its held items.
-    if session.kind == .operator { syncOperatorItems() }
+    // The operator's waits, and whether a session may own an item, decide which sessions show the operator's items.
+    syncOperatorItems()
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it

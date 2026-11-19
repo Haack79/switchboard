@@ -46,7 +46,7 @@ extension MessageField {
     }
 
     /// Whether a field that answers the item with `ref` sends to the Operator. Only an ask's ref does.
-    static func answersOperator(ref: String?) -> Bool { ref?.hasPrefix("report:") == true }
+    static func answersOperator(ref: String?) -> Bool { ref.map(Triage.isReportRef) == true }
 
     /// Sends the text as the Reply of the session's item with `ref`. It never falls back to a message to the
     /// session, so it sends nothing when the item has no Reply or the draft holds images.

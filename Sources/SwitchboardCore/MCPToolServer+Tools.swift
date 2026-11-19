@@ -204,11 +204,13 @@ extension MCPToolServer {
       ], required: ["reason"]),
     Tool(
       "report",
-      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report is a question for the user. It shows as an Inbox item on the session that `session` names, or without `session`, on the conversation that handed the operator the work. It stays open until the user answers it or acknowledges it there. Every report shows in the Loops tab's Background Activity list. sbd records reports too, for a wait's report action and for each merge or removal that a wait's action made.",
+      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report is a question for the user. It shows as an Inbox item on the session that `session` names. Without `session`, it shows on the conversation that handed the operator the work. It stays open until the user answers it or acknowledges it there. Every report shows in the Loops tab's Background Activity list. sbd records reports too, for a wait's report action and for each merge or removal that a wait's action made.",
       [
         "text": string("What happened, or the question for the user, in one line."),
         "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
-        "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
+        "session": string(
+          "The session that the report is about: an id, a unique id prefix, or a unique name. Pass it whenever the question is about one session, so the user answers on that session's Inbox item."
+        ),
       ], required: ["text"]),
     Tool(
       "approve",

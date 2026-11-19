@@ -71,14 +71,14 @@ struct DecisionCard: View {
     }
   }
 
-  /// The session that holds the item's overdue waits: the one that `waitsHolder` names, or else the item's own
-  /// session. Nil when the holder is not listed. `sessions` holds every listed session, because the filter can hide
-  /// the holder.
+  /// The session that holds the item's overdue waits: the Operator for a `held:` item, whose waits sbd routed to
+  /// this session, or else the item's own session. Nil when the holder is not listed. `sessions` holds every listed
+  /// session, because the filter can hide the holder.
   static func waitPanelSession(_ item: TriageItem, on session: SessionSummary, sessions: [SessionSummary])
     -> SessionSummary?
   {
-    guard let holder = item.details.waitsHolder else { return session }
-    return sessions.first { $0.id == holder }
+    guard Triage.isHeldRef(item.ref) else { return session }
+    return BoardModel.operatorSession(in: sessions)
   }
 
   /// What the Summary shows of the session's last reply. `presentation` reads the hook's `lastReply`, as sbd's

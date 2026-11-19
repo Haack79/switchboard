@@ -240,11 +240,11 @@ extension ManagerTextTests {
 /// show now that the Operator has no sidebar row or chat (#410).
 extension ManagerTextTests {
   @Test(arguments: [
-    "Nobody sees your chat; reports and the Background Activity list are all the user sees.",
-    "Whenever a question is about one session, pass that session as `session` (`--session S`), because the user answers on that session's Inbox item.",
+    "Nobody sees your chat. The user sees only your reports and the Background Activity list.",
+    "When a question is about one session, pass that session as `session` (`--session S`), because the user answers on that session's Inbox item.",
     "Without `session`, the question goes to the conversation that handed you the work.",
     "The user's answer reaches you as a message that starts with `About <name>:`, where <name> is the session or conversation whose Inbox item showed the question.",
-    "An answer to a question that no session could show has no such start.",
+    "If no Inbox item could show the question, the answer arrives without that start.",
   ])
   func theOperatorPromptSaysWhereItsQuestionsAndAnswersGo(_ sentence: String) {
     #expect(Manager.operatorPrompt.contains(sentence), "\(Manager.operatorPrompt)")
@@ -265,7 +265,7 @@ extension ManagerTextTests {
   }
 
   @Test(arguments: [
-    "It shows as an Inbox item on the session that `session` names, or without `session`, on the conversation that handed the operator the work.",
+    "It shows as an Inbox item on the session that `session` names. Without `session`, it shows on the conversation that handed the operator the work.",
     "It stays open until the user answers it or acknowledges it there.",
     "Every report shows in the Loops tab's Background Activity list.",
   ])

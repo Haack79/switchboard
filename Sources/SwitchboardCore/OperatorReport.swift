@@ -42,8 +42,7 @@ extension SessionFacts {
 
   /// Whether an `ack` now would close open reports: an unrouted report is open, and no prompt blocks the session.
   public var ackClosesReports: Bool {
-    !unroutedReports.isEmpty
-      && !Triage.hasBlockingPrompt(cards: cards, openPrompt: openPermission != nil || openQuestion != nil)
+    !unroutedReports.isEmpty && !hasBlockingPrompt
   }
 
   /// The open reports that no `report-routed` event gave an owner. Only these show on the operator's own item for
@@ -139,6 +138,6 @@ extension Triage {
       title: title(OperatorReport.reason(reports)), kind: .question,
       summary: (listed + (rest > 0 ? ["and \(rest) more"] : [])).joined(separator: "\n"),
       options: [TriageOption(label: "Reply", action: .reply, placeholder: "Your answer to the operator")],
-      source: .report, ref: "report:\(reports.last!.id)")
+      source: .report, ref: reportRef(reports.last!.id))
   }
 }

@@ -995,7 +995,7 @@ private let longOverdueWait = Wait(
   @Test func theOperatorsHeldWaitItemNamesItsWaitInItsRef() throws {
     let s = operatorSession(waits: [longOverdueWait])
     var f = facts(opIdle)
-    f.operatorItems = OperatorItems(heldWaits: [longOverdueWait], holder: s.id)
+    f.operatorItems = OperatorItems(heldWaits: [longOverdueWait])
     let v = Attention.evaluate(s, f, now: 1000)
 
     let op = try #require(Triage.item(f, v, kind: .operator))

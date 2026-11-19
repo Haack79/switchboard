@@ -1204,7 +1204,7 @@ private func withId(_ wait: Wait, _ id: String) -> Wait {
   @Test func theOperatorsHeldWaitItemCarriesTheOverdueWaits() throws {
     let s = operatorSession(waits: [ci])
     var f = idle
-    f.operatorItems = OperatorItems(heldWaits: [ci], holder: s.id)
+    f.operatorItems = OperatorItems(heldWaits: [ci])
     let v = Attention.evaluate(s, f, now: 2 * hourMs)
     try #require(v.fromOperator, "\(v.state) \(v.reason)")
 

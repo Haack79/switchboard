@@ -209,8 +209,9 @@ public enum InboxItems: Sendable {
   /// sessions it manages, and those sessions have their own items. A reply
   /// waits on the user's next message, which the chat pane takes.
   case blockingPrompts
-  /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
-  /// replies and `sb summary set` cards never reach the Inbox, because nobody sees its chat.
+  /// A blocking prompt, then an exit at the trust dialog, then an open permission or question dialog, then the
+  /// asks that no other session owns, then a `notify` outcome, then the overdue waits that no other session owns.
+  /// The operator's replies and `sb summary set` cards never reach the Inbox, because nobody sees its chat.
   case operatorItems
 }
 

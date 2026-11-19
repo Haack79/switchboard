@@ -11,17 +11,15 @@ extension Service {
   func mayOwnOperatorItems(_ id: String) -> Bool {
     guard let s = entries[id]?.session, s.host == nil, s.pause == nil, !s.done, s.removal == nil, s.docket == nil
     else { return false }
-    return s.followup == nil || s.followup?.started != nil
+    return !s.waitsToStart
   }
 
   /// The session that a needs-you report goes to (Decision 35): the session that it is about, else the conversation
   /// that handed off the wait that the Operator works on, else the most recent conversation. Each must be able to own
   /// an item and must not be the Operator. Nil means that the Operator keeps the report.
   func askOwner(about: String?, handedFrom: String?) -> String? {
-    let op = operatorID()
-    return [about, handedFrom, mostRecentManager()].lazy.compactMap { $0 }.first {
-      $0 != op && mayOwnOperatorItems($0)
-    }
+    OperatorItems.owner(
+      among: [about, handedFrom, newestConversation()], operatorID: operatorID(), isLive: mayOwnOperatorItems)
   }
 
   /// Records on the Operator that `owner` owns the report of `event`, and records the ask in the owner's log.
@@ -37,12 +35,9 @@ extension Service {
   func syncOperatorItems() {
     var assigned: [String: OperatorItems] = [:]
     if let op = operatorID(), let e = entries[op] {
-      let waits = e.session.waits ?? []
-      // The newest conversation costs a summary of each conversation, so it is read only when something can use it.
-      let newest = e.facts.openReports.isEmpty && waits.isEmpty ? nil : mostRecentManager()
       assigned = OperatorItems.assign(
-        openReports: e.facts.openReports, reportOwners: e.facts.reportOwners, waits: waits, operatorID: op,
-        isLive: mayOwnOperatorItems, newestConversation: newest)
+        openReports: e.facts.openReports, reportOwners: e.facts.reportOwners, waits: e.session.waits ?? [],
+        operatorID: op, isLive: mayOwnOperatorItems, newestConversation: newestConversation())
     }
     let now = nowMs()
     for id in entries.keys.sorted() {

@@ -519,15 +519,13 @@ public struct Verdict: Equatable, Sendable {
   /// The "Before you merge" panel. Only the Ready to merge verdict has one.
   public var review: MergeReview?
   /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. The operator's Inbox admits it
-  /// for a `notify` outcome.
+  /// only for a `notify` outcome.
   public var byWaitRule = false
   /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
   /// has no wait left, so it names none.
   public var overdueWaits: [String] = []
   /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
   public var removalFailed = false
-  /// The session that holds the overdue waits of a verdict from `Attention.heldWaitVerdict`: the operator.
-  public var waitsHolder: String?
   /// True for a verdict that the operator's routed asks or waits gave. Its item has source `.report`.
   public var fromOperator = false
 
@@ -632,11 +630,7 @@ public enum Attention {
     if let unread = facts.unread { return unreadVerdict(session, facts, unread, stateOf: stateOf) }
     let ask = askVerdict(facts.operatorItems)
     // An ask outranks a card that doesn't block, which a conversation's Inbox would not show (Decision 55).
-    if let card = facts.cards.first,
-      ask == nil
-        || Triage.hasBlockingPrompt(
-          cards: facts.cards, openPrompt: facts.openPermission != nil || facts.openQuestion != nil)
-    {
+    if let card = facts.cards.first, ask == nil || facts.hasBlockingPrompt {
       return Verdict(state: .needsYou, reason: oneLine(card.reason))
     }
     if facts.exitedAtTrust { return trustExitVerdict }

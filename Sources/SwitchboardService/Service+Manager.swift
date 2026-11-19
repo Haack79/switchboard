@@ -212,6 +212,14 @@ extension Service {
 
   func mostRecentManager() -> String? { managerList().first?.id }
 
+  /// The id of the conversation that `mostRecentManager` gives, read from the entries without building summaries.
+  /// It orders by the fields that `Manager.newestFirst` compares.
+  func newestConversation() -> String? {
+    entries.values.filter { $0.session.kind == .manager }.min {
+      ($0.facts.lastActivity, $0.session.created) > ($1.facts.lastActivity, $1.session.created)
+    }?.session.id
+  }
+
   /// The conversation that `ref` names by id, unique id prefix, or unique name.
   func managerConversation(_ ref: String) throws -> String {
     try resolveRef(ref, "Manager conversation", managerSessions.map { ($0.id, $0.name) })

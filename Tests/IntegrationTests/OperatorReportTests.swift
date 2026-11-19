@@ -443,7 +443,7 @@ import Testing
     #expect(try inboxItem(sbd, op) == nil)
   }
 
-  /// With no Manager conversation, the operator keeps its overdue wait's item, which names it as the holder.
+  /// With no Manager conversation, the operator keeps its overdue wait's item.
   @Test func anOverdueWaitOnTheOperatorWithNoConversationGivesItAHeldItem() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)
@@ -458,7 +458,6 @@ import Testing
     #expect(item.source == .report)
     #expect(item.ref == "held:\(wait.id)")
     #expect(item.details.overdueWaits == [wait.id])
-    #expect(item.details.waitsHolder == op.id)
   }
 
   // MARK: Only the operator reports
