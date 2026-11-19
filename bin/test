@@ -149,28 +149,29 @@ if [ "${1:-}" = --claude ]; then
 fi
 
 # Builds the tests and sets `run` to the swift test arguments that filter them
-# to the selection. Leaves `run` empty, which runs every test, when it cannot
-# work out the changed files or the package's targets. Exits when no test can
-# read a changed file.
+# to the selection. It never selects all of a ci-only target
+# (bin/lib/test-selection.sh), which CI runs on every push. Exits when no test
+# can read a changed file.
 targeted() {
   source bin/lib/test-selection.sh
-  local base changed json selection filter
-  if ! base=$(git merge-base origin/main HEAD 2>/dev/null); then
-    echo "bin/test: no merge base with origin/main, so every test runs" >&2
+  local base changed json selection filter target
+  if ! json=$(swift package dump-package) || ! jq -e .targets <<<"$json" >/dev/null 2>&1; then
+    for target in $ci_only_targets; do
+      echo "bin/test: could not read the package's targets, so every test outside $target runs. CI runs $target on every push." >&2
+      run+=(--skip "^$target\\.")
+    done
     return
   fi
-  changed=$({ git diff --name-only --no-renames "$base"; git ls-files --others --exclude-standard; } | sort -u)
-  if ! json=$(swift package dump-package) || ! selection=$(select_tests "$json" <<<"$changed"); then
-    echo "bin/test: could not read the package's targets, so every test runs" >&2
-    return
+  if ! base=$(git merge-base origin/main HEAD 2>/dev/null); then
+    echo "bin/test: no merge base with origin/main, so the unit test targets and the smoke suites run" >&2
+    selection=$(fallback_selection "$json")
+  else
+    changed=$({ git diff --name-only --no-renames "$base"; git ls-files --others --exclude-standard; } | sort -u)
+    selection=$(select_tests "$json" <<<"$changed")
   fi
   if [ -z "$selection" ]; then
     echo "bin/test: no test reads the files changed against origin/main. bin/test --all runs every test." >&2
     exit 0
-  fi
-  if [ "$selection" = all ]; then
-    echo "bin/test: runs every test" >&2
-    return
   fi
   build_tests
   run=(--skip-build)
@@ -178,6 +179,7 @@ targeted() {
     echo "bin/test: runs the tests that match $filter" >&2
     run+=(--filter "$filter")
   done < <(test_filters <<<"$selection")
+  echo "bin/test: CI runs every other test on every push, so a local run does not need them" >&2
 }
 
 run=()

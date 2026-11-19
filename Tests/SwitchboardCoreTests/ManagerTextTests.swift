@@ -88,6 +88,36 @@ import Testing
     #expect(Manager.operatorPrompt.contains("`needsYou`"), "\(Manager.operatorPrompt)")
   }
 
+  /// A CI judgment offers no approval but must keep the merge wait, so the clear rule yields to the message.
+  @Test func theOperatorPromptsClearRuleYieldsToAMessageThatKeepsTheWait() throws {
+    let line = try #require(
+      Manager.operatorPrompt.split(separator: "\n").first { $0.contains("offers no approval") },
+      "\(Manager.operatorPrompt)")
+    #expect(line.contains("unless the message says to keep the wait"), "\(line)")
+  }
+
+  /// The CI rule puts keeping the wait before the report, so it overrides the clear rule in the bullet above it.
+  @Test func theOperatorPromptsCIRuleKeepsTheWaitFirst() throws {
+    let line = try #require(
+      Manager.operatorPrompt.split(separator: "\n").first { $0.contains("failed CI logs") },
+      "\(Manager.operatorPrompt)")
+    let keep = try #require(line.range(of: "Keep the merge wait."), "\(line)")
+    let report = try #require(line.range(of: "report it with `--needs-you --session S`"), "\(line)")
+    #expect(keep.upperBound <= report.lowerBound, "\(line)")
+    #expect(line.contains("`sb send`"), "\(line)")
+  }
+
+  /// A reply question reaches the operator when the reply judge was unsure, failed, or did not run.
+  @Test func theOperatorPromptListsWhenAReplyQuestionReachesIt() throws {
+    let line = try #require(
+      Manager.operatorPrompt.split(separator: "\n").first {
+        $0.contains("one-shot judge about a session's last reply")
+      },
+      "\(Manager.operatorPrompt)")
+    #expect(line.contains("when that judge was unsure, failed, or did not run"), "\(line)")
+    #expect(line.contains("decide from your own reading of the reply"), "\(line)")
+  }
+
   @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
     #expect(Manager.operatorPrompt.contains("ask-first rules in CLAUDE.md"), "\(Manager.operatorPrompt)")
   }
