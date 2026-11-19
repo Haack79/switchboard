@@ -79,6 +79,8 @@ public final class Service {
     /// queued resume message once that claude exits, even when it exited before its SessionStart. It stays set
     /// until a launch starts claude or the running claude reports SessionStart.
     var resumeLaunch: LaunchTrigger?
+    /// The user's "Run here anyway" for a work skill in a manager-kind session.
+    var skillBypass: SkillBypass?
 
     var dialogs = DialogWatch()
   }
@@ -89,6 +91,8 @@ public final class Service {
     /// The message's `sent` event, or nil for a message that sbd restored
     /// from the log. A paste checks that the log still holds it.
     var sent: Event?
+    /// Whether the user sent it with "Run here anyway". A message that sbd restored from the log reads false.
+    var runHere: Bool { sent?.data["runHere"]?.bool == true }
   }
 
   /// Whether a message is queued for the session or on its way, so a prompt sent now could land in its turn.
@@ -191,6 +195,31 @@ public final class Service {
     jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
+  /// The skills that each account's Manager conversations and operator can load, by account folder and name.
+  var skillIndex: [String: [String: CatalogEntry]] = [:]
+  /// The classifier's labels, as `Home.skillLabels` holds them.
+  var skillLabels = SkillLabelCache()
+  /// The last failed run of each cache key, by account folder. A refresh retries one only after `skillRetryMs`.
+  var skillFailures: [String: [String: SkillFailure]] = [:]
+  /// The last run of each account whose claude call failed, timed out, or didn't start. Every skill of the account
+  /// would fail the same way. So a run in the next `skillRetryMs` records this failure for its own key and starts
+  /// no claude.
+  var skillAccountFailures: [String: SkillFailure] = [:]
+  /// When sbd last scanned each account's skills.
+  var skillRefreshed: [String: Int64] = [:]
+  /// The cache keys whose run waits on `skillJobs` or runs.
+  var skillQueued: Set<String> = []
+  /// The reason, account folder, and cache key of each `skill_unchecked` event that this run of sbd recorded.
+  var skillUnchecked: Set<String> = []
+  /// Runs the skill classifier, one run at a time, because a first scan can queue dozens.
+  let skillJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.skills"
+    jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the scans of the accounts' skill folders, one at a time.
+  let skillScanQueue = DispatchQueue(label: "sbd.skill-scan")
   /// Runs the gh reads of draft reply targets.
   let ghJobs: OperationQueue = {
     let jobs = OperationQueue()
@@ -324,6 +353,7 @@ public final class Service {
     autoContinueOn = autoContinueSwitch.isOn
     activityOn = activitySwitch.isOn
     loadIssueCache()
+    skillLabels = SkillLabelCache.load(home.skillLabels)
     try store.pruneSnapshots()
     var uncertain: [String: [String]] = [:]
     for session in try store.sessions() {
@@ -368,6 +398,7 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      refreshManagerSkills()
     }
   }
 
@@ -516,6 +547,9 @@ public final class Service {
     case "quick-ask":
       // A quick ask can run claude for minutes. It runs off the state queue.
       return .success(try quickAsk(request.args, clientGone: hookGone))
+    case "manager-skills":
+      // A relabel scans the folders and the transcript, so it runs off the state queue.
+      return .success(try managerSkills(request.args))
     case "send" where request.args["images"] != nil:
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
@@ -646,6 +680,8 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
+      let runHere = args["runHere"]?.bool == true
+      if runHere { try refuseRunHere(id, args) }
       // The `sent` event names a session that messages itself as the sender. Its launch trigger stays `send`.
       // A sender that sbd no longer knows goes unrecorded.
       let sender = try? lookup(["session": args["from"] ?? .null])
@@ -656,7 +692,7 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -696,7 +732,7 @@ public final class Service {
       return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
       return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
@@ -880,18 +916,25 @@ public final class Service {
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
       deliverPending(id, after: 1.5)
+      if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
         answer = ParentDigest.hookOutput(text, event: kind)
       }
     case "UserPromptSubmit":
       entries[id]?.inFlight = nil
+      if let block = managerSkillPromptGate(id, payload, stamp: stamp) {
+        answer = block
+        break
+      }
       try nameConversation(id, prompt: payload["prompt"]?.string)
       let digestText = digest(id, now: event.t)
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
       // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
+    case "PreToolUse":
+      answer = managerSkillToolGate(id, payload, stamp: stamp) ?? answer
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
     case "Notification" where payload["notification_type"]?.string == "idle_prompt":
@@ -925,12 +968,14 @@ public final class Service {
     let id = event.session
     if var e = entries[id] {
       e.facts.apply(event)
+      if e.skillBypass == .turn, Service.endsSkillBypass(event) { e.skillBypass = nil }
       let verdict = Attention.track(e.session, &e.facts, now: event.t, stateOf: lastState)
       e.events += 1
       entries[id] = e
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
+      dropStaleFailedRemoval(id, event: event)
     }
     releaseCards(id)
     return event
@@ -1408,6 +1453,8 @@ public final class Service {
     entries[id]?.mcpRelaunch = nil
     entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
+    // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
+    entries[id]?.skillBypass = nil
     entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
     record(
       id, resume ? "resumed" : "started",
@@ -1479,14 +1526,16 @@ public final class Service {
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
+  /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil
+    from: String? = nil, runHere: Bool = false
   ) throws -> Delivery {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
+    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
-      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
       return .queued
     }
@@ -1499,11 +1548,12 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, by: by, from: from)
+      try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
       try startClaude(id, prompt: text, trigger: trigger)
+      if runHere { armSkillBypass(id, text) }
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
-      let sent = try recordSent(id, text, .pasted, by: by, from: from)
+      let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
       paste(id, QueuedMessage(text: text, sent: sent))
       return .pasted
     } else {
@@ -1511,15 +1561,17 @@ public final class Service {
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from)
+      try queueMessage(id, text, by: by, from: from, extra: extra)
       return .queued
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil) throws {
-    let sent = try recordSent(id, text, .queued, by: by, from: from)
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
+    throws
+  {
+    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
   }
@@ -1699,6 +1751,7 @@ public final class Service {
         }
       }
       try recordStored(id, "pasting", .object(data))
+      if message.runHere { armSkillBypass(id, message.text) }
       return true
     } catch {
       logLine("can't start a paste into \(id): \(error)")

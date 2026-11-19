@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum TriageKind: String, Codable, Sendable {
@@ -364,22 +365,31 @@ extension SessionFacts {
   /// Keeps the summary of the turn that ended at the last Stop, and the card
   /// that the session wrote during its current turn. A failed or skipped
   /// summary, and a summary for any other turn, leave none. A new prompt
-  /// starts a newer turn, which drops both.
+  /// starts a newer turn, which drops both. A turn can also start without a
+  /// prompt, so the second main Stop after the card's turn drops the card.
   mutating func applyTriage(_ event: Event) {
     switch event.kind {
     case "Stop":
       lastStop = event.id
       triage = nil
+      // A Stop with `stop_hook_active` continues the turn that a Stop hook blocked.
+      guard sessionSummary != nil, !event.fromSubagent, event.data["stop_hook_active"]?.bool != true else { return }
+      if sessionSummaryStopped {
+        dropSessionSummary()
+      } else {
+        sessionSummaryStopped = true
+      }
     case "UserPromptSubmit":
       // A summary of the earlier turn that arrives later keys to no turn.
       lastStop = 0
       triage = nil
-      sessionSummary = nil
-      sessionSummaryId = 0
+      dropSessionSummary()
     case Triage.sessionEvent:
       guard let card = try? JSONCoding.convert(event.data, to: TriageSummary.self) else { return }
       sessionSummary = card
       sessionSummaryId = event.id
+      // A card recorded after its turn's Stop belongs to that ended turn.
+      sessionSummaryStopped = !turnRunning
     case "triage":
       countSummaryCall(event)
       guard lastStop != 0, event.data["stop"]?.int.map(Int64.init) == lastStop, event.data["error"] == nil,
@@ -391,6 +401,12 @@ extension SessionFacts {
     }
   }
 
+  private mutating func dropSessionSummary() {
+    sessionSummary = nil
+    sessionSummaryId = 0
+    sessionSummaryStopped = false
+  }
+
   /// Counts a model call that the event records toward `triage.perHour`. A
   /// skipped call does not count.
   mutating func countSummaryCall(_ event: Event) {
@@ -399,10 +415,25 @@ extension SessionFacts {
   }
 }
 
+/// How an item's Summary shows the session's last reply.
+public enum ReplyPresentation: Equatable, Sendable {
+  /// The short reply shows as the Summary's text, in place of the model's or the fallback's summary.
+  case replacesSummary
+  /// The short reply shows under the rule's summary, because it asks something.
+  case expanded
+  /// A "Read full reply" button shows the reply in place.
+  case collapsed
+  /// The Summary shows no reply. Details still does.
+  case none
+}
+
 /// The triage list: one item for each session that needs the user or that
 /// Claude can continue, and the order the list shows them in.
 public enum Triage {
+  /// The longest title of an item that a model, a session's card, a prompt card, or an offer gives.
   public static let titleLength = 60
+  /// The longest title of a rule item. A rule's reason can name a team, a PR, and a duration.
+  public static let ruleTitleLength = 100
   /// The kind of the event that `sb summary set` records.
   public static let sessionEvent = "summary"
 
@@ -424,7 +455,9 @@ public enum Triage {
     switch kind.inboxItems {
     case .all:
       let live = liveItem(facts, verdict)
-      return (item(facts, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live))
+      return (
+        item(facts, verdict, live: live), decisionList(facts, live: live), decisionsSent(facts, live: live)
+      )
     case .blockingPrompts:
       return (promptItem(facts, verdict), nil, false)
     case .operatorItems:
@@ -464,9 +497,10 @@ public enum Triage {
     openPrompt || cards.contains { blocks($0.kind) }
   }
 
-  private static func item(_ facts: SessionFacts, live: TriageItem?) -> TriageItem? {
+  private static func item(_ facts: SessionFacts, _ verdict: Verdict, live: TriageItem?) -> TriageItem? {
     guard var item = live else { return nil }
     if let list = facts.decisionList, item.source != .card { item.decisions = list.decisions }
+    if !verdict.removalFailed { addReplyAsk(facts, to: &item) }
     for i in item.drafts.indices {
       // Only the session's own card names a target. The model's summary reads text that can quote PR comments.
       if item.source == .session {
@@ -532,7 +566,8 @@ public enum Triage {
   static func addRule(_ verdict: Verdict, to item: inout TriageItem) {
     if let review = verdict.review { item.review = review }
     let kind: Callout.Kind = verdict.state == .needsYou ? .warning : .info
-    item.callouts.insert(contentsOf: [Callout(kind: kind, title: title(verdict.reason))] + verdict.callouts, at: 0)
+    item.callouts.insert(contentsOf: [Callout(kind: kind, title: ruleTitle(verdict.reason))] + verdict.callouts, at: 0)
+    item.details.overdueWaits = verdict.overdueWaits
     let lead = item.primary
     let added = verdict.options.filter { rule in
       !item.options.contains { $0.action == rule.action && ($0.action != .send || $0.message == rule.message) }
@@ -554,6 +589,46 @@ public enum Triage {
   static func fromReply(_ facts: SessionFacts, _ verdict: Verdict) -> Bool {
     facts.cards.isEmpty && facts.openPermission == nil && facts.openQuestion == nil && verdict.source == .reply
   }
+
+  /// The start of the callout title that `addReplyAsk` puts on a rule item.
+  static let replyAskPrefix = "The session asked: "
+
+  /// A reply of at most this many characters, after trimming, shows whole. A Details pane at 1024 pt shows about
+  /// that much without scrolling.
+  public static let wholeReplyCharacters = 1_200
+  /// A reply of at most this many lines, after trimming, shows whole.
+  public static let wholeReplyLines = 20
+
+  /// How an item's Summary shows the session's last reply. `reply` is the
+  /// hook's `session.lastReply`. A rule item shows the reply only when it
+  /// carries the question callout that `addReplyAsk` adds, so the app and
+  /// sbd agree. A rule item built while a turn runs has no such callout,
+  /// because its reply belongs to an earlier turn. `listOpen` is true while
+  /// the item's decision list is open.
+  public static func replyPresentation(item: TriageItem, reply: String, listOpen: Bool) -> ReplyPresentation {
+    let whole: ReplyPresentation
+    switch item.source {
+    case .card, .report: return .none
+    case .session: whole = .collapsed
+    case .summary, .fallback: whole = .replacesSummary
+    case .rule:
+      guard item.callouts.contains(where: { $0.kind == .decision && $0.title.hasPrefix(replyAskPrefix) }) else {
+        return .none
+      }
+      whole = .expanded
+    }
+    guard let first = reply.firstIndex(where: { !$0.isWhitespace }),
+      let last = reply.lastIndex(where: { !$0.isWhitespace })
+    else { return .none }
+    guard whole != .collapsed, !listOpen, item.decisions.isEmpty else { return .collapsed }
+    // The selected card calls this on every render, so a long reply is read only one character past the limit.
+    let text = reply[first...last].prefix(wholeReplyCharacters + 1)
+    let short = text.count <= wholeReplyCharacters && text.lazy.filter(\.isNewline).count < wholeReplyLines
+    return short ? whole : .collapsed
+  }
+
+  /// The question or the offer that the reply ends with, as `Attention.classify` finds it, or nil.
+  public static func replyAsk(_ reply: String) -> String? { Attention.classify(reply).ask }
 
   /// Whether the turn that just ended needs a summary: the reply decides the
   /// session's state, and no summary exists yet.
@@ -622,9 +697,46 @@ public enum Triage {
   static func ruleItem(_ verdict: Verdict) -> TriageItem {
     let text = capitalized(verdict.reason)
     return TriageItem(
-      title: title(verdict.reason), kind: verdict.kind,
+      title: ruleTitle(verdict.reason), kind: verdict.kind,
       summary: verdict.summary ?? (text.hasSuffix(".") ? text : text + "."),
-      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule)
+      options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule,
+      details: TriageDetails(overdueWaits: verdict.overdueWaits))
+  }
+
+  /// A rule item whose session's last reply asks something leads with the
+  /// question. The rule's options lose `recommended`. A lone rule option
+  /// stays the main option through `primary`. A yes/no offer puts Yes and No first,
+  /// and Yes is the main option. A question gets no buttons, even one that
+  /// reads as yes or no. A `send` option that already sends Yes or No
+  /// stands in for that button. The question is open only while no prompt
+  /// has arrived since the Stop that wrote the reply. A turn that ends
+  /// without a Stop keeps the answered reply. The item's ref gains a
+  /// fingerprint of the ask, so a choice that the user made against the item
+  /// with the ask is stale once the ask goes, and its option numbers no longer
+  /// point at the same options.
+  static func addReplyAsk(_ facts: SessionFacts, to item: inout TriageItem) {
+    guard item.source == .rule, !facts.turnRunning, !facts.promptSinceReply else { return }
+    let kind = Attention.classify(facts.lastReply ?? "")
+    guard let ask = kind.ask else { return }
+    let answers = kind.isQuestion ? [] : yesNo(ask)
+    item.callouts.insert(Callout(kind: .decision, title: oneLine(replyAskPrefix + ask, max: 120)), at: 0)
+    for i in item.options.indices { item.options[i].recommended = false }
+    var added: [TriageOption] = []
+    for var answer in answers {
+      answer.recommended = answer.message == "Yes"
+      if let i = item.options.firstIndex(where: { $0.action == .send && $0.message == answer.message }) {
+        item.options[i].recommended = answer.recommended
+      } else {
+        added.append(answer)
+      }
+    }
+    item.options.insert(contentsOf: added, at: 0)
+    item.ref += "#ask:" + SHA256.hash(data: Data(ask.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Yes and No `send` options for an offer that a yes or no answers, or none.
+  static func yesNo(_ offer: String) -> [TriageOption] {
+    OfferText.isYesNo(offer) ? ["Yes", "No"].map { TriageOption(label: $0, action: .send, message: $0) } : []
   }
 
   /// The reply's closing section as the summary. An offer's title starts
@@ -639,11 +751,9 @@ public enum Triage {
       guard let asked = Attention.lastQuestion(reply), asked.question == step else {
         return TriageItem(title: title(step), kind: .approval, summary: summary, source: .fallback)
       }
-      let options =
-        OfferText.isYesNo(step) ? ["Yes", "No"].map { TriageOption(label: $0, action: .send, message: $0) } : []
       return TriageItem(
         title: OfferText.title(question: step, previous: asked.previous), kind: .approval,
-        summary: summary, options: options, source: .fallback)
+        summary: summary, options: yesNo(step), source: .fallback)
     case .other:
       return TriageItem(title: title(verdict.reason), kind: .info, summary: summary, source: .fallback)
     }
@@ -706,10 +816,13 @@ public enum Triage {
   /// The ref of a rule item with this title.
   static func ruleRef(_ title: String) -> String { "rule:\(title)" }
 
-  static func title(_ reason: String) -> String {
+  static func title(_ reason: String, max: Int = titleLength) -> String {
     let text = capitalized(reason).replacingOccurrences(of: "; ", with: ": ")
-    return oneLine(text, max: titleLength)
+    return oneLine(text, max: max)
   }
+
+  /// The title of a rule item. `ruleItem`, `addRule`, and `ItemContext` must agree on it, so a `rule:` ref matches.
+  static func ruleTitle(_ reason: String) -> String { title(reason, max: ruleTitleLength) }
 
   /// The picks as one option, whose message is the one reply that they send.
   /// `picks` is not empty.

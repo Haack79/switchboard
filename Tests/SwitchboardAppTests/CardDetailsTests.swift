@@ -14,6 +14,19 @@ private func itemContext(
   ItemContext(session: "s1", ref: ref, anchor: anchor, anchored: anchored, more: more, steps: steps)
 }
 
+private let bashCall = TriageDetails.ToolInput(tool: "Bash", text: "touch x")
+
+/// A session with an open PR and one wait, or without either.
+private func workSession(withPRAndWait has: Bool = true) -> SessionSummary {
+  var s = needsItem("s1")
+  if has {
+    s.pr = PRSummary(
+      PullRequest(id: "PR_a", number: 1, url: "https://github.com/acme/widgets/pull/1", repo: "acme/widgets"))
+    s.waits = [Wait(id: "w1", kind: .ci, created: 0)]
+  }
+  return s
+}
+
 /// A follow-up that has started, so it has a folder and a claude like any work session.
 private func startedFollowup(_ id: String) -> SessionSummary {
   var s = needsItem(id)
@@ -158,6 +171,175 @@ private func startedFollowup(_ id: String) -> SessionSummary {
     let shown = CardDetails.lastReply(context: CardDetails.context(for: "card:2", in: loaded), reply: "Ship it?")
 
     #expect(shown == "Ship it?")
+  }
+
+  // MARK: The parts and their order
+
+  /// The transcript and the last reply never show together, so two lists pin the whole order.
+  @Test func everyPartWithLoadedStepsKeepsTodaysOrder() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(toolInput: bashCall, targets: ["b (s2)"]), callouts: [Callout(kind: .info, title: "i")],
+      context: itemContext(ref: "card:1"), reply: "Ship it?", session: workSession(), showsRecentEvents: true)
+
+    #expect(parts == [.toolInput, .targets, .callouts, .transcript, .pullRequest, .waits, .recentEvents])
+  }
+
+  @Test func everyPartWithoutLoadedStepsKeepsTodaysOrder() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(toolInput: bashCall, targets: ["b (s2)"]), callouts: [Callout(kind: .info, title: "i")],
+      context: nil, reply: "Ship it?", session: workSession(), showsRecentEvents: true)
+
+    #expect(parts == [.toolInput, .targets, .callouts, .pullRequest, .waits, .lastReply, .recentEvents])
+  }
+
+  @Test func aPermissionCardShowsItsCallThenItsTranscript() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(openByDefault: true, toolInput: bashCall), callouts: [],
+      context: itemContext(ref: "card:1"), reply: "Ship it?", session: workSession(withPRAndWait: false),
+      showsRecentEvents: false)
+
+    #expect(parts == [.toolInput, .transcript])
+  }
+
+  @Test func anAnchoredReplyShowsItsTranscriptAndNoLastReply() {
+    let context = itemContext(ref: "stop:1", anchor: .reply)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.transcript])
+  }
+
+  // MARK: Unanchored steps collapse
+
+  /// The newest steps of a wait, rule, or report item can be about anything, so they go last behind a closed group.
+  @Test func anUnanchoredRuleItemShowsItsStepsLastInAClosedGroup() {
+    let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
+      showsRecentEvents: false)
+
+    #expect(parts == [.pullRequest, .waits, .latestSteps])
+  }
+
+  @Test(arguments: ["rule:CI on #1: still open after 3h", "report:7", "rule:Delete failed"])
+  func everyUnanchoredItemCollapsesItsSteps(_ ref: String) {
+    let context = itemContext(ref: ref, anchor: .unanchored, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [Callout(kind: .info, title: "i")], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.callouts, .latestSteps])
+  }
+
+  /// "Last" is after every other part, the debug list of recent events included.
+  @Test func theClosedStepsComeAfterTheRecentEvents() {
+    let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
+      showsRecentEvents: true)
+
+    #expect(parts == [.pullRequest, .waits, .recentEvents, .latestSteps])
+  }
+
+  /// A context whose anchor sbd could not find keeps its steps in today's place, open, with its own caption.
+  @Test(arguments: [ItemContext.Anchor.tool, .reply, .end])
+  func aContextWhoseAnchorWasNotFoundKeepsItsStepsInPlace(_ anchor: ItemContext.Anchor) {
+    let context = itemContext(ref: "card:1", anchor: anchor, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
+      showsRecentEvents: false)
+
+    #expect(parts == [.transcript, .pullRequest, .waits])
+  }
+
+  @Test func anUnanchoredContextWithoutStepsShowsTheLastReply() {
+    let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false, steps: [])
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.lastReply])
+  }
+
+  @Test func theClosedStepsAreTitledLatestStepsInTheConversation() {
+    #expect(CardDetails.latestStepsTitle == "Latest steps in the conversation")
+  }
+
+  @Test func aMissingContextShowsTheLastReply() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: nil, reply: "Ship it?",
+      session: workSession(withPRAndWait: false),
+      showsRecentEvents: false)
+
+    #expect(parts == [.lastReply])
+  }
+
+  @Test func aContextWithoutStepsShowsTheLastReplyAndNoTranscript() {
+    let context = itemContext(ref: "card:1", anchored: false, steps: [])
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.lastReply])
+  }
+
+  @Test(arguments: [nil, ""] as [String?])
+  func anEmptyOrMissingReplyAddsNoLastReply(_ reply: String?) {
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: nil, reply: reply, session: workSession(withPRAndWait: false),
+      showsRecentEvents: false)
+
+    #expect(parts.isEmpty)
+  }
+
+  /// A message to a group names its targets after the message, with no transcript of its own steps yet.
+  @Test func aGroupMessageShowsItsMessageThenItsTargets() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(openByDefault: true, toolInput: bashCall, targets: ["b (s2)", "c (s3)"]), callouts: [],
+      context: nil, reply: nil, session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.toolInput, .targets])
+  }
+
+  /// Core's `TriageDetails.parts` reads the item's own PR, waits, and notes. Details reads the session's.
+  @Test func thePRAndWaitsComeFromTheSessionNotTheItemsDetails() {
+    let details = TriageDetails(
+      pullRequest: TriageDetails.PR(line: "#1", title: "t", url: "https://github.com/acme/widgets/pull/1"),
+      waits: ["ci on #1"], notes: ["a note"])
+
+    let parts = CardDetails.parts(
+      details: details, callouts: [], context: nil, reply: nil, session: workSession(withPRAndWait: false),
+      showsRecentEvents: false)
+
+    #expect(parts.isEmpty)
+  }
+
+  @Test func theSessionsPRAndWaitsShowWithEmptyDetails() {
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: nil, reply: nil, session: workSession(),
+      showsRecentEvents: false)
+
+    #expect(parts == [.pullRequest, .waits])
+  }
+
+  /// The caller passes true only when the setting is on and the events have loaded.
+  @Test(arguments: [true, false])
+  func recentEventsShowLastOnlyWhenAsked(_ shows: Bool) {
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: nil, reply: "Ship it?",
+      session: workSession(withPRAndWait: false),
+      showsRecentEvents: shows)
+
+    let expected: [CardDetails.Part] = shows ? [.lastReply, .recentEvents] : [.lastReply]
+    #expect(parts == expected)
   }
 }
 

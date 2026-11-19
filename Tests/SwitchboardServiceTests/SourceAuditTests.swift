@@ -154,7 +154,7 @@ enum SourceAudit {
       drawers
         == [
           "ChatView.swift", "DecisionCard.swift", "DraftView.swift", "IssuesView.swift", "Notes.swift",
-          "QuickAskView.swift", "TriageView.swift",
+          "QuickAskView.swift",
         ].map { SourceAudit.app + $0 })
   }
 

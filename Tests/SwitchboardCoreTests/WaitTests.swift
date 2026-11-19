@@ -956,7 +956,7 @@ extension WaitResolution {
   @Test func overdueWaitNeedsYouAndNamesTheWait() {
     let v = Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "a review from alex on #1204: still open after 1 d"))
+    #expect(v == Verdict(state: .needsYou, reason: "a review from alex on #1204: still open after 1d"))
   }
 
   @Test func overdueWaitIsAnInfoItem() {
@@ -972,18 +972,18 @@ extension WaitResolution {
   @Test func oneOverdueWaitAndOneOpenWaitNameOnlyTheOverdueOne() {
     let v = Attention.evaluate(withWaits([merge, ci]), idle, now: 2 * hourMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h"))
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h"))
   }
 
   @Test func twoOverdueWaitsAreJoinedInTheirOrder() {
     let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h; #2 to merge: still open after 1 d"))
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h; #2 to merge: still open after 1d"))
   }
 
   @Test(arguments: [
-    (59 * minuteMs, "59 min"), (60 * minuteMs, "1 h"), (90 * minuteMs, "1 h"), (2 * hourMs, "2 h"),
-    (24 * hourMs, "1 d"), (25 * hourMs, "1 d"), (3 * Attention.dayMs, "3 d"),
+    (59 * minuteMs, "59m"), (60 * minuteMs, "1h"), (90 * minuteMs, "1h"), (2 * hourMs, "2h"),
+    (24 * hourMs, "1d"), (25 * hourMs, "1d"), (3 * Attention.dayMs, "3d"),
   ])
   func ageIsTheLargestWholeUnit(_ ms: Int64, _ age: String) {
     let wait = stamped(waitOn(.ci, pr: pr1), after: ms)
@@ -1042,7 +1042,143 @@ extension WaitResolution {
 
     let v = Attention.evaluate(withWaits([deploy]), f, now: 4 * hourMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4 h"))
+    #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4h"))
+  }
+}
+
+/// The wait with this id.
+private func withId(_ wait: Wait, _ id: String) -> Wait {
+  var w = wait
+  w.id = id
+  return w
+}
+
+/// `Wait.age` prints the largest whole unit with no space, and at least one minute.
+@Suite struct WaitAge {
+  @Test(arguments: [
+    (Int64(86_400_000), "1d"), (7_200_000, "2h"), (30_000, "1m"), (0, "1m"), (59_999, "1m"), (60_000, "1m"),
+    (45 * minuteMs, "45m"), (25 * hourMs, "1d"), (3 * Attention.dayMs, "3d"),
+  ])
+  func ageIsCompactAndAtLeastAMinute(_ ms: Int64, _ age: String) {
+    #expect(Wait.age(ms) == age)
+  }
+}
+
+/// The overdue verdict names the waits that raised it by id, so the item can show them.
+@Suite struct OverdueWaitIds {
+  let idle = facts([
+    event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+  ])
+  let ci = withId(stamped(waitOn(.ci, pr: pr1), after: 2 * hourMs), "a")
+  let merge = withId(stamped(waitOn(.merge, pr: pr2), after: Attention.dayMs), "b")
+
+  @Test func twoOverdueWaitsGiveTheirIdsInTheirOrder() {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits == ["a", "b"])
+  }
+
+  @Test func theIdsFollowTheWaitsOrderNotTheirRecheckTimes() {
+    let v = Attention.evaluate(withWaits([merge, ci]), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits == ["b", "a"])
+  }
+
+  @Test func anOpenWaitThatIsNotOverdueIsLeftOut() {
+    let v = Attention.evaluate(withWaits([merge, ci]), idle, now: 2 * hourMs)
+
+    #expect(v.overdueWaits == ["a"])
+  }
+
+  @Test func theWaitingVerdictNamesNoOverdueWaits() throws {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: 2 * hourMs - 1)
+    try #require(v.state == .waiting)
+
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  /// A `notify` outcome has no wait left, so its item gets no wait panel.
+  @Test func aNotifyOutcomeNamesNoOverdueWaits() throws {
+    let notified = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+      try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2),
+    ])
+
+    let v = Attention.evaluate(withWaits([ci]), notified, now: Attention.dayMs)
+
+    #expect(v.reason == "CI on #1204: the checks passed")
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  @Test func aRuleThatIsNotAWaitNamesNoOverdueWaits() {
+    let v = Attention.evaluate(withWaits(nil), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  @Test func verdictEqualityIgnoresTheOverdueWaits() {
+    var named = Verdict(state: .needsYou, reason: "CI on #1: still open after 2h")
+    named.overdueWaits = ["a"]
+
+    #expect(named == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h"))
+  }
+
+  @Test func theRuleItemCarriesTheOverdueWaits() throws {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(idle, v, kind: .work))
+
+    #expect(item.source == .rule)
+    #expect(item.details.overdueWaits == ["a", "b"])
+  }
+
+  /// `addRule` puts the overdue wait under the session's own card.
+  @Test func theSessionsCardCarriesTheOverdueWaitsThatItsRuleAdds() throws {
+    let carded = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), try summaryEvent(2, 1, sessionCard),
+      stop(3, 2, "Want me to push?"),
+    ])
+    let v = Attention.evaluate(withWaits([ci]), carded, now: 2 * hourMs)
+
+    let item = try #require(Triage.item(carded, v, kind: .work))
+
+    #expect(item.source == .session)
+    #expect(item.details.overdueWaits == ["a"])
+  }
+
+  @Test func theOutcomeItemCarriesNoOverdueWaits() throws {
+    let notified = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+      try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2),
+    ])
+    let v = Attention.evaluate(withWaits([ci]), notified, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(notified, v, kind: .work))
+
+    #expect(item.details.overdueWaits.isEmpty)
+  }
+
+  /// The operator's wait item comes from `operatorItem`, which builds it with `ruleItem`.
+  @Test func theOperatorsWaitItemCarriesTheOverdueWaits() throws {
+    let s = operatorSession(waits: [ci])
+    let v = Attention.evaluate(s, idle, now: 2 * hourMs)
+    try #require(v.byWaitRule, "\(v.state) \(v.reason)")
+
+    let item = try #require(Triage.item(idle, v, kind: .operator))
+
+    #expect(item.details.overdueWaits == ["a"])
+  }
+
+  /// The issue's title: 64 characters, which the old 60-character cut ended at "still open aft…".
+  @Test func aTeamReviewWaitsTitleIsWhole() throws {
+    let team = stamped(
+      waitOn(.review, pr: Wait.PullRequest(number: 135173), who: "PostHog/clickhouse"), after: Attention.dayMs)
+    let v = Attention.evaluate(withWaits([team]), idle, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(idle, v, kind: .work))
+
+    #expect(item.title == "A review from PostHog/clickhouse on #135173: still open after 1d")
+    #expect(item.ref.hasPrefix("rule:A review from PostHog/clickhouse on #135173: still open after 1d"))
   }
 }
 
@@ -1277,5 +1413,70 @@ let qualifiedTargets = [
     let decoded = try JSONCoding.convert(JSON.object(json), to: Wait.self)
 
     #expect(decoded.handedFrom == nil)
+  }
+}
+
+// MARK: Whether the wait's reviewer is still requested
+
+/// `pendingReviewer(in:)` reads GitHub's review requests, where a team comes back as its slug alone.
+@Suite struct WaitPendingReviewer {
+  func review(_ who: String?) -> Wait { waitOn(.review, pr: pr1204, who: who) }
+
+  @Test(arguments: [
+    ("alex", ["alex"], true), ("alex", ["sam"], false), ("Alex", ["alex"], true), ("alex", ["sam", "alex"], true),
+    ("copilot[bot]", ["copilot"], true), ("copilot", ["copilot[bot]"], true), ("@alex", ["alex"], true),
+    ("@alex", ["sam"], false),
+  ])
+  func aUserLoginMatchesAsGitHubWritesIt(_ who: String, _ requests: [String], _ requested: Bool) {
+    #expect(review(who).pendingReviewer(in: requests) == requested)
+  }
+
+  @Test(arguments: [
+    ("PostHog/clickhouse", ["clickhouse"]), ("posthog/ClickHouse", ["clickhouse"]),
+    ("PostHog/clickhouse", ["ClickHouse"]), ("@PostHog/clickhouse", ["clickhouse"]),
+    ("PostHog/clickhouse", ["alex", "clickhouse"]),
+  ])
+  func aTeamMatchesItsSlugIgnoringCase(_ who: String, _ requests: [String]) {
+    #expect(review(who).pendingReviewer(in: requests) == true)
+  }
+
+  /// GitHub returns no org with the slug, so a team of another org with the same slug reads as requested.
+  @Test func aTeamOfAnotherOrgWithTheSameSlugReadsAsRequested() {
+    #expect(review("Other-Org/clickhouse").pendingReviewer(in: ["clickhouse"]) == true)
+  }
+
+  @Test(arguments: [["infra"], ["alex", "infra"], ["posthog"]])
+  func aTeamWhoseSlugIsNotRequestedIsNotPending(_ requests: [String]) {
+    #expect(review("PostHog/clickhouse").pendingReviewer(in: requests) == false)
+  }
+
+  @Test(arguments: ["alex", "PostHog/clickhouse"])
+  func anUnreadListCantTell(_ who: String) {
+    #expect(review(who).pendingReviewer(in: nil) == nil)
+  }
+
+  @Test(arguments: ["alex", "PostHog/clickhouse"])
+  func anEmptyListCantTell(_ who: String) {
+    #expect(review(who).pendingReviewer(in: []) == nil)
+  }
+
+  @Test func aWaitWithoutAReviewerCantTell() {
+    #expect(review(nil).pendingReviewer(in: ["alex"]) == nil)
+  }
+
+  @Test(arguments: [("alex", ["alex"], true), ("PostHog/clickhouse", ["clickhouse"], true), ("alex", ["sam"], false)])
+  func anApprovalWaitUsesTheSameMatch(_ who: String, _ requests: [String], _ requested: Bool) {
+    #expect(waitOn(.approval, pr: pr1204, who: who).pendingReviewer(in: requests) == requested)
+  }
+}
+
+/// `reviewerName` gives the name that GitHub's review requests use. The wait panel shows it.
+@Suite struct WaitReviewerName {
+  @Test(arguments: [
+    ("alex", "alex"), ("@alex", "alex"), ("copilot[bot]", "copilot[bot]"), ("PostHog/clickhouse", "clickhouse"),
+    ("@PostHog/clickhouse", "clickhouse"),
+  ])
+  func aReviewerLosesItsAtSignAndItsTeamsOrg(_ who: String, _ name: String) {
+    #expect(Wait.reviewerName(who) == name)
   }
 }

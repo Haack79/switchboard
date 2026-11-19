@@ -1,7 +1,7 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | model [<name>] | pin <conv> | unpin <conv> |
+/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | model [<name>] | skills … | pin <conv> | unpin <conv> |
 /// <conv> [text] [--log | --read]]`.
 /// Without a conversation it opens the most recent one.
 func manager(_ a: Args) {
@@ -25,6 +25,9 @@ func manager(_ a: Args) {
   case "model":
     words.removeFirst()
     return managerModel(a, Array(words))
+  case "skills":
+    words.removeFirst()
+    return managerSkills(a, Array(words))
   case "pin", "unpin":
     let verb = words.removeFirst()
     guard let ref = words.first else { die("manager \(verb) needs a conversation") }
@@ -66,6 +69,25 @@ private func managerModel(_ a: Args, _ words: [String]) {
   let model = result["model"]?.string ?? ""
   print("Manager conversations run \(model)".printable)
   if !args.isEmpty { print("A running conversation switches when its claude next starts.") }
+}
+
+/// `sb manager skills [<conv>]` or `sb manager skills relabel [<name>…]`.
+private func managerSkills(_ a: Args, _ words: [String]) {
+  var args: [String: JSON] = [:]
+  if words.first == "relabel" {
+    let names = words.dropFirst()
+    if names.isEmpty {
+      args["all"] = true
+    } else {
+      args["relabel"] = .array(names.map(JSON.string))
+    }
+  } else if let ref = words.first {
+    if words.count > 1 { die("manager skills takes one conversation, or relabel and skill names") }
+    args["session"] = .string(ref)
+  }
+  let result = call("manager-skills", args)
+  if a.json { return printJSON(result) }
+  for row in decode(result, as: [ManagerSkillRow].self) { print(row.line.printable) }
 }
 
 /// `sb manager mcp <conv> [add <server>… | rm <server>… | --all | --none]`.

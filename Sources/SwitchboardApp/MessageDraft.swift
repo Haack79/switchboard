@@ -23,17 +23,18 @@ extension MessageField {
 
     var isEmpty: Bool { trimmed.isEmpty && images.isEmpty }
 
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// Sends the trimmed text and the images, and empties the field once sbd accepts them, unless the user
     /// changed it meanwhile. `then` runs after that.
     @MainActor func submit(
-      _ session: String, ref: String? = nil, to model: BoardModel, then: (() -> Void)? = nil
+      _ session: String, ref: String? = nil, to model: BoardModel, runHere: Bool = false, then: (() -> Void)? = nil
     ) {
       guard !isEmpty else { return }
       let sent = trimmed
       let ids = images.map(\.id)
-      model.send(session, sent, images: images.map { ($0.name, $0.data) }, ref: ref) { [weak self] in
+      model.send(session, sent, images: images.map { ($0.name, $0.data) }, ref: ref, runHere: runHere) {
+        [weak self] in
         self?.clear(ifStill: sent, images: ids)
         then?()
       }

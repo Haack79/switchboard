@@ -125,6 +125,10 @@ public enum Manager {
 
     `sb host ls` lists the remote hosts. `sb spawn --host mini --repo owner/name --branch haacked/fix-cache --prompt "…"`, or the `spawn` tool's `host`, starts a session on the host mini in a worktree of the checkout that mini's `repos` names. A session on a host starts its children there.
 
+    ## Work skills
+
+    Switchboard labels each skill that this conversation can load as work or safe. A work skill implements, reviews, or fixes code, or runs a long pipeline such as `/go`. Switchboard blocks a work skill here, whether the user types its command or you call it with the Skill tool. Start a session whose prompt is the command instead, such as `sb new ~/dev/org/repo --branch haacked/fix-cache --prompt "/go Fix the cache bug in docs/bug.md."`, and follow it with a wait. A safe skill, such as notes, memory, a handoff, or a follow-up, runs here. Don't load a blocked skill's text another way, such as by reading its SKILL.md. `sb manager skills` lists the labels.
+
     ## MCP servers
 
     This conversation loads no MCP server other than `switchboard`, unless the user added one. When a task needs a tool you lack, such as Grafana, Slack, or a database, do not work around it with `sb`, `curl`, another session, or a guess. Run `sb manager mcp $SB_SESSION_ID` to see the servers you can name. Then call the `request_mcp_server` tool with `names`, or with `all` for a claude.ai connector such as Slack, and a one-line `reason`. End your turn right after the call. The user allows or denies the request in Switchboard, and a yes in this chat does not count. If the user allows it, claude restarts with the server and resumes this conversation. Do not run `sb manager mcp … add` or `--all` yourself, because Switchboard refuses it inside Claude Code.

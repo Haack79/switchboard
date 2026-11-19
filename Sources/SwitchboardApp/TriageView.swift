@@ -32,6 +32,17 @@ struct TriageDetail: View {
     return nil
   }
 
+  struct ReplyKey: Hashable {
+    var session: String
+    var reply: String?
+    var since: Int64
+  }
+
+  /// When the pane reads the session's reply again: for each new `lastReply`, and on each change of state.
+  static func replyKey(_ session: SessionSummary) -> ReplyKey {
+    ReplyKey(session: session.id, reply: session.lastReply, since: session.since)
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       bar
@@ -71,7 +82,7 @@ struct TriageDetail: View {
         }
       }
     }
-    .task(id: "\(session.id)/\(session.lastReply?.count ?? 0)/\(session.since)") { model.loadReply(session.id) }
+    .task(id: Self.replyKey(session)) { model.loadReply(session) }
     .onChange(of: session.stepList?.ref) { step = nil }
     .referenceRepo(session)
   }
@@ -130,12 +141,8 @@ struct TriageDetail: View {
 
   @ViewBuilder
   private var reply: some View {
-    if let text = model.replies[session.id] ?? session.lastReply, !text.isEmpty {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Last reply").font(.caption.bold()).foregroundStyle(.secondary)
-        MarkdownView(text: text)
-      }
-      .padding(.top, 4)
+    if let text = model.reply(for: session), !text.isEmpty {
+      LastReplySection(text: text).padding(.top, 4)
     }
   }
 }

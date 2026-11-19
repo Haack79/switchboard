@@ -7,6 +7,31 @@ import Testing
 /// a session's polled `PullRequest`, an `InboxIssue` in the Issues cache, and the `data` of a `GitHub.referenceQuery`
 /// answer. The GraphQL values are GitHub's, such as `MERGED` and `CHANGES_REQUESTED`.
 struct ReferenceItem: CustomTestStringConvertible, Sendable {
+  /// A reviewer that GitHub has a pending review request for.
+  enum Requested: Sendable {
+    case user(String)
+    case bot(String)
+    case team(slug: String, org: String)
+
+    /// The name that the poll stores: a login, or a team's slug without its org.
+    var stored: String {
+      switch self {
+      case .user(let login), .bot(let login): login
+      case .team(let slug, _): slug
+      }
+    }
+
+    /// The `requestedReviewer` node, with the fields that `reviewRequests(first: 20)` selects.
+    var node: JSON {
+      switch self {
+      case .user(let login): ["__typename": "User", "login": .string(login)]
+      case .bot(let login): ["__typename": "Bot", "login": .string(login)]
+      case .team(let slug, let org):
+        ["__typename": "Team", "slug": .string(slug), "combinedSlug": .string("\(org)/\(slug)")]
+      }
+    }
+  }
+
   var name: String
   var pull: Bool
   /// OPEN, CLOSED, or MERGED.
@@ -23,6 +48,8 @@ struct ReferenceItem: CustomTestStringConvertible, Sendable {
   var title = "Totals round twice"
   var createdAt = "2026-11-01T10:00:00Z"
   var updatedAt = "2026-11-10T10:00:00Z"
+  /// The pending review requests, or nil for a source that did not read them.
+  var reviewRequests: [Requested]? = nil
 
   var testDescription: String { name }
 
@@ -42,6 +69,12 @@ struct ReferenceItem: CustomTestStringConvertible, Sendable {
       node["mergeable"] = mergeable.map(JSON.string) ?? .null
       let rollup: JSON = checks.map { ["state": .string($0)] } ?? .null
       node["commits"] = ["nodes": [["commit": ["statusCheckRollup": rollup]]]]
+      if let reviewRequests {
+        node["reviewRequests"] = [
+          "totalCount": .number(Double(reviewRequests.count)),
+          "nodes": .array(reviewRequests.map { ["asCodeOwner": false, "requestedReviewer": $0.node] }),
+        ]
+      }
     }
     return .object(node)
   }
@@ -55,7 +88,7 @@ struct ReferenceItem: CustomTestStringConvertible, Sendable {
       id: "PR_\(number)", number: number, url: url, repo: repo, title: title,
       state: PRState(rawValue: state) ?? .open, draft: draft, mergeable: mergeable.flatMap(Mergeable.init(rawValue:)),
       reviewDecision: reviewDecision.flatMap(ReviewDecision.init(rawValue:)), labels: labels, checks: checks,
-      author: author)
+      reviewRequests: reviewRequests?.map(\.stored), author: author)
     pr.createdAt = createdAt
     return pr
   }
@@ -85,6 +118,11 @@ private func parsed(_ item: ReferenceItem) throws -> ReferenceDetails {
 
 private let twelveLabels = (1...12).map { "label-\($0)" }
 
+/// A user, a GitHub App, and a team, which GitHub's GraphQL API names without `[bot]` and by slug.
+private let pendingRequests: [ReferenceItem.Requested] = [
+  .user("alex"), .bot("copilot-pull-request-reviewer"), .team(slug: "clickhouse", org: "PostHog"),
+]
+
 /// The PR shapes that every source must describe the same way.
 private let pullItems = [
   ReferenceItem(
@@ -102,6 +140,10 @@ private let pullItems = [
   ReferenceItem(name: "PR with no author", pull: true, author: nil),
   ReferenceItem(name: "PR with no labels", pull: true, labels: []),
   ReferenceItem(name: "PR with 12 labels", pull: true, labels: twelveLabels),
+  ReferenceItem(
+    name: "PR with pending review requests", pull: true, reviewDecision: "REVIEW_REQUIRED",
+    reviewRequests: pendingRequests),
+  ReferenceItem(name: "PR with no pending review requests", pull: true, reviewRequests: []),
 ]
 
 /// The issue shapes that every source must describe the same way.
@@ -302,6 +344,71 @@ private let issueItems = [
 
     #expect(query.contains("issueOrPullRequest(number:"))
     #expect(query.contains("rateLimit"))
+  }
+
+  // MARK: Review requests
+
+  @Test func aPRNodeGivesItsReviewRequestsWithTeamsAsSlugs() throws {
+    let item = ReferenceItem(name: "PR", pull: true, reviewRequests: pendingRequests)
+
+    let details = try parsed(item)
+
+    #expect(details.reviewRequests == ["alex", "copilot-pull-request-reviewer", "clickhouse"])
+  }
+
+  @Test func aSessionsPRGivesTheReviewRequestsThatThePollRead() {
+    let item = ReferenceItem(name: "PR", pull: true, reviewRequests: pendingRequests)
+
+    let details = ReferenceDetails(pr: item.pullRequest)
+
+    #expect(details.reviewRequests == ["alex", "copilot-pull-request-reviewer", "clickhouse"])
+  }
+
+  /// An empty list means GitHub has no pending request, which differs from a field that was not read.
+  @Test func aPRNodeWithNoPendingRequestsHasAnEmptyList() throws {
+    let details = try parsed(ReferenceItem(name: "PR", pull: true, reviewRequests: []))
+
+    #expect(details.reviewRequests == [])
+  }
+
+  @Test func aPRNodeWithoutTheFieldHasNoReviewRequests() throws {
+    #expect(try parsed(ReferenceItem(name: "PR", pull: true)).reviewRequests == nil)
+  }
+
+  @Test func theReviewRequestsReachTheWire() throws {
+    let details = try parsed(ReferenceItem(name: "PR", pull: true, reviewRequests: pendingRequests))
+
+    #expect(try wire(details)["reviewRequests"] == ["alex", "copilot-pull-request-reviewer", "clickhouse"])
+  }
+
+  @Test func anIssueHasNoReviewRequests() throws {
+    let item = ReferenceItem(name: "issue", pull: false)
+
+    #expect(try parsed(item).reviewRequests == nil)
+    #expect(ReferenceDetails(issue: item.issue).reviewRequests == nil)
+  }
+
+  @Test func theQueryReadsTheReviewRequestsWithTeamSlugs() {
+    let query = GitHub.referenceQuery
+
+    #expect(query.contains("reviewRequests(first: 20)"))
+    #expect(query.contains("requestedReviewer"))
+    #expect(query.contains("slug"))
+  }
+
+  /// A reply from an sbd that predates `reviewRequests` decodes with none.
+  @Test func aReplyWithoutReviewRequestsDecodesWithNone() throws {
+    let text = """
+      {"repo":"haacked/switchboard","number":290,"kind":"pr","title":"Inbox wait panel",\
+      "url":"https://github.com/haacked/switchboard/pull/290","state":"open","draft":false,"author":"haacked",\
+      "labels":[],"createdAt":"2026-11-10T08:00:00Z","updatedAt":"2026-11-13T09:00:00Z",\
+      "checks":"PENDING","reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE","source":"fetch","read":1794377400000}
+      """
+
+    let details = try JSONCoding.decode(ReferenceDetails.self, from: text)
+
+    #expect(details.reviewRequests == nil)
+    #expect(details.number == 290)
   }
 
   // MARK: Codable

@@ -85,6 +85,15 @@ let usage = """
     manager model [<name>]        show or set the model of each Manager conversation,
                                   sonnet by default. It applies from the next time a
                                   conversation's claude starts, and not to the operator
+    manager skills [<conv>]       list the skills that the Manager conversations
+                                  and the operator can load, or only those of
+                                  the conversation's account, each labeled work
+                                  or safe. A work skill belongs in a session of
+                                  its own. config.json's managerSkills.work and
+                                  managerSkills.safe set a label by name
+    manager skills relabel [<name>…]
+                                  scan the skill folders again, then label the
+                                  named skills again, or every skill
     ask <question>                answer a question about Switchboard from a
                                   snapshot of its state. The answer comes from
                                   claude with no tools, so it changes nothing.
@@ -114,6 +123,11 @@ let usage = """
                                   send images with the message. sbd keeps a copy of
                                   each (png, jpg, gif, webp, heic, up to 20 MB) until
                                   the session is removed
+    send <session> --run-here <text>
+                                  send a message that starts with a work skill,
+                                  such as /go, to a Manager conversation or the
+                                  operator, past the block. The skills that its
+                                  turn calls run too. It refuses inside Claude Code
     send --group G [--yes] <text> send a message to every session in the group, after
                                   listing them and asking. Without a terminal, it
                                   needs --yes. Inside a Claude session, it sends
@@ -176,6 +190,12 @@ let usage = """
     schedule rm <id>              remove a schedule
     schedule pause|resume <id>    pause a schedule, or resume it one interval
                                   from now
+    schedule edit <id> [--every <interval>] [<prompt>]
+                                  change a schedule's interval, its prompt, or
+                                  both. A new interval brings the next run to
+                                  one interval from now when that is sooner
+    schedule run <id>             run a schedule now, or once its session is
+                                  free
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
     note <session> --todo <text>  add a to-do, a task for you that blocks
@@ -899,7 +919,9 @@ if ["group", "groups"].contains(command), ["note", "describe"].contains(argv.fir
   }
 }
 if flagsAfterSession.contains(command), a.positional.count > 1, a.positional[1].hasPrefix("--") { a = Args(argv) }
-if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(argv.first ?? "") { a = Args(argv) }
+if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(a.positional.first ?? "") {
+  a = Args(argv)
+}
 
 switch command {
 case "hook":
