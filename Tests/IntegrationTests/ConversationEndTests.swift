@@ -500,6 +500,83 @@ import Testing
     #expect(try !listed(sbd).contains(c.id))
   }
 
+  /// Where the stub holds the prompt of a launch until a test lets it go.
+  enum HeldLaunch: String, CaseIterable, Sendable, CustomTestStringConvertible {
+    /// `hold-start` keeps the stub before SessionStart.
+    case beforeSessionStart
+    /// `hold` keeps the stub after SessionStart and before the prompt's UserPromptSubmit, until `report` exists.
+    case afterSessionStart
+
+    var testDescription: String { rawValue }
+
+    var gate: String {
+      switch self {
+      case .beforeSessionStart: "hold-start"
+      case .afterSessionStart: "hold"
+      }
+    }
+
+    /// Holds the stub's next launch prompt.
+    func hold(_ sbd: Instance) { sbd.hold(gate) }
+
+    /// Lets the held launch prompt reach claude's UserPromptSubmit.
+    func release(_ sbd: Instance) throws {
+      switch self {
+      case .beforeSessionStart: try sbd.release(gate)
+      case .afterSessionStart: sbd.hold("report")
+      }
+    }
+
+    /// Waits until the launch after event `mark` reaches the place where the stub holds its prompt.
+    func waitForTheHold(_ sbd: Instance, _ id: String, after mark: Int64) throws {
+      _ = try sbd.waitFor(id, "claude to run") { $0.claudePid != nil }
+      guard self == .afterSessionStart else { return }
+      try sbd.waitFor("the launch's SessionStart") {
+        try sbd.events(id, after: mark).contains { $0.kind == "SessionStart" }
+      }
+    }
+  }
+
+  /// A send to the stopped conversation launches claude with the message as its prompt. sbd restarts before claude
+  /// submits that prompt. The restarted sbd reads the launch from the log, so the prompt still counts as on its
+  /// way, and both `sb manager end` and `sb rm` refuse.
+  @Test(arguments: HeldLaunch.allCases)
+  func aLaunchPromptThatClaudeHasNotSubmittedRefusesEndAndRmAfterARestart(_ held: HeldLaunch) throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd)
+    try sbd.sb("stop", c.id)
+    try sbd.waitFor(c.id, "the conversation's stop") { $0.claudePid == nil && !$0.live }
+    let mark = try sbd.lastEventId(c.id)
+    let text = "the deploy finished"
+    held.hold(sbd)
+
+    let delivery = try sbd.sb("send", c.id, text)
+    try #require(delivery == "resumed\n", "sbd sent it another way: \(delivery)")
+    try held.waitForTheHold(sbd, c.id, after: mark)
+    sbd.killSbd()
+    try sbd.startSbd()
+    let before = try sbd.waitFor(c.id, "the restarted sbd to see claude") { $0.claudePid != nil }
+
+    let refused = try refusedEnd(sbd, c)
+    let viaRm = failure(sbd, "rm", ["session": .string(c.id)])
+    let viaEnd = failure(sbd, "manager-end", ["session": .string(c.id)])
+
+    #expect(refused.stderr.contains("has 1 message"), Comment(rawValue: refused.stderr))
+    #expect(refused.stderr.contains("a message that claude has not confirmed yet"), Comment(rawValue: refused.stderr))
+    #expect(viaRm.contains("a message that claude has not confirmed yet"), Comment(rawValue: viaRm))
+    #expect(viaEnd == viaRm)
+    try expectUnchanged(sbd, before)
+    #expect(try sbd.events(c.id, after: mark).allSatisfy { $0.kind != "UserPromptSubmit" })
+
+    try held.release(sbd)
+    try sbd.waitFor(c.id, "the launch prompt's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+
+    let answer = try end(sbd, c)
+
+    #expect(answer["ended"]?.string == c.id, "\(answer.text)")
+    #expect(try !listed(sbd).contains(c.id))
+  }
+
   // MARK: Waits handed to the operator (Risk 2)
 
   @Test(arguments: OperatorHandoffTests.handOffShapes)

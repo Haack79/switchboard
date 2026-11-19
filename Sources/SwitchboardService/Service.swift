@@ -32,6 +32,9 @@ public final class Service {
     /// When sbd last pasted a message or launched claude with a prompt. Until
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
+    /// `load` sets it for a launch prompt that the log shows claude has not submitted, at the launch's time or its
+    /// SessionStart's time. The replay keeps a paste's message in `pending`, or `load` records whether it reached
+    /// claude, so `load` sets nothing for a paste.
     var inFlight: Int64?
     /// Whether a message is queued for the session, or sbd pasted or launched one that claude has not confirmed.
     var hasMessageOnItsWay: Bool { !pending.isEmpty || inFlight != nil }
@@ -357,7 +360,7 @@ public final class Service {
 
   public var tickSeconds: Double { config.tickSeconds }
 
-  /// Loads the sessions and rebuilds their facts and queued messages from the
+  /// Loads the sessions and rebuilds their facts, queued messages, and unsubmitted launch prompts from the
   /// event log. It records `delivered` or `delivery_unknown` for each message whose
   /// paste may have reached claude. Its last step queues the pastes of each
   /// running claude's queued messages on the state queue.
@@ -375,6 +378,9 @@ public final class Service {
       var e = Entry(session: session)
       e.facts = replay.facts
       e.pending = replay.pending.map { QueuedMessage(text: $0) }
+      if replay.facts.launchPromptOnItsWay, let launch = replay.facts.lastLaunch {
+        e.inFlight = max(launch, replay.facts.lastStart ?? 0)
+      }
       e.events = replay.events
       entries[session.id] = e
       if !replay.uncertain.isEmpty { uncertain[session.id] = replay.uncertain }

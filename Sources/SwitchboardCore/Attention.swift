@@ -73,6 +73,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Whether the main session sent any hook since the last launch. Claude
   /// sends none while the trust dialog shows.
   public var hookSinceLaunch = false
+  /// Whether the last launch passed claude a prompt that claude has not submitted yet. UserPromptSubmit clears
+  /// it. `trust_closed` clears it too, because that event moves the prompt to the queue.
+  public var launchPromptOnItsWay = false
   /// Background jobs that run under claude, as the last `job` event counted
   /// them. A job sends no hooks, so sbd's tick finds it in the process list.
   public var jobs = 0
@@ -269,6 +272,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       lastResumeTrigger = event.kind == "resumed" ? d["trigger"]?.string.flatMap(LaunchTrigger.init) : nil
       exitedAtTrust = false
       hookSinceLaunch = false
+      launchPromptOnItsWay = lastLaunchPrompt?.isEmpty == false
       permissionMode = d["permission_mode"]?.string
     case "imported":
       // The transcript's last line, not the import, is the session's last activity.
@@ -288,6 +292,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       endTurn()
       subagents = []
     case "UserPromptSubmit":
+      launchPromptOnItsWay = false
       if userPrompt { prompts += 1 }
       promptSinceReply = true
       startTurn(event.t)

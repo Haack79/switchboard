@@ -60,7 +60,7 @@ private final class ConversationBench {
   }
 
   var contextEvents: [Event] {
-    get throws { try service.queue.sync { try service.store.events(session: Self.id, kind: "context") } }
+    get throws { try service.queue.sync { try service.store.events(session: Self.id, kinds: ["context"]) } }
   }
 
   var contextTokens: Int? { service.queue.sync { service.entries[Self.id]?.facts.contextTokens } }

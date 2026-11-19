@@ -409,6 +409,83 @@ private func refusal(_ body: () throws -> Void) -> String? {
     }
   }
 
+  // MARK: A launch prompt across a restart of sbd (Risk 1)
+
+  /// What the log holds after a send launched the stopped conversation with its message as the prompt.
+  enum AfterLaunch: String, CaseIterable, Sendable, CustomTestStringConvertible {
+    case nothing
+    case sessionStart
+    /// Claude submitted the prompt, and its turn ended.
+    case promptSubmitted
+    /// Claude exited at the trust dialog, so `trust_closed` moved the prompt to the queue.
+    case trustClosed
+
+    var testDescription: String { rawValue }
+
+    func events(_ prompt: String) -> [Event] {
+      let launch = Event(session: conversation, t: created, kind: "resumed", data: ["prompt": .string(prompt)])
+      let start = Event(session: conversation, t: created + 1_000, kind: "SessionStart")
+      switch self {
+      case .nothing: return [launch]
+      case .sessionStart: return [launch, start]
+      case .promptSubmitted:
+        return [
+          launch, start,
+          Event(session: conversation, t: created + 2_000, kind: "UserPromptSubmit", data: ["prompt": .string(prompt)]),
+          Event(session: conversation, t: created + 3_000, kind: "Stop"),
+        ]
+      case .trustClosed:
+        return [
+          launch,
+          Event(
+            session: conversation, t: created + 1_000, kind: "trust_dialog",
+            data: ["folder": "/tmp", "prompt": .string(prompt), "launch": .number(Double(created))]),
+          Event(session: conversation, t: created + 2_000, kind: "trust_closed", data: ["prompt": .string(prompt)]),
+        ]
+      }
+    }
+  }
+
+  /// A restarted sbd reads the conversation from the log. A launch prompt that claude has not submitted is still on
+  /// its way, so both check points refuse the removal. A submitted prompt lets it through. A prompt that
+  /// `trust_closed` queued counts once, by its text.
+  @Test(arguments: AfterLaunch.allCases)
+  func aRestartKeepsALaunchPromptThatClaudeHasNotSubmittedOnItsWay(_ after: AfterLaunch) throws {
+    try withService { service, home in
+      try service.store.save(session(conversation, .manager))
+      let prompt = "the deploy finished"
+      for event in after.events(prompt) { _ = try service.store.append(event) }
+      let restarted = try Service(home: home, sbPath: "/usr/bin/true")
+      defer { for link in restarted.hostLinks.values { link.disconnect() } }
+
+      try restarted.load()
+      let atEntry = refusal { _ = try restarted.removalEntry(conversation, resolving: [], for: .rm) }
+      let atForget = refusal {
+        try restarted.queue.sync { try restarted.forgetSession(conversation, resolving: []) }
+      }
+
+      switch after {
+      case .nothing, .sessionStart:
+        let text = try #require(atEntry)
+        #expect(text.contains("has 1 message"), Comment(rawValue: text))
+        #expect(text.contains("a message that claude has not confirmed yet"), Comment(rawValue: text))
+        #expect(text.contains("sb open \(conversation)"), Comment(rawValue: text))
+        #expect(atForget == atEntry)
+        #expect(restarted.queue.sync { restarted.entries[conversation] } != nil)
+      case .promptSubmitted:
+        #expect(atEntry == nil)
+        #expect(atForget == nil)
+        #expect(restarted.queue.sync { restarted.entries[conversation] } == nil)
+      case .trustClosed:
+        let text = try #require(atEntry)
+        #expect(text.contains("has 1 message"), Comment(rawValue: text))
+        #expect(text.contains(prompt), Comment(rawValue: text))
+        #expect(!text.contains("not confirmed"), Comment(rawValue: text))
+        #expect(atForget == atEntry)
+      }
+    }
+  }
+
   /// A second `manager-end` on a conversation that one is ending would replace the first one's drops, and its
   /// cleanup would clear them while the first removal runs.
   @Test func aSecondEndOfTheSameConversationIsRefusedAndKeepsTheFirstOnesDrops() throws {
