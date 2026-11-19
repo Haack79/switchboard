@@ -1042,9 +1042,8 @@ import Testing
     let heard = try sbd.count("sent", of: parent.id)
     let op = try idleOperator(sbd)
     try ask(sbd, op, about: kid.id)
-    try sbd.waitFor(
+    let sent = try sbd.waitFor(
       "the parent hears the ask", fetch: { try sbd.count("sent", of: parent.id) }, until: { $0 > heard })
-    let sent = try sbd.count("sent", of: parent.id)
 
     sbd.stopSbd()
     try sbd.startSbd()
