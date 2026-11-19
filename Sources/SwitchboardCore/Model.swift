@@ -381,7 +381,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var url: String?
   /// The session's pause, or nil when it isn't paused.
   public var pause: Pause?
-  /// How many messages wait for the resume of a paused session, or nil when it isn't paused.
+  /// How many messages wait in sbd's queue for the session: for a paused session's resume, for the end of the
+  /// turn, or for claude's next start. It is nil when the session isn't paused and its queue is empty.
   public var heldMessages: Int?
   /// The session's place in sbd's removal job, or nil when no removal is
   /// queued, running, or failed.

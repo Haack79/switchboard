@@ -698,60 +698,33 @@ private let changedMarkdown: [(String, [Piece])] = [
     #expect(decoded == session)
   }
 
-  /// 2,000 distinct ids of each form in the session id alphabet.
-  private static let manyIds: [String] = ["s", SessionID.prefix].flatMap { prefix in
-    let alphabet = Array(ShortId.alphabet)
-    return (0..<2_000).map { i in
-      var n = i
-      var id = prefix
-      for _ in 0..<ShortId.length {
-        id.append(alphabet[n % alphabet.count])
-        n /= alphabet.count
-      }
-      return id
-    }
-  }
-
-  private static func manyNames() -> SessionNames {
-    SessionNames(
-      live: Dictionary(uniqueKeysWithValues: manyIds.enumerated().map { ($1, "session-\($0)") }), removed: [:])
-  }
-
   /// Text around each id: look-alike words, punctuation, and multibyte characters.
   private static let filler =
     " to rebase, then check the café ☕ build log for the stream, switch, and submit steps on main street; "
 
-  /// A linear scan takes well under a second, even on a loaded CI runner. A quadratic scan of 200 KB takes
-  /// minutes, so this bound still catches one.
-  private static let linearBound = Duration.seconds(5)
-
-  @Test func matchingTwoThousandIdsOfEachFormInOneRunIsFast() {
-    let string = Self.manyIds.map { "Ask \($0)\(Self.filler)" }.joined()
-    let text = MarkdownText(stringLiteral: string)
-    let names = Self.manyNames()
-    var matched = 0
-
-    let elapsed = ContinuousClock().measure {
-      matched = InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
-    }
-
-    #expect(string.utf8.count >= 200_000)
-    #expect(matched == Self.manyIds.count)
-    #expect(elapsed < Self.linearBound)
-  }
-
-  @Test func matchingTwoThousandIdsOfEachFormAcrossManyRunsIsFast() {
-    let runs = Self.manyIds.flatMap { [Run("Ask "), Run($0, .emphasis), Run(Self.filler)] }
-    let text = MarkdownText(runs)
-    let names = Self.manyNames()
-    var matched = 0
-
-    let elapsed = ContinuousClock().measure {
-      matched = InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
+  @Test func matchingTwoThousandIdsOfEachFormInOneRunGrowsLinearly() {
+    let ((text, _), matched) = expectLinearGrowth { count in
+      let ids = ManySessions.ids(count)
+      return (MarkdownText(stringLiteral: ids.map { "Ask \($0)\(Self.filler)" }.joined()), ManySessions.names(ids))
+    } _: { text, names in
+      InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(matched == Self.manyIds.count)
-    #expect(elapsed < Self.linearBound)
+    #expect(matched == ManySessions.largeIdCount)
+  }
+
+  @Test func matchingTwoThousandIdsOfEachFormAcrossManyRunsGrowsLinearly() {
+    let ((text, _), matched) = expectLinearGrowth { count in
+      let ids = ManySessions.ids(count)
+      return (
+        MarkdownText(ids.flatMap { [Run("Ask "), Run($0, .emphasis), Run(Self.filler)] }), ManySessions.names(ids)
+      )
+    } _: { text, names in
+      InlineMentions(names: names, repo: nil).pieces(text).count(where: { $0.mention != nil })
+    }
+
+    #expect(text.plain.utf8.count >= 200_000)
+    #expect(matched == ManySessions.largeIdCount)
   }
 }

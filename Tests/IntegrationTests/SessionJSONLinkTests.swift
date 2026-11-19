@@ -128,8 +128,8 @@ import Testing
     let jsons = [
       ("sb get", try sbd.summaryJSON(s.id)),
       ("sb ls", try entry(s.id, in: try listed(sbd))),
-      ("get_session", try #require(try mcp.call("get_session", ["session": .string(s.id)]).json)),
-      ("list_sessions", try entry(s.id, in: try #require(try mcp.call("list_sessions").json?.array))),
+      ("get_session", try #require(try mcp.call("get_session", ["session": .string(s.id), "full": true]).json)),
+      ("list_sessions", try entry(s.id, in: try #require(try mcp.call("list_sessions", ["full": true]).json?.array))),
     ]
 
     for (source, json) in jsons {

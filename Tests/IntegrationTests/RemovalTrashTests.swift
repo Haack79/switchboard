@@ -7,11 +7,6 @@ import Testing
 /// waits here.
 private let holdRename = "hold-removal-rename"
 
-/// The gate file that holds the removal worker on the trash path after the rename and before the trash check. The
-/// folder is at the trash path, and git still has the worktree's record. A removal that deletes in place never
-/// waits here.
-private let holdTrashCheck = "hold-removal-trash"
-
 /// The config key that makes sbd treat the trash folder as on another volume than every worktree, as a differing
 /// `st_dev` does. sbd reads it only with `testClock`.
 private let trashOnOtherVolume = "testTrashOtherVolume"
@@ -68,9 +63,6 @@ extension Instance {
     return repo
   }
 
-  /// The folder that a removal moves the session's worktree to.
-  fileprivate func trashFolder(_ id: String) -> String { "\(home.path)/trash/\(id)" }
-
   /// The names in the trash folder. A trash folder that doesn't exist holds nothing.
   fileprivate func trashEntries() -> [String] {
     (try? FileManager.default.contentsOfDirectory(atPath: "\(home.path)/trash")) ?? []
@@ -86,14 +78,6 @@ extension Instance {
     try waitFor(
       "\(id)'s removal to name its trash path", timeout: timeout, fetch: { try removal(id)?["trash"]?.string },
       until: { _ in true })
-  }
-
-  /// Waits until the session's worktree folder sits at its trash path and not at `cwd`.
-  fileprivate func waitForFolderInTrash(_ s: SessionSummary, timeout: Double = 60) throws {
-    try waitFor("\(s.id)'s folder to move to the trash", timeout: timeout) {
-      let fm = FileManager.default
-      return fm.fileExists(atPath: trashFolder(s.id)) && !fm.fileExists(atPath: s.cwd)
-    }
   }
 
   /// Whether `git worktree list` in the repo lists the session's folder. git lists the path with the symlinks

@@ -477,6 +477,21 @@ private func broken(_ label: String, _ base: [String: JSON], _ changes: [String:
     #expect(Home(path: "/tmp/sb-home").sshFolder == "/tmp/sb-home/ssh")
   }
 
+  @Test func readConfigGivesTheDefaultsWithoutAConfigFile() throws {
+    let home = Home(path: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path)
+
+    #expect(try home.readConfig() == Config())
+  }
+
+  @Test func readConfigThrowsForAConfigFileThatDoesNotDecode() throws {
+    let home = Home(path: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path)
+    try home.create()
+    defer { try? FileManager.default.removeItem(atPath: home.path) }
+    try "{".write(toFile: home.config, atomically: true, encoding: .utf8)
+
+    #expect(throws: (any Error).self) { try home.readConfig() }
+  }
+
   // MARK: HostStatus
 
   @Test func hostStatusLeavesOutAKeyWithNoValue() throws {

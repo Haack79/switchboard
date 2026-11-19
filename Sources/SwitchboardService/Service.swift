@@ -23,8 +23,9 @@ public final class Service {
   struct Entry {
     var session: Session
     var facts = SessionFacts()
-    /// Messages for a session whose turn runs or whose claude is starting.
-    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one.
+    /// Messages that wait for a paste: for a turn to end, for claude to start, or for a paused session's resume.
+    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one. A stopped claude's
+    /// messages wait for its next launch.
     var pending: [QueuedMessage] = []
     /// When the tick first saw a running claude that no SessionStart reported.
     var unreportedSince: Int64?
@@ -80,15 +81,8 @@ public final class Service {
     /// queued resume message once that claude exits, even when it exited before its SessionStart. It stays set
     /// until a launch starts claude or the running claude reports SessionStart.
     var resumeLaunch: LaunchTrigger?
-
-    /// Whether a message is queued for the session or on its way. A launch's
-    /// prompt stays on its way until SessionStart, for up to `startingMs`.
-    func messageWaiting(now: Int64) -> Bool {
-      guard pending.isEmpty else { return true }
-      guard let sent = inFlight else { return false }
-      let starting = !facts.startedSinceLaunch && now - (facts.lastLaunch ?? 0) < Service.startingMs
-      return starting || now - sent < Service.inFlightMs
-    }
+    /// The user's "Run here anyway" for a work skill in a manager-kind session.
+    var skillBypass: SkillBypass?
 
     var dialogs = DialogWatch()
   }
@@ -99,6 +93,24 @@ public final class Service {
     /// The message's `sent` event, or nil for a message that sbd restored
     /// from the log. A paste checks that the log still holds it.
     var sent: Event?
+    /// Whether the user sent it with "Run here anyway". A message that sbd restored from the log reads false.
+    var runHere: Bool { sent?.data["runHere"]?.bool == true }
+  }
+
+  /// Whether a message is queued for the session or on its way, so a prompt sent now could land in its turn.
+  /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A paste stays on its way
+  /// for `inFlightMs`, even after claude exits, because the paste queue may not have run it yet. The queue of
+  /// a stopped claude in a session that is not paused does not count. A send launches that claude, and the
+  /// launch takes the queued messages in order before the new one. A claude that exits before its
+  /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
+  /// because a send then only adds to the queue that the start delivers.
+  func messageWaiting(_ e: Entry, now: Int64) -> Bool {
+    if let sent = e.inFlight {
+      let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
+      if starting || now - sent < Service.inFlightMs { return true }
+    }
+    guard !e.pending.isEmpty else { return false }
+    return e.queuedSince != nil || Pause.blocker(e.session) != nil || claudeState(e.session.id) != .stopped
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.
@@ -118,8 +130,16 @@ public final class Service {
   var removedNames: [String: String] = [:]
   /// The follow-ups that `followup start` is starting.
   var starting: Set<String> = []
-  /// The sessions whose PR `merge` is merging.
+  /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// Runs wait actions, one at a time, off the state queue.
+  let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
+  /// `loadSbdMerges` rebuilds it at startup.
+  var lastSbdMerges: [String: SbdMergeRecord] = [:]
+  /// The changed files that a merge action read for each PR, keyed by the lowercased owner/name and the number, with
+  /// the head they were read at. Only `followThroughQueue` reads and writes it.
+  var changedFilesRead: [String: (head: String, files: Set<String>)] = [:]
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
@@ -188,6 +208,31 @@ public final class Service {
     jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
+  /// The skills that each account's Manager conversations and operator can load, by account folder and name.
+  var skillIndex: [String: [String: CatalogEntry]] = [:]
+  /// The classifier's labels, as `Home.skillLabels` holds them.
+  var skillLabels = SkillLabelCache()
+  /// The last failed run of each cache key, by account folder. A refresh retries one only after `skillRetryMs`.
+  var skillFailures: [String: [String: SkillFailure]] = [:]
+  /// The last run of each account whose claude call failed, timed out, or didn't start. Every skill of the account
+  /// would fail the same way. So a run in the next `skillRetryMs` records this failure for its own key and starts
+  /// no claude.
+  var skillAccountFailures: [String: SkillFailure] = [:]
+  /// When sbd last scanned each account's skills.
+  var skillRefreshed: [String: Int64] = [:]
+  /// The cache keys whose run waits on `skillJobs` or runs.
+  var skillQueued: Set<String> = []
+  /// The reason, account folder, and cache key of each `skill_unchecked` event that this run of sbd recorded.
+  var skillUnchecked: Set<String> = []
+  /// Runs the skill classifier, one run at a time, because a first scan can queue dozens.
+  let skillJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.skills"
+    jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the scans of the accounts' skill folders, one at a time.
+  let skillScanQueue = DispatchQueue(label: "sbd.skill-scan")
   /// Runs the gh reads of draft reply targets.
   let ghJobs: OperationQueue = {
     let jobs = OperationQueue()
@@ -246,6 +291,8 @@ public final class Service {
   var memoryPinOff = false
   /// The most claude processes that may run at once. `sb live --set` changes it.
   var liveCap: Int
+  /// The model of a Manager conversation without its own. `sb manager model` changes it.
+  var managerModel: String
   /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
@@ -299,6 +346,7 @@ public final class Service {
     self.hostCLIRunner = HostCLIRunner(program: sbPath)
     self.keeper = SnapshotKeeper(path: home.database, every: config.snapshotEvery)
     self.liveCap = config.liveCap
+    self.managerModel = config.manager.model
     self.issueSettings = config.issues
     let links = Service.makeHostLinks(config: config, home: home)
     self.hostLinks = links
@@ -318,6 +366,7 @@ public final class Service {
     autoContinueOn = autoContinueSwitch.isOn
     activityOn = activitySwitch.isOn
     loadIssueCache()
+    skillLabels = SkillLabelCache.load(home.skillLabels)
     try store.pruneSnapshots()
     var uncertain: [String: [String]] = [:]
     for session in try store.sessions() {
@@ -362,6 +411,9 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      loadSbdMerges()
+      resumeActions()
+      refreshManagerSkills()
     }
   }
 
@@ -463,6 +515,24 @@ public final class Service {
       return .success(try reviewRequest(request.args))
     case "draft-post", "draft-check":
       return .success(try draftReplyRequest(request.op, request.args, caller: caller))
+    case "wait-approve":
+      // The check reads the client's panes, so it takes a new snapshot.
+      let fresh = buildSnapshot()
+      return try .success(
+        queue.sync {
+          install(fresh)
+          return try approveWait(request.args, caller: caller)
+        })
+    case "wait", "clear-wait", "resolve-wait":
+      // An action's check reads the client's panes, so it takes a new snapshot.
+      let arms =
+        request.op == "wait" && (try? JSONCoding.convert(request.args, to: WaitRequest.self))?.actionKind != nil
+      let fresh = arms ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try waitRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     // An advance runs a tick before the reply, so the stop rule sees the
     // new time. `tick` takes the state queue itself, so `clock` runs here
     // and not in `dispatch`.
@@ -512,6 +582,9 @@ public final class Service {
     case "quick-ask":
       // A quick ask can run claude for minutes. It runs off the state queue.
       return .success(try quickAsk(request.args, clientGone: hookGone))
+    case "manager-skills":
+      // A relabel scans the folders and the transcript, so it runs off the state queue.
+      return .success(try managerSkills(request.args))
     case "send" where request.args["images"] != nil:
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
@@ -642,6 +715,8 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
+      let runHere = args["runHere"]?.bool == true
+      if runHere { try refuseRunHere(id, args) }
       // The `sent` event names a session that messages itself as the sender. Its launch trigger stays `send`.
       // A sender that sbd no longer knows goes unrecorded.
       let sender = try? lookup(["session": args["from"] ?? .null])
@@ -652,7 +727,7 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -688,11 +763,9 @@ public final class Service {
       return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
-    case "wait", "clear-wait", "resolve-wait":
-      return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule":
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
       return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
@@ -710,6 +783,8 @@ public final class Service {
       return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
+    case "manager-model":
+      return try managerModelRequest(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
@@ -738,13 +813,17 @@ public final class Service {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
       let limit = args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":
@@ -767,6 +846,8 @@ public final class Service {
       return try activityReport(args)
     case "activity-clear":
       return try activityClear()
+    case "headless-usage":
+      return try headlessUsage(args)
     case "live":
       return try liveRequest(args)
     case "live-next":
@@ -868,18 +949,25 @@ public final class Service {
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
       deliverPending(id, after: 1.5)
+      if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
         answer = ParentDigest.hookOutput(text, event: kind)
       }
     case "UserPromptSubmit":
       entries[id]?.inFlight = nil
+      if let block = managerSkillPromptGate(id, payload, stamp: stamp) {
+        answer = block
+        break
+      }
       try nameConversation(id, prompt: payload["prompt"]?.string)
       let digestText = digest(id, now: event.t)
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
       // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
+    case "PreToolUse":
+      answer = managerSkillToolGate(id, payload, stamp: stamp) ?? answer
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
       if session.kind == .manager { recordContext(id) }
@@ -914,12 +1002,14 @@ public final class Service {
     let id = event.session
     if var e = entries[id] {
       e.facts.apply(event)
+      if e.skillBypass == .turn, Service.endsSkillBypass(event) { e.skillBypass = nil }
       let verdict = Attention.track(e.session, &e.facts, now: event.t, stateOf: lastState)
       e.events += 1
       entries[id] = e
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
+      dropStaleFailedRemoval(id, event: event)
     }
     releaseCards(id)
     return event
@@ -1222,7 +1312,7 @@ public final class Service {
     let id = newSessionID()
     var session = Session(
       id: id, name: args.name ?? args.branch ?? (folder.cwd as NSString).lastPathComponent, cwd: folder.cwd,
-      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model ?? config.model,
+      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model,
       created: nowMs())
     session.repo = folder.repo
     session.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1235,6 +1325,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
+    if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
@@ -1317,11 +1409,15 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
-  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
-  /// comes first. A blank line separates it from the triage prompt.
+  /// The text of a launch's `--append-system-prompt`, or nil to pass none. The triage prompt is written for work
+  /// sessions, so a Manager conversation and the operator get their own prompt instead.
   func appendedSystemPrompt(for session: Session) -> String? {
-    let role = session.kind == .operator ? Manager.operatorPrompt : ""
-    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    let text =
+      switch session.kind {
+      case .manager: Manager.conversationPrompt
+      case .operator: Manager.operatorPrompt
+      case .work, .chat: config.triage.systemPrompt
+      }
     return text.isEmpty ? nil : text
   }
 
@@ -1349,10 +1445,15 @@ public final class Service {
       try writeClaudeSettings(id, session)
       args += ["--settings", home.claudeSettings(id)]
       args += launchMCPArgs(id, session)
+      // Claude in Chrome loads even under `--strict-mcp-config`. Nobody reads the operator's chat, so it has no use
+      // for a browser.
+      if session.kind == .operator { args.append("--no-chrome") }
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
-    if let model = session.model { args += ["--model", model] }
+    if let model = Manager.launchModel(for: session.kind, stored: session.model, managerModel: managerModel) {
+      args += ["--model", model]
+    }
     if local { args += config.claudeArgs }
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
@@ -1364,7 +1465,8 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    if session.kind == .manager { config.manager.apply(to: &env) }
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
@@ -1386,6 +1488,8 @@ public final class Service {
     entries[id]?.mcpRelaunch = nil
     entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
+    // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
+    entries[id]?.skillBypass = nil
     entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
     record(
       id, resume ? "resumed" : "started",
@@ -1457,14 +1561,16 @@ public final class Service {
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
+  /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil
+    from: String? = nil, runHere: Bool = false
   ) throws -> Delivery {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
+    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
-      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
       return .queued
     }
@@ -1477,11 +1583,12 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, by: by, from: from)
+      try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
       try startClaude(id, prompt: text, trigger: trigger)
+      if runHere { armSkillBypass(id, text) }
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
-      let sent = try recordSent(id, text, .pasted, by: by, from: from)
+      let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
       paste(id, QueuedMessage(text: text, sent: sent))
       return .pasted
     } else {
@@ -1489,15 +1596,17 @@ public final class Service {
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from)
+      try queueMessage(id, text, by: by, from: from, extra: extra)
       return .queued
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil) throws {
-    let sent = try recordSent(id, text, .queued, by: by, from: from)
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
+    throws
+  {
+    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
   }
@@ -1677,6 +1786,7 @@ public final class Service {
         }
       }
       try recordStored(id, "pasting", .object(data))
+      if message.runHere { armSkillBypass(id, message.text) }
       return true
     } catch {
       logLine("can't start a paste into \(id): \(error)")
@@ -1764,8 +1874,9 @@ public final class Service {
   /// lists is forgotten only when its claude stopped on record.
   /// A removal of the worktree refuses a caller inside a session on this Mac before anything stops, as
   /// `beginPaneStop` describes. It refuses a session that the removal job holds, or that another `rm` or
-  /// `cleanup` is removing.
-  func remove(_ args: JSON, caller: Caller) throws -> JSON {
+  /// `cleanup` is removing. With `whileIdle`, it throws `TurnRunsError` instead of stopping a turn that runs or a
+  /// message on its way when the stop would begin.
+  func remove(_ args: JSON, caller: Caller, whileIdle: Bool = false) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
     let removesBranch = args["branch"]?.bool == true
@@ -1790,7 +1901,7 @@ public final class Service {
       defer { queue.sync { _ = removing.remove(id) } }
       let released = try removeAtSite(
         id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
-        resolving: resolving, ancestry: ancestry, by: .rm
+        resolving: resolving, ancestry: ancestry, whileIdle: whileIdle, by: .rm
       ) { check, stopped, site in
         try releaseFiles(
           check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
@@ -1822,10 +1933,11 @@ public final class Service {
   /// `release` in one scope of the site, so on a host every check and git command runs on one connection, and the
   /// scope's machine refuses each command once one got no answer. `release` gets the scope's site. Then
   /// `forgetRemoved` forgets the session. For the job, `forgetRemoved` also stores a removal notice for a branch or
-  /// remote branch that stayed. It runs off the state queue.
+  /// remote branch that stayed. `whileIdle` goes to `stopAndCheckAgain`. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    by runner: RemovalRunner, release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
+    whileIdle: Bool = false, by runner: RemovalRunner,
+    release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
   ) throws -> ReleasedFiles {
     let entry = try removalEntry(id, resolving: resolving, for: runner)
     let site = self.site(for: entry.session)
@@ -1841,7 +1953,7 @@ public final class Service {
         entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
       let stopped = try stopAndCheckAgain(
         check, worktree: worktree, branch: branch, resolving: resolving, for: runner, ancestry: ancestry,
-        scope: scope)
+        whileIdle: whileIdle, scope: scope)
       return try release(check, stopped, scope.site)
     }
     waitAtGate("hold-removal-forget")
@@ -1926,11 +2038,13 @@ public final class Service {
   /// when `worktree` is set, and otherwise stops claude as
   /// `stopForRemoval(_:at:)` says. It first refuses a session that changed
   /// since the checks, whose record the store can't delete, or whose scope's
-  /// check fails. It returns what `checkRemoval` returns when it runs again
-  /// after the stop. It runs off the state queue.
+  /// check fails. With `whileIdle`, it throws `TurnRunsError` for a session
+  /// whose turn runs or whose message is on its way. It returns what
+  /// `checkRemoval` returns when it runs again after the stop. It runs off
+  /// the state queue.
   func stopAndCheckAgain(
     _ check: RemovalSubject, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
-    ancestry: Set<Int>?, scope: SiteScope
+    ancestry: Set<Int>?, whileIdle: Bool = false, scope: SiteScope
   ) throws -> ReleaseTargets {
     let session = check.session
     let fresh = try freshSnapshot(of: session)
@@ -1944,6 +2058,7 @@ public final class Service {
       try store.checkDeletable(
         session: removal(session.id, resolving: removalResolving(session.id, resolving, for: runner)))
       install(fresh, of: session)
+      if whileIdle, let e = entries[session.id], turnRuns(e) { throw TurnRunsError(name: session.name) }
       try scope.require()
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
       try stopForRemoval(session, at: site(for: session))
@@ -2587,7 +2702,7 @@ public final class Service {
   func stopInput(_ e: Entry, jobs: Int, now: Int64) -> StopPolicy.Claude {
     StopPolicy.Claude(
       session: e.session, facts: e.facts, lastJobSeen: e.lastJobSeen, jobs: jobs,
-      messageWaiting: e.messageWaiting(now: now), attached: attached(e.session.id))
+      messageWaiting: messageWaiting(e, now: now), attached: attached(e.session.id))
   }
 
   // MARK: Summaries
@@ -2685,9 +2800,9 @@ public final class Service {
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }
     if verdict.state == .readyForReview, let ready = facts.readySince { out.since = ready }
+    if s.pause != nil || !e.pending.isEmpty { out.heldMessages = e.pending.count }
     if let pause = s.pause {
       out.pause = pause
-      out.heldMessages = e.pending.count
       // A replay tracks each event under the current session, so the tracked state can start before the pause.
       if !s.done { out.since = pause.since }
     }

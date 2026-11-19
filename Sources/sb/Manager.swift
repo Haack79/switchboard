@@ -1,7 +1,7 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | pin <conv> | unpin <conv> |
+/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | model [<name>] | skills … | pin <conv> | unpin <conv> |
 /// end <conv> [--drop <id>]… [--new [--name N]] | <conv> [text] [--log | --read]]`.
 /// Without a conversation it opens the most recent one.
 func manager(_ a: Args) {
@@ -22,6 +22,12 @@ func manager(_ a: Args) {
   case "mcp":
     words.removeFirst()
     return managerMCP(a, Array(words))
+  case "model":
+    words.removeFirst()
+    return managerModel(a, Array(words))
+  case "skills":
+    words.removeFirst()
+    return managerSkills(a, Array(words))
   case "pin", "unpin":
     let verb = words.removeFirst()
     guard let ref = words.first else { die("manager \(verb) needs a conversation") }
@@ -85,6 +91,41 @@ private func managerEnd(_ a: Args, _ words: [String]) {
     let s = summary(started)
     print("Started \(s.name) (\(s.id))".printable)
   }
+}
+
+/// `sb manager model [<name>]`.
+private func managerModel(_ a: Args, _ words: [String]) {
+  var args: [String: JSON] = [:]
+  if let model = words.first {
+    guard words.count == 1 else { die("manager model takes one model name") }
+    // A conversation that read injected instructions could otherwise move every conversation to a pricier model.
+    refuseInsideClaudeCode("manager model <name> needs the user, so it doesn't run inside Claude Code")
+    args["model"] = .string(model)
+  }
+  let result = call("manager-model", args)
+  if a.json { return printJSON(result) }
+  let model = result["model"]?.string ?? ""
+  print("Manager conversations run \(model)".printable)
+  if !args.isEmpty { print("A running conversation switches when its claude next starts.") }
+}
+
+/// `sb manager skills [<conv>]` or `sb manager skills relabel [<name>…]`.
+private func managerSkills(_ a: Args, _ words: [String]) {
+  var args: [String: JSON] = [:]
+  if words.first == "relabel" {
+    let names = words.dropFirst()
+    if names.isEmpty {
+      args["all"] = true
+    } else {
+      args["relabel"] = .array(names.map(JSON.string))
+    }
+  } else if let ref = words.first {
+    if words.count > 1 { die("manager skills takes one conversation, or relabel and skill names") }
+    args["session"] = .string(ref)
+  }
+  let result = call("manager-skills", args)
+  if a.json { return printJSON(result) }
+  for row in decode(result, as: [ManagerSkillRow].self) { print(row.line.printable) }
 }
 
 /// `sb manager mcp <conv> [add <server>… | rm <server>… | --all | --none]`.

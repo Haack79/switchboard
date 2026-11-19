@@ -8,12 +8,14 @@ extension Service {
   /// acts on processes, so `handle` settles the session and takes a new
   /// snapshot first, as for `send`. A `clear-wait` or `resolve-wait` that names
   /// a conversation also reaches the waits that it handed to the operator. The
-  /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared.
-  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac) throws -> JSON {
+  /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared. `caller` sent the request, which
+  /// decides whether a `wait` may arm an action. A `resolve-wait` from a client is never met, so a client can't
+  /// start an action. Only sbd's poller says that a condition was met, through `resolveWait`.
+  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac, caller: Caller) throws -> JSON {
     let id = try lookup(args)
     switch op {
     case "wait":
-      return try JSON(encoding: summary(setWait(args, waiter: id, from: origin), for: origin))
+      return try JSON(encoding: summary(setWait(args, waiter: id, from: origin, caller: caller), for: origin))
     case "clear-wait":
       let cleared = try clearWaits(id, args["wait"]?.string)
       var answer = try JSON(encoding: summary(id, for: origin)).object ?? [:]
@@ -23,14 +25,10 @@ extension Service {
       guard let outcome = args["outcome"]?.string, !outcome.isEmpty else {
         throw APIError("resolve-wait needs an outcome that says what happened")
       }
-      let waitId = args["wait"]?.string
-      let changedAt = args["changedAt"]?.int.map(Int64.init)
-      if let until = pauseCondition(id, waitId) {
-        try resolve(id, until, outcome: outcome, changedAt: changedAt)
-      } else {
-        let (holder, wait) = try openWait(id, waitId)
-        try resolve(holder, wait, outcome: outcome, changedAt: changedAt)
-      }
+      guard args["met"] == nil else { throw APIError("only sbd says whether a wait's condition was met") }
+      try resolve(
+        id, waitId: args["wait"]?.string, outcome: outcome, changedAt: args["changedAt"]?.int.map(Int64.init),
+        met: false)
     default:
       throw APIError("unknown request \(op)")
     }
@@ -43,20 +41,28 @@ extension Service {
   /// `here` in `args` keeps the wait on `named`. It records the `wait` event
   /// on the session that holds the wait, with `from` for a handed-off wait,
   /// and returns the id of that session. The caller holds the state queue.
-  /// A wait from a host must pass `requireGitHubWait`.
-  func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin = .mac) throws -> String {
+  /// A wait from a host must pass `requireGitHubWait`. A wait with an action must pass `armAction`. A merge wait must
+  /// land on the operator, because only the operator approves a merge.
+  func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin, caller: Caller) throws -> String {
     let session = entries[named]!.session
     try refuseNotStarted(session)
     let request = try JSONCoding.convert(args, to: WaitRequest.self)
     // The checks run against `named`, so a conversation still can't wait on itself.
     var wait = try request.makeWait(id: "", waiter: named, now: nowMs(), findSession: waitTarget)
     if case .remote(let host) = origin { try requireGitHubWait(wait, on: named, from: host) }
+    if wait.action != nil { try armAction(&wait, args, origin: origin, caller: caller) }
     if wait.kind == .ci && wait.pr == nil {
       wait.headSha = try? checkedOutBranch(session, at: site(of: named)).tip
     }
     var waiter = named
     let op = operatorID()
-    if handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op) {
+    let hands = handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op)
+    if wait.action?.kind == .merge, !hands, session.kind != .operator {
+      throw APIError(
+        "then merge goes only on a wait that the operator holds, because only the operator approves the merge. Set it "
+          + "without --here, from a Manager conversation, or on \(Manager.operatorName)")
+    }
+    if hands {
       waiter = try op ?? ensureOperator()
       wait.handedFrom = Wait.SessionTarget(id: named, name: session.name)
     }
@@ -66,6 +72,58 @@ extension Service {
     try update(waiter) { $0.waits = open + [wait] }
     record(waiter, "wait", try waitEventData(wait))
     return waiter
+  }
+
+  /// Refuses an action that the sender may not arm or that its subject can't take, and sets the subject of
+  /// `rm-worktree` on a merge wait.
+  ///
+  /// Only a Manager conversation, the Operator, or the user may arm an action, and both signals of the sender must
+  /// allow it: the client's ancestry reaches no other session's pane and no part of sbd's tmux server outside the
+  /// panes, and the request's `caller`, when it has one, names a Manager conversation or the Operator. A session
+  /// never arms a merge on itself. A request from a host and a subject on a host are refused. A merge needs the
+  /// subject's PR in a repository that `operator.mergeRepos` lists. It runs on the state queue, after `install` of a
+  /// fresh snapshot.
+  private func armAction(_ wait: inout Wait, _ args: JSON, origin: RequestOrigin, caller: Caller) throws {
+    guard let action = wait.action?.kind else { return }
+    let then = "then \(action.rawValue)"
+    guard case .mac = origin else { throw APIError("\(then) can't come from a host, because actions run on this Mac") }
+    let ancestry = try caller.ancestry(command: "sb wait --\(then)")
+    let claimed = args["caller"]?.string
+    if action == .merge, let target = wait.session?.id,
+      claimed == target || ancestry.map({ isInside(target, $0) }) == true
+    {
+      throw APIError("a session can't arm merge on itself")
+    }
+    let refusal = "only a Manager conversation, the Operator, or you can arm \(action.rawValue)"
+    let mayArm = { (id: String) in [SessionKind.manager, .operator].contains(self.entries[id]?.session.kind) }
+    if let claimed, !mayArm(claimed) {
+      throw APIError("\(refusal), and the request comes from \(entries[claimed] == nil ? claimed : mention(claimed))")
+    }
+    if let ancestry {
+      let place = callerPlace(ancestry)
+      if let other = place.inside.first(where: { !mayArm($0) }) {
+        throw APIError("\(refusal), and `sb wait` runs inside \(mention(other))")
+      }
+      if place.inside.isEmpty && place.inServer {
+        throw APIError("\(refusal), and `sb wait` runs in sbd's tmux server, where the sessions run")
+      }
+    }
+    if action == .rmWorktree, wait.kind == .merge, let pr = wait.pr, let repository = pr.repository {
+      let id = try sessionByPR(["pr": .number(Double(pr.number)), "repository": .string(repository)])
+      wait.subject = Wait.SessionTarget(id: id, name: entries[id]!.session.name)
+    }
+    guard let subject = wait.actionSubject?.id else { return }
+    guard let e = entries[subject] else { throw APIError("\(then) acts on \(subject), which sbd no longer has") }
+    if let host = e.session.host {
+      throw APIError("\(then) acts only on a session on this Mac, and \(e.session.name) runs on \(host)")
+    }
+    guard action == .merge else { return }
+    guard let pr = e.facts.pr else { throw APIError("\(e.session.name) has no PR yet, so sbd has nothing to merge") }
+    guard operatorSettings.mergesIn(pr.repo) else {
+      throw APIError(
+        "sbd merges only in the repositories that operator.mergeRepos in \(home.config) lists, and it doesn't list "
+          + "\(pr.repo). The user merges #\(pr.number) from the Inbox")
+    }
   }
 
   /// The data of a `wait` or `wait-resolved` event, with `from` naming the
@@ -116,32 +174,59 @@ extension Service {
   }
 
   /// The open waits that may resolve. A session marked done keeps its waits,
-  /// and they don't resume it.
+  /// and they don't resume it. A wait whose action runs waits for the run to end, which resolves it.
   private func waitsToResolve() -> [(session: Session, wait: Wait)] {
     entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }.flatMap { s in
-      s.resolvableWaits.map { (session: s, wait: $0) }
+      s.resolvableWaits.filter { $0.actionStatus?.kind != .running }.map { (session: s, wait: $0) }
     }
   }
 
   /// Resolves an open wait and runs its `then`, through the `resolve-wait`
   /// request. `outcome` says what happened in words, such as "the checks
   /// passed". `changedAt` is when that happened on GitHub or Trunk, in ms,
-  /// when the poller knows it. A poller calls it from its own queue.
-  func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?) throws -> SessionSummary {
+  /// when the poller knows it. `met` says whether the change the wait asked
+  /// for happened. A poller calls it from its own queue. A met action wait only starts its action or leaves it as
+  /// it is, which sends nothing, so it skips the settle and the fresh snapshot that a message needs.
+  func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?, met: Bool) throws
+    -> SessionSummary
+  {
+    let started = try queue.sync { () throws -> SessionSummary? in
+      guard met, pauseCondition(session, wait) == nil, (try? openWait(session, wait))?.wait.action != nil else {
+        return nil
+      }
+      if let refusal = removalRefusal(session) { throw refusal }
+      try resolve(session, waitId: wait, outcome: outcome, changedAt: changedAt, met: true)
+      return summary(session)
+    }
+    if let started { return started }
     var args: [String: JSON] = ["session": .string(session), "wait": .string(wait), "outcome": .string(outcome)]
     if let changedAt { args["changedAt"] = .number(Double(changedAt)) }
-    let response = handle(Request(op: "resolve-wait", args: .object(args)))
-    guard response.ok, let result = response.result else { throw APIError(response.error ?? "resolve-wait failed") }
+    let request = Request(op: "resolve-wait", args: .object(args))
+    let result = try prepared(request, origin: .mac) {
+      let id = try lookup(request.args)
+      try resolve(id, waitId: wait, outcome: outcome, changedAt: changedAt, met: met)
+      return try JSON(encoding: summary(id))
+    }
     return try JSONCoding.convert(result, to: SessionSummary.self)
+  }
+
+  /// Resolves the pause condition of `id` that `waitId` names, or else the open wait that `openWait` finds.
+  private func resolve(_ id: String, waitId: String?, outcome: String, changedAt: Int64?, met: Bool) throws {
+    if let until = pauseCondition(id, waitId) {
+      try resolve(id, until, outcome: outcome, changedAt: changedAt, met: met)
+    } else {
+      let (holder, wait) = try openWait(id, waitId)
+      try resolve(holder, wait, outcome: outcome, changedAt: changedAt, met: met)
+    }
   }
 
   /// Resolves the waits that sbd watches itself: dates, rechecks, and other
   /// sessions' states. `tick` calls it after it records each session's state.
   func resolveDueWaits(now: Int64) {
     for (session, wait) in waitsToResolve() {
-      guard let outcome = wait.resolution(now: now, stateOf: lastState) else { continue }
+      guard let settlement = wait.settlement(now: now, stateOf: lastState) else { continue }
       do {
-        try resolve(session.id, wait, outcome: outcome)
+        try resolve(session.id, wait, outcome: settlement.outcome, met: settlement.met)
       } catch {
         logLine("can't resolve wait \(wait.id) of \(session.id): \(error)")
       }
@@ -150,13 +235,38 @@ extension Service {
 
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
-  private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil) throws {
+  /// A met action wait starts its action and stays, unless its action waits for an answer, a retry, or a run.
+  ///
+  /// An unmet outcome resolves a held or questioned action wait with a message that says sbd did not run the action.
+  /// A running action refuses both, because its run resolves the wait.
+  private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil, met: Bool) throws {
     if try resumeOnCondition(id, wait, outcome: outcome) { return }
-    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), by: .sbd, trigger: .wait) }
-    try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
+    if let action = wait.action {
+      if wait.actionStatus?.kind == .running {
+        throw APIError("sbd is running the \(action.kind.rawValue) action of wait \(wait.id), which resolves it")
+      }
+      if met {
+        if wait.actionStatus?.retries(now: nowMs(), subjectSince: subjectSince(of: wait)) ?? true {
+          try startAction(id, wait)
+        }
+        return
+      }
+    }
+    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome, met: met), by: .sbd, trigger: .wait) }
     var extra: [String: JSON] = ["outcome": .string(outcome)]
     if let changedAt { extra["changedAt"] = .number(Double(changedAt)) }
-    record(id, "wait-resolved", try waitEventData(wait, extra))
+    try closeWait(id, wait, extra: extra)
+  }
+
+  /// Removes the wait from `holder` and records `wait-resolved` with `extra`.
+  func closeWait(_ holder: String, _ wait: Wait, extra: [String: JSON]) throws {
+    try update(holder) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
+    record(holder, "wait-resolved", try waitEventData(wait, extra))
+  }
+
+  /// The `stateSince` of the session that the wait's action acts on.
+  func subjectSince(of wait: Wait) -> Int64? {
+    wait.actionSubject.flatMap { entries[$0.id]?.facts.stateSince }
   }
 
   /// The session that holds the wait, and the wait: the one with this id, or

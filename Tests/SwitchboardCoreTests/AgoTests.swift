@@ -35,4 +35,34 @@ private let day: Int64 = 24 * hour
   @Test func defaultNowReadsTheClock() {
     #expect(ago(nowMs() - 2 * hour - 30 * minute) == "2h")
   }
+
+  // MARK: compactDuration
+
+  static let durationBands: [(Int64, String)] = [
+    (0, "0s"),
+    (59_999, "59s"),
+    (60 * second, "1m"),
+    (2 * minute - 1, "1m"),
+    (hour - 1, "59m"),
+    (hour, "1h"),
+    (day - 1, "23h"),
+    (day, "1d"),
+    (2 * day + 23 * hour, "2d"),
+    (10 * day, "10d"),
+  ]
+
+  @Test(arguments: durationBands)
+  func compactDurationUsesTheLargestWholeUnit(_ duration: Int64, _ text: String) {
+    #expect(compactDuration(duration) == text)
+  }
+
+  @Test(arguments: [Int64(-1), -second, -day])
+  func aNegativeDurationClampsToZeroSeconds(_ duration: Int64) {
+    #expect(compactDuration(duration) == "0s")
+  }
+
+  @Test(arguments: durationBands.map(\.0))
+  func agoIsTheCompactDurationOfTheElapsedTime(_ elapsed: Int64) {
+    #expect(ago(now - elapsed, now: now) == compactDuration(elapsed))
+  }
 }

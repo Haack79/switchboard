@@ -68,16 +68,18 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
   @Test func refusesANulInAnArgumentOrTheEnvironment() throws {
     let folder = try scratchFolder()
 
-    #expect(throws: APIError.self) { try run("echo a\u{0}b", folder: folder) }
-    #expect(throws: APIError.self) { try run("echo hi", env: ["X": "a\u{0}b"], folder: folder) }
-    #expect(throws: APIError.self) { try run("echo hi", env: ["X\u{0}Y": "v"], folder: folder) }
+    #expect(throws: Headless.NotStarted.self) { try run("echo a\u{0}b", folder: folder) }
+    #expect(throws: Headless.NotStarted.self) { try run("echo hi", env: ["X": "a\u{0}b"], folder: folder) }
+    #expect(throws: Headless.NotStarted.self) { try run("echo hi", env: ["X\u{0}Y": "v"], folder: folder) }
   }
 
   @Test func aNonZeroExitThrowsWithTheStatusAndTheOutput() throws {
     let folder = try scratchFolder()
 
-    let error = #expect(throws: APIError.self) { try run("echo partial answer; exit 3", folder: folder) }
+    let error = #expect(throws: Headless.ExitError.self) { try run("echo partial answer; exit 3", folder: folder) }
 
+    #expect(error?.status == 3)
+    #expect(error?.output == "partial answer\n")
     #expect(error?.description.contains("status 3") == true, "\(String(describing: error))")
     #expect(error?.description.contains("partial answer") == true, "\(String(describing: error))")
   }
@@ -100,7 +102,7 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     let pidFile = "\(folder)/pid"
     let start = Date()
 
-    let error = #expect(throws: APIError.self) {
+    let error = #expect(throws: Headless.TimedOut.self) {
       try run(neverEnds(pidFile: pidFile), folder: folder, timeout: 0.5)
     }
 
@@ -144,13 +146,13 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     #expect(!exists(pid))
   }
 
-  /// A cancel that arrives before the run may start no process at all, or end the one it started.
+  /// A cancel that arrives before the run starts no process. `NotStarted` tells `headlessCall` to record no call.
   @Test func aCancelBeforeTheRunThrowsCancelledAndLeavesNoProcess() throws {
     let folder = try scratchFolder()
     let pidFile = "\(folder)/pid"
     let start = Date()
 
-    let error = #expect(throws: APIError.self) {
+    let error = #expect(throws: Headless.NotStarted.self) {
       try run(neverEnds(pidFile: pidFile), folder: folder, cancelled: { true })
     }
 
@@ -168,14 +170,15 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     let input = String(repeating: "q", count: 1_000_000)
     let start = Date()
 
-    let error = #expect(throws: APIError.self) {
+    let error = #expect(throws: (any Error).self) {
       try run(
         neverEnds(pidFile: pidFile), input: input, folder: folder, timeout: byCancel ? 30 : 0.5,
         cancelled: { byCancel && since(start) > 0.3 })
     }
 
+    #expect(byCancel ? error is APIError : error is Headless.TimedOut)
     let expected = byCancel ? "cancelled" : "timed out"
-    #expect(error?.description.contains(expected) == true, "\(String(describing: error))")
+    #expect(error.map { "\($0)" }?.contains(expected) == true, "\(String(describing: error))")
     #expect(since(start) < 2 * scale)
     #expect(writtenPid(pidFile).map(exists) != true)
   }

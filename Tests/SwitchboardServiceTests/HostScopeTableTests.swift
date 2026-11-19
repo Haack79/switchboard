@@ -22,7 +22,7 @@ enum PlannedScope {
   private static let noteKeys: Set<String> = ["session", "text", "by", "kind", "note"]
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "wait", "outcome",
+    "needsYou", "wait", "outcome", "caller",
   ]
 
   /// The op table of "The scope design". `answer` also takes `always`, which it reads through `AllowExtra` as it
@@ -44,7 +44,8 @@ enum PlannedScope {
     "wait": Row(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Row(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Row(keys: waitKeys, refs: ["session"]),
-    "events": Row(keys: ["session", "sessions", "since", "limit"], refs: ["session"], refLists: ["sessions"]),
+    "events": Row(
+      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
     "send": Row(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Row(
       keys: ["session", "card", "behavior", "autoMode", "always", "message", "answers"], refs: ["session"]),
@@ -67,12 +68,13 @@ enum PlannedScope {
   /// `live-next`, and `slash-commands` ops came from main after the plan, and the table denies every op it doesn't name.
   static let refused: [String] = [
     "rm", "cleanup", "rm-done", "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move",
-    "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat",
-    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-end", "item-context", "manager-mcp-request",
-    "operator",
-    "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
-    "parent", "schedule",
-    "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
+    "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp",
+    "manager-skills", "chat",
+    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-end", "manager-model", "item-context", "manager-mcp-request",
+    "operator", "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
+    "highlight", "parent", "schedule", "wait-approve",
+    "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
+    "rm-cancel", "rm-keep", "rm-retry",
     "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",
     "account-use",
     "account-move",
@@ -119,8 +121,9 @@ enum PlannedScope {
         case "card" where op == "summary-set": ["summary": "a turn"]
         case "since", "limit", "card": 3
         case "answers": ["yes"]
+        case "kinds": ["Stop"]
         case "colors", "open", "terminals", "done", "clear", "worktree", "autoMode", "always", "planMode",
-          "manualMode":
+          "manualMode", "full":
           true
         default: .string("\(key) value")
         }

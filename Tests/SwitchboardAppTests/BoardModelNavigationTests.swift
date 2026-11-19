@@ -171,7 +171,7 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.selection == "x")
     }
 
-    @Test(arguments: [1, -1], [MainView.inbox, .board, .issues])
+    @Test(arguments: [1, -1], [MainView.inbox, .board, .issues, .loops])
     func withNoSessionsEachMainViewStaysEmpty(step: Int, view: MainView) {
       let model = offlineModel()
       model.show(view)
@@ -181,6 +181,7 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.selection == nil)
       #expect(model.inboxFocus == nil)
       #expect(model.boardFocus == nil)
+      #expect(model.loopFocus == nil)
     }
   }
 
@@ -444,7 +445,7 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       #expect(model.listFocusTarget == .sidebar)
     }
 
-    @Test(arguments: [(MainView.inbox, ListFocus.inbox), (.board, .board), (.issues, .issues)])
+    @Test(arguments: [(MainView.inbox, ListFocus.inbox), (.board, .board), (.issues, .issues), (.loops, .loops)])
     func noSelectionTargetsTheMainView(_ view: MainView, _ target: ListFocus) {
       let model = appliedModel([needsItem("a")])
       model.show(view)

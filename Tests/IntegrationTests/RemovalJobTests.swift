@@ -27,6 +27,11 @@ private func skipped(_ result: JSON, _ id: String) -> JSON? {
   result["skipped"]?.array?.first { $0["id"]?.string == id }
 }
 
+/// How many launches, resumes, and prompts the session's log holds. Each one shows that the session came back.
+private func comebackEvents(_ sbd: Instance, _ id: String) throws -> Int {
+  try sbd.events(id).filter { ["started", "resumed", "UserPromptSubmit"].contains($0.kind) }.count
+}
+
 private func paneExists(_ t: Terminals, _ target: String) throws -> Bool {
   try runCommand(t.tmux, ["-S", t.socket, "has-session", "-t", "=\(target)"]).status == 0
 }
@@ -489,18 +494,31 @@ private final class FolderHold {
     #expect(!FileManager.default.fileExists(atPath: dirty.cwd))
   }
 
-  @Test func rmKeepClearsAFailedRemovalAndTheSessionIsBackInDone() throws {
+  /// `sb rm --keep` sends the Keep button's `rm-keep`, so a Manager or a script can clear a stuck failed delete.
+  /// Before the delete fails, sbd refuses the session. `--keep` refuses a delete's flags before it sends anything.
+  @Test func sbRmKeepClearsAFailedRemovalAndTheSessionIsBackInDone() throws {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
     try sbd.markSessionDone(dirty.id)
     try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+
+    let refused = try sbd.run("rm", "--keep", dirty.id)
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("has no failed removal"), Comment(rawValue: refused.stderr))
+    for flags in [["--done"], ["--worktree"], ["--delete-branch"], ["--delete-remote-branch"], ["--resolve", "1"]] {
+      let r = try sbd.run(["rm", "--keep", dirty.id] + flags)
+      #expect(r.stderr.contains("--keep and \(flags[0]) conflict"), Comment(rawValue: r.stderr))
+    }
+
     #expect(queued(try sbd.queueRemoval([dirty.id])) == [dirty.id])
     try sbd.waitForRemoval(dirty.id, "failed")
     try #require(try sbd.get(dirty.id).state == .needsYou)
 
-    _ = try sbd.client.call("rm-keep", ["session": .string(dirty.id)])
+    let kept = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("rm", "--keep", dirty.id, "--json"))
 
+    #expect(kept.id == dirty.id)
+    #expect(kept.removal == nil)
     #expect(try sbd.removal(dirty.id) == nil)
     try sbd.waitFor(dirty.id, "Done") { $0.state == .done }
     #expect(try sbd.intact(dirty))
@@ -526,6 +544,60 @@ private final class FolderHold {
       #expect(failure(sbd, op, ["session": .string(s.id)]) != "no error", "\(op) on \(state ?? "no removal")")
       #expect(try sbd.removalState(s.id) == state)
     }
+  }
+
+  // MARK: A session that comes back drops its failed removal (#378)
+
+  /// The removal fails on the uncommitted file. The prompt shows that the user went back to the session, so sbd
+  /// clears the removal as Keep does, and the session leaves Needs you with its folder and file in place.
+  @Test func aPromptToASessionWhoseRemovalFailedClearsTheRemoval() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let dirty = try sbd.worktreeSession(repo, branch: "haacked/dirty")
+    try sbd.markSessionDone(dirty.id)
+    try "x".write(toFile: "\(dirty.cwd)/notes.txt", atomically: true, encoding: .utf8)
+    #expect(queued(try sbd.queueRemoval([dirty.id])) == [dirty.id])
+    try sbd.waitForRemoval(dirty.id, "failed")
+    try #require(try sbd.get(dirty.id).state == .needsYou)
+
+    try sbd.sb("send", dirty.id, "keep going")
+
+    try sbd.waitFor("\(dirty.id)'s failed removal to clear", timeout: 30) { try sbd.removal(dirty.id) == nil }
+    let got = try #require(JSON.parse(try sbd.sb("get", "--json", dirty.id)))
+    #expect(got["removal"] == nil || got["removal"] == .null, Comment(rawValue: got.text))
+    #expect(got["state"]?.string != AttentionState.needsYou.rawValue, Comment(rawValue: got.text))
+    #expect(try sbd.intact(dirty))
+    #expect(FileManager.default.fileExists(atPath: "\(dirty.cwd)/notes.txt"))
+  }
+
+  /// The trash check fails, and the move back finds a folder at `cwd`, so the worktree's folder stays in the trash.
+  /// The prompt must not clear the removal, because the purge would then delete the folder. sbd logs why it kept it.
+  @Test func aPromptToASessionWhoseFolderIsInTheTrashKeepsTheRemoval() throws {
+    let sbd = try Instance()
+    let repo = try sbd.repoWithOrigin()
+    let a = try sbd.worktreeSession(repo, branch: "haacked/a")
+    sbd.hold(holdTrashCheck)
+    #expect(queued(try sbd.queueRemoval([a.id], scope: "work")) == [a.id])
+    try sbd.waitForFolderInTrash(a)
+    let trash = sbd.trashFolder(a.id)
+    try "late".write(toFile: "\(trash)/notes.txt", atomically: true, encoding: .utf8)
+    try FileManager.default.createDirectory(atPath: a.cwd, withIntermediateDirectories: false)
+    try sbd.release(holdTrashCheck)
+    try sbd.waitForRemoval(a.id, "failed")
+    let comebacks = try comebackEvents(sbd, a.id)
+    let logBefore = (try? String(contentsOfFile: sbd.home.log, encoding: .utf8))?.count ?? 0
+
+    try sbd.sb("send", a.id, "keep going")
+
+    // sbd records the launch or the prompt and runs the drop's guard in the same step, so once the event is in the
+    // log, the guard has decided.
+    try sbd.waitFor("the send to launch or reach \(a.id)", timeout: 30) { try comebackEvents(sbd, a.id) > comebacks }
+    #expect(try sbd.removalState(a.id) == "failed")
+    #expect(FileManager.default.fileExists(atPath: "\(trash)/notes.txt"), "the folder left the trash")
+    #expect(try sbd.get(a.id).reason.hasPrefix("Delete failed"))
+    let log = String(((try? String(contentsOfFile: sbd.home.log, encoding: .utf8)) ?? "").dropFirst(logBefore))
+    let kept = log.split(separator: "\n").filter { $0.contains(a.id) && $0.contains("trash") }
+    #expect(!kept.isEmpty, Comment(rawValue: "sbd logged no line about keeping the removal:\n\(log)"))
   }
 
   // MARK: Launches refuse a session that is being deleted

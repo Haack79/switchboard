@@ -42,6 +42,9 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
   /// The rollup state of the head commit's checks. nil for an issue and for a commit with no checks.
   public var checks: String?
   public var reviewDecision: ReviewDecision?
+  /// The users, apps, and team slugs that GitHub has a pending review request for. nil for an issue and when the
+  /// source did not read them.
+  public var reviewRequests: [String]?
   public var mergeable: Mergeable?
   public var source: Source
   /// When sbd read the item from GitHub, in milliseconds since the epoch. nil for the session source.
@@ -60,6 +63,7 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
     createdAt = pr.createdAt
     checks = pr.checks
     reviewDecision = pr.reviewDecision
+    reviewRequests = pr.reviewRequests
     mergeable = pr.mergeable
     source = .session
   }
@@ -83,7 +87,7 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
   init(
     repo: String, number: Int, kind: Kind, title: String, url: String, state: State, draft: Bool, author: String?,
     labels: [String], createdAt: String?, updatedAt: String?, checks: String?, reviewDecision: ReviewDecision?,
-    mergeable: Mergeable?, labelCount: Int? = nil
+    mergeable: Mergeable?, labelCount: Int? = nil, reviewRequests: [String]? = nil
   ) {
     self.repo = repo
     self.number = number
@@ -99,6 +103,7 @@ public struct ReferenceDetails: Codable, Equatable, Sendable {
     self.updatedAt = updatedAt
     self.checks = checks
     self.reviewDecision = reviewDecision
+    self.reviewRequests = reviewRequests
     self.mergeable = mergeable
     source = .fetch
   }
@@ -130,6 +135,9 @@ extension GitHub {
             number title url state isDraft createdAt updatedAt author { login }
             labels(first: 10) { totalCount nodes { name } }
             reviewDecision mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+            reviewRequests(first: 20) {
+              nodes { requestedReviewer { ... on User { login } ... on Bot { login } ... on Team { slug } } }
+            }
           }
         }
       }
@@ -158,7 +166,8 @@ extension GitHub {
       checks: pull ? nodes(node["commits"]).first?["commit"]?["statusCheckRollup"]?["state"]?.string : nil,
       reviewDecision: pull ? node["reviewDecision"]?.string.flatMap(ReviewDecision.init(rawValue:)) : nil,
       mergeable: pull ? node["mergeable"]?.string.flatMap(Mergeable.init(rawValue:)) : nil,
-      labelCount: node["labels"]?["totalCount"]?.int)
+      labelCount: node["labels"]?["totalCount"]?.int,
+      reviewRequests: pull ? node["reviewRequests"].map(requestedReviewers) : nil)
   }
 }
 

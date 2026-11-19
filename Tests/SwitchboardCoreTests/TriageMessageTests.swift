@@ -27,6 +27,14 @@ private func longCommandTurn() -> [Event] {
   return promptTurn(call, tool("Bash", ["command": .string(longCommand)]))
 }
 
+/// A session whose CI wait `w7` went overdue two hours after it was set, and its verdict.
+private func overdueCI() -> (SessionFacts, Wait, Verdict) {
+  let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"]), stop(1, 1, "Pushed.")])
+  var wait = Wait(id: "w7", kind: .ci, created: 0)
+  wait.recheck = 2 * 3_600_000
+  return (f, wait, Attention.evaluate(withWaits([wait]), f, now: 2 * 3_600_000))
+}
+
 @Suite struct TriageMessageSections {
   @Test func aPermissionCardPutsTheCallInSummaryAndTheButtonsInAction() throws {
     let m = try #require(message(facts(permissionTurn())))
@@ -189,6 +197,25 @@ private func longCommandTurn() -> [Event] {
     #expect(m.details.pullRequest == .init(line: pr.line, title: pr.title, url: pr.url))
   }
 
+  @Test func detailsKeepTheOverdueWaitsBesideTheWaitLines() throws {
+    let (f, wait, verdict) = overdueCI()
+
+    let m = try #require(message(f, verdict, waits: [wait]))
+
+    #expect(m.details.overdueWaits == ["w7"])
+    #expect(m.details.waits == [wait.line])
+  }
+
+  @Test func aRuleThatIsNotAWaitHasNoOverdueWaitsBesideItsWaitLines() throws {
+    let f = facts([event("UserPromptSubmit", 0, ["prompt": "go"])])
+    let wait = Wait(id: "w1", kind: .manual, note: "later", created: 1)
+
+    let m = try #require(message(f, Verdict(state: .needsYou, reason: "tidy the folder"), waits: [wait]))
+
+    #expect(m.details.overdueWaits.isEmpty)
+    #expect(m.details.waits == [wait.line])
+  }
+
   @Test func aGroupMessageCardPutsItsTargetsAndTextInDetails() throws {
     var f = facts(permissionTurn())
     var card = f.cards[0]
@@ -290,6 +317,55 @@ private func longCommandTurn() -> [Event] {
 
     let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
 
+    #expect(decoded == built)
+  }
+
+  @Test func anOverdueWaitItemNamesItsWaitsUnderDetails() throws {
+    let (f, wait, verdict) = overdueCI()
+    let m = try #require(message(f, verdict, waits: [wait]))
+
+    #expect(try encoded(m)["details"]?["overdueWaits"] == ["w7"])
+  }
+
+  @Test func overdueWaitsEncodeWhenNotEmpty() throws {
+    var details = TriageDetails()
+    details.overdueWaits = ["w1", "w2"]
+
+    #expect(try JSON(encoding: details)["overdueWaits"] == ["w1", "w2"])
+  }
+
+  @Test func emptyOverdueWaitsAreLeftOut() throws {
+    let details = TriageDetails(waits: ["CI on the session's PR"])
+
+    let keys = try #require(try JSON(encoding: details).object).keys
+
+    #expect(!keys.contains("overdueWaits"))
+    #expect(keys.contains("waits"))
+  }
+
+  @Test func detailsFromAnOlderSbdHaveNoOverdueWaits() throws {
+    let old: JSON = ["openByDefault": false, "waits": ["CI on the session's PR: still open after 2 h"]]
+
+    let decoded = try JSONCoding.convert(old, to: TriageDetails.self)
+
+    #expect(decoded.overdueWaits.isEmpty)
+    #expect(decoded.waits == ["CI on the session's PR: still open after 2 h"])
+  }
+
+  @Test func theItemRoundTripsWithItsOverdueWaits() throws {
+    let (f, wait, verdict) = overdueCI()
+    var s = SessionSummary(
+      id: "s1", name: "s1", cwd: "/", repo: nil, branch: nil, claudeSessionId: "s1", state: verdict.state,
+      reason: verdict.reason, since: 0, lastActivity: 0, live: true, claudePid: nil, attached: false,
+      lastReply: f.lastReply, waits: [wait], notes: [], cards: f.cards)
+    s.triage = Triage.item(f, verdict, kind: .work)
+    let details = Triage.details(for: s)
+    s.triage?.details = details
+    let built = try #require(s.triage)
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
+
+    #expect(decoded.details.overdueWaits == ["w7"])
     #expect(decoded == built)
   }
 
@@ -544,4 +620,121 @@ private func panelItem() throws -> TriageItem {
 
     #expect(try JSONCoding.convert(old, to: TriageItem.self).review == nil)
   }
+}
+
+/// Plans whose JSON text escapes or spells them in a way that a parser could
+/// read back wrong.
+private let trickyPlans = [
+  "# Plan\n\n- step one\n- step two", "Say \"hi\" to `sb`.", #"C:\path\to\file and \n literally"#,
+  "See https://example.com/a/b.", "Café, naïve, 日本語, 🚀", "null", "1", "true", "  padded  ", "tab\there",
+  #"{"plan": "nested"}"#, "line\u{2028}separator",
+]
+
+private func planInput(_ plan: String, _ extra: [String: JSON] = [:]) -> [String: JSON] {
+  extra.merging(["plan": .string(plan)]) { _, plan in plan }
+}
+
+private func planTurn(_ input: [String: JSON]) -> [Event] {
+  promptTurn(tool("ExitPlanMode", input, id: "p1"), tool("ExitPlanMode", input))
+}
+
+@Suite struct TriageToolInputMarkdown {
+  @Test(arguments: trickyPlans)
+  func exitPlanModeGivesItsPlanAsItIs(_ plan: String) {
+    #expect(Card.markdown(tool: "ExitPlanMode", input: .object(planInput(plan))) == plan)
+  }
+
+  @Test(arguments: ["Write", "exitplanmode", "mcp__x__ExitPlanMode"])
+  func anotherToolWithAPlanGivesNoMarkdown(_ tool: String) {
+    #expect(Card.markdown(tool: tool, input: .object(planInput("# Plan"))) == nil)
+  }
+
+  @Test(arguments: [
+    JSON.object([:]), ["plans": "# Plan"], ["Plan": "# Plan"], ["plan": ""], ["plan": .null], ["plan": .number(1)],
+    ["plan": .bool(true)], ["plan": .array([.string("# Plan")])], ["plan": .object(["text": .string("# Plan")])],
+    .string("# Plan"), .array([.object(["plan": .string("# Plan")])]), .null, .number(1), .bool(true),
+  ])
+  func exitPlanModeWithoutAPlanStringGivesNoMarkdown(_ input: JSON) {
+    #expect(Card.markdown(tool: "ExitPlanMode", input: input) == nil)
+  }
+
+  /// The Inbox reads the computed property and a card reads the static one,
+  /// so both read the same plan out of the same input.
+  @Test(arguments: trickyPlans, [true, false])
+  func theComputedMarkdownMatchesTheRuleForTheSameInput(_ plan: String, pretty: Bool) {
+    let input = JSON.object(planInput(plan, ["planFilePath": "/p/plan.md"]))
+    let text = pretty ? input.prettyText : input.text
+
+    let computed = TriageDetails.ToolInput(tool: "ExitPlanMode", text: text).markdown
+
+    #expect(computed == Card.markdown(tool: "ExitPlanMode", input: input))
+    #expect(computed == plan)
+  }
+
+  @Test(arguments: [
+    "", "touch x", "# Plan", "null", "1", "true", "\"# Plan\"", ##"[{"plan": "# Plan"}]"##, ##"{"plan": "# Plan""##,
+    ##"{plan: "# Plan"}"##,
+  ])
+  func textThatIsNotAJSONObjectGivesNoMarkdown(_ text: String) {
+    #expect(TriageDetails.ToolInput(tool: "ExitPlanMode", text: text).markdown == nil)
+  }
+
+  /// `sb --json` and the Manager read the tool input, so the computed Markdown adds no key to it.
+  @Test func anExitPlanModeMessageEncodesOnlyTheToolAndTextOfItsInput() throws {
+    let m = try #require(message(facts(planTurn(planInput("# Plan")))))
+
+    let toolInput = try #require(try JSON(encoding: m)["details"]?["toolInput"]?.object)
+
+    #expect(Set(toolInput.keys) == ["tool", "text"])
+  }
+
+  @Test func anExitPlanModeItemRoundTrips() throws {
+    let built = try #require(item(facts(planTurn(planInput("# Plan\n- a")))))
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
+
+    #expect(decoded == built)
+  }
+
+  @Test func anExitPlanModeCardGivesThePlanAsMarkdown() throws {
+    let plan = "# Plan\n\n- Add the view.\n- Test it."
+    let m = try #require(message(facts(planTurn(planInput(plan, ["planFilePath": "/p/plan.md"])))))
+
+    #expect(m.details.toolInput?.tool == "ExitPlanMode")
+    #expect(m.details.toolInput?.markdown == plan)
+  }
+
+  /// The raw JSON stays behind the toggle, so it keeps every field.
+  @Test(arguments: ["planFilePath", "description"])
+  func anExitPlanModeCardKeepsTheWholeInputAsPrettyJSON(_ field: String) throws {
+    let input = planInput("# Plan\n- a", [field: "second field value"])
+    let m = try #require(message(facts(planTurn(input))))
+
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+    #expect(m.details.toolInput?.text.contains("second field value") == true)
+  }
+
+  @Test func anExitPlanModeCardOpensDetails() throws {
+    let m = try #require(message(facts(planTurn(planInput("# Plan")))))
+
+    #expect(m.details.openByDefault)
+  }
+
+  @Test(arguments: [JSON.string(""), .null, .number(1)])
+  func anExitPlanModeCardWithoutAPlanStringKeepsItsJSONAndGivesNoMarkdown(_ plan: JSON) throws {
+    let input: [String: JSON] = ["plan": plan]
+    let m = try #require(message(facts(planTurn(input))))
+
+    #expect(m.details.toolInput?.markdown == nil)
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+  }
+
+  @Test func aWriteCardWithAPlanFieldGivesNoMarkdown() throws {
+    let input: [String: JSON] = ["file_path": "/a/plan.md", "plan": "# Plan", "content": "x"]
+    let m = try #require(message(facts(promptTurn(tool("Write", input, id: "w1"), tool("Write", input)))))
+
+    #expect(m.details.toolInput?.markdown == nil)
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+  }
+
 }

@@ -135,12 +135,21 @@ public enum TriageCard {
       // The user's click sets the wait, so the session can't name its author.
       wait.by = nil
       // A session target is checked when the user clicks.
-      _ = try wait.makeWait(id: "w", waiter: "", now: now) { Wait.SessionTarget(id: $0, name: $0) }
+      let made = try wait.makeWait(id: "w", waiter: "", now: now) { Wait.SessionTarget(id: $0, name: $0) }
+      if let action = made.action { throw armsAction(action.kind) }
       option.wait = wait
     default:
       break
     }
     return option
+  }
+
+  /// The refusal of a wait option that arms an action. The session or the model writes the option's label, which
+  /// need not name the action. `choose` sets the wait from inside sbd, so sbd can't check who arms it.
+  public static func armsAction(_ action: WaitAction.Kind) -> APIError {
+    APIError(
+      "a card's wait option can't take then \(action.rawValue), because only a Manager conversation, the Operator, "
+        + "or you can arm an action, with `sb wait`")
   }
 
   /// A decision keeps the reply's number, so `sb decide` names it as the
@@ -215,7 +224,9 @@ public enum TriageCard {
               must then be a send option. A single pick sends its message, and several send one message
               that lists each picked option's message on its own line.
     decisions Optional. Use it in place of "options" when the turn ends with two or more separate decisions
-              for the user, each with its own options. Still write the summary.
+              for the user, each with its own options. Still write the summary. Write only your own decisions.
+              A session you started asks its own questions in its own Inbox item, so link to that session
+              in the summary instead of copying its questions here.
               Up to \(TriageSummarizer.maxDecisions) decisions, each with:
                 number      the decision's number in your reply, from 1, each one different. When your reply
                             doesn't number its decisions, use each one's position.

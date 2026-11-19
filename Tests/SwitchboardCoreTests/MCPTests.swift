@@ -141,6 +141,27 @@ import Testing
   }
 }
 
+@Suite struct MCPEventsToolTests {
+  /// Every number in the text, so that 20 does not match inside 200.
+  func numbers(_ text: String) -> [String] { text.split(whereSeparator: { !$0.isNumber }).map(String.init) }
+
+  @Test func theEventsToolNamesItsDefaultOf20() throws {
+    let events = try #require(MCPToolServer.allTools.first { $0.name == "events" })
+    let limit = events.properties["limit"]?["description"]?.string ?? ""
+
+    #expect(numbers(events.description + " " + limit).contains("20"), "\(events.description) \(limit)")
+    #expect(!numbers(limit).contains("200"), "\(limit)")
+  }
+
+  @Test func theEventsToolTakesKindsAndFull() throws {
+    let events = try #require(MCPToolServer.allTools.first { $0.name == "events" })
+
+    #expect(events.properties["kinds"]?["type"] == "array")
+    #expect(events.properties["kinds"]?["items"]?["type"] == "string")
+    #expect(events.properties["full"]?["type"] == "boolean")
+  }
+}
+
 @Suite struct MCPSpawnToolTests {
   @Test func theSpawnToolTakesAnOptionalHost() throws {
     let spawn = try #require(MCPToolServer.allTools.first { $0.name == "spawn" })

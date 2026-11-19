@@ -180,6 +180,9 @@ extension Service {
     return trash
   }
 
+  /// Whether a folder, and not a symlink or a file, is at `path` on this Mac.
+  func folderExists(_ path: String) -> Bool { linkStatus(path).map(isFolder) == true }
+
   /// Moves the folder of a failed removal back from the trash to `cwd`, and
   /// does nothing when the trash holds no folder for the session. It throws,
   /// and the folder stays, when git already dropped the worktree's record,

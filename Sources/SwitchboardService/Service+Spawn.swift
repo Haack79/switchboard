@@ -45,7 +45,7 @@ extension Service {
           [
             "session": .string(parent), "kind": .string(Wait.Kind.session.rawValue), "target": .string(child.id),
             "state": .string(wait), "by": .string(Author.claude.rawValue),
-          ])
+          ], caller: .inProcess)
       }
       return queue.sync { summary(child.id) }
     }

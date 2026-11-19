@@ -29,7 +29,7 @@ enum HostScope {
   /// The fields of `WaitRequest`, and the keys that `waitRequest` reads for `clear-wait` and `resolve-wait`.
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "wait", "outcome",
+    "needsYou", "wait", "outcome", "caller",
   ]
 
   /// The ops that a host may send, with the keys that each one reads.
@@ -50,7 +50,8 @@ enum HostScope {
     "wait": Rule(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Rule(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Rule(keys: waitKeys, refs: ["session"]),
-    "events": Rule(keys: ["session", "sessions", "since", "limit"], refs: ["session"], refLists: ["sessions"]),
+    "events": Rule(
+      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
     // No `images`, so the path that reads image files never runs.
     "send": Rule(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Rule(
@@ -83,16 +84,19 @@ enum HostScope {
     for op in ["rm", "cleanup", "rm-done", "manager-end"] { refused[op] = stops }
     for op in [
       "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe",
-      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log", "parent",
+      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "manager-skills", "chat", "chat-log",
+      "parent",
     ] {
       refused[op] = reaches
     }
     for op in [
       "import", "importable", "accounts", "account-use", "account-move", "usage", "mcp", "hosts", "host-connect",
-      "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
-      "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
+      "slash-commands", "removed-ls", "manager-pin", "manager-model", "item-context", "manager-mcp-request", "operator",
+      "operator-report", "operator-reports", "wait-approve", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
+      "highlight",
       "schedule",
-      "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
+      "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
+      "rm-cancel", "rm-keep", "rm-retry",
       "removal-notices", "removal-notice-dismiss",
       "host-disconnect", "live", "live-next", "autocontinue", "snapshots", "poll", "repos", "repo-add", "clock",
       "triage", "choose", "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard",
@@ -100,7 +104,8 @@ enum HostScope {
       "plan-artifact-apply", "plan-artifact-reject", "plan-artifact-report", "plan-followup", "plan-ls", "plan-get",
       "plan-detach", "plan-auto", "plan-proposals", "plan-reject", "followup-add", "followup-ls", "followup-start",
       "followup-rm", "followup-import", "docket-start", "merge", "review", "ack", "resolved-todos",
-      "dependency-resolved", "activity", "activity-report", "activity-clear", "draft-post", "draft-check", "issues",
+      "dependency-resolved", "activity", "activity-report", "activity-clear", "headless-usage", "draft-post",
+      "draft-check", "issues",
       "issues-refresh", "issues-start", "issues-clone", "issues-source-add", "issues-source-rm", "issues-settings",
       "issues-dismiss",
     ] {

@@ -38,6 +38,10 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// arrives as a prompt. This count leaves it out.
   public var prompts = 0
   public var lastReply: String?
+  /// Whether a prompt arrived after `lastReply` was written. A turn can end
+  /// without a Stop. The reply then belongs to a turn that the user already
+  /// answered.
+  public var promptSinceReply = false
   public var lastActivity: Int64 = 0
   /// The number of replies that claude finished in the main session. Only a
   /// chat's or a Manager conversation's summary shows it.
@@ -98,6 +102,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var sbdMessages: [String] = []
   /// The session's PR, as the GitHub poller last read it.
   public var pr: PullRequest?
+  /// When the `pr` event that set `pr` was recorded.
+  public var prRead: Int64?
   /// The number of every PR that the session has had, including one that
   /// dropped out since.
   public var prNumbers: Set<Int> = []
@@ -134,6 +140,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// current turn, and the id of its event.
   public var sessionSummary: TriageSummary?
   public var sessionSummaryId: Int64 = 0
+  /// Whether the turn of `sessionSummary` has ended at a main Stop. The next main Stop drops the card.
+  public var sessionSummaryStopped = false
   /// The model's summary of the PR for the merge card, from the last
   /// `mergeBrief` event that has one.
   public var mergeBrief: MergeBrief?
@@ -266,6 +274,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       // The transcript's last line, not the import, is the session's last activity.
       if let t = d["lastActivity"]?.int { lastActivity = Int64(t) }
       lastReply = d["lastReply"]?.string
+      promptSinceReply = false
       // A reply means that the user sent a prompt before it.
       if d["hasReplies"]?.bool == true { prompts = max(prompts, 1) }
     case "job":
@@ -280,6 +289,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       subagents = []
     case "UserPromptSubmit":
       if userPrompt { prompts += 1 }
+      promptSinceReply = true
       startTurn(event.t)
       jobsEndedAt = nil
       runningTool = nil
@@ -332,10 +342,18 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       endTurn()
       jobsEndedAt = nil
       lastReply = d["last_assistant_message"]?.string
+      promptSinceReply = false
     case "StopFailure", "idle":
       // An API or usage limit error ends the turn without a Stop. So does
       // Escape, which sbd finds out from `claude agents` and records as idle.
       endTurn()
+    case "skill_blocked":
+      // Claude Code sends no Stop after it blocks a prompt. A subagent's blocked call leaves the main call running.
+      if d["via"]?.string == "prompt" {
+        endTurn()
+      } else if let running = runningTool, SkillCommand.tools.contains(running.tool) {
+        runningTool = nil
+      }
     case "link_down":
       // A second `link_down` keeps the first one's time and state: the facts stopped updating at the first.
       if unread == nil {
@@ -345,7 +363,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     case "link_up":
       unread = nil
     case "reconciled":
-      if let reply = d["lastReply"]?.string { lastReply = reply }
+      // Reconciliation also runs when only activity advanced, and then carries the reply the user already answered.
+      if let reply = d["lastReply"]?.string, reply != lastReply {
+        lastReply = reply
+        promptSinceReply = false
+      }
       if let activity = d["lastActivity"]?.int { lastActivity = Int64(activity) }
     case "SubagentStart":
       if let id = d["agent_id"]?.string { subagents.insert(id) }
@@ -355,6 +377,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       let next = d["pr"].flatMap { try? JSONCoding.convert($0, to: PullRequest.self) }
       noteBoard(from: pr, to: next, at: event.t)
       pr = next
+      prRead = event.t
       if let number = next?.number { prNumbers.insert(number) }
       if pr?.ready == true { readySince = readySince ?? event.t } else { readySince = nil }
       applyReviewListing()
@@ -494,6 +517,11 @@ public struct Verdict: Equatable, Sendable {
   /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
   /// blocking prompts, the operator's Inbox admits only this one.
   public var byWaitRule = false
+  /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
+  /// has no wait left, so it names none.
+  public var overdueWaits: [String] = []
+  /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
+  public var removalFailed = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -508,6 +536,14 @@ public enum ReplyKind: Equatable, Sendable {
   var isQuestion: Bool {
     if case .question = self { return true }
     return false
+  }
+
+  /// The question or the offer, or nil for `other`.
+  var ask: String? {
+    switch self {
+    case .question(let ask), .offer(let ask): ask
+    case .other: nil
+    }
   }
 }
 
@@ -579,7 +615,7 @@ public enum Attention {
   ) -> Verdict {
     // A failed removal comes first, because the sessions that Delete All takes are Done.
     if let removal = session.removal, removal.state == .failed {
-      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"))
+      return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"), removalFailed: true)
     }
     if session.done { return Verdict(state: .done, reason: "marked done") }
     if let verdict = followupVerdict(session) { return verdict }

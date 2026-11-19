@@ -19,6 +19,10 @@ final class ReferenceStore: ObservableObject {
   @Published private(set) var details: [String: ReferenceLoad] = [:]
   /// The keys whose `ref-details` request has not answered yet.
   var inFlight: Set<String> = []
+  /// How many fresh reads each key has started. An answer is stored only when no fresh read started after its own
+  /// request. A cached answer to a request that started before a fresh read is dropped. A cached answer to a
+  /// request that started after it replaces the fresh one.
+  var freshReads: [String: Int] = [:]
 
   /// Clears the store before it holds more than `maxEntries` items.
   func store(_ load: ReferenceLoad, for key: String) {
@@ -34,11 +38,25 @@ extension BoardModel {
   /// sends nothing. sbd decides how fresh an answer is, so the app keeps no
   /// time limit of its own. A failure goes to the card, not to `actionError`.
   func loadReference(_ ref: GitHubRef) {
+    guard references.inFlight.insert(ref.key).inserted else { return }
+    readReference(ref, fresh: false)
+  }
+
+  /// Asks sbd to read `ref` from GitHub again, past its cache, even while another read is in flight. The answer
+  /// replaces the stored details as `loadReference`'s does.
+  func checkReference(_ ref: GitHubRef) {
+    references.inFlight.insert(ref.key)
+    readReference(ref, fresh: true)
+  }
+
+  private func readReference(_ ref: GitHubRef, fresh: Bool) {
     let key = ref.key
-    guard references.inFlight.insert(key).inserted else { return }
+    if fresh { references.freshReads[key, default: 0] += 1 }
+    let generation = references.freshReads[key, default: 0]
     if case .loaded? = references.details[key] {} else { references.store(.loading, for: key) }
     let send = send
-    let args: [String: JSON] = ["repo": .string(ref.repo), "number": .number(Double(ref.number))]
+    var args: [String: JSON] = ["repo": .string(ref.repo), "number": .number(Double(ref.number))]
+    if fresh { args["fresh"] = true }
     issueWork.async {
       let load: ReferenceLoad
       do {
@@ -50,6 +68,7 @@ extension BoardModel {
         load = .failed("\(error)")
       }
       Task { @MainActor in
+        guard self.references.freshReads[key, default: 0] == generation else { return }
         self.references.inFlight.remove(key)
         self.references.store(load, for: key)
       }

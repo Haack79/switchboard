@@ -369,6 +369,20 @@ public enum ChecksRollup: Equatable, Sendable {
     default: return nil
     }
   }
+
+  /// One state for a list of check runs and statuses: failed when any failed or has a state that `ChecksRollup`
+  /// does not know, running when any still runs, and passed when all passed. A check run carries `status` and
+  /// `conclusion`, and a status carries `state`. An empty list has no state.
+  public init?(contexts: [JSON]) {
+    guard !contexts.isEmpty else { return nil }
+    let states = contexts.map { c -> ChecksRollup in
+      if let state = c["state"]?.string?.uppercased() { return ChecksRollup(state) ?? .failed }
+      if c["status"]?.string?.uppercased() != "COMPLETED" { return .running }
+      let conclusion = c["conclusion"]?.string?.uppercased() ?? ""
+      return ["SUCCESS", "NEUTRAL", "SKIPPED"].contains(conclusion) ? .passed : .failed
+    }
+    self = states.contains(.failed) ? .failed : states.contains(.running) ? .running : .passed
+  }
 }
 
 /// The change requests that a PR's author answered.

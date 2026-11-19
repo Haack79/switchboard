@@ -20,14 +20,38 @@ import Testing
 
   /// The bullet goes in `## Commands`, which #252 leaves alone, and not in `## What changed`.
   @Test func theManagerGuideTeachesSchedulesInItsCommands() throws {
-    let guide = Manager.guide
-    let start = try #require(guide.range(of: "## Commands"))
-    let end = try #require(guide.range(of: "## What changed", range: start.upperBound..<guide.endIndex))
-
-    let commands = guide[start.upperBound..<end.lowerBound]
+    let commands = try Self.guideSection("## Commands")
 
     #expect(commands.contains("`sb schedule "))
     #expect(commands.contains("add_schedule"))
+  }
+
+  /// The guide's section under `heading`, up to the next heading.
+  static func guideSection(_ heading: String) throws -> String {
+    let start = try #require(Manager.guide.range(of: heading + "\n"))
+    let rest = Manager.guide[start.upperBound...]
+    return String(rest[..<(rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex)])
+  }
+
+  @Test(arguments: [
+    "`/go`", "don't read or edit code", "Start a session",
+    "more than a screen of output", "only its conclusion",
+    "planning and design", "`model: \"opus\"`",
+    "set a wait instead of checking it again and again",
+  ])
+  func theManagerGuideSaysHowToKeepTurnsCheap(_ phrase: String) throws {
+    let section = try Self.guideSection("## Cost")
+    #expect(section.contains(phrase), "\(section)")
+  }
+
+  @Test func theManagerGuideLeavesBranchTestingToASession() throws {
+    let section = try Self.guideSection("## Testing branches together")
+    #expect(section.contains("reply with the result in one line"), "\(section)")
+    #expect(section.contains("`here: true`"), "\(section)")
+  }
+
+  @Test func theOperatorPromptSaysThatTheCostRulesApply() {
+    #expect(Manager.operatorPrompt.contains("cost rules"), "\(Manager.operatorPrompt)")
   }
 
   @Test func theChatGuideNamesTheScheduleTools() {
@@ -63,26 +87,19 @@ import Testing
   }
 
   @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
-    #expect(Manager.operatorPrompt.contains("CLAUDE.md"), "\(Manager.operatorPrompt)")
+    #expect(Manager.operatorPrompt.contains("ask-first rules in CLAUDE.md"), "\(Manager.operatorPrompt)")
   }
 
   // MARK: Asking for an MCP server
 
-  /// The guide's "## MCP servers" section, up to the next heading.
-  func mcpSection() throws -> String {
-    let start = try #require(Manager.guide.range(of: "## MCP servers"))
-    let rest = Manager.guide[start.upperBound...]
-    return String(rest[..<(rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex)])
-  }
-
   @Test func theGuidesMCPSectionNamesTheRequestTool() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("`request_mcp_server`"), "\(section)")
   }
 
   @Test func theParagraphThatNamesTheRequestToolSaysToEndTheTurn() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
     let paragraph = try #require(
       section.split(separator: "\n").first { $0.contains("request_mcp_server") }, "\(section)")
 
@@ -96,26 +113,26 @@ import Testing
   }
 
   @Test func theGuideStillListsTheServersWithSbManagerMCP() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("sb manager mcp $SB_SESSION_ID"), "\(section)")
   }
 
   @Test func theGuideSaysAConnectorNeedsAll() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("Slack"), "\(section)")
     #expect(section.contains("`all`"), "\(section)")
   }
 
   @Test func theGuideSaysNotToWorkAroundAMissingTool() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     for word in ["`sb`", "`curl`", "another session"] { #expect(section.contains(word), "\(word) in \(section)") }
   }
 
   @Test func theGuideSaysNotToRunAddItself() throws {
-    let section = try mcpSection()
+    let section = try Self.guideSection("## MCP servers")
 
     #expect(section.contains("Do not run `sb manager mcp"), "\(section)")
   }
@@ -198,5 +215,23 @@ extension ManagerTextTests {
 
   @Test func theServerHasTheSetParentToolThatTheManagerGuideNames() {
     #expect(MCPToolServer.allTools.contains { $0.name == "set_parent" })
+  }
+}
+
+/// The Manager guide and the chat guide teach the brief form and the `full: true` argument that returns every field.
+extension ManagerTextTests {
+  @Test func theManagerGuidesCommandsNameTheBriefFlagAndTheFullArgument() throws {
+    let guide = Manager.guide
+    let start = try #require(guide.range(of: "## Commands"))
+    let end = try #require(guide.range(of: "## What changed", range: start.upperBound..<guide.endIndex))
+
+    let commands = guide[start.upperBound..<end.lowerBound]
+
+    #expect(commands.contains("--brief`"), "\(commands)")
+    #expect(commands.contains("`full: true`"), "\(commands)")
+  }
+
+  @Test func theChatGuideNamesTheFullArgument() {
+    #expect(Chat.guide.contains("`full: true`"), "\(Chat.guide)")
   }
 }

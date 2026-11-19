@@ -1391,3 +1391,51 @@ extension TriageOperatorTests {
     #expect(f.contextTokens == 12_000)
   }
 }
+
+/// A `skill_blocked` event ends the turn that a blocked prompt started, because Claude Code sends no Stop after a
+/// UserPromptSubmit block. A blocked tool call clears the running tool and leaves the turn running.
+@Suite struct SkillBlockedAttentionTests {
+  private func blocked(_ via: String, _ t: Int64) -> Event {
+    event("skill_blocked", t, ["skill": "go", "via": .string(via), "by": "haiku"])
+  }
+
+  private let skillCall = tool("Skill", ["skill": "go"], id: "s1")
+
+  @Test func aBlockedPromptEndsItsTurn() {
+    let f = facts([event("SessionStart", 0), event("UserPromptSubmit", 1, ["prompt": "/go x"]), blocked("prompt", 2)])
+
+    #expect(!f.turnRunning)
+    #expect(Attention.evaluate(session(), f, now: 3).state != .working)
+  }
+
+  @Test func aBlockedToolCallClearsTheRunningToolAndKeepsTheTurn() {
+    let f = facts([
+      event("UserPromptSubmit", 1, ["prompt": "load go"]), event("PreToolUse", 2, skillCall), blocked("tool", 3),
+    ])
+
+    #expect(f.turnRunning)
+    #expect(f.runningTool == nil)
+  }
+
+  /// A subagent's Skill call never became the running tool, so its block leaves the main session's Agent call.
+  @Test func aSubagentsBlockedSkillCallKeepsTheMainSessionsRunningTool() {
+    let f = facts([
+      event("UserPromptSubmit", 1, ["prompt": "review it"]),
+      event("PreToolUse", 2, tool("Agent", ["prompt": "load go"], id: "a1")),
+      event("PreToolUse", 3, tool("Skill", ["skill": "go"], id: "s1", agent: "sub1")),
+      blocked("tool", 4),
+    ])
+
+    #expect(f.turnRunning)
+    #expect(f.runningTool?.tool == "Agent")
+  }
+
+  @Test func aBlockedPromptAfterAnEndedTurnChangesNothing() {
+    let ended = [event("UserPromptSubmit", 1, ["prompt": "hi"]), event("Stop", 2, ["last_assistant_message": "Hi."])]
+
+    let f = facts(ended + [blocked("prompt", 3)])
+
+    #expect(!f.turnRunning)
+    #expect(f.lastReply == "Hi.")
+  }
+}
