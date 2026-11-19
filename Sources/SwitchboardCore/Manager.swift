@@ -73,7 +73,7 @@ public enum Manager {
     - Ask the user before you merge a PR.
     - Ask the user before you remove a worktree that has unpushed commits or uncommitted changes. Check with `git -C <cwd> status -sb` and `git -C <cwd> log @{u}..` first.
     - Ask the user before you send one message to several sessions.
-    - \(ChildQuestions.guidance) The rule that three or more decisions go in `sb summary set` covers only your own decisions.
+    - \(ChildQuestions.guidance)
     - A session is an id, a unique id prefix, or a unique name. Add `--json` to any command for exact output.
     - \(SessionLink.guidance)
 

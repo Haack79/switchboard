@@ -128,7 +128,6 @@ import Testing
   @Test(arguments: zip([true, false], Launch.allCases))
   func aManagerConversationLaunchesWithItsOwnPromptAndWithChrome(_ triageSet: Bool, _ launch: Launch) throws {
     let sbd = try Instance(config: ["triage": ["systemPrompt": .string(triageSet ? Self.triagePrompt : "")]])
-    _ = try idleOperator(sbd)
 
     let c = try conversationHelpers.idleConversation(sbd)
     if launch == .resume { try resume(sbd, c) { _ = try sbd.sb("manager", c.id, "--json") } }
