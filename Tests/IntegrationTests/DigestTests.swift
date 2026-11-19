@@ -77,7 +77,8 @@ import Testing
     let given = contexts(sbd, p).dropFirst(before)
     #expect(given.count == 1)
     let text = try #require(given.first)
-    let line = "- kid (\(kid.id)): needs you: read its last reply and decide what's next"
+    let line =
+      "- kid (\(kid.id)): needs you in its own Inbox item (switchboard://session/\(kid.id)): read its last reply and decide what's next"
     #expect(text.components(separatedBy: line).count == 2, "\(text)")
     #expect(text.hasPrefix("Switchboard: what changed since your last turn."))
     #expect(try sbd.events(p.id).filter { $0.kind == "digest" }.last?.data["text"]?.string == text)
