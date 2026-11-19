@@ -150,10 +150,22 @@ extension Service {
     }
     let text = oneLine(args["text"]?.string ?? "", max: TriageCard.lineLength)
     guard !text.isEmpty else { throw APIError("a report needs text") }
-    var data: [String: JSON] = ["text": .string(text), "needsYou": .bool(args["needsYou"]?.bool == true)]
-    if let about = args["session"]?.string { data["about"] = .string(try lookup(["session": .string(about)])) }
-    let event = try recordStored(id, OperatorReport.event, .object(data))
+    let about = try args["session"]?.string.map { try lookup(["session": .string($0)]) }
+    let event = try recordReport(text, needsYou: args["needsYou"]?.bool == true, about: about, on: id)
     return try reportRow(OperatorReport(event)!, of: id)
+  }
+
+  /// Records a report on the operator `op`, cut to one line. `about` is the session that the report is about, and
+  /// `wait` is the wait whose action made the report.
+  @discardableResult
+  func recordReport(_ text: String, needsYou: Bool, about: String?, on op: String, wait: String? = nil) throws -> Event
+  {
+    var data: [String: JSON] = [
+      "text": .string(oneLine(text, max: TriageCard.lineLength)), "needsYou": .bool(needsYou),
+    ]
+    if let about { data["about"] = .string(about) }
+    if let wait { data["wait"] = .string(wait) }
+    return try recordStored(op, OperatorReport.event, .object(data))
   }
 
   /// The `operator-reports` request: the operator's reports, oldest first, each with whether it is open. It

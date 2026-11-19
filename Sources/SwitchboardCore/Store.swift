@@ -383,6 +383,14 @@ public final class Store {
     ).first
   }
 
+  /// The operator report on the session that the action of the wait with this id recorded, or nil.
+  public func operatorReport(wait: String, session: String) throws -> Event? {
+    try query(
+      "\(Store.eventColumns) WHERE session = ? AND kind = ? AND json_extract(data, '$.wait') = ? LIMIT 1",
+      [session, OperatorReport.event, wait], Store.event
+    ).first
+  }
+
   /// Records that an import read this line of Followups.md. Removing the
   /// follow-up keeps the row, so a later import still skips the line.
   public func recordImport(_ line: String) throws {

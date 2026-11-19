@@ -24,7 +24,7 @@ struct LiveGitHub {
   /// The answers for PR `number` as `github` records it, so the live head is the poller's head.
   init(_ github: FakeGitHub, number: Int = MergeTests.number) {
     self.number = number
-    head = github.pr(number)["headRefOid"]!.string!
+    head = MergeTests().head(github, number)
   }
 
   /// One check run as `gh pr view --json statusCheckRollup` prints it.
@@ -122,34 +122,30 @@ extension Instance {
 
   func theOperator(_ sbd: Instance) throws -> SessionSummary { try arming.theOperator(sbd) }
 
-  func head(_ github: FakeGitHub, _ number: Int = MergeTests.number) -> String {
-    github.pr(number)["headRefOid"]!.string!
-  }
+  func head(_ github: FakeGitHub, _ number: Int = MergeTests.number) -> String { MergeTests().head(github, number) }
 
   func ghMerge(_ head: String, _ number: Int = MergeTests.number) -> String {
     "pr merge \(number) --repo \(Self.charts) --merge --match-head-commit \(head)"
   }
 
-  /// Arms the wait from the user's terminal for the conversation `c`, and returns the id of the wait that the
-  /// Operator holds.
-  func arm(_ sbd: Instance, _ c: SessionSummary, _ args: [String]) throws -> String {
-    let r = try sbd.run(["wait", "--json", c.id] + args)
+  /// Arms the wait from the user's terminal for the conversation `c`, or for a new conversation when `c` is nil, and
+  /// returns the id of the wait that the Operator holds.
+  func arm(_ sbd: Instance, _ args: [String], from c: SessionSummary? = nil) throws -> String {
+    let conversation = try c ?? arming.conversation(sbd)
+    let r = try sbd.run(["wait", "--json", conversation.id] + args)
     try #require(r.status == 0, Comment(rawValue: r.stderr))
-    return try #require(try arming.operatorsLastWait(sbd)["id"]?.string)
+    return try arming.operatorsLastWait(sbd).id
   }
 
-  /// The Operator's wait with `id` as `sb get --json` prints it, or nil when it is gone.
-  func operatorsWait(_ sbd: Instance, _ id: String) throws -> JSON? {
-    try sbd.getJSON(try theOperator(sbd).id)["waits"]?.array?.first { $0["id"]?.string == id }
+  /// The Operator's wait with `id`, or nil when it is gone.
+  func operatorsWait(_ sbd: Instance, _ id: String) throws -> Wait? {
+    try theOperator(sbd).waits.first { $0.id == id }
   }
 
-  /// The kind of the wait's action status, or nil when it has none.
-  func statusName(_ wait: JSON?) -> String? { wait?["actionStatus"]?["kind"]?.string }
-
-  /// Waits until the Operator's wait `id` has an action status whose name contains `word`.
-  func waitForStatus(_ sbd: Instance, _ id: String, _ word: String) throws {
-    try sbd.waitFor("wait \(id) to be \(word)", timeout: 30) {
-      statusName(try operatorsWait(sbd, id))?.contains(word) == true
+  /// Waits until the Operator's wait `id` has an action status of `kind`.
+  func waitForStatus(_ sbd: Instance, _ id: String, _ kind: ActionStatus.Kind) throws {
+    try sbd.waitFor("wait \(id) to be \(kind.rawValue)", timeout: 30) {
+      try operatorsWait(sbd, id)?.actionStatus?.kind == kind
     }
   }
 
@@ -197,8 +193,7 @@ extension Instance {
   ) {
     try sbd.serve(live ?? LiveGitHub(github))
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
     try judgment(sbd, about: wait)
     return (s, wait)
   }
@@ -246,8 +241,12 @@ extension Instance {
 
   func sessionIds(_ sbd: Instance) throws -> [String] { try sbd.client.sessions().map(\.id) }
 
-  func sentToOperator(_ sbd: Instance) throws -> [Event] {
-    try sbd.events(try theOperator(sbd).id).filter { $0.kind == "sent" }
+  /// A successful `rm`, `rm-worktree`, or `report` records no `sent` event on the Operator, so it never wakes. Two
+  /// ticks first give a late message the time to show.
+  func expectNoSentToOperator(_ sbd: Instance, sourceLocation: SourceLocation = #_sourceLocation) throws {
+    try tick(sbd, 2)
+    let sent = try sbd.events(try theOperator(sbd).id).filter { $0.kind == "sent" }
+    #expect(sent.isEmpty, "\(sent.map(\.data.text))", sourceLocation: sourceLocation)
   }
 
   func reportEvents(_ sbd: Instance) throws -> [Event] {
@@ -297,7 +296,7 @@ extension FollowThroughTests {
 
     let (_, wait) = try askedMerge(github, sbd)
 
-    #expect(statusName(try operatorsWait(sbd, wait))?.contains("judgment") == true)
+    #expect(try operatorsWait(sbd, wait)?.actionStatus?.kind == .awaitingJudgment)
   }
 
   /// `callerArg` reads SB_SESSION_ID, which a work session can set to the Operator's id. Only the pane counts.
@@ -337,8 +336,7 @@ extension FollowThroughTests {
     let sbd = try instance(github)
     try sbd.serve(LiveGitHub(github))
     let s = try arming.notReadyTarget(github, sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
     _ = try operatorHelpers.idleOperator(sbd)
 
     let r = try approve(sbd, wait)
@@ -397,10 +395,8 @@ extension FollowThroughTests {
     let follow = try sbd.waitFor(
       "the follow-through event", timeout: 30,
       fetch: { try sbd.events(s.id).last { $0.kind == "follow-through" } }, until: { _ in true })
-    let waitField = follow.data["wait"]?.string ?? follow.data["wait"]?["id"]?.string
-    #expect(waitField == wait, Comment(rawValue: follow.data.text))
-    let action = follow.data["action"]?.string ?? follow.data["action"]?["kind"]?.string
-    #expect(action == "merge", Comment(rawValue: follow.data.text))
+    #expect(follow.data["wait"]?.string == wait, Comment(rawValue: follow.data.text))
+    #expect(follow.data["action"]?.string == "merge", Comment(rawValue: follow.data.text))
     let merges = try sbd.events(s.id).filter { $0.kind == "merge" }
     #expect(merges.count == 1)
     #expect(merges.first?.data["result"]?.string == "merged", Comment(rawValue: merges.first?.data.text ?? ""))
@@ -599,8 +595,8 @@ extension FollowThroughTests {
     try sbd.poll()
     try sbd.waitFor(second.id, "the poller's read of #18304") { $0.pr?.number == Self.secondNumber }
     let c = try arming.conversation(sbd)
-    let firstWait = try arm(sbd, c, arming.mergeArgs(first))
-    let secondWait = try arm(sbd, c, arming.mergeArgs(second))
+    let firstWait = try arm(sbd, arming.mergeArgs(first), from: c)
+    let secondWait = try arm(sbd, arming.mergeArgs(second), from: c)
     for n in [Self.number, Self.secondNumber] {
       github.change(n) {
         $0["reviewDecision"] = approved["reviewDecision"]!
@@ -611,11 +607,11 @@ extension FollowThroughTests {
     try sbd.poll(all: true)
 
     try judgment(sbd, about: firstWait)
-    try waitForStatus(sbd, secondWait, "held")
+    try waitForStatus(sbd, secondWait, .held)
     try tick(sbd, 3)
     let asked = try operatorMessages(sbd)
     #expect(asked.allSatisfy { !$0.contains(secondWait) }, "\(asked)")
-    #expect(statusName(try operatorsWait(sbd, secondWait))?.contains("held") == true)
+    #expect(try operatorsWait(sbd, secondWait)?.actionStatus?.kind == .held)
     #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
 
     let r = try approve(sbd, firstWait)
@@ -648,11 +644,10 @@ extension FollowThroughTests {
     let second = try sbd.session(in: Self.charts, branch: Self.secondBranch, folder: "charts-2", name: "second")
     try sbd.poll()
     try sbd.waitFor(second.id, "Ready to merge") { $0.state == .readyToMerge }
-    let c = try arming.conversation(sbd)
 
-    let wait = try arm(sbd, c, arming.mergeArgs(second))
+    let wait = try arm(sbd, arming.mergeArgs(second))
 
-    try waitForStatus(sbd, wait, "held")
+    try waitForStatus(sbd, wait, .held)
     let asked = try operatorMessages(sbd)
     #expect(asked.allSatisfy { !$0.contains(wait) }, "\(asked)")
     #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
@@ -670,10 +665,9 @@ extension FollowThroughTests {
     let sbd = try instance(github)
     try sbd.serve(LiveGitHub(github))
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
 
-    try waitForStatus(sbd, wait, "held")
+    try waitForStatus(sbd, wait, .held)
 
     try tick(sbd, 3)
     let messages = try operatorMessages(sbd)
@@ -695,12 +689,11 @@ extension FollowThroughTests {
     live.behindBy = 2
     try sbd.serve(live)
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
 
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
 
     try sbd.waitFor("the merge-main message") { try sbd.messagesFromSbd(s.id).contains(Self.mergeMain) }
-    try waitForStatus(sbd, wait, "held")
+    try waitForStatus(sbd, wait, .held)
     let messages = try operatorMessages(sbd)
     #expect(messages.isEmpty, "\(messages)")
     #expect(sbd.ghMerges().isEmpty)
@@ -713,14 +706,13 @@ extension FollowThroughTests {
     live.behindBy = 2
     try sbd.serve(live)
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
     try sbd.waitFor(s.id, "the reply to the merge-main message") {
       $0.lastReply == "Done: \(Self.mergeMain)" && $0.state == .readyToMerge
     }
     // The turn moved the session's state twice, which may start one more check. It ends held again.
     try tick(sbd, 2)
-    try waitForStatus(sbd, wait, "held")
+    try waitForStatus(sbd, wait, .held)
     return (s, wait)
   }
 
@@ -765,7 +757,7 @@ extension FollowThroughTests {
 
     let text = try operatorMessage(sbd, holding: "still held after 6 h")
     #expect(text.contains(wait), Comment(rawValue: text))
-    try waitForStatus(sbd, wait, "judgment")
+    try waitForStatus(sbd, wait, .awaitingJudgment)
     #expect(sbd.ghMerges().isEmpty)
   }
 
@@ -802,9 +794,8 @@ extension FollowThroughTests {
     live.behindBy = pending == .held ? 2 : 0
     try sbd.serve(live)
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
-    try waitForStatus(sbd, wait, pending == .held ? "held" : "judgment")
+    let wait = try arm(sbd, arming.mergeArgs(s))
+    try waitForStatus(sbd, wait, pending == .held ? .held : .awaitingJudgment)
 
     try sbd.sb("rm", s.id)
 
@@ -823,8 +814,7 @@ extension FollowThroughTests {
     try sbd.serve(live)
     let release = try holdCompare(sbd, live)
     let s = try arming.readyTarget(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
     try sbd.waitFor("the compare read", timeout: 30) { compareReads(sbd) > 0 }
 
     try sbd.sb("rm", s.id)
@@ -840,8 +830,7 @@ extension FollowThroughTests {
     let sbd = try instance(github)
     try sbd.serve(LiveGitHub(github))
     let s = try arming.notReadyTarget(github, sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
 
     try sbd.sb("rm", s.id)
 
@@ -859,7 +848,7 @@ extension FollowThroughTests {
     try sbd.serve(LiveGitHub(github))
     let s = try arming.notReadyTarget(github, sbd)
     let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s), from: c)
 
     let r = try sbd.run(["wait", c.id, "--resolve", "the user merged it by hand", "--id", wait])
 
@@ -873,8 +862,7 @@ extension FollowThroughTests {
   @Test func resolveWaitWithMetFromAnotherClientDoesNotRemoveTheSession() throws {
     let sbd = try Instance()
     let kid = try sbd.idleSession(name: "kid")
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, ["--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm"])
+    let wait = try arm(sbd, ["--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm"])
     let op = try theOperator(sbd)
 
     #expect(throws: (any Error).self) {
@@ -892,8 +880,7 @@ extension FollowThroughTests {
     let sbd = try instance(github)
     try sbd.serve(LiveGitHub(github))
     let s = try arming.notReadyTarget(github, sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, arming.mergeArgs(s))
+    let wait = try arm(sbd, arming.mergeArgs(s))
     let op = try theOperator(sbd)
 
     #expect(throws: (any Error).self) {
@@ -915,9 +902,8 @@ extension FollowThroughTests {
     let s = try sbd.session(in: Self.charts, branch: MergeTests.branch, name: WaitActionTests.target)
     try sbd.poll()
     try sbd.waitFor(s.id, "the poller's read of #18303") { $0.pr?.number == Self.number }
-    let c = try arming.conversation(sbd)
     _ = try arm(
-      sbd, c,
+      sbd,
       ["--kind", "queue", "--target", "\(Self.charts)#\(Self.number)", "--then", "report", "--note", Self.note])
     github.change(Self.number) { $0["isInMergeQueue"] = true }
     try sbd.poll(all: true)
@@ -986,8 +972,7 @@ extension FollowThroughTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let s = try chartsWorktreeSession(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, rmWorktreeArgs(s))
+    let wait = try arm(sbd, rmWorktreeArgs(s))
 
     try mergeAndWaitForDone(github, sbd, s)
 
@@ -996,6 +981,7 @@ extension FollowThroughTests {
     try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
     let resolved = try #require(try resolvedEvent(sbd, wait))
     #expect(resolved.data["action"]?["kind"]?.string == "rm-worktree", Comment(rawValue: resolved.data.text))
+    try expectNoSentToOperator(sbd)
   }
 
   /// The merge action's post-merge message starts a turn, and Done shows "once it stops". sbd holds the removal
@@ -1004,14 +990,13 @@ extension FollowThroughTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let s = try chartsWorktreeSession(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, rmWorktreeArgs(s))
+    let wait = try arm(sbd, rmWorktreeArgs(s))
     try sbd.sb("send", s.id, "slow held")
     let running = try sbd.waitFor(s.id, "the held turn") { $0.state == .working }
 
     try mergeAndWaitForDone(github, sbd, s)
 
-    try waitForStatus(sbd, wait, "held")
+    try waitForStatus(sbd, wait, .held)
     try tick(sbd, 3)
     let during = try sbd.get(s.id)
     #expect(during.live)
@@ -1031,8 +1016,7 @@ extension FollowThroughTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let s = try chartsWorktreeSession(sbd)
-    let c = try arming.conversation(sbd)
-    _ = try arm(sbd, c, mergeWaitArgs + ["rm-worktree"])
+    _ = try arm(sbd, mergeWaitArgs + ["rm-worktree"])
 
     mergeOnGitHub(github, head: try sbd.git(s.cwd, "rev-parse", "HEAD"))
     try sbd.poll(all: true)
@@ -1046,8 +1030,7 @@ extension FollowThroughTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let s = try chartsWorktreeSession(sbd)
-    let c = try arming.conversation(sbd)
-    _ = try arm(sbd, c, mergeWaitArgs + ["rm-worktree"])
+    _ = try arm(sbd, mergeWaitArgs + ["rm-worktree"])
     try "scratch".write(toFile: "\(s.cwd)/notes.txt", atomically: true, encoding: .utf8)
 
     mergeOnGitHub(github, head: try sbd.git(s.cwd, "rev-parse", "HEAD"))
@@ -1063,8 +1046,7 @@ extension FollowThroughTests {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     let s = try chartsWorktreeSession(sbd)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, rmWorktreeArgs(s))
+    let wait = try arm(sbd, rmWorktreeArgs(s))
 
     github.change(Self.number) {
       $0["state"] = "CLOSED"
@@ -1073,7 +1055,7 @@ extension FollowThroughTests {
     try sbd.poll(all: true)
     try sbd.waitFor(s.id, "Done") { $0.state == .done }
 
-    try waitForStatus(sbd, wait, "judgment")
+    try waitForStatus(sbd, wait, .awaitingJudgment)
     #expect(try !operatorMessages(sbd).isEmpty)
     #expect(try sessionIds(sbd).contains(s.id))
     #expect(FileManager.default.fileExists(atPath: s.cwd))
@@ -1085,12 +1067,11 @@ extension FollowThroughTests {
     let sbd = try Instance()
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo)
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, rmWorktreeArgs(s))
+    let wait = try arm(sbd, rmWorktreeArgs(s))
 
     try sbd.sb("done", s.id)
 
-    try waitForStatus(sbd, wait, "judgment")
+    try waitForStatus(sbd, wait, .awaitingJudgment)
     #expect(try sessionIds(sbd).contains(s.id))
     #expect(FileManager.default.fileExists(atPath: s.cwd))
   }
@@ -1102,21 +1083,21 @@ extension FollowThroughTests {
   @Test func rmOnDoneRemovesTheSession() throws {
     let sbd = try Instance()
     let kid = try sbd.idleSession(name: "kid")
-    let c = try arming.conversation(sbd)
-    let wait = try arm(sbd, c, ["--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm"])
+    let wait = try arm(sbd, ["--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm"])
 
     try sbd.sb("done", kid.id)
 
     try sbd.waitFor("the removal", timeout: 30) { try !sessionIds(sbd).contains(kid.id) }
     try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
+    #expect(try resolvedEvent(sbd, wait)?.data["action"]?["kind"]?.string == "rm")
+    try expectNoSentToOperator(sbd)
   }
 
   @Test func reportOnAMergeWaitRecordsAnInfoReport() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     _ = try arming.notReadyTarget(github, sbd)
-    let c = try arming.conversation(sbd)
-    _ = try arm(sbd, c, mergeWaitArgs + ["report", "--note", Self.note])
+    let wait = try arm(sbd, mergeWaitArgs + ["report", "--note", Self.note])
 
     mergeOnGitHub(github)
     try sbd.poll(all: true)
@@ -1127,14 +1108,16 @@ extension FollowThroughTests {
     #expect(report.data["needsYou"]?.bool != true, Comment(rawValue: report.data.text))
     let rows = try listedReports(sbd)
     #expect(rows.last?["open"]?.bool == false, "\(rows)")
+    try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
+    #expect(try resolvedEvent(sbd, wait)?.data["action"]?["kind"]?.string == "report")
+    try expectNoSentToOperator(sbd)
   }
 
   @Test func reportWithNeedsYouShowsAsAnOpenReport() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
     _ = try arming.notReadyTarget(github, sbd)
-    let c = try arming.conversation(sbd)
-    _ = try arm(sbd, c, mergeWaitArgs + ["report", "--note", Self.note, "--needs-you"])
+    _ = try arm(sbd, mergeWaitArgs + ["report", "--note", Self.note, "--needs-you"])
 
     mergeOnGitHub(github)
     try sbd.poll(all: true)
@@ -1149,51 +1132,5 @@ extension FollowThroughTests {
   func listedReports(_ sbd: Instance) throws -> [JSON] {
     let text = try sbd.sb("operator", "reports", "--json")
     return try #require(JSON.parse(text)?.array, Comment(rawValue: text))
-  }
-}
-
-// MARK: No message to the Operator for an action that went through (the token-saving property)
-
-extension FollowThroughTests {
-  enum Quiet: String, CaseIterable, CustomTestStringConvertible {
-    case rm
-    case rmWorktree = "rm-worktree"
-    case report
-    var testDescription: String { rawValue }
-  }
-
-  /// A successful `rm`, `rm-worktree`, or `report` records no `sent` event on the Operator, so it never wakes.
-  @Test(arguments: Quiet.allCases)
-  func aSuccessfulActionRecordsNoSentOnTheOperator(_ action: Quiet) throws {
-    let github = try FakeGitHub()
-    let sbd = try instance(github)
-    let wait: String
-    switch action {
-    case .rm:
-      let kid = try sbd.idleSession(name: "kid")
-      let c = try arming.conversation(sbd)
-      wait = try arm(sbd, c, ["--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm"])
-      try sbd.sb("done", kid.id)
-      try sbd.waitFor("the removal", timeout: 30) { try !sessionIds(sbd).contains(kid.id) }
-    case .rmWorktree:
-      let s = try chartsWorktreeSession(sbd)
-      let c = try arming.conversation(sbd)
-      wait = try arm(sbd, c, rmWorktreeArgs(s))
-      try mergeAndWaitForDone(github, sbd, s)
-      try sbd.waitFor("the removal", timeout: 60) { try !sessionIds(sbd).contains(s.id) }
-    case .report:
-      _ = try arming.notReadyTarget(github, sbd)
-      let c = try arming.conversation(sbd)
-      wait = try arm(sbd, c, mergeWaitArgs + ["report", "--note", Self.note])
-      mergeOnGitHub(github)
-      try sbd.poll(all: true)
-      try sbd.waitFor("the report", timeout: 30) { try !reportEvents(sbd).isEmpty }
-    }
-
-    try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
-    try tick(sbd, 2)
-    let sent = try sentToOperator(sbd)
-    #expect(sent.isEmpty, "\(sent.map(\.data.text))")
-    #expect(try resolvedEvent(sbd, wait)?.data["action"]?["kind"]?.string == action.rawValue)
   }
 }

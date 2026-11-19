@@ -9,7 +9,7 @@ import Testing
 /// into the base, and the Operator's approval. It acts only when it can show every part of the merge property. Each
 /// test below breaks one part of a passing input and sees no `act`.
 ///
-/// The verdict kind is pinned only where the plan states it: `rearm` only when the subject is no longer Ready to
+/// The verdict kind is pinned only where it matters: `rearm` only when the subject is no longer Ready to
 /// merge; `hold` for a live head that differs, for `behindBy > 0` (with the merge-main message), and for anything
 /// unknown; `judgment` for a red base, a missing or stale approval, and a repository outside `operator.mergeRepos`.
 @Suite struct MergeGuardTests {
@@ -41,10 +41,10 @@ import Testing
       verdict: attention(facts),
       facts: facts,
       live: MergeGuard.LivePR(
-        head: head, state: .open, draft: false, mergeable: .mergeable, base: "main", rollup: "SUCCESS"),
+        head: head, state: .open, draft: false, mergeable: .mergeable, base: "main", rollup: .passed),
       behindBy: 0,
       baseTip: baseTip,
-      baseRollup: "SUCCESS",
+      baseRollup: .passed,
       files: files,
       earlierFiles: [],
       lastSbdMerge: nil,
@@ -264,8 +264,8 @@ extension MergeGuardTests {
     }
 
     /// The rollup counts on the commit that GitHub merges, which is the live head, not on the poller's read.
-    @Test(arguments: ["PENDING", "FAILURE", "ERROR", "EXPECTED", nil] as [String?])
-    func aLiveRollupThatIsNotSuccessDoesNotMerge(_ rollup: String?) throws {
+    @Test(arguments: [.running, .failed, nil] as [ChecksRollup?])
+    func aLiveRollupThatIsNotSuccessDoesNotMerge(_ rollup: ChecksRollup?) throws {
       let verdict = try MergeGuardTests.check { $0.live?.rollup = rollup }
 
       #expect(!verdict.acts, "\(verdict)")
@@ -361,15 +361,14 @@ extension MergeGuardTests {
 
 extension MergeGuardTests {
   @Suite struct BaseCI {
-    @Test(arguments: ["FAILURE", "ERROR"])
-    func aRedBaseAsksForJudgment(_ rollup: String) throws {
-      let verdict = try MergeGuardTests.check { $0.baseRollup = rollup }
+    @Test func aRedBaseAsksForJudgment() throws {
+      let verdict = try MergeGuardTests.check { $0.baseRollup = .failed }
 
       #expect(verdict.asksForJudgment, "\(verdict)")
     }
 
     @Test func theRedBaseQuestionNamesTheBaseTip() throws {
-      let verdict = try MergeGuardTests.check { $0.baseRollup = "FAILURE" }
+      let verdict = try MergeGuardTests.check { $0.baseRollup = .failed }
 
       #expect(verdict.question?.contains(MergeGuardTests.baseTip.prefix(7)) == true, "\(verdict)")
     }
@@ -393,7 +392,7 @@ extension MergeGuardTests {
     /// The base tip is sbd's own merge, that PR shared a file with this one, and its CI still runs.
     @Test func aPendingBaseAfterSbdsOverlappingMergeHolds() throws {
       let verdict = try MergeGuardTests.check {
-        $0.baseRollup = "PENDING"
+        $0.baseRollup = .running
         $0.lastSbdMerge = MergeGuard.SbdMerge(commit: MergeGuardTests.baseTip, files: ["Sources/Cache.swift"])
       }
 
@@ -402,14 +401,14 @@ extension MergeGuardTests {
 
     /// Without that overlap a pending base does not hold, so merges don't line up behind a long CI run.
     @Test func aPendingBaseWithNoMergeBySbdActs() throws {
-      let verdict = try MergeGuardTests.check { $0.baseRollup = "PENDING" }
+      let verdict = try MergeGuardTests.check { $0.baseRollup = .running }
 
       #expect(verdict.acts, "\(verdict)")
     }
 
     @Test func aPendingBaseAfterSbdsMergeOfOtherFilesActs() throws {
       let verdict = try MergeGuardTests.check {
-        $0.baseRollup = "PENDING"
+        $0.baseRollup = .running
         $0.lastSbdMerge = MergeGuard.SbdMerge(commit: MergeGuardTests.baseTip, files: ["README.md"])
       }
 
@@ -419,7 +418,7 @@ extension MergeGuardTests {
     /// sbd's merge is no longer the base tip, so the pending run belongs to someone else's commit.
     @Test func aPendingBaseWhoseTipIsNotSbdsMergeActs() throws {
       let verdict = try MergeGuardTests.check {
-        $0.baseRollup = "PENDING"
+        $0.baseRollup = .running
         $0.lastSbdMerge = MergeGuard.SbdMerge(commit: "an-older-merge", files: ["Sources/Cache.swift"])
       }
 
@@ -429,7 +428,7 @@ extension MergeGuardTests {
     /// sbd can't tell whether its merge shared a file with this PR.
     @Test func aPendingBaseAfterSbdsMergeWithUnknownFilesHolds() throws {
       let verdict = try MergeGuardTests.check {
-        $0.baseRollup = "PENDING"
+        $0.baseRollup = .running
         $0.lastSbdMerge = MergeGuard.SbdMerge(commit: MergeGuardTests.baseTip, files: nil)
       }
 
@@ -438,7 +437,7 @@ extension MergeGuardTests {
 
     @Test func aPendingBaseAfterSbdsMergeWhenThisPRsFilesAreUnknownHolds() throws {
       let verdict = try MergeGuardTests.check {
-        $0.baseRollup = "PENDING"
+        $0.baseRollup = .running
         $0.files = nil
         $0.lastSbdMerge = MergeGuard.SbdMerge(commit: MergeGuardTests.baseTip, files: ["README.md"])
       }
@@ -540,7 +539,7 @@ extension MergeGuardTests {
 // MARK: The order of the checks
 
 extension MergeGuardTests {
-  /// The plan's order: allowlist, subject state, verdict Ready to merge, merge method known, merge details read and no
+  /// The order of the checks: allowlist, subject state, verdict Ready to merge, merge method known, merge details read and no
   /// open threads, live read matches, behind_by, base CI, earlier overlap, reply approval. The Operator is asked only
   /// about a head that every mechanical check passed, so a hold or a re-arm comes before a question.
   @Suite struct Order {

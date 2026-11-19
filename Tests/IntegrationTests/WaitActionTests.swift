@@ -2,14 +2,11 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// Wait actions (#410, Stage 1): `sb wait --then merge|rm-worktree|rm|report` and MCP `set_wait` store a checked,
-/// authorized action on the wait. sbd decides who may arm one from the client's process ancestry (Decision 8), so the
-/// tests that need a caller inside a session run sb from that session's Claude pane, as a tool call of the stub. A
-/// command that the test runner starts runs outside every pane, which counts as the user. FollowThroughTests covers
-/// what sbd does when an action wait resolves.
-///
-/// The tests read the new fields (`action`, `subject`) from the JSON that sb prints, so this file compiles before
-/// `Wait` has them.
+/// Wait actions: `sb wait --then merge|rm-worktree|rm|report` and MCP `set_wait` store a checked, authorized action
+/// on the wait. sbd decides who may arm one from the client's process ancestry. Tests that need a caller inside a
+/// session run sb from that session's Claude pane, as a tool call of the stub. A command that the test runner starts
+/// runs outside every pane, which counts as the user. FollowThroughTests covers what sbd does when an action wait
+/// resolves.
 @Suite(.blocking(timeLimit: .seconds(120))) struct WaitActionTests {
   let handoff = OperatorHandoffTests()
   let operatorHelpers = OperatorTests()
@@ -25,14 +22,7 @@ import Testing
   /// A private sbd whose poller asks `github`, with Fixtures/gh-merge-stub as its gh, so `ghMerges` shows any merge.
   /// `mergeRepos` is `operator.mergeRepos` in config.json, or nil to leave the key out.
   func instance(_ github: FakeGitHub, mergeRepos: [String]? = [charts]) throws -> Instance {
-    var config: [String: JSON] = [
-      "github": [
-        "gh": .string("\(FakeGitHub.fixtures)/gh-merge-stub"), "url": .string(github.url), "pollSeconds": 0,
-      ],
-      "tickSeconds": 1,
-    ]
-    if let mergeRepos { config["operator"] = ["mergeRepos": .array(mergeRepos.map(JSON.string))] }
-    return try Instance(config: config)
+    try Instance.withMergeStub(github, mergeRepos: mergeRepos)
   }
 
   /// A session on #18303's branch whose PR the poller has read. #18303 still needs a review, so the session is not
@@ -80,9 +70,21 @@ import Testing
     try #require(session["waits"]?.array?.last, Comment(rawValue: session.text))
   }
 
-  /// The operator's last wait, as `sb get --json` prints it.
-  func operatorsLastWait(_ sbd: Instance) throws -> JSON {
-    try lastWait(try sbd.getJSON(try theOperator(sbd).id))
+  /// The operator's last wait.
+  func operatorsLastWait(_ sbd: Instance) throws -> Wait {
+    try #require(try theOperator(sbd).waits.last)
+  }
+
+  /// Expects `r` to be refused as an arm by a caller that may not arm, with no wait stored.
+  func expectRefused(_ r: CommandResult, _ sbd: Instance, sourceLocation: SourceLocation = #_sourceLocation) throws {
+    #expect(r.status != 0, Comment(rawValue: r.stdout), sourceLocation: sourceLocation)
+    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr), sourceLocation: sourceLocation)
+    #expect(try noWaits(sbd), sourceLocation: sourceLocation)
+  }
+
+  /// The environment assignments for a command in a pane: CLAUDECODE as Claude Code sets it, then `env`.
+  func paneEnv(_ env: [String: String]) -> [String] {
+    ["CLAUDECODE": "1"].merging(env) { $1 }.sorted { $0.key < $1.key }.map { "\($0.key)=\(shellQuote($0.value))" }
   }
 
   // MARK: Running sb inside a pane
@@ -105,10 +107,8 @@ import Testing
   func sbInPane(
     _ sbd: Instance, of owner: SessionSummary, _ args: [String], env: [String: String] = [:], name: String = "arm"
   ) throws -> CommandResult {
-    let vars = ["CLAUDECODE": "1"].merging(env) { $1 }.sorted { $0.key < $1.key }.map {
-      "\($0.key)=\(shellQuote($0.value))"
-    }
-    try sbd.writeScript(name, (vars + [shellQuote("\(Instance.bin)/sb")] + args.map(shellQuote)).joined(separator: " "))
+    let command = paneEnv(env) + [shellQuote("\(Instance.bin)/sb")] + args.map(shellQuote)
+    try sbd.writeScript(name, command.joined(separator: " "))
     return try runInPane(sbd, of: owner, name)
   }
 
@@ -142,11 +142,8 @@ import Testing
         "params": ["name": .string(tool), "arguments": .object(arguments)],
       ],
     ]
-    let vars = ["CLAUDECODE": "1"].merging(env) { $1 }.sorted { $0.key < $1.key }.map {
-      "\($0.key)=\(shellQuote($0.value))"
-    }
     let input = "printf '%s\\n' " + lines.map { shellQuote($0.text) }.joined(separator: " ")
-    let server = (vars + [shellQuote("\(Instance.bin)/sb"), "mcp-server"]).joined(separator: " ")
+    let server = (paneEnv(env) + [shellQuote("\(Instance.bin)/sb"), "mcp-server"]).joined(separator: " ")
     try sbd.writeScript(name, "\(input) | \(server)")
     let r = try runInPane(sbd, of: owner, name)
     let replies = r.stdout.split(separator: "\n").compactMap { JSON.parse(String($0)) }
@@ -160,7 +157,7 @@ import Testing
     ["kind": "session", "target": .string(s.id), "state": "ready_to_merge", "then": "merge", "note": .string(note)]
   }
 
-  // MARK: Who may arm (Decision 8)
+  // MARK: Who may arm
 
   @Test func aConversationArmsMergeAndTheOperatorHoldsItWithHandedFrom() throws {
     let github = try FakeGitHub()
@@ -175,10 +172,10 @@ import Testing
     #expect(try parse(r)["id"]?.string == op.id)
     #expect(op.waits.count == 1, "\(op.waits)")
     let wait = try operatorsLastWait(sbd)
-    #expect(wait["action"]?["kind"]?.string == "merge", Comment(rawValue: wait.text))
-    #expect(wait["then"]?.string == "resume", Comment(rawValue: wait.text))
-    #expect(wait["session"]?["id"]?.string == s.id, Comment(rawValue: wait.text))
-    #expect(wait["handedFrom"]?["id"]?.string == c.id, Comment(rawValue: wait.text))
+    #expect(wait.action?.kind == .merge, "\(wait)")
+    #expect(wait.then == .resume, "\(wait)")
+    #expect(wait.session?.id == s.id, "\(wait)")
+    #expect(wait.handedFrom?.id == c.id, "\(wait)")
     #expect(try sbd.get(c.id).waits.isEmpty)
   }
 
@@ -191,9 +188,9 @@ import Testing
     let r = try sbInPane(sbd, of: op, ["wait", "--json"] + mergeArgs(s))
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
-    let wait = try lastWait(try sbd.getJSON(op.id))
-    #expect(wait["action"]?["kind"]?.string == "merge", Comment(rawValue: wait.text))
-    #expect(wait["handedFrom"] == nil, Comment(rawValue: wait.text))
+    let wait = try #require(try sbd.get(op.id).waits.last)
+    #expect(wait.action?.kind == .merge, "\(wait)")
+    #expect(wait.handedFrom == nil, "\(wait)")
   }
 
   /// The user's terminal: no CLAUDECODE, no SB_SESSION_ID, and no session's pane above sb.
@@ -207,9 +204,9 @@ import Testing
 
     #expect(r.status == 0, Comment(rawValue: r.stderr))
     let wait = try operatorsLastWait(sbd)
-    #expect(wait["action"]?["kind"]?.string == "merge", Comment(rawValue: wait.text))
-    #expect(wait["by"]?.string == "you", Comment(rawValue: wait.text))
-    #expect(wait["handedFrom"]?["id"]?.string == c.id, Comment(rawValue: wait.text))
+    #expect(wait.action?.kind == .merge, "\(wait)")
+    #expect(wait.by == .you, "\(wait)")
+    #expect(wait.handedFrom?.id == c.id, "\(wait)")
   }
 
   /// A work session's Claude may not arm any action, for itself or for another session.
@@ -225,9 +222,7 @@ import Testing
 
     let r = try sbInPane(sbd, of: worker, ["wait", "--json", "--kind", "session", "--target", s.id] + shape)
 
-    #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr))
-    #expect(try noWaits(sbd))
+    try expectRefused(r, sbd)
   }
 
   @Test func theWorkSessionRefusalNamesMerge() throws {
@@ -251,9 +246,7 @@ import Testing
 
     let r = try sbInPane(sbd, of: worker, ["wait", "--json"] + mergeArgs(s), env: ["SB_SESSION_ID": c.id])
 
-    #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr))
-    #expect(try noWaits(sbd))
+    try expectRefused(r, sbd)
   }
 
   /// The same spoof, naming the conversation as the waiter in place of SB_SESSION_ID. The wait would go to the
@@ -268,9 +261,7 @@ import Testing
 
     let r = try sbInPane(sbd, of: worker, ["wait", "--json", c.id] + mergeArgs(s))
 
-    #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr))
-    #expect(try noWaits(sbd))
+    try expectRefused(r, sbd)
     #expect(try handoff.operators(sbd).isEmpty)
   }
 
@@ -302,9 +293,7 @@ import Testing
     let r = try sbd.run(
       ["wait", c.id] + mergeArgs(s), env: ["SB_SESSION_ID": namesWorker ? worker.id : "zzzzz"])
 
-    #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr))
-    #expect(try noWaits(sbd))
+    try expectRefused(r, sbd)
   }
 
   /// A session that runs `tmux new-session` starts sb below sbd's tmux server, outside every pane, and without
@@ -327,10 +316,8 @@ import Testing
     try #require(opened.status == 0, "\(opened.stderr)")
     let r = try sbd.scriptResult("opened-arm")
 
-    #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal), Comment(rawValue: r.stderr))
+    try expectRefused(r, sbd)
     #expect(r.stderr.contains("tmux server"), Comment(rawValue: r.stderr))
-    #expect(try noWaits(sbd))
   }
 
   /// Actions run only on this Mac, so sbd refuses one on a session on a host, even from the user.
@@ -346,7 +333,7 @@ import Testing
     #expect(try noWaits(sbd))
   }
 
-  // MARK: What merge needs at set time (Decision 9)
+  // MARK: What merge needs at set time
 
   /// sbd merges only in the repositories that `operator.mergeRepos` lists. The default lists none.
   @Test(arguments: [nil, [], ["PostHog/posthog"]] as [[String]?])
@@ -405,7 +392,7 @@ import Testing
 
     let op = try theOperator(sbd)
     #expect(try lastWait(printed)["action"]?["kind"]?.string == "merge", Comment(rawValue: printed.text))
-    let stored = try operatorsLastWait(sbd)
+    let stored = try lastWait(try sbd.getJSON(op.id))
     #expect(stored["action"]?["kind"]?.string == "merge", Comment(rawValue: stored.text))
     let id = try #require(op.waits.last?.id)
     let event = try #require(try handoff.waitEvent(sbd, op.id, "wait", wait: id))
@@ -470,9 +457,9 @@ import Testing
     let answer = try #require(result.json, Comment(rawValue: result.text))
     #expect(answer["id"]?.string == op.id, Comment(rawValue: answer.text))
     let wait = try operatorsLastWait(sbd)
-    #expect(wait["action"]?["kind"]?.string == "merge", Comment(rawValue: wait.text))
-    #expect(wait["by"]?.string == "claude", Comment(rawValue: wait.text))
-    #expect(wait["handedFrom"]?["id"]?.string == c.id, Comment(rawValue: wait.text))
+    #expect(wait.action?.kind == .merge, "\(wait)")
+    #expect(wait.by == .claude, "\(wait)")
+    #expect(wait.handedFrom?.id == c.id, "\(wait)")
   }
 
   /// The work session's own server, naming a conversation as the waiter, and one started with SB_SESSION_ID set to
@@ -526,7 +513,7 @@ import Testing
     for value in ["merge", "rm-worktree", "rm", "report"] { #expect(then.contains(value), Comment(rawValue: then)) }
   }
 
-  // MARK: rm-worktree on a merge wait (Decision 5)
+  // MARK: rm-worktree on a merge wait
 
   /// The subject is the session with that open PR when the wait is set. rm-worktree needs no allowlist.
   @Test func rmWorktreeOnAMergeWaitStoresTheSessionWithThatOpenPR() throws {
@@ -543,9 +530,9 @@ import Testing
 
     let op = try theOperator(sbd)
     let wait = try operatorsLastWait(sbd)
-    #expect(wait["action"]?["kind"]?.string == "rm-worktree", Comment(rawValue: wait.text))
-    #expect(wait["subject"]?["id"]?.string == s.id, Comment(rawValue: wait.text))
-    #expect(wait["subject"]?["name"]?.string == s.name, Comment(rawValue: wait.text))
+    #expect(wait.action?.kind == .rmWorktree, "\(wait)")
+    #expect(wait.subject?.id == s.id, "\(wait)")
+    #expect(wait.subject?.name == s.name, "\(wait)")
     #expect(try lastWait(printed)["subject"]?["id"]?.string == s.id, Comment(rawValue: printed.text))
     let id = try #require(op.waits.last?.id)
     let event = try #require(try handoff.waitEvent(sbd, op.id, "wait", wait: id))

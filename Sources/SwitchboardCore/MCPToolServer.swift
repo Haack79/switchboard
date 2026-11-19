@@ -181,8 +181,7 @@ public struct MCPToolServer: Sendable {
       var request = try JSON(encoding: wait).object ?? [:]
       request["session"] = try sessionOrCaller(args, scoped)
       if let here = args["here"]?.bool { request["here"] = .bool(here) }
-      // sbd reads `caller` only to check an action. A request from a host may not carry it.
-      if let caller, wait.then.flatMap(WaitAction.Kind.init(rawValue:)) != nil { request["caller"] = .string(caller) }
+      if let caller { request["caller"] = .string(caller) }
       return try client.call("wait", request)
     case "clear_wait":
       var request = pick(args, ["wait"])

@@ -93,8 +93,9 @@ let usage = """
                                   answer the operator or acknowledge it. S is
                                   the session that it is about
     operator approve <wait>       approve the merge that a "judgment needed"
-                                  message asks about. Only the operator runs it,
-                                  in its own pane
+                                  message asks about, after reading the
+                                  session's last reply in it. Only the operator
+                                  runs it, in its own pane
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
@@ -159,7 +160,8 @@ let usage = """
                                   its worktree after its PR merged (state done,
                                   or --kind merge), rm removes the target (state
                                   done), and report records --note as a report.
-                                  A wait that ends unmet resumes the operator
+                                  A wait that ends unmet runs nothing and
+                                  resumes the wait's holder
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -487,12 +489,12 @@ let usage = """
   rm-worktree (a session wait for done, or a merge wait on owner/name#N), rm
   (a session wait for done), and report (any kind but manual, with --note, and
   --needs-you for an Inbox item) arm an action that sbd runs when the wait is
-  met. Only a Manager conversation, the Operator, or you can arm one, and merge
-  needs the PR's repository in operator.mergeRepos in config.json. review,
-  bot-review, and queue take --since WHEN, a past time after which a review or
-  a change in Trunk's queue counts, instead of the time the wait was set. A
-  wait still open past its recheck time (recheckSeconds in config.json) moves
-  the session to Needs you.
+  met. Only a Manager conversation, the Operator, or you in a terminal can arm
+  one, and merge needs the PR's repository in operator.mergeRepos in
+  config.json. review, bot-review, and queue take --since WHEN, a past time
+  after which a review or a change in Trunk's queue counts, instead of the
+  time the wait was set. A wait still open past its recheck time
+  (recheckSeconds in config.json) moves the session to Needs you.
   """
 
 struct Args {

@@ -52,8 +52,7 @@ func waitCommand(_ a: Args) {
   args["by"] = .string(author.rawValue)
   if a.switches.contains("--here") { args["here"] = true }
   if a.switches.contains("--needs-you") { args["needsYou"] = true }
-  // sbd reads `caller` only to check an action. A request from a host may not carry it.
-  if a.values["--then"].flatMap(WaitAction.Kind.init(rawValue:)) != nil { args.merge(callerArg) { $1 } }
+  args.merge(callerArg) { $1 }
   if block { BlockingWait(session: session).run(args, timeout: timeout) }
   let result = call("wait", args)
   if a.json { return printJSON(result) }

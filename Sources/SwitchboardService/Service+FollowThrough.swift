@@ -7,10 +7,11 @@ import SwitchboardCore
 extension Service {
   /// What one run of an action ended with.
   enum ActionOutcome {
-    /// The action ran or was already done. `report`, when set, becomes an info report on the operator.
-    case done(result: String, detail: String, report: String?)
+    /// The action ran or was already done. With `reports`, `detail` becomes an info report on the operator. `merged`
+    /// is the PR that a merge action merged, which `finish` records as sbd's last merge in its repository.
+    case done(result: String, detail: String, reports: Bool, merged: SbdMergeRecord? = nil)
     /// Not yet. `message` goes to the subject once per `messageKey`.
-    case hold(reason: String, message: String?, messageKey: String?)
+    case hold(reason: String, message: String? = nil, messageKey: String? = nil)
     /// The subject is no longer in the wait's state, so the wait waits for its condition again.
     case rearm
     /// The holder must decide. `approval` is what `sb operator approve` approves, for a question about the reply,
@@ -18,9 +19,10 @@ extension Service {
     case judgment(question: String, approval: MergeGuard.Approval? = nil, reply: String? = nil)
   }
 
-  /// Marks the action running, stores it, and runs it on `followThroughQueue`. A run keeps the fields of the status
-  /// before it, so a hold's start time, its message key, and an approval survive it. `approval` replaces the stored
-  /// one. It runs on the state queue.
+  /// Marks the action running, stores it, and runs it on `followThroughQueue`.
+  ///
+  /// The run keeps a hold's start time, its message key, and an approval. `approval` replaces the stored one. It runs
+  /// on the state queue.
   func startAction(_ holder: String, _ wait: Wait, approval: MergeGuard.Approval? = nil) throws {
     var status = wait.actionStatus ?? ActionStatus(kind: .running, since: nowMs())
     status.kind = .running
@@ -30,9 +32,11 @@ extension Service {
     followThroughQueue.async { [self] in runAction(holder, wait.id) }
   }
 
-  /// The repository, PR, and files of the merge that an action made for `subject`, as `lastSbdMerges` holds it.
-  private func lastSbdMerge(of subject: String) -> (repo: String, number: Int, files: Set<String>?)? {
-    lastSbdMerges.first { $0.value.subject == subject }.map { ($0.key, $0.value.number, $0.value.files) }
+  /// A PR that a merge action merged, with its changed files, or nil files when sbd did not read them.
+  struct SbdMergeRecord {
+    var repo: String
+    var number: Int
+    var files: Set<String>?
   }
 
   /// Rebuilds `lastSbdMerges` from the newest `wait-resolved` events of merge actions that merged, so a restart
@@ -74,8 +78,7 @@ extension Service {
   /// Runs the action of the wait and records how it ended. Any error becomes a question to the holder, so a wait
   /// never stays running. It runs on `followThroughQueue`.
   private func runAction(_ holder: String, _ waitId: String) {
-    guard let wait = queue.sync(execute: { entries[holder]?.session.waits?.first { $0.id == waitId } }),
-      let action = wait.action
+    guard let wait = queue.sync(execute: { storedWait(holder, waitId) }), let action = wait.action
     else { return }
     let outcome: ActionOutcome
     do {
@@ -91,36 +94,33 @@ extension Service {
     queue.sync { finish(holder, waitId, outcome) }
   }
 
-  /// Records how the action ended. Done removes the wait and records `wait-resolved` with the action, a
-  /// `follow-through` event on the subject, and an info report for a merge or a removal. A hold sets the retry time
-  /// and sends its message to the subject unless it already went. A hold for one reason past
-  /// `operator.holdLimitSeconds` becomes a question. A question goes to the holder. It runs on the state queue.
+  /// Records how the action ended.
+  ///
+  /// Done removes the wait and records `wait-resolved`, a `follow-through` event on the subject, and an info report
+  /// for a merge or a removal. A hold sets the retry time and sends its message to the subject once. A hold for one
+  /// reason past `operator.holdLimitSeconds` becomes a question. A question goes to the holder. It runs on the state
+  /// queue.
   private func finish(_ holder: String, _ waitId: String, _ outcome: ActionOutcome) {
-    guard let wait = entries[holder]?.session.waits?.first(where: { $0.id == waitId }), let action = wait.action
-    else {
+    guard let wait = storedWait(holder, waitId), let action = wait.action else {
       logLine("wait \(waitId) of \(holder) went while its action ran")
       return
     }
     let now = nowMs()
     let old = wait.actionStatus ?? ActionStatus(kind: .running, since: now)
-    let subject = (wait.subject ?? wait.session)?.id
+    let subject = wait.actionSubject?.id
     do {
       switch outcome {
-      case .done(let result, let detail, let report):
-        try update(holder) { $0.waits = ($0.waits ?? []).filter { $0.id != waitId } }
+      case .done(let result, let detail, let reports, let merged):
         var data: [String: JSON] = [
           "kind": .string(action.kind.rawValue), "result": .string(result), "detail": .string(detail),
         ]
-        if let merged = subject.flatMap(lastSbdMerge(of:)) {
+        if let merged {
           data["repo"] = .string(merged.repo)
           data["pr"] = .number(Double(merged.number))
           data["files"] = merged.files.map { .array($0.sorted().map(JSON.string)) } ?? .null
+          if let subject { lastSbdMerges[merged.repo.lowercased()] = (subject, merged.number, merged.files) }
         }
-        var resolved: [String: JSON] = [
-          "wait": try JSON(encoding: wait), "outcome": .string(detail), "action": .object(data),
-        ]
-        if let from = wait.handedFrom { resolved["from"] = .string(from.id) }
-        record(holder, "wait-resolved", .object(resolved))
+        try closeWait(holder, wait, extra: ["outcome": .string(detail), "action": .object(data)])
         if let subject, entries[subject] != nil {
           var event: [String: JSON] = [
             "wait": .string(waitId), "action": .string(action.kind.rawValue), "result": .string(result),
@@ -128,7 +128,10 @@ extension Service {
           if let from = wait.handedFrom { event["from"] = .string(from.id) }
           record(subject, "follow-through", .object(event))
         }
-        if let report { try recordReport(report, needsYou: false, about: subject, wait: waitId) }
+        if reports {
+          let about = subject.flatMap { entries[$0] == nil ? nil : $0 }
+          try recordReport(detail, needsYou: false, about: about, on: try ensureOperator(), wait: waitId)
+        }
         if action.kind == .merge, let repo = subject.flatMap({ entries[$0]?.facts.pr?.repo }) {
           try retryHeldMerges(in: repo)
         }
@@ -140,10 +143,8 @@ extension Service {
           let hours = config.operator.holdLimitSeconds / 3600
           return finish(holder, waitId, .judgment(question: "still held after \(hours) h: \(reason)"))
         }
-        status.kind = .held
-        status.reason = reason
-        status.retryAt = now + Int64(config.operator.holdRetrySeconds) * 1000
-        status.subjectSince = subject.flatMap { entries[$0]?.facts.stateSince }
+        hold(&status, reason, now: now)
+        status.subjectSince = subjectSince(of: wait)
         try setActionStatus(holder, waitId, status)
         if let message, let subject, key != old.messageKey {
           // A failed send leaves the key unset, so the next hold sends the message again.
@@ -163,8 +164,7 @@ extension Service {
         status.since = now
         status.reason = question
         status.retryAt = nil
-        status.head = approval?.head
-        status.replyDigest = approval?.replyDigest
+        status.asked = approval
         try setActionStatus(holder, waitId, status)
         do {
           let session = entries[holder]!.session
@@ -186,24 +186,22 @@ extension Service {
   /// Holds the action of a wait that `finish` could not move on, so the tick or the poller checks it again and the
   /// wait never stays running or asks nobody. It does nothing when the wait is gone.
   private func holdAfterFailure(_ holder: String, _ waitId: String, _ reason: String) {
-    guard let wait = entries[holder]?.session.waits?.first(where: { $0.id == waitId }) else { return }
+    guard var status = storedWait(holder, waitId)?.actionStatus, status.kind != .held else { return }
     let now = nowMs()
-    var status = wait.actionStatus ?? ActionStatus(kind: .held, since: now)
-    if status.kind == .held { return }
-    status.kind = .held
-    status.reason = reason
+    hold(&status, reason, now: now)
     status.since = now
-    status.retryAt = now + Int64(config.operator.holdRetrySeconds) * 1000
     try? setActionStatus(holder, waitId, status)
   }
 
-  /// Records a report on the operator, with the id of the wait whose action made it.
-  private func recordReport(_ text: String, needsYou: Bool, about: String?, wait: String) throws {
-    var data: [String: JSON] = [
-      "text": .string(oneLine(text, max: TriageCard.lineLength)), "needsYou": .bool(needsYou), "wait": .string(wait),
-    ]
-    if let about, entries[about] != nil { data["about"] = .string(about) }
-    try recordStored(try ensureOperator(), OperatorReport.event, .object(data))
+  /// Marks the action held for `reason` until `operator.holdRetrySeconds` from `now`.
+  private func hold(_ status: inout ActionStatus, _ reason: String, now: Int64) {
+    status.kind = .held
+    status.reason = reason
+    status.retryAt = now + Int64(config.operator.holdRetrySeconds) * 1000
+  }
+
+  private func storedWait(_ holder: String, _ id: String) -> Wait? {
+    entries[holder]?.session.waits?.first { $0.id == id }
   }
 
   /// Makes the held merges in `repo` due now, because a merge that one of them held behind just finished.
@@ -223,10 +221,10 @@ extension Service {
   // MARK: The approval
 
   /// The `wait-approve` request: the operator approves the merge that a question about the last reply asked about.
-  /// The approval covers the head and the reply that the question covered, so a push or a new reply since makes sbd
-  /// ask again. Only a client inside the operator's Claude pane may send it, and its `caller` must name the
-  /// operator, because any process can set SB_SESSION_ID. It runs on the state queue, after `install` of a fresh
-  /// snapshot.
+  ///
+  /// The approval covers the head and the reply that the question covered, so a push or a new reply makes sbd ask
+  /// again. Only a client inside the operator's Claude pane may send it, and its `caller` must name the operator,
+  /// because any process can set SB_SESSION_ID. It runs on the state queue, after `install` of a fresh snapshot.
   func approveWait(_ args: JSON, caller: Caller) throws -> JSON {
     let refusal = APIError("only the operator approves a wait, from its own pane")
     guard let op = operatorID(), args["caller"]?.string == op else { throw refusal }
@@ -234,13 +232,11 @@ extension Service {
       !pane.dead, Processes.isValidPid(pane.pid), ancestry.contains(pane.pid)
     else { throw refusal }
     let waitId = args["wait"]?.string ?? ""
-    guard let wait = entries[op]?.session.waits?.first(where: { $0.id == waitId }) else {
-      throw APIError("the operator has no wait \(waitId)")
+    guard let wait = storedWait(op, waitId) else { throw APIError("the operator has no wait \(waitId)") }
+    guard let status = wait.actionStatus, status.kind == .awaitingJudgment, let asked = status.asked else {
+      throw APIError("wait \(waitId) isn't waiting for an approval of a merge")
     }
-    guard let status = wait.actionStatus, status.kind == .awaitingJudgment, let head = status.head,
-      let digest = status.replyDigest
-    else { throw APIError("wait \(waitId) isn't waiting for an approval of a merge") }
-    try startAction(op, wait, approval: MergeGuard.Approval(head: head, replyDigest: digest))
+    try startAction(op, wait, approval: asked)
     return try JSON(encoding: summary(op))
   }
 
@@ -252,16 +248,16 @@ extension Service {
     var facts: SessionFacts
     var verdict: Verdict?
     var busy: Bool
-    var earlier: [Int]
+    /// The PRs of the earlier merges, with the heads that the poller read.
+    var earlier: [(number: Int, head: String)]
     var lastSbdMerge: MergeGuard.SbdMerge?
     var approval: MergeGuard.Approval?
   }
 
-  /// Lands the subject's PR when `MergeGuard` acts. The checks that need no live read run first, so a wait that
-  /// can't merge runs no gh command. A PR that is already merged, in the facts or the live read, finishes as done,
-  /// which is how a merge that landed before a restart ends. `operator.mergeRepos` is read from config.json again,
-  /// so a repository that the user took off the list stops merging without a restart. It runs on
-  /// `followThroughQueue`.
+  /// Lands the subject's PR when `MergeGuard` acts.
+  ///
+  /// A live read runs only after the stages before it pass. A PR that is already merged finishes as done. It reads
+  /// `operator.mergeRepos` from config.json on each call. It runs on `followThroughQueue`.
   private func runMerge(_ holder: String, _ wait: Wait) throws -> ActionOutcome {
     guard let subject = wait.session?.id else {
       return .judgment(question: "the wait names no session to merge")
@@ -269,26 +265,28 @@ extension Service {
     let mergeRepos = home.loadConfig().operator.mergeRepos
     let read = queue.sync { mergeFacts(subject, wait) }
     let facts = read.facts
-    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, subject, read.name) }
-    if read.busy, let pr = facts.pr {
-      return .hold(reason: "\(read.name) is merging #\(pr.number) or being deleted", message: nil, messageKey: nil)
-    }
+    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, read.name) }
+    if read.busy, let pr = facts.pr { return .hold(reason: "\(read.name) is merging #\(pr.number) or being deleted") }
     if let verdict = MergeGuard.checkFacts(mergeRepos: mergeRepos, verdict: read.verdict, facts: facts) {
       return outcome(of: verdict, input: nil)
     }
     let pr = facts.pr!
-    let live = livePR(pr)
-    if live?.state == .merged { return alreadyMerged(pr, subject, read.name) }
-    let compared = live.flatMap { compare(pr.repo, base: $0.base, head: $0.head) }
-    let baseTip = compared?.baseTip
-    let files = changedFiles(pr.repo, pr.number)
-    let input = MergeGuard.Input(
-      mergeRepos: mergeRepos, verdict: read.verdict, facts: facts, live: live, behindBy: compared?.behindBy,
-      baseTip: baseTip, baseRollup: baseTip.flatMap { baseRollup(pr.repo, $0) }, files: files,
-      earlierFiles: read.earlier.map { changedFiles(pr.repo, $0) },
-      lastSbdMerge: read.lastSbdMerge,
-      approval: read.approval)
-    let verdict = MergeGuard.check(input)
+    var input = MergeGuard.Input(
+      mergeRepos: mergeRepos, verdict: read.verdict, facts: facts, live: livePR(pr), behindBy: nil, baseTip: nil,
+      baseRollup: nil, files: nil, earlierFiles: [], lastSbdMerge: read.lastSbdMerge, approval: read.approval)
+    if input.live?.state == .merged { return alreadyMerged(pr, read.name) }
+    if let verdict = MergeGuard.checkLive(input) { return outcome(of: verdict, input: input) }
+    let live = input.live!
+    let compared = compare(pr.repo, base: live.base, head: live.head)
+    input.behindBy = compared?.behindBy
+    input.baseTip = compared?.baseTip
+    input.baseRollup = compared.flatMap { baseRollup(pr.repo, $0.baseTip) }
+    if let verdict = MergeGuard.checkBase(input) { return outcome(of: verdict, input: input) }
+    if !read.earlier.isEmpty || MergeGuard.ownMergeUnderCI(input) != nil {
+      input.files = changedFiles(pr.repo, pr.number, head: pr.headSha)
+      input.earlierFiles = read.earlier.map { changedFiles(pr.repo, $0.number, head: $0.head) }
+    }
+    let verdict = MergeGuard.checkFiles(input) ?? MergeGuard.checkReply(input)
     guard verdict == .act, let approval = read.approval else { return outcome(of: verdict, input: input) }
     if let changed = queue.sync(execute: { takeForMerge(holder, wait.id, subject, pr, approval) }) { return changed }
     defer { queue.sync { _ = merging.remove(subject) } }
@@ -298,31 +296,34 @@ extension Service {
     } catch {
       return .judgment(question: "\(error)")
     }
-    if attempt.result == .merged {
-      queue.sync { lastSbdMerges[pr.repo.lowercased()] = (subject, pr.number, files) }
-    }
     let landed = "\(facts.mergeMethod.pastTense.capitalized) #\(pr.number) of \(read.name) at \(pr.headSha.prefix(7))"
-    return .done(result: attempt.result.rawValue, detail: landed, report: landed)
+    guard attempt.result == .merged else {
+      return .done(result: attempt.result.rawValue, detail: landed, reports: true)
+    }
+    let files = input.files ?? changedFiles(pr.repo, pr.number, head: pr.headSha)
+    changedFilesRead[filesKey(pr.repo, pr.number)] = nil
+    return .done(
+      result: attempt.result.rawValue, detail: landed, reports: true,
+      merged: SbdMergeRecord(repo: pr.repo, number: pr.number, files: files))
   }
 
-  /// Checks again what may have changed during the live reads, and when nothing did, puts the subject in `merging`
-  /// in the same step, so the merge runs only for a wait that is still running, at the head that the guard read,
-  /// for the reply that the holder approved, while the subject is still Ready to merge. It returns the outcome that
-  /// replaces the merge, or nil. It runs on the state queue.
+  /// Puts the subject in `merging` when nothing changed during the live reads, or returns the outcome that replaces
+  /// the merge.
+  ///
+  /// The merge runs only for a wait that is still running, at the head that the guard read, for the reply that the
+  /// holder approved, while the subject is still Ready to merge. It runs on the state queue.
   private func takeForMerge(
     _ holder: String, _ waitId: String, _ subject: String, _ pr: PullRequest, _ approval: MergeGuard.Approval
   ) -> ActionOutcome? {
-    guard entries[holder]?.session.waits?.first(where: { $0.id == waitId })?.actionStatus?.kind == .running else {
-      return .rearm
-    }
-    guard let e = entries[subject], beingDeletedRefusal(subject) == nil, !merging.contains(subject) else {
-      return .hold(reason: "the session is merging #\(pr.number) or being deleted", message: nil, messageKey: nil)
-    }
-    guard Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState).state == .readyToMerge else {
-      return .rearm
+    guard storedWait(holder, waitId)?.actionStatus?.kind == .running else { return .rearm }
+    let e: Entry
+    switch mergeAdmission(subject) {
+    case .busy: return .hold(reason: "the session is merging #\(pr.number) or being deleted")
+    case .notReady: return .rearm
+    case .ready(let entry, _): e = entry
     }
     guard e.facts.pr?.headSha == pr.headSha else {
-      return .hold(reason: "the head of #\(pr.number) moved during the checks", message: nil, messageKey: nil)
+      return .hold(reason: "the head of #\(pr.number) moved during the checks")
     }
     let digest = MergeGuard.replyDigest(e.facts.lastReply)
     guard digest == approval.replyDigest else {
@@ -345,7 +346,7 @@ extension Service {
     }
     let deleting = beingDeletedRefusal(subject) != nil
     let verdict = deleting ? nil : Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
-    var earlier: [Int] = []
+    var earlier: [(number: Int, head: String)] = []
     var last: MergeGuard.SbdMerge?
     if let repo = e.facts.pr?.repo {
       for holder in entries.values {
@@ -354,7 +355,7 @@ extension Service {
             let pr = other.session.flatMap({ entries[$0.id]?.facts.pr }), pr.state == .open,
             Dependencies.sameRepo(pr.repo, repo)
           else { continue }
-          earlier.append(pr.number)
+          earlier.append((pr.number, pr.headSha))
         }
       }
       if let merged = lastSbdMerges[repo.lowercased()] {
@@ -369,10 +370,11 @@ extension Service {
 
   /// The outcome for a PR that merged before this run, such as a merge that landed before a restart. It counts as
   /// sbd's last merge in the repository with unknown files, so a pending base after it holds an overlapping merge.
-  private func alreadyMerged(_ pr: PullRequest, _ subject: String, _ name: String) -> ActionOutcome {
-    queue.sync { lastSbdMerges[pr.repo.lowercased()] = (subject, pr.number, nil) }
-    let text = "#\(pr.number) of \(name) is merged"
-    return .done(result: "merged", detail: text, report: text)
+  private func alreadyMerged(_ pr: PullRequest, _ name: String) -> ActionOutcome {
+    changedFilesRead[filesKey(pr.repo, pr.number)] = nil
+    return .done(
+      result: MergeAttempt.Result.merged.rawValue, detail: "#\(pr.number) of \(name) is merged", reports: true,
+      merged: SbdMergeRecord(repo: pr.repo, number: pr.number, files: nil))
   }
 
   /// The action's outcome for a verdict that does not act. A hold's message goes once per head and base tip. A
@@ -399,7 +401,7 @@ extension Service {
     (try? runGh(args, timeout: 30)).flatMap(JSON.parse)
   }
 
-  /// The PR as GitHub has it now.
+  /// The PR as GitHub has it.
   private func livePR(_ pr: PullRequest) -> MergeGuard.LivePR? {
     guard
       let json = ghJSON([
@@ -422,7 +424,7 @@ extension Service {
   }
 
   /// The rollup of a commit's check runs and statuses. A list longer than one page is unknown.
-  private func baseRollup(_ repo: String, _ sha: String) -> String? {
+  private func baseRollup(_ repo: String, _ sha: String) -> ChecksRollup? {
     guard let runs = ghJSON(["api", "repos/\(repo)/commits/\(sha)/check-runs?per_page=100"]),
       let list = runs["check_runs"]?.array, (runs["total_count"]?.int ?? 0) <= list.count,
       let status = ghJSON(["api", "repos/\(repo)/commits/\(sha)/status"])
@@ -432,38 +434,47 @@ extension Service {
     return Service.rollup(list + statuses)
   }
 
-  /// The PR's changed files, or nil when a page failed or the PR has more files than 30 pages hold.
-  private func changedFiles(_ repo: String, _ number: Int) -> Set<String>? {
+  /// The PR's changed files at `head`, or nil when a page failed or the PR has more files than 30 pages hold.
+  ///
+  /// A successful read stays in `changedFilesRead` until the PR's head moves or its merge wait finishes.
+  private func changedFiles(_ repo: String, _ number: Int, head: String) -> Set<String>? {
+    let key = filesKey(repo, number)
+    if let read = changedFilesRead[key], read.head == head { return read.files }
     var files = Set<String>()
     for page in 1...30 {
       guard let list = ghJSON(["api", "repos/\(repo)/pulls/\(number)/files?per_page=100&page=\(page)"])?.array
       else { return nil }
       files.formUnion(list.compactMap { $0["filename"]?.string })
-      if list.count < 100 { return files }
+      if list.count < 100 {
+        changedFilesRead[key] = (head, files)
+        return files
+      }
     }
     return nil
   }
 
-  /// One state for a list of check runs and statuses: FAILURE when any failed, PENDING when any still runs, and
-  /// SUCCESS when all passed. A check run carries `status` and `conclusion`, and a status carries `state`. An
-  /// empty list has no state.
-  static func rollup(_ contexts: [JSON]) -> String? {
+  private func filesKey(_ repo: String, _ number: Int) -> String { "\(repo.lowercased())#\(number)" }
+
+  /// One state for a list of check runs and statuses: failed when any failed or has a state that `ChecksRollup`
+  /// does not know, running when any still runs, and passed when all passed. A check run carries `status` and
+  /// `conclusion`, and a status carries `state`. An empty list has no state.
+  static func rollup(_ contexts: [JSON]) -> ChecksRollup? {
     guard !contexts.isEmpty else { return nil }
-    var pending = false
+    var running = false
     for c in contexts {
       if let state = c["state"]?.string?.uppercased() {
-        switch state {
-        case "SUCCESS": continue
-        case "PENDING", "EXPECTED": pending = true
-        default: return "FAILURE"
+        switch ChecksRollup(state) {
+        case .passed?: continue
+        case .running?: running = true
+        case .failed?, nil: return .failed
         }
       } else if c["status"]?.string?.uppercased() != "COMPLETED" {
-        pending = true
+        running = true
       } else if !["SUCCESS", "NEUTRAL", "SKIPPED"].contains(c["conclusion"]?.string?.uppercased() ?? "") {
-        return "FAILURE"
+        return .failed
       }
     }
-    return pending ? "PENDING" : "SUCCESS"
+    return running ? .running : .passed
   }
 
   // MARK: Removal and report
@@ -471,7 +482,7 @@ extension Service {
   /// Removes the subject as `sb rm` does, with its worktree for `rm-worktree`, when `RemovalGuard` allows it. Each
   /// refusal of `remove` becomes a question that quotes it. It runs on `followThroughQueue`.
   private func runRemoval(_ wait: Wait, worktree: Bool) throws -> ActionOutcome {
-    guard let target = wait.subject ?? wait.session else {
+    guard let target = wait.actionSubject else {
       return .judgment(question: "the wait names no session to remove")
     }
     let subject = target.id
@@ -485,9 +496,9 @@ extension Service {
     }
     switch RemovalGuard.check(input) {
     case .gone:
-      return .done(result: "removed", detail: "\(target.name) was already removed", report: nil)
+      return .done(result: "removed", detail: "\(target.name) was already removed", reports: false)
     case .hold(let reason):
-      return .hold(reason: reason, message: nil, messageKey: nil)
+      return .hold(reason: reason)
     case .judgment(let question):
       return .judgment(question: question)
     case .remove:
@@ -499,7 +510,7 @@ extension Service {
       return .judgment(question: "sbd could not remove \(target.name): \(error)")
     }
     let detail = worktree ? "Removed \(target.name) and its worktree" : "Removed \(target.name)"
-    return .done(result: "removed", detail: detail, report: detail)
+    return .done(result: "removed", detail: detail, reports: true)
   }
 
   /// Records the wait's note as a report on the operator, once: a report that already carries the wait's id, from a
@@ -507,13 +518,11 @@ extension Service {
   private func runReport(_ wait: Wait) throws -> ActionOutcome {
     try queue.sync {
       let op = try ensureOperator()
-      let reports = try store.events(session: op, kind: OperatorReport.event, limit: Int.max, newest: true)
-      if !reports.contains(where: { $0.data["wait"]?.string == wait.id }) {
-        try recordReport(
-          wait.note ?? "", needsYou: wait.action?.needsYou == true, about: (wait.subject ?? wait.session)?.id,
-          wait: wait.id)
+      if try store.operatorReport(wait: wait.id, session: op) == nil {
+        let about = wait.actionSubject.flatMap { entries[$0.id] == nil ? nil : $0.id }
+        try recordReport(wait.note ?? "", needsYou: wait.action?.needsYou == true, about: about, on: op, wait: wait.id)
       }
-      return .done(result: "reported", detail: "Recorded the report", report: nil)
+      return .done(result: "reported", detail: "Recorded the report", reports: false)
     }
   }
 }

@@ -87,7 +87,7 @@ extension GitHubPoller {
         let settlement =
           (wait.kind == .deploy
             ? deployOutcome(wait, pr, comments, host: session.host)
-            : wait.settlement(of: pr) ?? githubQueueOutcome(wait, pr).map { Wait.Settlement($0, met: false) }),
+            : wait.settlement(of: pr) ?? githubQueueOutcome(wait, pr)),
         !(wait.pr == nil && wait.finishedBeforeItCounts(pr))
       else { return nil }
       return Settled(session: session.id, wait: wait, prId: id, pr: pr, settlement: settlement, polled: read.polled)
@@ -161,11 +161,11 @@ extension GitHubPoller {
   /// `leftGitHubQueue` for a `queue` wait whose open PR an earlier read showed
   /// in GitHub's merge queue and this read shows outside it. A PR that the
   /// queue has not taken yet keeps the wait open.
-  private func githubQueueOutcome(_ wait: Wait, _ pr: PullRequest) -> String? {
+  private func githubQueueOutcome(_ wait: Wait, _ pr: PullRequest) -> Wait.Settlement? {
     guard wait.kind == .queue, pr.state == .open, pr.queue == nil else { return nil }
     if pr.inMergeQueue == true { queuedWaits.insert(wait.id) }
     guard pr.inMergeQueue == false, queuedWaits.contains(wait.id) else { return nil }
-    return Self.leftGitHubQueue
+    return Wait.Settlement(Self.leftGitHubQueue, met: false)
   }
 
   private func confirmed(_ s: Settled, actions: ActionsRead?) -> Bool {

@@ -330,12 +330,12 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
 @Suite struct WaitResolution {
   @Test(arguments: [(Wait.Kind.date, "the time came"), (.manual, "time to recheck")], [Int64(1000), 5000])
   func timedWaitResolvesOnceItsTimeComes(_ kind: (Wait.Kind, String), _ now: Int64) {
-    #expect(waitOn(kind.0, until: 1000).resolution(now: now, stateOf: { _ in nil }) == kind.1)
+    #expect(waitOn(kind.0, until: 1000).settlement(now: now, stateOf: { _ in nil })?.outcome == kind.1)
   }
 
   @Test(arguments: [Wait.Kind.date, .manual])
   func timedWaitStaysOpenBeforeItsTime(_ kind: Wait.Kind) {
-    #expect(waitOn(kind, until: 1000).resolution(now: 999, stateOf: { _ in nil }) == nil)
+    #expect(waitOn(kind, until: 1000).settlement(now: 999, stateOf: { _ in nil })?.outcome == nil)
   }
 
   /// A due date or manual wait is met, so an action on it runs.
@@ -347,30 +347,30 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
   }
 
   @Test func manualWaitWithoutARecheckTimeStaysOpen() {
-    #expect(waitOn(.manual, note: "ask Alex").resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(waitOn(.manual, note: "ask Alex").settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 
   @Test(arguments: AttentionState.allCases)
   func sessionWaitResolvesWhenTheOtherSessionReachesItsState(_ state: AttentionState) {
     let wait = waitOn(.session, session: flagCache, state: state)
-    #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? state : nil }) == "it did")
+    #expect(wait.settlement(now: 1, stateOf: { $0 == "k3x9p" ? state : nil })?.outcome == "it did")
   }
 
   @Test(arguments: AttentionState.allCases.filter { $0 != .done && $0 != .stale })
   func sessionWaitStaysOpenInAnotherState(_ other: AttentionState) {
     let wait = waitOn(.session, session: flagCache, state: .done)
-    #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? other : nil }) == nil)
+    #expect(wait.settlement(now: 1, stateOf: { $0 == "k3x9p" ? other : nil })?.outcome == nil)
   }
 
   @Test func sessionWaitResolvesWhenTheOtherSessionIsGone() {
     let wait = waitOn(.session, session: flagCache, state: .done)
-    #expect(wait.resolution(now: 1, stateOf: { _ in nil }) == "it was removed")
+    #expect(wait.settlement(now: 1, stateOf: { _ in nil })?.outcome == "it was removed")
   }
 
   @Test(arguments: prKinds)
   func pollerKindNeverResolvesInSbd(_ kind: Wait.Kind) {
     let wait = waitOn(kind, pr: pr1204, session: flagCache, state: .done, until: 0)
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 }
 
@@ -883,8 +883,8 @@ extension WaitResolution {
     let wait = RecheckSettings().stamped(waitOn(.manual, note: "ask Alex"))
     let due = wait.created + Attention.dayMs
 
-    #expect(wait.resolution(now: due - 1, stateOf: { _ in nil }) == nil)
-    #expect(wait.resolution(now: due, stateOf: { _ in nil }) == "time to recheck")
+    #expect(wait.settlement(now: due - 1, stateOf: { _ in nil })?.outcome == nil)
+    #expect(wait.settlement(now: due, stateOf: { _ in nil })?.outcome == "time to recheck")
   }
 
   /// The wait stays open past its recheck time, and the session goes to Needs you instead.
@@ -892,13 +892,13 @@ extension WaitResolution {
   func pollerKindStaysOpenPastItsRecheck(_ kind: Wait.Kind) {
     let wait = stamped(waitOn(kind, pr: pr1204), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 
   @Test func sessionWaitStaysOpenPastItsRecheckWhileTheTargetWorks() {
     let wait = stamped(waitOn(.session, session: flagCache, state: .done), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { $0 == "k3x9p" ? .working : nil }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { $0 == "k3x9p" ? .working : nil })?.outcome == nil)
   }
 }
 
@@ -906,7 +906,7 @@ extension WaitResolution {
 @Suite struct SessionWaitTargets {
   func resolution(wanting state: AttentionState, target: AttentionState?, now: Int64 = 1) -> String? {
     waitOn(.session, session: flagCache, state: state)
-      .resolution(now: now, stateOf: { $0 == flagCache.id ? target : nil })
+      .settlement(now: now, stateOf: { $0 == flagCache.id ? target : nil })?.outcome
   }
 
   @Test(arguments: AttentionState.allCases.filter { $0 != .done })
@@ -929,7 +929,7 @@ extension WaitResolution {
   func realOutcomeWinsPastTheRecheck(_ state: AttentionState) {
     let wait = stamped(waitOn(.session, session: flagCache, state: state), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in state }) == "it did")
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in state })?.outcome == "it did")
   }
 
   @Test func targetRemovedEndsTheWait() {
@@ -947,7 +947,7 @@ extension WaitResolution {
   @Test func onlyTheTargetsOwnStateCounts() {
     let wait = waitOn(.session, session: flagCache, state: .readyForReview)
 
-    #expect(wait.resolution(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done }) == nil)
+    #expect(wait.settlement(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done })?.outcome == nil)
   }
 }
 

@@ -3,8 +3,8 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// Wait actions (#410, Stage 1): `then` takes `merge`, `rm-worktree`, `rm`, and `report`. `makeWait` stores the
-/// action in `Wait.action` with `then: .resume`, and refuses every shape that Decision 5 does not allow.
+/// Wait actions: `then` takes `merge`, `rm-worktree`, `rm`, and `report`. `makeWait` stores the action in
+/// `Wait.action` with `then: .resume`, and refuses every shape that `allowed` does not list.
 @Suite struct WaitActionTests {
   /// One `then` value that arms an action, and the action that it stores.
   struct Action: Sendable, CustomTestStringConvertible {
@@ -35,7 +35,7 @@ import Testing
     return r
   }
 
-  /// Decision 5, written out: whether `action` may go on a wait of `kind`. `state` is the session wait's state
+  /// Whether `action` may go on a wait of `kind`. `state` is the session wait's state
   /// after the default. `target` says whether the request names a PR.
   static func allowed(_ action: WaitAction.Kind, _ kind: Wait.Kind, _ state: AttentionState, target: Bool) -> Bool {
     switch action {
@@ -47,7 +47,7 @@ import Testing
   }
 }
 
-// MARK: Which waits take which action (Decision 5)
+// MARK: Which waits take which action
 
 extension WaitActionTests {
   /// A session wait that arms an action, with the state that the request gives, or nil for the default.
@@ -129,7 +129,7 @@ extension WaitActionTests {
       for hint in shape.action.hints { #expect(text.contains(hint), "\(text)") }
     }
 
-    /// Decision 3: the stored `then` stays resume, so an older sbd and `applyWait` still decode it.
+    /// The stored `then` stays resume, so an older sbd and `applyWait` still decode it.
     @Test(arguments: WaitActionTests.sessionShapes.filter(\.allowed))
     func anActionWaitOnASessionResumes(_ shape: SessionShape) throws {
       let wait = try buildWait(WaitActionTests.request(shape.action, .session, state: shape.state))
@@ -168,7 +168,7 @@ extension WaitActionTests {
       #expect(wait.session == flagCache)
     }
 
-    /// Decision 3: the stored enum keeps exactly its three values.
+    /// The stored enum keeps exactly its three values.
     @Test(arguments: ["merge", "rm-worktree", "rm", "report"])
     func theStoredThenHasNoActionValue(_ then: String) {
       #expect(Wait.Then(rawValue: then) == nil)
@@ -199,7 +199,7 @@ extension WaitActionTests {
   }
 }
 
-// MARK: report and needsYou (Decision 4)
+// MARK: report and needsYou
 
 extension WaitActionTests {
   @Suite struct Report {
@@ -253,7 +253,7 @@ extension WaitActionTests {
   }
 }
 
-// MARK: handsOff for action waits (Decision 7)
+// MARK: handsOff for action waits
 
 extension WaitActionTests {
   /// A request for an action wait that a conversation sends, by `by`.
@@ -296,7 +296,7 @@ extension WaitActionTests {
       #expect(try handsOffRequest(r))
     }
 
-    /// A wait with no action that the user sets on a conversation still stays, as before Stage 1.
+    /// A wait with no action that the user sets on a conversation still stays.
     @Test func aPlainWaitThatTheUserSetStillStays() throws {
       var r = byClaude(.session)
       r.by = Author.you.rawValue
@@ -306,7 +306,7 @@ extension WaitActionTests {
   }
 }
 
-// MARK: Stored rows and the wire (Hard to reverse 3)
+// MARK: Stored rows and the wire
 
 extension WaitActionTests {
   static func storedWait(action: WaitAction?, status: ActionStatus? = nil, subject: Wait.SessionTarget? = nil) -> Wait {
@@ -343,8 +343,7 @@ extension WaitActionTests {
       status.reason = "the reason"
       status.retryAt = 9
       status.subjectSince = 4
-      status.head = samplePRHead
-      status.replyDigest = MergeGuard.replyDigest("Done.")
+      status.asked = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.approval = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.messageKey = "a@b"
       let wait = WaitActionTests.storedWait(action: WaitAction(kind: .merge), status: status)
@@ -387,7 +386,7 @@ extension WaitActionTests {
       #expect(keys.isDisjoint(with: ["action", "actionStatus", "subject"]), "\(json.text)")
     }
 
-    /// A row that an sbd from before Stage 1 stored.
+    /// A row that an sbd from before wait actions stored.
     @Test func aStoredRowWithoutAnActionDecodesUnchanged() throws {
       let row = #"""
         {"id":"w3","kind":"session","session":{"id":"k3x9p","name":"flag-cache"},"state":"ready_to_merge",
@@ -570,7 +569,7 @@ extension WaitActionTests {
   }
 
   @Suite struct DidNot {
-    /// The lists above must hold every unmet outcome that the plan names, or a case silently drops out.
+    /// The lists above must hold every unmet outcome that a wait can end with, or a case silently drops out.
     @Test func everyUnmetOutcomeIsCovered() {
       let outcomes = Set(WaitActionTests.unmet.map(\.settlement.outcome))
 
@@ -695,7 +694,7 @@ extension WaitActionTests {
 
       let (fence, body) = try #require(Self.block(text), Comment(rawValue: text))
       #expect(body == reply, Comment(rawValue: text))
-      #expect(fence.count > Wait.longestBacktickRun(reply), Comment(rawValue: text))
+      #expect(fence.count > Triage.longestBacktickRun(reply), Comment(rawValue: text))
       #expect(!reply.components(separatedBy: "\n").contains { $0.hasPrefix(fence) }, Comment(rawValue: text))
     }
 
@@ -730,11 +729,28 @@ extension WaitActionTests {
       #expect(text.contains("`sb reply \(flagCache.id)`"), Comment(rawValue: text))
     }
 
-    @Test func noReplySaysSo() {
+    @Test func noReplySaysSoAndOffersNoApproval() {
       let text = Self.message(nil)
 
       #expect(Self.block(text) == nil)
-      #expect(text.hasSuffix("The session has no last reply."), Comment(rawValue: text))
+      #expect(text.contains("The session has no last reply, so don't approve."), Comment(rawValue: text))
+      #expect(!text.contains("sb operator approve"), Comment(rawValue: text))
+      #expect(text.contains("--clear --id w7"), Comment(rawValue: text))
+    }
+
+    /// A message never prints `sb reply` without a session, so a long reply with no session to name offers nothing.
+    @Test func aLongReplyWithNoSessionToNameOffersNoApproval() {
+      var wait = WaitActionTests.actionWait(.session, .merge, state: .readyToMerge)
+      wait.session = nil
+      wait.subject = nil
+
+      let text = wait.judgmentMessage(
+        question: "Does the reply leave anything for the user?", holder: Self.op, byOperator: true, approvable: true,
+        reply: String(repeating: "a", count: Wait.maxQuotedReply + 1))
+
+      #expect(!text.contains("sb reply"), Comment(rawValue: text))
+      #expect(!text.contains("sb operator approve"), Comment(rawValue: text))
+      #expect(text.contains("--clear --id w7"), Comment(rawValue: text))
     }
 
     @Test func aQuestionThatIsNotAboutTheReplyOffersNoApprovalAndQuotesNothing() {

@@ -123,6 +123,9 @@ public final class Service {
   /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name, with its
   /// session and its changed files. `loadSbdMerges` rebuilds it at startup.
   var lastSbdMerges: [String: (subject: String, number: Int, files: Set<String>?)] = [:]
+  /// The changed files that a merge action read for each PR, keyed by the lowercased owner/name and the number, with
+  /// the head they were read at. Only `followThroughQueue` reads and writes it.
+  var changedFilesRead: [String: (head: String, files: Set<String>)] = [:]
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []

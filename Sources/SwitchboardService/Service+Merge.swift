@@ -17,13 +17,14 @@ extension Service {
   func mergeRequest(_ args: JSON) throws -> JSON {
     let (id, pr, method): (String, PullRequest?, MergeMethod) = try queue.sync {
       let id = try sessionByPR(args)
-      if let refusal = beingDeletedRefusal(id) { throw refusal }
-      let e = entries[id]!
-      let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
-      guard verdict.state == .readyToMerge, let pr = e.facts.pr else {
-        throw APIError("\(e.session.name) isn't ready to merge: \(verdict.reason)")
+      let name = entries[id]!.session.name
+      let (e, verdict): (Entry, Verdict)
+      switch mergeAdmission(id) {
+      case .busy(let refusal): throw refusal
+      case .notReady(let v): throw APIError("\(name) isn't ready to merge: \(v.reason)")
+      case .ready(let entry, let v): (e, verdict) = (entry, v)
       }
-      guard !merging.contains(id) else { throw APIError("#\(pr.number) is already merging") }
+      guard let pr = e.facts.pr else { throw APIError("\(name) isn't ready to merge: \(verdict.reason)") }
       let method = e.facts.mergeMethod
       if args["dismiss"]?.bool == true {
         try acknowledge(id, verdict)
@@ -46,12 +47,30 @@ extension Service {
     return try queue.sync { try JSON(encoding: summary(id)) }
   }
 
-  /// Merges or enqueues the session's PR by `method` and records a `merge`
-  /// event with the attempt. After a merge it resumes the session with a
-  /// message. After an enqueue it sets a queue wait. A session marked done
-  /// gets neither. A failed command throws its error after the record. The
-  /// caller must not hold the state queue, because the gh command runs
-  /// outside it.
+  /// Whether the session may start a merge.
+  enum MergeAdmission {
+    case busy(APIError)
+    case notReady(Verdict)
+    case ready(Entry, Verdict)
+  }
+
+  /// Checks in this order: the session is gone, being deleted, or already merging; it is not Ready to merge; it is
+  /// ready. The caller inserts a ready session in `merging`. It runs on the state queue.
+  func mergeAdmission(_ id: String) -> MergeAdmission {
+    guard let e = entries[id] else { return .busy(APIError("\(id) was removed")) }
+    if let refusal = beingDeletedRefusal(id) { return .busy(refusal) }
+    if merging.contains(id) {
+      return .busy(APIError("\(e.facts.pr.map { "#\($0.number)" } ?? e.session.name) is already merging"))
+    }
+    let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
+    return verdict.state == .readyToMerge ? .ready(e, verdict) : .notReady(verdict)
+  }
+
+  /// Merges or enqueues the session's PR by `method` and records a `merge` event with the attempt.
+  ///
+  /// After a merge it resumes the session with a message. After an enqueue it sets a queue wait. A session marked
+  /// done gets neither. A failed command throws its error after the record. The caller must not hold the state
+  /// queue, because the gh command runs outside it.
   func landPR(_ id: String, pr: PullRequest, method: MergeMethod) throws -> MergeAttempt {
     let error = method == .trunk ? runTrunkEnqueue(pr) : runMerge(pr)
     return try queue.sync {

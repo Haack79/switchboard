@@ -41,6 +41,15 @@ extension Service {
     entries[id]?.session.host == nil && !ancestry.isDisjoint(with: livePanePids(id))
   }
 
+  /// Where a client with `ancestry` runs: the sessions on this Mac whose panes it runs below, in id order, and
+  /// whether it runs below sbd's tmux server. A program that a session starts with `tmux new-session` or
+  /// `tmux new-window` runs below the server and outside every pane. It runs on the state queue, after `install` of a
+  /// fresh snapshot.
+  func callerPlace(_ ancestry: Set<Int>) -> (inside: [String], inServer: Bool) {
+    let servers = Set(mac.snapshot.panes.values.map(\.server).filter(Processes.isValidPid))
+    return (entries.keys.sorted().filter { isInside($0, ancestry) }, !ancestry.isDisjoint(with: servers))
+  }
+
   /// The refusal for a caller that runs below the session's Claude or shell pane, or nil.
   /// A stop would wait on such a caller, which waits on sbd, so the stop could never
   /// finish. It returns nil for a nil `ancestry`. It runs on the state queue. A client's ancestry holds pids

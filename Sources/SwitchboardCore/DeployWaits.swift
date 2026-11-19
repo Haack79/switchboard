@@ -62,7 +62,7 @@ extension Wait {
 
   /// What happened, when a deploy wait can resolve from the PR and its
   /// comments, or nil while it stays open. A merged PR of a wait that names a
-  /// service returns nil, because `serviceDeployResolution` decides it.
+  /// service returns nil, because `serviceDeploySettlement` decides it.
   ///
   /// The deploy comment covers only the main posthog app. It decides a
   /// PostHog/posthog PR. Nothing that sbd reads shows a PostHog/charts PR or a
@@ -98,15 +98,7 @@ extension Wait {
   /// nil while it stays open. `state` is the parsed state file, or nil when
   /// PostHog/charts has no state file for the service. `environments` holds
   /// each environment that the poller could decide. A missing entry keeps the
-  /// wait open.
-  public func serviceDeployResolution(
-    _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
-    environments: [DeployEnvironment: EnvironmentDeploy]
-  ) -> String? {
-    serviceDeploySettlement(state, pr: pr, environments: environments)?.outcome
-  }
-
-  /// `serviceDeployResolution(_:pr:environments:)` with whether the service deployed. A stuck deploy is not met.
+  /// wait open. A stuck deploy is not met.
   public func serviceDeploySettlement(
     _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
     environments: [DeployEnvironment: EnvironmentDeploy]

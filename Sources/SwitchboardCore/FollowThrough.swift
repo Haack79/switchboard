@@ -89,8 +89,7 @@ public struct ActionStatus: Codable, Equatable, Sendable {
   /// The subject's `stateSince` when sbd held the action. A different value retries the hold.
   public var subjectSince: Int64?
   /// The PR head and the reply digest that a question about the last reply covers. An approval copies them.
-  public var head: String?
-  public var replyDigest: String?
+  public var asked: MergeGuard.Approval?
   public var approval: MergeGuard.Approval?
   /// The hold message that sbd last sent the subject, keyed by what it was about, such as the head and the base tip.
   public var messageKey: String?
@@ -120,10 +119,12 @@ public enum MergeGuard {
     public var draft: Bool
     public var mergeable: Mergeable?
     public var base: String
-    /// The head's check rollup: SUCCESS, FAILURE, PENDING, or nil without checks.
-    public var rollup: String?
+    /// The head's check rollup, or nil without checks.
+    public var rollup: ChecksRollup?
 
-    public init(head: String, state: PRState, draft: Bool, mergeable: Mergeable?, base: String, rollup: String?) {
+    public init(
+      head: String, state: PRState, draft: Bool, mergeable: Mergeable?, base: String, rollup: ChecksRollup?
+    ) {
       self.head = head
       self.state = state
       self.draft = draft
@@ -164,7 +165,7 @@ public enum MergeGuard {
     public var live: LivePR?
     public var behindBy: Int?
     public var baseTip: String?
-    public var baseRollup: String?
+    public var baseRollup: ChecksRollup?
     public var files: Set<String>?
     /// The files of each earlier pending merge in the repository.
     public var earlierFiles: [Set<String>?]
@@ -173,7 +174,7 @@ public enum MergeGuard {
 
     public init(
       mergeRepos: [String], verdict: SwitchboardCore.Verdict?, facts: SessionFacts, live: LivePR?, behindBy: Int?,
-      baseTip: String?, baseRollup: String?, files: Set<String>?, earlierFiles: [Set<String>?],
+      baseTip: String?, baseRollup: ChecksRollup?, files: Set<String>?, earlierFiles: [Set<String>?],
       lastSbdMerge: SbdMerge?, approval: Approval?
     ) {
       self.mergeRepos = mergeRepos
@@ -205,7 +206,7 @@ public enum MergeGuard {
     -> Verdict?
   {
     guard let pr = facts.pr else { return .hold(reason: "sbd has not read the session's PR", message: nil) }
-    guard mergeRepos.contains(where: { Dependencies.sameRepo($0, pr.repo) }) else {
+    guard OperatorSettings(mergeRepos: mergeRepos).mergesIn(pr.repo) else {
       return .judgment(
         question: "operator.mergeRepos in config.json doesn't list \(pr.repo), so sbd won't merge #\(pr.number). "
           + "The user merges it")
@@ -229,13 +230,17 @@ public enum MergeGuard {
     return nil
   }
 
+  /// Every check in order. `runMerge` runs the stages one at a time, so a stage that holds spares the live reads of
+  /// the stages after it.
   public static func check(_ input: Input) -> Verdict {
-    if let verdict = checkFacts(mergeRepos: input.mergeRepos, verdict: input.verdict, facts: input.facts) {
-      return verdict
-    }
-    let pr = input.facts.pr!
+    checkFacts(mergeRepos: input.mergeRepos, verdict: input.verdict, facts: input.facts) ?? checkLive(input)
+      ?? checkBase(input) ?? checkFiles(input) ?? checkReply(input)
+  }
+
+  /// The checks of the live read of the PR, which run after `checkFacts`. It returns nil when they all pass.
+  public static func checkLive(_ input: Input) -> Verdict? {
+    guard let pr = input.facts.pr else { return hold("sbd has not read the session's PR") }
     let n = "#\(pr.number)"
-    func hold(_ reason: String, _ message: String? = nil) -> Verdict { .hold(reason: reason, message: message) }
     guard let live = input.live else { return hold("the live read of \(n) failed") }
     guard !live.head.isEmpty, live.head == pr.headSha else {
       return hold("the head of \(n) moved after the poller read it")
@@ -250,9 +255,23 @@ public enum MergeGuard {
     guard live.base == defaultBranch else {
       return .judgment(question: "\(n) targets \(live.base), not \(defaultBranch), so sbd won't merge it")
     }
-    guard live.rollup == "SUCCESS" else {
-      return hold("the checks of \(n) at \(short(live.head)) are \(live.rollup?.lowercased() ?? "missing")")
+    guard live.rollup == .passed else {
+      let state =
+        switch live.rollup {
+        case .failed?: "failing"
+        case .running?: "running"
+        default: "missing"
+        }
+      return hold("the checks of \(n) at \(short(live.head)) are \(state)")
     }
+    return nil
+  }
+
+  /// The checks of the base branch, which run after `checkLive`: the PR contains the base's tip, and the tip is not
+  /// red. It returns nil when they pass.
+  public static func checkBase(_ input: Input) -> Verdict? {
+    guard let pr = input.facts.pr, let live = input.live else { return hold("sbd has not read the PR live") }
+    let n = "#\(pr.number)"
     guard let behind = input.behindBy else { return hold("sbd could not read whether \(n) contains \(live.base)") }
     guard behind == 0 else {
       return hold(
@@ -262,21 +281,38 @@ public enum MergeGuard {
     guard let baseTip = input.baseTip else { return hold("sbd could not read the tip of \(live.base)") }
     let tip = "\(live.base) at \(short(baseTip))"
     switch input.baseRollup {
-    case "SUCCESS":
-      break
-    case "FAILURE", "ERROR":
+    case .passed?, .running?:
+      return nil
+    case .failed?:
       return .judgment(question: "\(tip) is red, so sbd won't merge \(n) onto it. Start a fix, or report it")
-    case "PENDING":
-      if let merged = input.lastSbdMerge, merged.commit == nil || merged.commit == baseTip {
-        guard let mine = input.files, let theirs = merged.files else {
-          return hold("CI runs on \(tip) after sbd's last merge, and sbd can't compare its files with \(n)")
-        }
-        if !mine.isDisjoint(with: theirs) {
-          return hold("CI runs on \(tip) after sbd's last merge, which shared files with \(n)")
-        }
-      }
-    default:
+    case nil:
       return hold("sbd could not read the checks of \(tip)")
+    }
+  }
+
+  /// sbd's last merge in the repository when the base's checks still run on it, or nil. `checkFiles` then compares
+  /// its files with the PR's.
+  public static func ownMergeUnderCI(_ input: Input) -> SbdMerge? {
+    guard input.baseRollup == .running, let merged = input.lastSbdMerge,
+      merged.commit == nil || merged.commit == input.baseTip
+    else { return nil }
+    return merged
+  }
+
+  /// The checks of the PR's files, which run after `checkBase`: no file is shared with sbd's own merge while the
+  /// base's checks run on it, or with an earlier merge in the repository. They read `files` only when
+  /// `ownMergeUnderCI` gives a merge or `earlierFiles` is not empty. It returns nil when they pass.
+  public static func checkFiles(_ input: Input) -> Verdict? {
+    guard let pr = input.facts.pr, let live = input.live else { return hold("sbd has not read the PR live") }
+    let n = "#\(pr.number)"
+    if let merged = ownMergeUnderCI(input) {
+      let tip = "\(live.base) at \(short(input.baseTip ?? ""))"
+      guard let mine = input.files, let theirs = merged.files else {
+        return hold("CI runs on \(tip) after sbd's last merge, and sbd can't compare its files with \(n)")
+      }
+      if !mine.isDisjoint(with: theirs) {
+        return hold("CI runs on \(tip) after sbd's last merge, which shared files with \(n)")
+      }
     }
     if !input.earlierFiles.isEmpty {
       guard let mine = input.files else { return hold("sbd could not read the files of \(n)") }
@@ -287,14 +323,24 @@ public enum MergeGuard {
         }
       }
     }
+    return nil
+  }
+
+  /// The last check, after `checkFiles`: the holder approved the last reply at the live head.
+  public static func checkReply(_ input: Input) -> Verdict {
+    guard let pr = input.facts.pr, let live = input.live else { return hold("sbd has not read the PR live") }
     let digest = replyDigest(input.facts.lastReply)
     guard let approval = input.approval, approval.head == live.head, approval.replyDigest == digest else {
       return .judgment(
         question:
-          "Every check passed for \(n) at \(short(live.head)). Does the session's last reply ask the user a question, "
-          + "leave a decision for the user, or say that /go did not finish?")
+          "Every check passed for #\(pr.number) at \(short(live.head)). Does the session's last reply ask the user a "
+          + "question, leave a decision for the user, or say that /go did not finish?")
     }
     return .act
+  }
+
+  private static func hold(_ reason: String, _ message: String? = nil) -> Verdict {
+    .hold(reason: reason, message: message)
   }
 
   /// The approval that would let `input` act, when the reply is all that it lacks, or nil.
@@ -386,7 +432,9 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
   /// The model that answers judgment calls.
   public var judgeModel = "sonnet"
 
-  public init() {}
+  public init(mergeRepos: [String] = []) {
+    self.mergeRepos = mergeRepos
+  }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)

@@ -29,7 +29,7 @@ enum HostScope {
   /// The fields of `WaitRequest`, and the keys that `waitRequest` reads for `clear-wait` and `resolve-wait`.
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "needsYou", "wait", "outcome",
+    "needsYou", "wait", "outcome", "caller",
   ]
 
   /// The ops that a host may send, with the keys that each one reads.
