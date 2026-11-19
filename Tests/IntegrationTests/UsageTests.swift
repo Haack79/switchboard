@@ -41,7 +41,7 @@ extension Instance {
   }
 
   /// The runs of the stub claude that asked it to refresh a token.
-  func refreshCalls() -> [(account: String, agent: String, args: String)] {
+  func refreshCalls() -> [Instance.StubCall] {
     stubCalls().filter { $0.args.hasPrefix("mcp get") }
   }
 }
