@@ -210,6 +210,57 @@ import Testing
     #expect(try links(sbd, g.id).map(\.url) == [url])
   }
 
+  // MARK: Length
+
+  @Test func addTakesATitleOfExactlyTheLimit() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let title = String(repeating: "a", count: GroupLink.titleLimit)
+
+    _ = try linkAdd(sbd, "Flags", Self.rfc, title: title)
+
+    #expect(try links(sbd, g.id).map(\.title) == [title])
+  }
+
+  @Test func addRefusesATitleOneOverTheLimitAndAddsNoLink() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let title = String(repeating: "a", count: GroupLink.titleLimit + 1)
+
+    let r = try sbd.run(["group", "link", "add", "--json", "Flags", Self.rfc, "--title", title])
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("\(GroupLink.titleLimit)"))
+    #expect(try links(sbd, g.id).isEmpty)
+  }
+
+  /// An https URL of exactly `count` characters.
+  static func url(ofLength count: Int) -> String {
+    let base = "https://example.com/"
+    return base + String(repeating: "a", count: count - base.count)
+  }
+
+  @Test func addTakesAURLOfExactlyTheLimit() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let url = Self.url(ofLength: GroupLink.urlLimit)
+
+    _ = try linkAdd(sbd, "Flags", url, title: "Long")
+
+    #expect(try links(sbd, g.id).map(\.url) == [url])
+  }
+
+  @Test func addRefusesAURLOneOverTheLimitAndAddsNoLink() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let url = Self.url(ofLength: GroupLink.urlLimit + 1)
+
+    let message = failure(sbd, "group-link-add", ["group": "Flags", "url": .string(url), "by": "you"])
+
+    #expect(message.contains("\(GroupLink.urlLimit)"))
+    #expect(try links(sbd, g.id).isEmpty)
+  }
+
   // MARK: Only the user adds or removes a link
 
   @Test func aRawAddByClaudeIsRefused() throws {
@@ -342,15 +393,17 @@ import Testing
   @Test func lsPrintsALinkLineWithTheTitleAndURLOfEachLink() throws {
     let sbd = try Instance()
     _ = try shared.add(sbd, "Flags")
-    _ = try linkAdd(sbd, "Flags", Self.rfc, title: "Flag evaluations RFC")
-    _ = try linkAdd(sbd, "Flags", Self.doc, title: "Cache design")
+    let rfc = try link(try linkAdd(sbd, "Flags", Self.rfc, title: "Flag evaluations RFC"), Self.rfc)
+    let doc = try link(try linkAdd(sbd, "Flags", Self.doc, title: "Cache design"), Self.doc)
 
     let text = try sbd.sb("group", "ls")
 
     let lines = text.split(separator: "\n").filter { $0.contains("link:") }
     #expect(lines.count == 2)
+    #expect(lines.first?.contains(rfc.id) == true)
     #expect(lines.first?.contains("Flag evaluations RFC") == true)
     #expect(lines.first?.contains(Self.rfc) == true)
+    #expect(lines.last?.contains(doc.id) == true)
     #expect(lines.last?.contains("Cache design") == true)
     #expect(lines.last?.contains(Self.doc) == true)
   }

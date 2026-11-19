@@ -18,7 +18,8 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// Artifact rows that outlive their session on this group: those of removed sessions and of a merged group's
   /// chat. Nil in a group that an older sbd stored.
   public var keptArtifacts: [GroupArtifact]?
-  /// The links that the user added, oldest first. Nil in a group that has none.
+  /// The links that the user added, in the order they were added. A merge puts the other group's links after this
+  /// group's. Nil in a group that has none.
   public var links: [GroupLink]?
 
   /// The longest description, in characters.

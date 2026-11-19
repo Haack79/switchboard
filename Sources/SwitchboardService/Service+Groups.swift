@@ -32,40 +32,32 @@ extension Service {
       try place(ids, in: group)
       return try JSON(encoding: ids.map { summary($0) })
     case "group-note":
-      let id = try lookupGroup(args)
-      var group = groups[id]!
-      group.notes.append(try groupNote(args["text"]?.string, args, after: group.notes))
-      try saveGroup(group)
-      return try JSON(encoding: groupSummary(id))
+      return try updateGroup(args) { group in
+        group.notes.append(try groupNote(args["text"]?.string, args, after: group.notes))
+      }
     case "group-describe":
-      let id = try lookupGroup(args)
-      let clear = args["clear"]?.bool == true
-      guard clear || args["text"]?.string != nil else { throw APIError("group describe needs text, or clear") }
-      var group = groups[id]!
-      group.describe(
-        clear ? nil : try SessionGroup.cleanDescription(args["text"]?.string),
-        by: try Author(parsing: args["by"]?.string))
-      try saveGroup(group)
-      return try JSON(encoding: groupSummary(id))
+      return try updateGroup(args) { group in
+        let clear = args["clear"]?.bool == true
+        guard clear || args["text"]?.string != nil else { throw APIError("group describe needs text, or clear") }
+        group.describe(
+          clear ? nil : try SessionGroup.cleanDescription(args["text"]?.string),
+          by: try Author(parsing: args["by"]?.string))
+      }
     case "group-link-add":
       try requireUser(args, "Only you can add a link to a group. Ask the user to run sb group link add")
-      let id = try lookupGroup(args)
-      var group = groups[id]!
-      let url = try GroupLink.cleanURL(args["url"]?.string)
-      let title = try GroupLink.cleanTitle(args["title"]?.string) ?? url
-      guard group.addLink(GroupLink(id: shortId("l"), title: title, url: url, by: .you, t: nowMs())) else {
-        throw APIError("\(group.name) already has a link to \(url)")
+      return try updateGroup(args) { group in
+        let url = try GroupLink.cleanURL(args["url"]?.string)
+        let title = try GroupLink.cleanTitle(args["title"]?.string) ?? url
+        guard group.addLink(GroupLink(id: shortId("l"), title: title, url: url, by: .you, t: nowMs())) else {
+          throw APIError("\(group.name) already has a link to \(url)")
+        }
       }
-      try saveGroup(group)
-      return try JSON(encoding: groupSummary(id))
     case "group-link-rm":
       try requireUser(args, "Only you can remove a group's link. Ask the user to run sb group link rm")
-      let id = try lookupGroup(args)
-      var group = groups[id]!
-      let linkId = args["link"]?.string ?? ""
-      guard group.removeLink(id: linkId) else { throw APIError("\(group.name) has no link \(linkId)") }
-      try saveGroup(group)
-      return try JSON(encoding: groupSummary(id))
+      return try updateGroup(args) { group in
+        let linkId = args["link"]?.string ?? ""
+        guard group.removeLink(id: linkId) else { throw APIError("\(group.name) has no link \(linkId)") }
+      }
     case "group-account":
       // Without an account or clear, it answers with the group unchanged.
       let id = try lookupGroup(args)
@@ -171,6 +163,16 @@ extension Service {
     } catch {
       logLine("groups: can't update the chat of \(group.id) with its description: \(error)")
     }
+  }
+
+  /// Applies `change` to the request's group, saves the group, and answers with its summary. A throw from `change`
+  /// saves nothing.
+  private func updateGroup(_ args: JSON, _ change: (inout SessionGroup) throws -> Void) throws -> JSON {
+    let id = try lookupGroup(args)
+    var group = groups[id]!
+    try change(&group)
+    try saveGroup(group)
+    return try JSON(encoding: groupSummary(id))
   }
 
   /// Deletes the group, detaches its plans, and marks its chat done.
