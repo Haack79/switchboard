@@ -557,6 +557,38 @@ private func write(_ text: String, to path: String) throws {
     #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
   }
 
+  enum EarlyStop: CaseIterable {
+    /// `sb stop`, which records `stopped`.
+    case stopped
+    /// SIGTERM before SessionStart and before the unreported fallback, which records no event.
+    case killed
+  }
+
+  /// A claude that ends before it takes the run-here launch prompt leaves no bypass for the next claude's `/go`.
+  @Test(arguments: EarlyStop.allCases) func aRunHereLaunchThatEndsBeforeItsPromptLeavesTheNextGoBlocked(
+    _ how: EarlyStop
+  ) throws {
+    let sbd = try instance()
+    let c = try workGoConversation(sbd)
+    try sbd.sb("stop", c.id)
+    try sbd.waitFor(c.id, "the stop") { $0.claudePid == nil }
+    sbd.hold("hold-start")
+    try #require(try sbd.sb("send", c.id, "--run-here", "/go x").contains("resumed"))
+    let pid = try #require(try sbd.waitFor(c.id, "claude to run") { $0.claudePid != nil }.claudePid)
+    switch how {
+    case .stopped: try sbd.sb("stop", c.id)
+    case .killed: kill(pid_t(pid), SIGTERM)
+    }
+    try sbd.waitFor(c.id, "claude to end") { $0.claudePid == nil }
+    try sbd.release("hold-start")
+
+    let delivery = try sbd.sb("send", c.id, "/go y")
+
+    #expect(delivery.contains("resumed"), "\(delivery)")
+    try waitForEvents(sbd, c.id, "skill_blocked")
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").isEmpty)
+  }
+
   /// A run-here message that waits in the queue arms nothing until sbd pastes it. The `/go y` pasted before it
   /// would get past the gate if the bypass were armed when the run-here message was queued.
   @Test func aQueuedRunHereMessageArmsOnlyWhenPasted() throws {

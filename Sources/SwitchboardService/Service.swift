@@ -199,8 +199,8 @@ public final class Service {
   var skillIndex: [String: [String: CatalogEntry]] = [:]
   /// The classifier's labels, as `Home.skillLabels` holds them.
   var skillLabels = SkillLabelCache()
-  /// The last failed run of each cache key. A refresh retries one only after `skillRetryMs`.
-  var skillFailures: [String: SkillFailure] = [:]
+  /// The last failed run of each cache key, by account folder. A refresh retries one only after `skillRetryMs`.
+  var skillFailures: [String: [String: SkillFailure]] = [:]
   /// The last run of each account whose claude call failed, timed out, or didn't start. Every skill of the account
   /// would fail the same way. So a run in the next `skillRetryMs` records this failure for its own key and starts
   /// no claude.
@@ -209,7 +209,7 @@ public final class Service {
   var skillRefreshed: [String: Int64] = [:]
   /// The cache keys whose run waits on `skillJobs` or runs.
   var skillQueued: Set<String> = []
-  /// The reason and cache key of each `skill_unchecked` event that this run of sbd recorded.
+  /// The reason, account folder, and cache key of each `skill_unchecked` event that this run of sbd recorded.
   var skillUnchecked: Set<String> = []
   /// Runs the skill classifier, one run at a time, because a first scan can queue dozens.
   let skillJobs: OperationQueue = {
@@ -1443,6 +1443,8 @@ public final class Service {
     entries[id]?.mcpRelaunch = nil
     entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
+    // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
+    entries[id]?.skillBypass = nil
     entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
     record(
       id, resume ? "resumed" : "started",

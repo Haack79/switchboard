@@ -145,6 +145,31 @@ private let spentReading =
     #expect(try #require(rows["go"], "\(rows.keys.sorted())")["label"]?.string == "work")
   }
 
+  /// Claude Code's listing leaves out a skill that the model can't call. A Manager's `slash-commands` still has a
+  /// row for such a plugin skill, so that the app's Send check finds its label.
+  @Test func slashCommandsOfAManagerCarryTheLabelOfAPluginSkillThatOnlyTheUserCanCall() throws {
+    let sbd = try instance()
+    let account = sbd.account("A")
+    let plugin = "\(sbd.home.path)/plugin-cache/p/1.0.0"
+    try FileManager.default.createDirectory(atPath: "\(plugin)/skills/ship", withIntermediateDirectories: true)
+    try "---\nname: ship\ndescription: Ships it.\ndisable-model-invocation: true\n---\nRun the pipeline.\n".write(
+      toFile: "\(plugin)/skills/ship/SKILL.md", atomically: true, encoding: .utf8)
+    let plugins: JSON = ["version": 2, "plugins": ["p@market": [["scope": "user", "installPath": .string(plugin)]]]]
+    try FileManager.default.createDirectory(atPath: "\(account)/plugins", withIntermediateDirectories: true)
+    try plugins.text.write(toFile: "\(account)/plugins/installed_plugins.json", atomically: true, encoding: .utf8)
+    let settings: JSON = ["enabledPlugins": ["p@market": true]]
+    try settings.text.write(toFile: "\(account)/settings.json", atomically: true, encoding: .utf8)
+    try writeListing(sbd, [("notes", nil)])
+    let c = try newConversation(sbd)
+    try prompt(sbd, c, "hello")
+    try waitForLabel(sbd, "p:ship", "work")
+
+    let rows = try slashRows(sbd, c.id)
+
+    #expect(try #require(JSON.parse(try sbd.sb("slash", c.id, "--json")))["listing"] == true)
+    #expect(try #require(rows["p:ship"], "\(rows.keys.sorted())")["label"]?.string == "work")
+  }
+
   enum Unchecked: CaseIterable {
     case work, chat
   }
@@ -300,6 +325,27 @@ private let spentReading =
     try sbd.sb("account", "use", "A", "--new-only")
     try sbd.sb("manager", "skills", "relabel", "b-only")
     try sbd.waitFor("a second run of b-only", timeout: 30) { calls(sbd, "b-only") == 2 }
+    let account = try String(contentsOfFile: "\(sbd.home.path)/skill-classify-account", encoding: .utf8)
+    #expect(account == sbd.account("B"))
+  }
+
+  /// A run of one account holds back the other account's scan of the same file. When that run fails, the other
+  /// account runs the file under its own login.
+  @Test func failedRunOfASharedFileQueuesTheOtherAccountsRun() throws {
+    let sbd = try Instance(
+      accounts: ["A", "B"], inheriting: .unset, config: ["managerSkills": ["timeoutSeconds": 25]])
+    try sbd.sb("account", "use", "A")
+    try writeSkill(sbd.account("A"), "slow", "SLOW-SKILL")
+    try writeSkill(sbd.account("B"), "slow", "SLOW-SKILL")
+    try newConversation(sbd)
+    try sbd.waitFor("A's run", timeout: 30) { calls(sbd, "slow") == 1 }
+    try sbd.sb("account", "use", "B", "--new-only")
+
+    let onB = try newConversation(sbd)
+
+    let waiting = try waitForRow(sbd, "slow", "B's scan", conversation: onB.id) { _ in true }
+    try #require(waiting["pending"]?.bool == true, "A's run ended before B's scan: \(waiting.text)")
+    try sbd.waitFor("B's run", timeout: 45) { calls(sbd, "slow") == 2 }
     let account = try String(contentsOfFile: "\(sbd.home.path)/skill-classify-account", encoding: .utf8)
     #expect(account == sbd.account("B"))
   }
@@ -499,6 +545,58 @@ private let spentReading =
     #expect(try cachedWorkLabels(sbd) == 0)
     try hookPrompt(sbd, c, "/go x")
     #expect(try sbd.events(c.id, kind: "skill_unchecked").first?.data["why"]?.string == "signedOut")
+  }
+
+  /// A signed-out account's failure belongs to that account, so another account with the same file still runs it.
+  @Test func signedOutAccountLeavesAnotherAccountsRunOfTheSameFile() throws {
+    let fake = try FakeUsage()
+    let sbd = try Instance.withUsage(fake, accounts: ["A", "B"])
+    try sbd.signIn("B", token: "token-b")
+    _ = try sbd.usage()
+    #expect(try sbd.usage(of: "A").signedOut == true)
+    try writeSkill(sbd.account("A"), "go")
+    try writeSkill(sbd.account("B"), "go")
+    try newConversation(sbd)
+    try waitForError(sbd, "go")
+    try sbd.sb("account", "use", "B", "--new-only")
+
+    let onB = try newConversation(sbd)
+
+    try waitForLabel(sbd, "go", "work", conversation: onB.id)
+    #expect(calls(sbd, "go") == 1)
+    let account = try String(contentsOfFile: "\(sbd.home.path)/skill-classify-account", encoding: .utf8)
+    #expect(account == sbd.account("B"))
+  }
+
+  /// Each conversation records its own `skill_unchecked` for a file that two signed-out accounts hold.
+  @Test func eachSignedOutAccountRecordsItsOwnUncheckedSkill() throws {
+    let fake = try FakeUsage()
+    let sbd = try Instance.withUsage(fake, accounts: ["A", "B"])
+    // `account use` refuses a signed-out account. So B signs out after the switch.
+    try sbd.signIn("B", token: "token-b")
+    _ = try sbd.usage()
+    try writeSkill(sbd.account("A"), "go")
+    try writeSkill(sbd.account("B"), "go")
+    let onA = try newConversation(sbd)
+    try waitForError(sbd, "go")
+    try sbd.sb("account", "use", "B", "--new-only")
+    try FileManager.default.removeItem(atPath: "\(sbd.account("B"))/.credentials.json")
+    try #require(try sbd.usage(of: "B").signedOut == true)
+    let onB = try newConversation(sbd)
+    try waitForRow(sbd, "go", "B's error", conversation: onB.id) {
+      $0["error"]?.string != nil && $0["pending"]?.bool != true
+    }
+
+    try hookPrompt(sbd, onA, "/go x")
+    try hookPrompt(sbd, onB, "/go x")
+
+    #expect(try sbd.events(onA.id, kind: "skill_unchecked").first?.data["why"]?.string == "signedOut")
+    #expect(try sbd.events(onB.id, kind: "skill_unchecked").first?.data["why"]?.string == "signedOut")
+    let rows = try skills(sbd).filter { $0["name"]?.string == "go" }
+    for name in ["A", "B"] {
+      let own = try #require(rows.first { $0["path"]?.string?.hasPrefix(sbd.account(name) + "/") == true })
+      #expect(own["error"]?.string?.hasPrefix("\(name) ") == true, "\(own.text)")
+    }
   }
 
   @Test func spentQuotaLeavesNoLabelWithoutARun() throws {

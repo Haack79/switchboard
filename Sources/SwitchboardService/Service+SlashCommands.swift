@@ -6,7 +6,8 @@ extension Service {
   /// the session's claude. It reads the transcript and the folders off the
   /// state queue. A repeat request on the same transcript reads only the
   /// lines added since the last one. For a Manager conversation or the
-  /// operator, each row carries the label of the hook's decision.
+  /// operator, each row carries the label of the hook's decision, and the
+  /// rows include the plugin skills that only the user can call.
   func slashCommands(_ args: JSON) throws -> JSON {
     let (id, findTranscript, account, cwd, machine, cached, decide) = try queue.sync {
       () -> (
@@ -23,8 +24,13 @@ extension Service {
       )
     }
     let listing = skillListing(id, findTranscript: findTranscript, machine: machine, cached: cached)
+    // Claude Code's listing leaves out a skill that the model can't call. So the gate's plugin skills come from a scan.
+    var scanned = SkillFolders.scan(account: account, cwd: cwd, on: machine)
+    if decide != nil, let account {
+      scanned += SkillCatalog.pluginSkills(account: account, cwd: cwd, listing: listing, machine: machine)
+    }
     var commands = SlashCommands.merge(
-      listing: listing, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
+      listing: listing, scanned: scanned,
       overrides: SkillFolders.overrides(account: account, on: machine))
     if let decide {
       for i in commands.indices { commands[i].label = decide(commands[i].name).label }

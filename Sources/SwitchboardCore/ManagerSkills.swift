@@ -113,19 +113,16 @@ public enum SkillCatalog {
       guard overrides[entry.name] != "off", entries[entry.name] == nil else { return }
       entries[entry.name] = entry
     }
-    func file(_ skill: ScannedSkill, named name: String, origin: ManagerSkillRow.Origin) -> CatalogEntry {
+    func file(_ skill: ScannedSkill, origin: ManagerSkillRow.Origin) -> CatalogEntry {
       CatalogEntry(
-        name: name, origin: origin, path: skill.path, description: skill.description,
+        name: skill.name, origin: origin, path: skill.path, description: skill.description,
         hash: SkillHash.read(skill.path, on: machine)?.hash)
     }
     for skill in SkillFolders.scan(account: account, cwd: cwd, on: machine) {
-      add(file(skill, named: skill.name, origin: origin(skill.origin)))
+      add(file(skill, origin: origin(skill.origin)))
     }
-    for (plugin, folder) in pluginFolders(account: account, cwd: cwd, listing: listing, machine: machine) {
-      let found =
-        SkillFolders.skills(in: folder, origin: .accountSkill, on: machine)
-        + SkillFolders.commands(in: folder, origin: .accountCommand, on: machine)
-      for skill in found { add(file(skill, named: "\(plugin):\(skill.name)", origin: .plugin)) }
+    for skill in pluginSkills(account: account, cwd: cwd, listing: listing, machine: machine) {
+      add(file(skill, origin: .plugin))
     }
     for item in listing ?? [] {
       add(
@@ -144,11 +141,28 @@ public enum SkillCatalog {
     }
   }
 
+  /// The skills and then the commands of each enabled plugin that applies to the cwd, named `<plugin>:<name>`, in
+  /// the order of `pluginFolders`.
+  public static func pluginSkills(account: String, cwd: String, listing: [SlashCommand]?, machine: any Machine)
+    -> [ScannedSkill]
+  {
+    pluginFolders(account: account, cwd: cwd, listing: listing, machine: machine).flatMap { plugin, folder in
+      let found =
+        SkillFolders.skills(in: folder, origin: .accountSkill, on: machine)
+        + SkillFolders.commands(in: folder, origin: .accountCommand, on: machine)
+      return found.map {
+        ScannedSkill(
+          name: "\(plugin):\($0.name)", description: $0.description, userInvocable: $0.userInvocable,
+          modelInvocable: $0.modelInvocable, path: $0.path, origin: $0.origin)
+      }
+    }
+  }
+
   /// The install folder of each enabled plugin that applies to the cwd, with
   /// the plugin's name, sorted by `<plugin>@<marketplace>`. It reads only version
   /// 2 of installed_plugins.json. A plugin is enabled when the account's
   /// settings.json says so, or when the listing names one of its skills.
-  static func pluginFolders(account: String, cwd: String, listing: [SlashCommand]?, machine: any Machine)
+  private static func pluginFolders(account: String, cwd: String, listing: [SlashCommand]?, machine: any Machine)
     -> [(plugin: String, folder: String)]
   {
     guard let text = machine.text("\(account)/plugins/installed_plugins.json") else { return [] }
@@ -473,8 +487,8 @@ public enum SkillCommand {
 
 /// A user's "Run here anyway" for one message in a Manager conversation. It lives only in sbd's memory.
 public enum SkillBypass: Equatable, Sendable {
-  /// The message with this skill's command is on its way to claude. The next UserPromptSubmit clears it. That
-  /// prompt gets past the gate only when its command is this skill.
+  /// The message with this skill's command is on its way to claude. The next UserPromptSubmit clears it, and so
+  /// does the next start of claude. That prompt gets past the gate only when its command is this skill.
   case armed(String)
   /// The message's skill runs. Every Skill call of its turn is let through until the turn ends.
   case turn

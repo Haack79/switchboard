@@ -266,6 +266,27 @@ private func userInstall(_ path: String) -> JSON { ["scope": "user", "installPat
     #expect(entries["tools:folder"] == nil)
   }
 
+  /// The listing leaves out a skill that the model can't call. So `slash-commands` reads each plugin skill's flags.
+  @Test func pluginSkillsKeepTheirFlagsUnderThePluginsName() throws {
+    let f = try Folders()
+    defer { f.remove() }
+    let path = "\(f.plugins)/tools/1.0.0"
+    try write(skillFile("ship", "disable-model-invocation: true"), to: "\(path)/skills/ship/SKILL.md")
+    try write(skillFile("hidden", "user-invocable: false"), to: "\(path)/skills/hidden/SKILL.md")
+    try write("The deploy command.\n", to: "\(path)/commands/deploy.md")
+    try f.registerPlugins(["tools@market": userInstall(path)])
+    try f.enable("tools@market")
+
+    let skills = SkillCatalog.pluginSkills(account: f.account, cwd: f.cwd, listing: nil, machine: LocalMachine())
+
+    #expect(skills.map(\.name) == ["tools:hidden", "tools:ship", "tools:deploy"])
+    let ship = try #require(skills.first { $0.name == "tools:ship" })
+    #expect(!ship.modelInvocable)
+    #expect(ship.userInvocable)
+    #expect(ship.path == "\(path)/skills/ship/SKILL.md")
+    #expect(skills.first { $0.name == "tools:hidden" }?.userInvocable == false)
+  }
+
   @Test func pluginEnabledOnlyThroughAListingNameAddsAllItsSkills() throws {
     let f = try Folders()
     defer { f.remove() }

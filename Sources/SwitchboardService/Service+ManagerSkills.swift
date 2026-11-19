@@ -65,8 +65,9 @@ extension Service {
   }
 
   /// Queues a run for each of the account's entries whose key has no label,
-  /// no run on its way, and no failure in the last `skillRetryMs`. A name
-  /// that config.json labels never runs. Runs on the state queue.
+  /// no run on its way, and no failure of the account in the last
+  /// `skillRetryMs`. A name that config.json labels never runs. Runs on the
+  /// state queue.
   func queueSkillRuns(_ account: String) {
     let settings = config.managerSkills
     let now = nowMs()
@@ -74,7 +75,7 @@ extension Service {
       guard settings.override(entry.name) == nil, let key = entry.key(model: settings.model),
         skillLabels.labels[key] == nil, !skillQueued.contains(key)
       else { continue }
-      if let failure = skillFailures[key], now - failure.t < Self.skillRetryMs { continue }
+      if let failure = skillFailures[account]?[key], now - failure.t < Self.skillRetryMs { continue }
       skillQueued.insert(key)
       skillJobs.addOperation { [self] in
         let (outcome, fromClaude) = classifySkill(entry, account: account, settings: settings)
@@ -141,15 +142,17 @@ extension Service {
     skillQueued.remove(key)
     switch outcome {
     case .success(let (labelKey, answer)):
-      skillFailures[key] = nil
+      skillFailures[account]?[key] = nil
       skillAccountFailures[account] = nil
       skillLabels.labels[labelKey] = SkillLabelCache.Label(
         label: answer.label, reason: answer.reason, model: config.managerSkills.model, t: nowMs())
       saveSkillLabels()
     case .failure(let failure):
-      skillFailures[key] = failure
+      skillFailures[account, default: [:]][key] = failure
       if fromClaude { skillAccountFailures[account] = failure }
       logLine("can't label the skill \(entry.name) of \(account): \(failure.message)")
+      // Another account's scan skips the key while this run is queued. So the other accounts queue their runs now.
+      for other in managerSkillAccounts().keys.sorted() where other != account { queueSkillRuns(other) }
     }
   }
 
@@ -185,7 +188,7 @@ extension Service {
       let settings = config.managerSkills
       let rows = accounts.flatMap { account in
         ManagerSkillRow.rows(
-          skillIndex[account] ?? [:], settings: settings, labels: skillLabels, failures: skillFailures,
+          skillIndex[account] ?? [:], settings: settings, labels: skillLabels, failures: skillFailures[account] ?? [:],
           queued: skillQueued)
       }
       return try JSON(encoding: rows)
@@ -221,7 +224,7 @@ extension Service {
       for entry in (skillIndex[account] ?? [:]).values where names?.contains(entry.name) ?? true {
         guard let key = entry.key(model: model) else { continue }
         skillLabels.labels[key] = nil
-        skillFailures[key] = nil
+        skillFailures[account]?[key] = nil
       }
     }
     saveSkillLabels()
@@ -296,7 +299,7 @@ extension Service {
   /// The gate's decision for a name in the account's index. Runs on the state queue.
   private func skillDecision(_ name: String, account: String, bypass: SkillBypass?) -> ManagerSkillGate.Decision {
     ManagerSkillGate.decide(
-      name: name, catalog: skillIndex[account] ?? [:], labels: skillLabels, failures: skillFailures,
+      name: name, catalog: skillIndex[account] ?? [:], labels: skillLabels, failures: skillFailures[account] ?? [:],
       settings: config.managerSkills, bypass: bypass)
   }
 
@@ -306,7 +309,7 @@ extension Service {
   func managerSkillDecider(_ id: String) -> SkillDecider? {
     guard let account = managerSkillAccount(id) else { return nil }
     let (catalog, labels, failures, settings) = (
-      skillIndex[account] ?? [:], skillLabels, skillFailures, config.managerSkills
+      skillIndex[account] ?? [:], skillLabels, skillFailures[account] ?? [:], config.managerSkills
     )
     return { name in
       ManagerSkillGate.decide(
@@ -315,15 +318,15 @@ extension Service {
   }
 
   /// Records `skill_unchecked` for a skill of the account's index that the gate let through without a label, once
-  /// per cache key and reason in each run of sbd. A name that resolves to no entry of the index is not a skill
-  /// that sbd knows, so it records nothing. Runs on the state queue.
+  /// per account, cache key, and reason in each run of sbd. A name that resolves to no entry of the index is not a
+  /// skill that sbd knows, so it records nothing. Runs on the state queue.
   private func recordSkillUnchecked(_ id: String, _ name: String, account: String, _ failure: SkillFailure?) {
     let catalog = skillIndex[account] ?? [:]
     let settings = config.managerSkills
     guard let entry = catalog[ManagerSkillGate.resolve(name, catalog: catalog, settings: settings)] else { return }
     let why = failure?.category.rawValue ?? "unlabeled"
     let key = entry.key(model: settings.model) ?? "\(account)/\(name)"
-    guard skillUnchecked.insert("\(why) \(key)").inserted else { return }
+    guard skillUnchecked.insert("\(why) \(account) \(key)").inserted else { return }
     var data: [String: JSON] = ["skill": .string(name), "why": .string(why)]
     if let failure { data["error"] = .string(failure.message) }
     record(id, "skill_unchecked", .object(data))
