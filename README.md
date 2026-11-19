@@ -232,6 +232,8 @@ sb group move s2abc --to flag-evals      # or --ungrouped
 sb group note flag-evals "rollout doc: …"
 sb group describe flag-evals Ship the cache behind a flag first
 sb group describe flag-evals --clear
+sb group link add flag-evals https://github.com/org/rfcs/pull/12 --title "Flag evaluations RFC"
+sb group link rm flag-evals l4k2m        # the link id that sb group ls shows
 sb group account flag-evals personal     # its sessions run under ~/.claude-personal; --clear removes it
 sb group rm flag-evals                   # its sessions become ungrouped
 sb group suggest                         # at most 3 groups suggested from dependencies, branch prefixes, and PR title scopes
@@ -243,6 +245,10 @@ sb send --group flag-evals "Rebase onto main."
 ```
 
 A description says what the group is for in one line of at most 280 characters. Line breaks become spaces. `sb group ls` shows it under the group's name, `sb get` shows it with a session's group, and `--json` has it as `description` on a group and `groupDescription` on a session. The Board shows it under the group's name. Click it to edit it, then press Return to save or Escape to cancel. A group without one shows "Add a description". A group that a suggestion creates gets a description from the suggestion, such as "Sessions on the flag-evaluations branch prefix", which you can change.
+
+sbd records who wrote a description: you, or Claude when Claude runs `sb group describe`, `sb group add --description`, or the MCP `add_group` tool. `sb group ls` marks a Claude-written description with `(written by Claude)`, and `--json` has the author as `descriptionBy`. A description without an author, such as one an older sbd stored or one that a suggestion created, counts as yours. Clearing a description clears its author.
+
+A group also holds links that you add, such as an RFC or a design doc. `sb group link add` takes an http or https URL and an optional `--title`, which defaults to the URL. sbd refuses a URL that the group already has, and refuses `sb group link add` and `sb group link rm` from inside Claude, so every link is one you added. `sb group ls` lists each link on a `link:` line with its id, and `--json` has them as `links`. When a suggestion merges two groups, the group that stays keeps its links and takes the other group's links whose URLs it doesn't have.
 
 When a session's PR depends on another session's PR and the two sessions are in different groups, `suggest` offers to merge the groups. A PR depends on another when it is stacked on it or names it in a `Depends on` line. The group with more sessions placed by hand keeps its name, then the group with more sessions, then the older one. The merge moves the other group's sessions into it, except sessions that you placed by hand, which stay where they are and which the suggestion lists. When no session is left behind, the other group is deleted and its notes move to the group that kept its name. That group keeps its own description and gets the other group's description as a note. When it has none, it takes the other group's description, or "Merged from" and both names when neither has one. A merge that would move no session is not suggested. When one end of the dependency has no group, `suggest` offers to add it to the other end's group. These suggestions come before the ones from branch names and PR titles.
 

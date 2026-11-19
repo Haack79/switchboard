@@ -847,7 +847,8 @@ public final class Service {
       // A session that started after the user asked, such as on a second click, is already where it should be.
       try openSession(try lookup(args))
       return try liveRequest(.object([:]))
-    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-account",
+    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-link-add",
+      "group-link-rm", "group-account",
       "group-suggest",
       "send-group",
       "send-pending":

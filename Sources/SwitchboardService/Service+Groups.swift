@@ -13,8 +13,9 @@ extension Service {
       let ids = try sessionRefs(args)
       let notes = try args["note"].map { try [groupNote($0.string, args, after: [])] } ?? []
       let description = try SessionGroup.cleanDescription(args["description"]?.string)
+      let by = try Author(parsing: args["by"]?.string)
       try refuseUngroupable(ids)
-      let id = try createGroup(name, description: description, notes: notes).id
+      let id = try createGroup(name, description: description, by: by, notes: notes).id
       try place(ids, in: id)
       return try JSON(encoding: groupSummary(id))
     case "group-rm":
@@ -41,7 +42,28 @@ extension Service {
       let clear = args["clear"]?.bool == true
       guard clear || args["text"]?.string != nil else { throw APIError("group describe needs text, or clear") }
       var group = groups[id]!
-      group.description = clear ? nil : try SessionGroup.cleanDescription(args["text"]?.string)
+      group.describe(
+        clear ? nil : try SessionGroup.cleanDescription(args["text"]?.string),
+        by: try Author(parsing: args["by"]?.string))
+      try saveGroup(group)
+      return try JSON(encoding: groupSummary(id))
+    case "group-link-add":
+      try requireUser(args, "Only you can add a link to a group. Ask the user to run sb group link add")
+      let id = try lookupGroup(args)
+      var group = groups[id]!
+      let url = try GroupLink.cleanURL(args["url"]?.string)
+      let title = try GroupLink.cleanTitle(args["title"]?.string) ?? url
+      guard group.addLink(GroupLink(id: shortId("l"), title: title, url: url, by: .you, t: nowMs())) else {
+        throw APIError("\(group.name) already has a link to \(url)")
+      }
+      try saveGroup(group)
+      return try JSON(encoding: groupSummary(id))
+    case "group-link-rm":
+      try requireUser(args, "Only you can remove a group's link. Ask the user to run sb group link rm")
+      let id = try lookupGroup(args)
+      var group = groups[id]!
+      let linkId = args["link"]?.string ?? ""
+      guard group.removeLink(id: linkId) else { throw APIError("\(group.name) has no link \(linkId)") }
       try saveGroup(group)
       return try JSON(encoding: groupSummary(id))
     case "group-account":
@@ -123,12 +145,15 @@ extension Service {
   }
 
   /// Refuses a name that another group has. A name then finds one group.
-  private func createGroup(_ name: String, description: String? = nil, notes: [Note] = []) throws -> SessionGroup {
+  private func createGroup(_ name: String, description: String? = nil, by: Author? = nil, notes: [Note] = []) throws
+    -> SessionGroup
+  {
     if groups.values.contains(where: { $0.name == name }) { throw APIError("a group named \(name) exists") }
     // A removed group's chat keeps the group's id, so a new group never takes that id.
     let taken = Set(groups.keys).union(entries.values.compactMap(\.session.chat))
     let group = SessionGroup(
-      id: shortId("g", taken: taken), name: name, description: description, notes: notes, created: nowMs())
+      id: shortId("g", taken: taken), name: name, description: description, descriptionBy: by, notes: notes,
+      created: nowMs())
     try saveGroup(group)
     return group
   }

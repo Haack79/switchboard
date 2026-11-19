@@ -375,6 +375,11 @@ let usage = """
     group describe <group> <text> | --clear
                                   set or clear the group's description, at
                                   most \(SessionGroup.descriptionLimit) characters
+    group link add <group> <url> [--title T]
+                                  add an http or https link, such as an RFC;
+                                  the title defaults to the URL. Only you add
+                                  links: inside Claude it is refused
+    group link rm <group> <link-id>
     group account <group> [<account> | --clear]
                                   show, set, or clear the Claude account that the
                                   group's sessions run under. A stopped session
