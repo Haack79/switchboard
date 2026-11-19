@@ -625,7 +625,7 @@ public enum Attention {
         state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
     }
     if let v = openPromptVerdict(facts) { return v }
-    if let v = reportVerdict(session, facts) { return v }
+    if let v = reportVerdict(session.kind == .operator ? facts.openReports : []) { return v }
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning {
       if let tool = facts.runningTool {

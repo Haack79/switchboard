@@ -880,15 +880,22 @@ public enum Triage {
   /// a notification, or Next Needing You. The app checks this itself, so a
   /// summary from an older sbd cannot add an item that this rule leaves out.
   public static func inInbox(_ s: SessionSummary) -> Bool {
-    switch s.kind.inboxItems {
+    itemSourceAllowed(
+      kind: s.kind, source: s.triage?.source, blocking: hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt))
+  }
+
+  /// Whether an item from `source` (nil for no item) may reach the Inbox on a session of `kind`. `blocking` says
+  /// whether the session shows a prompt that stops its turn.
+  public static func itemSourceAllowed(kind: SessionKind, source: TriageSource?, blocking: Bool) -> Bool {
+    switch kind.inboxItems {
     case .all: true
-    case .blockingPrompts: s.triage != nil && hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+    case .blockingPrompts: source != nil && blocking
     case .operatorItems:
       // The summary doesn't say which rule gave a `.rule` item. sbd gives the operator one only for the wait
       // rule or a dialog without a card, and both reach the Inbox.
-      switch s.triage?.source {
+      switch source {
       case .report, .rule: true
-      case .card: hasBlockingPrompt(cards: s.cards, openPrompt: s.openPrompt)
+      case .card: blocking
       case .session, .summary, .fallback, nil: false
       }
     }

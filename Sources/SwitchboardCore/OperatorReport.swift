@@ -71,10 +71,10 @@ extension SessionFacts {
 }
 
 extension Attention {
-  /// Needs you while the operator has an open report, with the latest report's text as the reason.
-  static func reportVerdict(_ session: Session, _ facts: SessionFacts) -> Verdict? {
-    guard session.kind == .operator, !facts.openReports.isEmpty else { return nil }
-    return Verdict(state: .needsYou, reason: OperatorReport.reason(facts.openReports), kind: .question)
+  /// Needs you while `reports` has an open report, with the latest report's text as the reason.
+  static func reportVerdict(_ reports: [OperatorReport]) -> Verdict? {
+    guard !reports.isEmpty else { return nil }
+    return Verdict(state: .needsYou, reason: OperatorReport.reason(reports), kind: .question)
   }
 
   /// The verdict that the app and `sb` show for a session of `kind`. It also marks the operator's verdict
