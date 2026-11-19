@@ -62,4 +62,19 @@ public struct HeadlessUsageReport: Codable, Equatable, Sendable {
     }
     return HeadlessUsageReport(since: since, rows: rows.values.sorted { ($0.day, $0.kind) < ($1.day, $1.kind) })
   }
+
+  /// The lines that `sb usage headless` prints: a header, then one line per row.
+  public var table: [String] {
+    func left(_ text: String) -> String { text.padding(toLength: 12, withPad: " ", startingAt: 0) }
+    func right(_ text: String) -> String { String(repeating: " ", count: max(0, 12 - text.count)) + text }
+    let header = ["calls", "errors", "input", "output", "cache read", "cache write"]
+    return [left("day") + left("kind") + header.map(right).joined() + "  models"]
+      + rows.map { row in
+        let counts = [
+          row.calls, row.errors, row.usage.input, row.usage.output, row.usage.cacheRead, row.usage.cacheWrite,
+        ]
+        return left(row.day) + left(row.kind) + counts.map { right(String($0)) }.joined() + "  "
+          + row.models.joined(separator: ", ")
+      }
+  }
 }

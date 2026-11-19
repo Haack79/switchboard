@@ -336,6 +336,21 @@ private func usage(_ input: Int, _ output: Int, _ cacheRead: Int, _ cacheWrite: 
 
   /// 07:30 and 08:30 UTC fall on one day in UTC, but on either side of midnight in Los Angeles, which is 8 hours
   /// behind UTC in November.
+  /// The counts are 64-bit, so a total past 2^31 prints whole.
+  @Test func theTablePrintsCountsPastThirtyTwoBits() {
+    let big = HeadlessUsage(input: 1, output: 2, cacheRead: 2_147_483_648, cacheWrite: 3)
+    let report = HeadlessUsageReport.build(
+      [HeadlessCall(t: epochMs("2026-11-18T12:00:00Z"), kind: "triage", model: "haiku", usage: big)], since: nil,
+      timeZone: utc)
+
+    let lines = report.table
+
+    #expect(lines.count == 2)
+    #expect(lines[1].contains(" 2147483648"), "\(lines[1])")
+    #expect(lines[1].hasPrefix("2026-11-18  triage      "))
+    #expect(lines[1].hasSuffix("  haiku"))
+  }
+
   @Test func callsOnEitherSideOfLocalMidnightGoOnTwoDays() {
     let calls = [
       HeadlessCall(t: epochMs("2026-11-18T07:30:00Z"), kind: "triage", usage: usage(1, 0, 0, 0)),

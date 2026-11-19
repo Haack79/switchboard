@@ -21,10 +21,10 @@ public enum Headless {
     claude: String, arguments: [String], input: String, env: [String: String], folder: String,
     timeout: Double, cancelled: @escaping @Sendable () -> Bool = { false }
   ) throws -> String {
-    if cancelled() { throw APIError("cancelled") }
+    if cancelled() { throw NotStarted(reason: "cancelled") }
     // Process raises an Objective-C exception for a NUL. Swift can't catch it, and it would end sbd.
     if (arguments + Array(env.keys) + Array(env.values)).contains(where: \.hasNul) {
-      throw APIError("claude can't run with a NUL character in its arguments or environment")
+      throw NotStarted(reason: "claude can't run with a NUL character in its arguments or environment")
     }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: claude)
@@ -39,7 +39,7 @@ public enum Headless {
     // A process that ends before it reads all of its input makes the write fail with EPIPE.
     // Without this flag, that write raises SIGPIPE, which ends a process that doesn't ignore it.
     _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-    try p.run()
+    do { try p.run() } catch { throw NotStarted(reason: "\(error)") }
     let ending = OSAllocatedUnfairLock<RunEnd?>(initialState: nil)
     let deadline = DispatchTime.now() + timeout
     // A global queue gets no thread while callers wait on every thread of Swift's cooperative pool.
@@ -81,6 +81,15 @@ public enum Headless {
     public let output: String
 
     public var description: String { "claude exited with status \(status): \(oneLine(output, max: 200))" }
+  }
+
+  /// What `run` throws when it refuses or fails to start `claude`, so the call spent no tokens.
+  public struct NotStarted: Error, CustomStringConvertible {
+    public let reason: String
+
+    public init(reason: String) { self.reason = reason }
+
+    public var description: String { reason }
   }
 
   private enum RunEnd: Sendable { case exited, timedOut, cancelled }

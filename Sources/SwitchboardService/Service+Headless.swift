@@ -24,9 +24,10 @@ extension Service {
   /// Runs `claude` with the arguments and the input on stdin, in the folder,
   /// ends it after `timeout` seconds or once `cancelled` returns true, and
   /// parses what it printed. Every one-shot call that sbd makes runs through
-  /// it, and it stores one `headless_calls` row per call: the model and the
-  /// tokens that claude's envelope reports, and the error when the call
-  /// gave no answer that `parse` accepts. Runs off the state queue.
+  /// it, and it stores one `headless_calls` row for each call that started
+  /// claude: the model and the tokens that claude's envelope reports, and
+  /// the error when the call gave no answer that `parse` accepts. Runs off
+  /// the state queue.
   func headlessCall<T>(
     _ kind: HeadlessKind, session: String?, arguments: [String], input: String, env: [String: String],
     folder: String, timeout: Double, cancelled: @escaping @Sendable () -> Bool = { false },
@@ -34,7 +35,9 @@ extension Service {
   ) -> HeadlessOutcome<T> {
     let outcome: HeadlessOutcome<T>
     do {
-      guard let claude = findExecutable(config.claude) else { throw APIError("can't find \(config.claude)") }
+      guard let claude = findExecutable(config.claude) else {
+        throw Headless.NotStarted(reason: "can't find \(config.claude)")
+      }
       let reply = Headless.reply(
         try Headless.run(
           claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
@@ -42,6 +45,8 @@ extension Service {
       outcome = HeadlessOutcome(reply: reply, result: Result { try parse(reply.output) })
     } catch let exit as Headless.ExitError {
       outcome = HeadlessOutcome(reply: Headless.reply(exit.output), result: .failure(exit))
+    } catch let notStarted as Headless.NotStarted {
+      return HeadlessOutcome(reply: nil, result: .failure(notStarted))
     } catch {
       outcome = HeadlessOutcome(reply: nil, result: .failure(error))
     }
