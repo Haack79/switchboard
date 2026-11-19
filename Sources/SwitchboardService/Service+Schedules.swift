@@ -160,7 +160,9 @@ extension Service {
   /// nothing, so its check runs while the session is busy. A short group
   /// starts a top-up on `topupQueue` without waiting for the session either.
   /// An open gate sends the fallback message only when the session is free.
-  /// A schedule whose top-up is running stays due and runs no check.
+  /// A failed top-up sends its fallback only when the session is free, and
+  /// otherwise saves the failed check and sends nothing. A schedule whose
+  /// top-up is running stays due and runs no check.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
       e.session.scheduleHold == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
@@ -176,7 +178,7 @@ extension Service {
         if let gate = schedule.gate {
           let found = subjects ?? actionSubjects()
           subjects = found
-          let status = QueueStatus.compute(queueRows(subjects: found), gate: gate)
+          let status = QueueStatus.compute(queueRows(subjects: found, gate: gate), gate: gate)
           switch status.decision {
           case .gated:
             recordGated(id, schedule, status: status, now: now)
@@ -243,21 +245,34 @@ extension Service {
 
   /// A row for each session, with the facts that `QueueStatus.compute` reads. `compute` picks the gate's rows from
   /// them. `subjects` is what `actionSubjects` returned. It runs on the state queue.
-  func queueRows(subjects: ActionSubjects) -> [QueueStatus.Row] {
+  func queueRows(subjects: ActionSubjects, gate: Schedule.Gate) -> [QueueStatus.Row] {
     let now = nowMs()
     return entries.values.map { e in
       let s = e.session
       let checkout = checkout(s)
-      // `repository` starts the lookup that `repositoryRead` waits for, so it runs first.
-      let origin = checkout.flatMap { repository($0, of: s) }
+      // `repository` starts the lookup that `repositoryKnown` waits for, so it runs first.
+      let repository = repository(of: e, checkout: checkout, gate: gate)
       return QueueStatus.Row(
-        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: origin,
-        repositoryRead: repositoryRead(s, checkout: checkout), markedDone: s.done, paused: Pause.blocker(s) != nil,
+        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: repository,
+        repositoryRead: repositoryKnown(s, checkout: checkout), markedDone: s.done, paused: Pause.blocker(s) != nil,
         removing: s.removal?.holdsSession == true,
         state: Attention.evaluate(s, e.facts, now: now, stateOf: lastState).state, unreadHost: e.facts.unread != nil,
         prMerged: e.facts.pr?.state == .merged, hasMergeAction: subjects.merging.contains(s.id),
         hasRemovalAction: subjects.removing.contains(s.id), started: !s.waitsToStart)
     }.sorted { $0.id < $1.id }
+  }
+
+  /// The repository of the session as a gate reads it. That is the gate's repository when the session's PR, issue
+  /// link, or follow-up is in it, and otherwise the owner/name of the origin of `checkout`, the session's checkout. A
+  /// follow-up that hasn't started has no checkout, so it has only its follow-up's repository. It runs on the state
+  /// queue.
+  func repository(of e: Entry, checkout: String?, gate: Schedule.Gate) -> String? {
+    let s = e.session
+    if s.waitsToStart { return s.followup?.repository }
+    // A fork's checkout names the fork as its origin, while sbd starts sessions there for the upstream repository.
+    let origin = checkout.flatMap { repository($0, of: s) }
+    let named = [e.facts.pr?.repo, s.issue?.repo, s.followup?.repository].compactMap { $0 }
+    return named.contains { Dependencies.sameRepo($0, gate.repo) } ? gate.repo : origin
   }
 
   /// The subjects of the action waits of `waitHolders`. It runs on the state queue.

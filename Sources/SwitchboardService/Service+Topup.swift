@@ -34,18 +34,22 @@ extension Service {
     } catch {
       return fail("\(error)")
     }
+    var dropped = ""
     let setup = queue.sync { () -> (holder: String, built: TopupCandidates, env: [String: String])? in
-      guard entries[id]?.session.schedules?.contains(where: { $0.id == scheduleID }) == true else { return nil }
+      if let refusal = scheduleRefusal(id, scheduleID) {
+        dropped = refusal
+        return nil
+      }
       let holder = topupHolder(id)
       let followups = entries.values.map(\.session).filter { $0.waitsToStart && !starting.contains($0.id) }
       let built = TopupCandidates.build(
-        repo: gate.repo, group: gate.group, issues: lists.issues, openPRs: lists.openPRs, sessions: coverageRows(),
-        followups: followups, viewer: issueCache.viewer, team: issueSettings.team)
+        repo: gate.repo, group: gate.group, issues: lists.issues, openPRs: lists.openPRs,
+        sessions: coverageRows(gate: gate), followups: followups, viewer: issueCache.viewer, team: issueSettings.team)
       let env = headlessEnv(session: holder, account: config.triage.account.map(ClaudeAccount.init(folder:)))
       return (holder, built, env)
     }
     guard let setup else {
-      return logLine("dropping the top-up of schedule \(scheduleID), because \(id) no longer has it")
+      return logLine("dropping the top-up of schedule \(scheduleID) of \(id), because \(dropped)")
     }
     let (holder, built, env) = setup
     guard !built.candidates.isEmpty else {
@@ -71,7 +75,8 @@ extension Service {
     var skips = built.skips + answer.skips
     for pick in answer.picks {
       let refusal = queue.sync {
-        pickRefusal(pick.candidate, gate: gate, openPRs: lists.openPRs, started: started.map(\.session.id))
+        scheduleRefusal(id, scheduleID)
+          ?? pickRefusal(pick.candidate, gate: gate, openPRs: lists.openPRs, started: started.map(\.session.id))
       }
       if let refusal {
         skips.append(Schedule.Gate.Skip(ref: pick.ref, reason: refusal))
@@ -182,30 +187,56 @@ extension Service {
     return TopupCandidates.OpenPR(number: number, headRefName: branch, closes: closes)
   }
 
-  /// Every session sbd has, as the candidate list reads it for coverage. It runs on the state queue.
-  private func coverageRows() -> [TopupCandidates.SessionRow] {
-    entries.values.map { e in
-      TopupCandidates.SessionRow(
-        repository: repository(of: e.session), branch: e.session.branch, prNumber: e.facts.pr?.number,
-        issue: e.session.issue, closesIssues: e.facts.pr?.closesIssues)
+  /// Every session sbd has, as the candidate list of `gate` reads it for coverage: a row for its current branch and
+  /// one for the branch it started on. It runs on the state queue.
+  private func coverageRows(gate: Schedule.Gate) -> [TopupCandidates.SessionRow] {
+    entries.values.flatMap { e in
+      let repository = repository(of: e, checkout: checkout(e.session), gate: gate)
+      // A session that switched branches may still work on the issue that its first branch names.
+      return Set([e.branch, e.session.branch]).map { branch in
+        TopupCandidates.SessionRow(
+          repository: repository, branch: branch, prNumber: e.facts.pr?.number, issue: e.session.issue,
+          closesIssues: e.facts.pr?.closesIssues)
+      }
     }
   }
 
+  /// Why the schedule can't start sessions now, or nil when it can: the session no longer has it, it is paused, or
+  /// `Schedule.hold` holds its session. It runs on the state queue.
+  private func scheduleRefusal(_ id: String, _ scheduleID: String) -> String? {
+    guard let s = entries[id]?.session, let schedule = s.schedules?.first(where: { $0.id == scheduleID }) else {
+      return "\(id) no longer has the schedule"
+    }
+    if schedule.paused == true { return "the schedule is paused" }
+    return s.scheduleHold
+  }
+
   /// Why a pick can't start now, or nil when it can: the group has reached its target, counting the sessions that
-  /// this top-up started, or a session or an open PR covers the issue now. It runs on the state queue.
+  /// this top-up started, a session or an open PR covers the issue now, or the follow-up is no longer a candidate.
+  /// It runs on the state queue.
   private func pickRefusal(
     _ candidate: TopupCandidates.Candidate, gate: Schedule.Gate, openPRs: [TopupCandidates.OpenPR], started: [String]
   ) -> String? {
     // A session that this top-up started may not count yet, because sbd reads its repository after it starts.
-    let rows = queueRows(subjects: actionSubjects())
+    let rows = queueRows(subjects: actionSubjects(), gate: gate)
     let active = Set(QueueStatus.compute(rows, gate: gate).counted.map(\.id)).union(started)
     if active.count >= gate.target { return "the group has its target of \(gate.target) active sessions" }
-    guard case .issue(let issue) = candidate else { return nil }
-    let fresh = TopupCandidates.build(
-      repo: gate.repo, group: gate.group, issues: [issue], openPRs: openPRs, sessions: coverageRows(),
-      followups: [], viewer: issueCache.viewer, team: issueSettings.team)
-    guard !fresh.candidates.contains(candidate) else { return nil }
-    return fresh.skips.first?.reason ?? "a session covers it now"
+    switch candidate {
+    case .issue(let issue):
+      let fresh = TopupCandidates.build(
+        repo: gate.repo, group: gate.group, issues: [issue], openPRs: openPRs, sessions: coverageRows(gate: gate),
+        followups: [], viewer: issueCache.viewer, team: issueSettings.team)
+      guard !fresh.candidates.contains(candidate) else { return nil }
+      return fresh.skips.first?.reason ?? "a session covers it now"
+    case .followup(let followupID, _):
+      let followups = [entries[followupID]?.session].compactMap { $0 }.filter { !starting.contains($0.id) }
+      let fresh = TopupCandidates.build(
+        repo: gate.repo, group: gate.group, issues: [], openPRs: [], sessions: [], followups: followups,
+        viewer: issueCache.viewer, team: issueSettings.team)
+      // The candidate carries the prompt, so an edited prompt would not match the candidate itself.
+      guard !fresh.candidates.contains(where: { $0.ref == candidate.ref }) else { return nil }
+      return "the follow-up is no longer one that the top-up may start"
+    }
   }
 
   /// Starts an issue from the gate's template in the gate's group, or a follow-up with its own prompt. It runs off
@@ -258,16 +289,31 @@ extension Service {
   }
 
   /// Sends the schedule's fallback message with the failure on its first line, and records the run with a failed
-  /// check that lists `skips`. It runs off the state queue.
+  /// check that lists `skips`. When the session isn't free, it saves the failed check, sends nothing, and records no
+  /// run, so the next due time tries again. It runs off the state queue.
   private func fallBack(
     _ id: String, _ scheduleID: String, gate: Schedule.Gate, status: QueueStatus, skipped: Int, failure: String,
     skips: [Schedule.Gate.Skip] = []
   ) {
     logLine("the top-up of schedule \(scheduleID) of \(id) failed: \(failure)")
     queue.sync {
-      guard let schedule = entries[id]?.session.schedules?.first(where: { $0.id == scheduleID }) else { return }
+      guard let e = entries[id], let schedule = e.session.schedules?.first(where: { $0.id == scheduleID }) else {
+        return
+      }
       let now = nowMs()
       let check = Schedule.Gate.Check(.failed, status: status, now: now, skipped: skips, error: failure)
+      // A busy session would queue the message, and each later failed top-up would queue another behind it.
+      if let blocker = Schedule.blocker(
+        facts: e.facts, process: promptProcess(id), messageWaiting: messageWaiting(e, now: now))
+      {
+        logLine("not sending the fallback of schedule \(scheduleID) of \(id), because \(blocker)")
+        do {
+          try changeSchedule(id, scheduleID) { $0.gate?.last = check }
+        } catch {
+          logLine("can't save the failed check of schedule \(scheduleID) of \(id): \(error)")
+        }
+        return
+      }
       let text = gate.fallbackMessage(status: status, prompt: schedule.prompt, failure: failure)
       sendAndRecord(id, schedule, text: text, skipped: skipped, check: check, now: now)
     }

@@ -173,7 +173,9 @@ public final class Service {
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
   /// can become a repo. sbd reads such a folder again after `checkoutRetryMs`.
-  var checkouts: [SitePath: (path: String?, readMs: Int64)] = [:]
+  /// `failed` marks a lookup that couldn't read the folder, such as a folder
+  /// that is gone, which also stores a nil path.
+  var checkouts: [SitePath: (path: String?, readMs: Int64, failed: Bool)] = [:]
   /// The folders whose checkout a lookup off the queue is reading.
   var checkoutLookups: Set<SitePath> = []
   /// The main checkout that names the auto-memory folder of each local session folder in a git repo, or nil
@@ -182,8 +184,9 @@ public final class Service {
   var memoryCheckouts: [String: String?] = [:]
   /// The owner/name that the origin remote of each checkout names on GitHub,
   /// or nil when it names none, with the time of the lookup. sbd reads a
-  /// checkout without one again after `checkoutRetryMs`.
-  var repositories: [SitePath: (repository: String?, readMs: Int64)] = [:]
+  /// checkout without one again after `checkoutRetryMs`. `failed` marks a
+  /// lookup where git couldn't read the checkout, which also stores nil.
+  var repositories: [SitePath: (repository: String?, readMs: Int64, failed: Bool)] = [:]
   /// The checkouts whose origin a lookup off the queue is reading.
   var repositoryLookups: Set<SitePath> = []
   /// Each session's folded skill listing and the transcript it was read
@@ -1138,10 +1141,19 @@ public final class Service {
     }
     if checkoutLookups.insert(folder).inserted {
       DispatchQueue.global().async { [self] in
-        // The first worktree that git lists is the main checkout.
-        let main = (try? worktreeEntries(folder.path, at: site))?.first.flatMap { try? site.realPath($0.path) }
+        let main: String?
+        let failed: Bool
+        do {
+          // The first worktree that git lists is the main checkout.
+          main = try worktreeEntries(folder.path, at: site).first.flatMap { try? site.realPath($0.path) }
+          failed = main == nil
+        } catch {
+          // git refuses a folder outside any repo and a folder that is gone with the same exit status.
+          main = nil
+          failed = !site.machine.isFolder(folder.path)
+        }
         queue.async { [self] in
-          checkouts[folder] = (main, nowMs())
+          checkouts[folder] = (main, nowMs(), failed)
           checkoutLookups.remove(folder)
         }
       }
@@ -1166,10 +1178,13 @@ public final class Service {
     }
     if repositoryLookups.insert(key).inserted {
       DispatchQueue.global().async { [self] in
-        let url = try? gitOutput(checkout, ["config", "--get", "remote.origin.url"], at: site)
+        let result = try? site.machine.run(site.git(), ["-C", checkout, "remote", "get-url", "origin"])
+        let url = result?.status == 0 ? result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         let repository = url.flatMap(GitHub.repo(remoteURL:))
+        // git exits 2 when the checkout has no origin remote, and 128 when it can't read the checkout.
+        let failed = result.map { $0.status != 0 && $0.status != 2 } ?? true
         queue.async { [self] in
-          repositories[key] = (repository, nowMs())
+          repositories[key] = (repository, nowMs(), failed)
           repositoryLookups.remove(key)
         }
       }
@@ -1183,11 +1198,19 @@ public final class Service {
   }
 
   /// Whether sbd has read the session's checkout and, when it has one, the
-  /// checkout's origin remote.
+  /// checkout's origin remote. A lookup that failed counts as a read.
   func repositoryRead(_ s: Session, checkout: String?) -> Bool {
     let site = self.site(for: s)
     if let checkout { return repositories[SitePath(checkout, at: site)] != nil }
     return checkouts[SitePath(s.cwd, at: site)] != nil
+  }
+
+  /// Whether a lookup read the session's checkout and, when it has one, the checkout's origin remote, and neither
+  /// lookup failed.
+  func repositoryKnown(_ s: Session, checkout: String?) -> Bool {
+    let site = self.site(for: s)
+    if let checkout { return repositories[SitePath(checkout, at: site)]?.failed == false }
+    return checkouts[SitePath(s.cwd, at: site)]?.failed == false
   }
 
   func lockedError(_ path: String) -> APIError {

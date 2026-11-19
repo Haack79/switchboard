@@ -142,9 +142,11 @@ public struct QueueStatus: Equatable, Sendable {
     public var name: String
     public var kind: SessionKind
     public var group: String?
-    /// owner/name, or nil when sbd hasn't read it or the checkout's origin isn't on GitHub.
+    /// owner/name, or nil when sbd hasn't read it or the checkout's origin isn't on GitHub. It is the gate's
+    /// repository when the session's PR, issue link, or follow-up is in it, whatever the origin names.
     public var repository: String?
-    /// sbd has read the session's checkout and its origin. A nil `repository` with this set is a session off GitHub.
+    /// sbd has read the session's checkout and its origin, and neither read failed. A nil `repository` with this set
+    /// is a session off GitHub.
     public var repositoryRead: Bool
     public var markedDone: Bool
     public var paused: Bool
