@@ -47,12 +47,20 @@ enum RemoteShellProtocol {
   /// exits 0 on the signal, as a tmux client does, then still answers with 143, so a command
   /// that its timeout ended never reads as one that succeeded.
   ///
+  /// The shell can die after it starts the `sleep` and before the subshell opens the FIFO. Under
+  /// SIGTERM, bash's EXIT trap can also remove the FIFO before the subshell opens it. A
+  /// write-only open of a FIFO blocks until a reader opens it, so the `sleep` would block in
+  /// open(2) forever, in the shell's working folder. The `sleep` therefore opens the FIFO for
+  /// reading and writing, which never blocks. The EXIT trap opens it the same way before it
+  /// removes it, which releases a subshell that waits in open(2) for a writer. Every process that
+  /// a command starts ends within its timeout and 2 s, whatever happens to the shell.
+  ///
   /// `sb_emit` runs one `wc` on both files from inside `$sb_d`, so the words of its output are
   /// `<stdout bytes> o <stderr bytes> e <sum> total` whatever the folder's name holds.
   static func bootScript(token: String) -> String {
     #"""
     sb_d=$(mktemp -d "${TMPDIR:-/tmp}/sb-sh.XXXXXX") || exit 97
-    trap 'rm -rf "$sb_d"' EXIT
+    trap '[ -p "$sb_d/f" ] && exec 3<>"$sb_d/f"; rm -rf "$sb_d"' EXIT
     mkfifo "$sb_d/f" || exit 97
     if sb_p=$(stat -c '%s %.9Y' -- / 2>/dev/null); then sb_s=gnu
     elif sb_p=$(stat -f '%z %Fm' -- / 2>/dev/null); then sb_s=bsd
@@ -72,7 +80,7 @@ enum RemoteShellProtocol {
       ( exec "$@" ) <"$sb_d/i" >"$sb_d/o" 2>"$sb_d/e" & sb_c=$!
       sb_w=
       if [ -n "$sb_t" ]; then
-        sleep "$sb_t" 2>/dev/null >"$sb_d/f" & sb_k=$!
+        sleep "$sb_t" 2>/dev/null 1<>"$sb_d/f" & sb_k=$!
         ( read sb_z <"$sb_d/f"; : >"$sb_d/t"; kill -TERM "$sb_c"; sleep 2; kill -KILL "$sb_c" ) >/dev/null 2>&1 & sb_w=$!
       fi
       wait "$sb_c" 2>/dev/null; sb_x=$?
