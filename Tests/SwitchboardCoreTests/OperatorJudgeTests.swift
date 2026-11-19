@@ -1065,5 +1065,43 @@ extension OperatorJudgeTests {
 
       #expect(try JSONCoding.decode(Wait.self, from: row).ciCheck == nil)
     }
+
+    static let unsent = "Switchboard: judgment needed for wait w3. The checks on #18303 of fix-cache failed."
+
+    /// A question that sbd could not send survives a restart, so a later tick sends it again.
+    @Test func anUnsentQuestionRoundTripsOnTheWait() throws {
+      let wait = ciWait(CICheck(head: ciHead, since: 5, step: ciStep("judged"), unsent: Self.unsent))
+
+      let decoded = try JSONCoding.decode(Wait.self, from: try JSONCoding.encode(wait))
+
+      #expect(decoded.ciCheck?.unsent == Self.unsent)
+      #expect(decoded == wait)
+    }
+
+    @Test func anUnsentQuestionEncodesAsUnsent() throws {
+      let json = try JSON(
+        encoding: ciWait(CICheck(head: ciHead, since: 5, step: ciStep("judged"), unsent: Self.unsent)))
+
+      #expect(json["ciCheck"]?["unsent"]?.string == Self.unsent, Comment(rawValue: json.text))
+    }
+
+    /// A check with no unsent question writes no new key, so the row stays as an older sbd wrote it.
+    @Test(arguments: steps)
+    func aCICheckWithoutAnUnsentQuestionWritesNoUnsentKey(_ step: String) throws {
+      let json = try JSON(encoding: ciWait(CICheck(head: ciHead, since: 5, step: ciStep(step))))
+
+      #expect(json["ciCheck"] != nil, Comment(rawValue: json.text))
+      #expect(json["ciCheck"]?["unsent"] == nil, Comment(rawValue: json.text))
+    }
+
+    /// A row that an sbd from before the unsent question stored.
+    @Test(arguments: steps)
+    func aStoredCICheckWithoutUnsentDecodesWithNone(_ step: String) throws {
+      let row = #"{"head":"\#(ciHead)","since":5,"step":"\#(step)"}"#
+
+      let check = try JSONCoding.decode(CICheck.self, from: row)
+
+      #expect(check.unsent == nil)
+    }
   }
 }

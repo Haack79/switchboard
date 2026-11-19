@@ -504,6 +504,36 @@ extension CIReaderTests {
     #expect(try ciJudgments(sbd, wait).isEmpty)
   }
 
+  /// A turn that starts while the reader reads makes its answer stale, because the session may fix the checks in that
+  /// turn. sbd drops the answer: it tells the session nothing, reruns nothing, asks the Operator nothing, and records
+  /// nothing as judged. The turn stays held to the end, so no later read starts.
+  @Test(arguments: Path.allCases)
+  func aTurnThatStartsDuringTheReadDropsTheReadersAnswer(_ path: Path) throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (s, wait) = try armed(path, github, sbd)
+    let gate = try StubGate("\(sbd.home.path)/gh-live/run/\(Self.charts)/commit/\(head(github)).gate")
+    defer { gate.remove() }
+    try failTwice(sbd, wait, head: head(github))
+    try sbd.waitFor("the held run list", timeout: 30) { !sbd.ghCalls("run list ").isEmpty }
+
+    try sbd.sb("send", s.id, "slow held")
+    try sbd.waitFor(s.id, "the held turn", timeout: 30) { $0.state == .working }
+    try gate.pass()
+    gate.remove()
+
+    // A tick skips the wait while the read runs, so the step leaves `seen` only after the read ends.
+    try sbd.waitFor("the read's end", timeout: 30) {
+      try follow.tick(sbd)
+      return try ciCheck(sbd, wait)?.step != .seen
+    }
+    #expect(try ciCheck(sbd, wait) == nil)
+    let messages = try ciMessages(sbd, s)
+    #expect(messages.isEmpty, "\(messages)")
+    #expect(try ciJudgments(sbd, wait).isEmpty)
+    #expect(sbd.ghCalls(Self.reruns).isEmpty, "\(sbd.ghCalls(Self.reruns))")
+  }
+
   /// Decision 42: the state is stored with the wait, so a restart does not send the message again. sbd's clock
   /// offset lives in memory and starts again at zero, so the test moves the clock past where it was before the
   /// restart. Without that, the stored `since` would be in the future and nothing would run for the wrong reason.
@@ -697,6 +727,35 @@ extension CIReaderTests {
     #expect(messages.isEmpty, "\(messages)")
     #expect(sbd.ghCalls(Self.reruns).count == 2, "\(sbd.ghCalls(Self.reruns))")
   }
+
+  /// A push while gh reruns the old head's jobs makes gh's refusal about a head that no longer matters, so sbd asks
+  /// the Operator nothing and counts the new head from its first failure. The clock stays within `holdRetrySeconds`
+  /// of that failure, so any judgment would be about the old head.
+  @Test func aRerunRefusalAfterAPushAsksTheOperatorNothing() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    try sbd.answerCIJudge("flake")
+    try sbd.ghRerunFails(run: Self.failed, with: "HTTP 403: Resource not accessible by integration")
+    let (_, wait) = try armedFailure(github, sbd)
+    let gate = try StubGate("\(sbd.home.path)/gh-live/run/\(Self.charts)/\(Self.failed)/rerun.gate")
+    defer { gate.remove() }
+    try failTwice(sbd, wait, head: head(github))
+    try waitForReruns(sbd, 1)
+
+    let pushed = FakeGitHub.sha(18_400)
+    github.change(Self.number) { $0["headRefOid"] = .string(pushed) }
+    try sbd.poll(all: true)
+    try gate.pass()
+    gate.remove()
+
+    try sbd.waitFor("the new head seen", timeout: 30) {
+      try follow.tick(sbd)
+      let check = try ciCheck(sbd, wait)
+      return check?.head == pushed && check?.step == .seen
+    }
+    let judgments = try ciJudgments(sbd, wait)
+    #expect(judgments.isEmpty, "\(judgments)")
+  }
 }
 
 // MARK: Raised to the Operator
@@ -813,6 +872,33 @@ extension CIReaderTests {
     #expect(event.data["error"] != nil, Comment(rawValue: event.data.text))
     #expect(event.data["head"]?.string == head(github), Comment(rawValue: event.data.text))
   }
+
+  /// A question that can't reach the Operator stays on the wait, and sbd sends it again once `holdRetrySeconds` have
+  /// passed. The Operator's folder is gone at first, so its stopped claude can't start for the message.
+  @Test func aCIJudgmentThatCannotReachTheOperatorGoesAgainAfterHoldRetrySeconds() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (_, wait) = try armedUndecided(.judgeFails, github, sbd)
+    let op = try follow.theOperator(sbd)
+    // A running claude takes the message as a paste, which never checks the folder.
+    try sbd.sb("stop", op.id)
+    try sbd.waitFor(op.id, "the Operator's claude to stop", timeout: 30) { !$0.live }
+    let away = op.cwd + ".away"
+    try FileManager.default.moveItem(atPath: op.cwd, toPath: away)
+    try failTwice(sbd, wait, head: head(github))
+    try sbd.waitFor("the judged step", timeout: 30) { try ciCheck(sbd, wait)?.step == .judged }
+    try #require(try ciJudgments(sbd, wait).isEmpty)
+
+    try FileManager.default.moveItem(atPath: away, toPath: op.cwd)
+    try follow.tick(sbd, 2)
+    #expect(try ciJudgments(sbd, wait).isEmpty)
+    try sbd.advanceClock(Self.pastHoldRetry)
+
+    try ciJudgment(sbd, wait)
+    try passMoreTicks(sbd)
+    let judgments = try ciJudgments(sbd, wait)
+    #expect(judgments.count == 1, "\(judgments)")
+  }
 }
 
 // MARK: The merge action
@@ -823,19 +909,22 @@ extension CIReaderTests {
     var testDescription: String { rawValue }
   }
 
+  /// A merge wait on a failing fix-cache whose reader takes `path`.
+  func armed(_ path: Path, _ github: FakeGitHub, _ sbd: Instance) throws -> (s: SessionSummary, wait: String) {
+    switch path {
+    case .message: try armedFailure(github, sbd)
+    case .rerun: try armedFlake(github, sbd)
+    case .raise: try armedUndecided(.judgeFails, github, sbd)
+    }
+  }
+
   /// Decision 44: the CI path never changes the merge wait's `actionStatus`, so a later Ready to merge still fires
   /// the merge action.
   @Test(arguments: Path.allCases)
   func theCIPathLeavesTheMergeActionsStatusAlone(_ path: Path) throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
-    let armed: (s: SessionSummary, wait: String)
-    switch path {
-    case .message: armed = try armedFailure(github, sbd)
-    case .rerun: armed = try armedFlake(github, sbd)
-    case .raise: armed = try armedUndecided(.judgeFails, github, sbd)
-    }
-    let (s, wait) = armed
+    let (s, wait) = try armed(path, github, sbd)
     let before = try operatorsWait(sbd, wait)?.actionStatus
 
     try failTwice(sbd, wait, head: head(github))

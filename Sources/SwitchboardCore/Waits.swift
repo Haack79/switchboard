@@ -29,11 +29,15 @@ public struct CICheck: Codable, Equatable, Sendable {
   /// When the step began, on sbd's clock, in milliseconds since the epoch.
   public var since: Int64
   public var step: Step
+  /// The question to the wait's holder that sbd could not send. sbd sends it again `operator.holdRetrySeconds`
+  /// after `since`.
+  public var unsent: String?
 
-  public init(head: String, since: Int64, step: Step) {
+  public init(head: String, since: Int64, step: Step, unsent: String? = nil) {
     self.head = head
     self.since = since
     self.step = step
+    self.unsent = unsent
   }
 }
 

@@ -49,10 +49,13 @@ extension Service {
     for holder in entries.keys.sorted() {
       for wait in entries[holder]?.session.waits ?? [] where wait.action?.kind == .merge {
         guard !ciReads.contains(CIRead.key(holder: holder, wait: wait.id)) else { continue }
-        // Nothing more happens at a head that the reader judged, so the wait needs no read of the settings.
+        // At a head that the reader judged, only a question that sbd could not send is left to do.
         if let check = wait.ciCheck, check.step == .judged,
           check.head == wait.actionSubject.flatMap({ entries[$0.id]?.facts.pr?.headSha })
         {
+          if let text = check.unsent, now - check.since >= Int64(settings.holdRetrySeconds) * 1000 {
+            sendCIQuestion(holder, wait.id, check, text)
+          }
           continue
         }
         guard wait.actionStatus?.kind != .running, let subject = wait.actionSubject?.id, let e = entries[subject],
@@ -117,7 +120,11 @@ extension Service {
         ciReads.remove(read.key)
         return false
       }
-      setCICheck(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .reran))
+      guard setCICheck(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .reran)) else {
+        ciReads.remove(read.key)
+        askAboutCI(read, "sbd could not record the rerun, so it did not rerun the failed jobs")
+        return false
+      }
       return true
     }
     guard current else { return }
@@ -130,7 +137,11 @@ extension Service {
     }
     queue.sync {
       ciReads.remove(read.key)
-      if let refusal { askAboutCI(read, refusal) }
+      // A push during the reruns makes the refusal about a head that no longer matters.
+      guard let refusal, storedWait(read.holder, read.wait)?.ciCheck?.head == read.head,
+        entries[read.subject]?.facts.pr?.headSha == read.head
+      else { return }
+      askAboutCI(read, refusal)
     }
   }
 
@@ -180,13 +191,13 @@ extension Service {
     }
   }
 
-  /// Whether the wait still records the failure as seen at the read's head, and the subject's PR still fails its
-  /// checks at that head. It runs on the state queue.
+  /// Whether the wait still records the failure as seen at the read's head, the subject's PR still fails its checks
+  /// at that head, and the subject's turn still does not run. It runs on the state queue.
   private func ciCurrent(_ read: CIRead) -> Bool {
     guard let check = storedWait(read.holder, read.wait)?.ciCheck, check.head == read.head, check.step == .seen,
-      let pr = entries[read.subject]?.facts.pr
+      let e = entries[read.subject], let pr = e.facts.pr
     else { return false }
-    return pr.headSha == read.head && pr.checksFailed
+    return pr.headSha == read.head && pr.checksFailed && !turnRuns(e)
   }
 
   /// Sends the subject the judge's summary and records the head as judged. A failed send asks the holder instead. It
@@ -211,21 +222,37 @@ extension Service {
   /// runs on the state queue.
   private func askAboutCI(_ read: CIRead, _ reason: String) {
     guard let wait = storedWait(read.holder, read.wait), let session = entries[read.holder]?.session else { return }
-    setCICheck(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .judged))
     let text = wait.keepWaitMessage(question: read.question(reason), byOperator: session.kind == .operator)
+    sendCIQuestion(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .judged), text)
+  }
+
+  /// Records `check` as judged, then sends the holder `text`. A failed send stores `text` as unsent, so a later tick
+  /// sends it again. It runs on the state queue.
+  private func sendCIQuestion(_ holder: String, _ waitId: String, _ check: CICheck, _ text: String) {
+    var check = check
+    check.since = nowMs()
+    check.unsent = nil
+    // The step is stored before the send, so a restart after the send never sends it twice.
+    setCICheck(holder, waitId, check)
     do {
-      _ = try send(read.holder, text, by: .sbd, trigger: .wait)
+      _ = try send(holder, text, by: .sbd, trigger: .wait)
     } catch {
-      logLine("can't ask about the failed checks of wait \(read.wait) of \(read.holder): \(error)")
+      logLine("can't ask about the failed checks of wait \(waitId) of \(holder): \(error)")
+      check.unsent = text
+      setCICheck(holder, waitId, check)
     }
   }
 
-  /// Stores `check` as the CI state of the wait, and changes nothing else on it. It runs on the state queue.
-  private func setCICheck(_ holder: String, _ waitId: String, _ check: CICheck?) {
+  /// Stores `check` as the CI state of the wait, and changes nothing else on it. It returns false when the store
+  /// failed. It runs on the state queue.
+  @discardableResult
+  private func setCICheck(_ holder: String, _ waitId: String, _ check: CICheck?) -> Bool {
     do {
       try updateWait(holder, waitId) { $0.ciCheck = check }
+      return true
     } catch {
       logLine("can't record the CI state of wait \(waitId) of \(holder): \(error)")
+      return false
     }
   }
 }

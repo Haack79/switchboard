@@ -31,7 +31,7 @@
 #   gh run rerun <id> --repo <owner/name> ...
 #                                   run/<owner>/<name>/<id>/rerun
 # A rerun prints <key>.error to stderr and exits 1 when that file exists, and
-# exits 0 otherwise.
+# exits 0 otherwise. A FIFO at <key>.gate holds the rerun as it holds a read.
 printf '%s\n' "$*" >>"$SB_HOME/gh-calls.log"
 
 live="$SB_HOME/gh-live"
@@ -159,6 +159,7 @@ case "$1 $2" in
 "run rerun")
   run_args "$@"
   rerun="$live/run/$run_repo/$run_id/rerun"
+  if [ -p "$rerun.gate" ]; then read -r _ <"$rerun.gate"; fi
   if [ -f "$rerun.error" ]; then
     cat "$rerun.error" >&2
     exit 1
