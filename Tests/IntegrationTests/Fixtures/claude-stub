@@ -70,6 +70,22 @@
 #   a prompt that holds "Switchboard plan artifact task." plays the chat's
 #                    side of the task with a fake Artifact tool. See artifact
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
+#   /<command> ...   replies "Done: <prompt>". Its UserPromptSubmit goes
+#                    first, as Claude Code runs the hook before it writes the
+#                    prompt to the transcript. A hook answer whose decision is
+#                    block ends the turn there: no transcript line, no reply,
+#                    and no Stop, as Claude Code 2.1.318 does. A prompt that
+#                    holds " skill <name>" also calls the Skill tool for
+#                    the text after its last " skill " in its turn, as a skill
+#                    that loads another skill does, and replies "Denied:
+#                    <reason>" when its PreToolUse hook denies the call
+#   skill <name>     calls the Skill tool with {skill: <name>} and replies
+#                    "Skill <name>", or "Denied: <reason>" when the
+#                    PreToolUse hook answers a permissionDecision of deny. A
+#                    deny sends no PostToolUse. A block of its
+#                    UserPromptSubmit ends the turn as for /<command>
+#   subskill <name>  does the same from a subagent, whose PreToolUse carries
+#                    agent_id
 #   anything else    replies "Done: <prompt>"
 # `claude -p ...` is the summary call. It reads the prompt on stdin and prints
 # the JSON that claude prints with --output-format json: a decision with two
@@ -516,6 +532,8 @@ vars() {
 # It writes an additionalContext to the transcript as the attachment line
 # that Claude Code 2.1.318 writes.
 answer() {
+  # gated reads the last answer. It is set only when the hook runs in this shell, not in a pipeline's subshell.
+  last_answer=$1
   [ -z "$1" ] && return
   printf '%s\t%s\0' "$session" "$1" >>"$SB_HOME/hook-output.log"
   local context
@@ -660,6 +678,62 @@ asks() {
   event turn Stop | emit "$(vars "$1" "$reply")"
 }
 
+# skill_call <name> [agent]: calls the Skill tool for <name>, from the
+# subagent <agent> when it is given, and prints "Denied: <reason>" when the
+# PreToolUse hook denies the call, or nothing when it allows it. Like claude,
+# it writes the call's tool_use line to the transcript before PreToolUse, and
+# it sends PostToolUse only for a call that ran.
+skill_call() {
+  local fields
+  fields=$(jq -nc --arg n "$1" '{tool_name: "Skill", tool_input: {skill: $n}, tool_use_id: "s1"}')
+  [ -n "${2:-}" ] && fields=$(jq -c --arg a "$2" '. + {agent_id: $a, agent_type: "general-purpose"}' <<<"$fields")
+  mkdir -p "$project"
+  jq -nc --arg n "$1" \
+    '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "s1", name: "Skill", input: {skill: $n}}]}}' \
+    >>"$project/$session.jsonl"
+  last_answer=''
+  [ "${STUB_HOOKS-}" = off ] || answer "$(payload PreToolUse "$fields" | sh -c "$hook_cmd")"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$last_answer" 2>/dev/null)" = deny ]; then
+    echo "Denied: $(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"$last_answer")"
+    return
+  fi
+  hook PostToolUse "$(jq -c '. + {tool_response: {success: true}}' <<<"$fields")"
+}
+
+# gated <prompt>: plays a turn of a prompt that sbd's hooks may refuse: a
+# /<command>, skill <name>, or subskill <name>. See the list at the top.
+gated() {
+  local p=$1 reply denied
+  last_answer=''
+  emit "$(vars "$p" "")" < <(event turn UserPromptSubmit)
+  if [ "$(jq -r '.decision // empty' <<<"$last_answer" 2>/dev/null)" = block ]; then
+    printf 'UserPromptSubmit operation blocked by hook:\n%s\n' "$(jq -r '.reason // ""' <<<"$last_answer")"
+    status
+    return
+  fi
+  transcript "$p"
+  status
+  case $p in
+  skill\ *)
+    denied=$(skill_call "${p#skill }")
+    reply=${denied:-"Skill ${p#skill }"}
+    ;;
+  subskill\ *)
+    denied=$(skill_call "${p#subskill }" sub1)
+    reply=${denied:-"Skill ${p#subskill }"}
+    ;;
+  *\ skill\ *)
+    denied=$(skill_call "${p##* skill }")
+    reply=${denied:-"Done: $p"}
+    ;;
+  *) reply="Done: $p" ;;
+  esac
+  echo "⏺ $reply"
+  reply_line "$reply"
+  emit "$(vars "$p" "$reply")" < <(event turn Stop)
+  status
+}
+
 # artifact <prompt>: plays a Switchboard plan artifact task with a fake
 # Artifact tool, and prints the reply. The artifact whose URL ends in <id> is
 # the text in $SB_HOME/artifacts/<id>, and its version is the text in
@@ -757,6 +831,12 @@ turn() {
     awk 1 "$SB_HOME/skill-listing.jsonl" >>"$project/$session.jsonl"
   fi
   listed=1
+  case $p in
+  /* | skill\ * | subskill\ *)
+    gated "$p"
+    return
+    ;;
+  esac
   transcript "$p"
   status
   case $p in

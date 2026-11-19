@@ -5,6 +5,8 @@ import SwitchboardCore
 extension Service {
   /// How long a refresh waits before it runs a failed key again.
   static let skillRetryMs: Int64 = 15 * 60_000
+  /// How long a manager-kind prompt or Skill call waits after an account's last scan before it scans again.
+  static let skillRescanMs: Int64 = 60_000
 
   /// The account folder of each manager-kind session on this Mac, mapped to
   /// the account's most recently active one. Runs on the state queue.
@@ -210,5 +212,117 @@ extension Service {
     }
     saveSkillLabels()
     accounts.forEach(queueSkillRuns)
+  }
+
+  // MARK: The gate
+
+  /// The UserPromptSubmit gate of a manager-kind session. The prompt takes an armed bypass, whatever its command.
+  /// It returns the block answer for a work skill, after it records `skill_blocked` and delivers the next queued
+  /// message, because Claude Code sends no Stop after a block. Runs on the state queue.
+  func managerSkillPromptGate(_ id: String, _ payload: JSON, stamp: HostEventStamp?) -> JSON? {
+    guard let account = gatedSkillAccount(id, stamp: stamp), let session = entries[id]?.session else { return nil }
+    let bypass = entries[id]?.skillBypass
+    entries[id]?.skillBypass = nil
+    let armed = bypass == .turn ? nil : bypass
+    guard let name = SkillCommand.name(inPrompt: payload["prompt"]?.string ?? "") else { return nil }
+    switch skillDecision(name, account: account, bypass: armed) {
+    case .bypassed:
+      entries[id]?.skillBypass = .turn
+      record(id, "skill_bypassed", ["skill": .string(name)])
+    case .blocked(let by):
+      record(id, "skill_blocked", ["skill": .string(name), "via": "prompt", "by": .string(by.rawValue)])
+      deliverPending(id, after: 0.5)
+      return [
+        "decision": "block",
+        "reason": .string(ManagerSkillGate.promptReason(skill: name, conversation: session.name)),
+      ]
+    case .unchecked(let failure):
+      recordSkillUnchecked(id, name, account: account, failure)
+    case .ignored, .allowed:
+      break
+    }
+    return nil
+  }
+
+  /// The PreToolUse gate of a manager-kind session and its subagents. It returns the deny answer for a Skill or
+  /// SlashCommand call of a work skill, which a run-here turn lets through. Runs on the state queue.
+  func managerSkillToolGate(_ id: String, _ payload: JSON, stamp: HostEventStamp?) -> JSON? {
+    guard
+      let name = SkillCommand.name(inToolCall: payload["tool_name"]?.string ?? "", input: payload["tool_input"]),
+      let account = gatedSkillAccount(id, stamp: stamp)
+    else { return nil }
+    let bypass = entries[id]?.skillBypass == .turn ? SkillBypass.turn : nil
+    switch skillDecision(name, account: account, bypass: bypass) {
+    case .blocked(let by):
+      record(id, "skill_blocked", ["skill": .string(name), "via": "tool", "by": .string(by.rawValue)])
+      return [
+        "hookSpecificOutput": [
+          "hookEventName": "PreToolUse", "permissionDecision": "deny",
+          "permissionDecisionReason": .string(ManagerSkillGate.toolReason(skill: name)),
+        ]
+      ]
+    case .unchecked(let failure):
+      recordSkillUnchecked(id, name, account: account, failure)
+    case .ignored, .allowed, .bypassed:
+      break
+    }
+    return nil
+  }
+
+  /// The account folder of a manager-kind session whose hook answer reaches claude, or nil for every other
+  /// session. A host's hook answer never reaches claude. It scans the account again when its last scan is at
+  /// least `skillRescanMs` old, and it never waits for the scan. Runs on the state queue.
+  private func gatedSkillAccount(_ id: String, stamp: HostEventStamp?) -> String? {
+    guard stamp == nil, entries[id]?.session.kind.runsInManagerFolder == true,
+      case .local(let account) = claudeAccount(of: id)
+    else { return nil }
+    if nowMs() - (skillRefreshed[account.folder] ?? 0) >= Self.skillRescanMs {
+      refreshManagerSkills(account: account.folder)
+    }
+    return account.folder
+  }
+
+  /// The gate's decision for a name in the account's index. Runs on the state queue.
+  private func skillDecision(_ name: String, account: String, bypass: SkillBypass?) -> ManagerSkillGate.Decision {
+    ManagerSkillGate.decide(
+      name: name, catalog: skillIndex[account] ?? [:], labels: skillLabels, failures: skillFailures,
+      settings: config.managerSkills, bypass: bypass)
+  }
+
+  /// Records `skill_unchecked` for a skill of the account's index that the gate let through without a label, once
+  /// per cache key and reason in each run of sbd. A name that the index lacks is not a skill that sbd knows, so
+  /// it records nothing. Runs on the state queue.
+  private func recordSkillUnchecked(_ id: String, _ name: String, account: String, _ failure: SkillFailure?) {
+    guard let entry = skillIndex[account]?[name] else { return }
+    let why = failure?.category.rawValue ?? "unlabeled"
+    let key = entry.key(model: config.managerSkills.model) ?? "\(account)/\(name)"
+    guard skillUnchecked.insert("\(why) \(key)").inserted else { return }
+    var data: [String: JSON] = ["skill": .string(name), "why": .string(why)]
+    if let failure { data["error"] = .string(failure.message) }
+    record(id, "skill_unchecked", .object(data))
+  }
+
+  /// Whether an event ends the turn of a run-here message, whose Skill calls the bypass lets through until then.
+  static func endsSkillBypass(_ event: Event) -> Bool {
+    ["Stop", "StopFailure", "idle", "SessionEnd", "stopped", "exited"].contains(event.kind) && !event.fromSubagent
+  }
+
+  // MARK: Run here anyway
+
+  /// Arms the bypass for the command that starts the text, when claude gets the text. A text without a command
+  /// arms nothing. Runs on the state queue.
+  func armSkillBypass(_ id: String, _ text: String) {
+    guard let name = SkillCommand.name(inPrompt: text) else { return }
+    entries[id]?.skillBypass = .armed(name)
+  }
+
+  /// Refuses a `send` with `runHere` from a Claude Code, so the model can't let itself run a work skill, and for a
+  /// session that isn't a Manager conversation or the operator. Runs on the state queue.
+  func refuseRunHere(_ id: String, _ args: JSON) throws {
+    try Service.refuseClaude(args, "runs a work skill in a Manager conversation")
+    guard let session = entries[id]?.session, session.kind.runsInManagerFolder else {
+      throw APIError(
+        "--run-here lets a work skill run in a Manager conversation or the operator, and \(id) is neither")
+    }
   }
 }

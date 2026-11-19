@@ -332,6 +332,13 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       // An API or usage limit error ends the turn without a Stop. So does
       // Escape, which sbd finds out from `claude agents` and records as idle.
       endTurn()
+    case "skill_blocked":
+      // Claude Code sends no Stop after it blocks a prompt. A subagent's blocked call leaves the main call running.
+      if d["via"]?.string == "prompt" {
+        endTurn()
+      } else if let running = runningTool, SkillCommand.tools.contains(running.tool) {
+        runningTool = nil
+      }
     case "link_down":
       // A second `link_down` keeps the first one's time and state: the facts stopped updating at the first.
       if unread == nil {

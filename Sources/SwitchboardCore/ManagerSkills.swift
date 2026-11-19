@@ -428,3 +428,91 @@ public struct ManagerSkillRow: Codable, Equatable, Sendable {
     return [label?.rawValue ?? "-", name, origin.rawValue, why].joined(separator: "  ")
   }
 }
+
+/// The skill that a prompt or a tool call loads.
+public enum SkillCommand {
+  /// The tools whose call loads a skill.
+  public static let tools: Set<String> = ["Skill", "SlashCommand"]
+
+  /// The command that the prompt's first line starts with, after leading whitespace: a `/` and a name of
+  /// `[A-Za-z0-9_.:-]` that ends at whitespace or the end of the line. Matching is case-sensitive, as in Claude Code.
+  public static func name(inPrompt prompt: String) -> String? {
+    let line = prompt.prefix { !$0.isNewline }.drop { $0.isWhitespace }
+    guard line.first == "/" else { return nil }
+    let rest = line.dropFirst()
+    let name = rest.prefix { $0.isASCII && ($0.isLetter || $0.isNumber || "_.:-".contains($0)) }
+    guard !name.isEmpty, name.endIndex == rest.endIndex || rest[name.endIndex].isWhitespace else { return nil }
+    return String(name)
+  }
+
+  /// The skill that a call of the Skill tool or of the older SlashCommand tool loads. Every other tool loads none.
+  public static func name(inToolCall tool: String, input: JSON?) -> String? {
+    switch tool {
+    case "Skill":
+      guard let skill = input?["skill"]?.string?.trimmingCharacters(in: .whitespaces) else { return nil }
+      let name = skill.hasPrefix("/") ? String(skill.dropFirst()) : skill
+      return name.isEmpty ? nil : name
+    case "SlashCommand":
+      return input?["command"]?.string.flatMap { name(inPrompt: $0) }
+    default:
+      return nil
+    }
+  }
+}
+
+/// A user's "Run here anyway" for one message in a Manager conversation. It lives only in sbd's memory.
+public enum SkillBypass: Equatable, Sendable {
+  /// The message with this skill's command is on its way to claude. The next UserPromptSubmit takes it.
+  case armed(String)
+  /// The message's skill runs. Every Skill call of its turn is let through until the turn ends.
+  case turn
+}
+
+/// Whether a manager-kind session may load a skill. The hook, the `slash-commands` label, and `manager-skills`
+/// read the same decision.
+public enum ManagerSkillGate {
+  public enum Decision: Equatable, Sendable {
+    /// No skill, or one of Claude Code's built-in commands.
+    case ignored
+    case bypassed
+    case allowed(by: ManagerSkillRow.By)
+    case blocked(by: ManagerSkillRow.By)
+    /// Allowed without a label. The failure is the one stored for the entry's current key, or nil when none is.
+    case unchecked(SkillFailure?)
+  }
+
+  public static func decide(
+    name: String?, catalog: [String: CatalogEntry], labels: SkillLabelCache, failures: [String: SkillFailure],
+    settings: ManagerSkillSettings, bypass: SkillBypass?
+  ) -> Decision {
+    guard let name, !SlashCommand.builtIns.contains(where: { $0.name == name }) else { return .ignored }
+    switch bypass {
+    case .turn?: return .bypassed
+    case .armed(let armed)? where armed == name: return .bypassed
+    default: break
+    }
+    let key = catalog[name]?.key(model: settings.model)
+    guard let found = ManagerSkillRow.label(of: name, key: key, settings: settings, labels: labels) else {
+      return .unchecked(key.flatMap { failures[$0] })
+    }
+    return found.label == .work ? .blocked(by: found.by) : .allowed(by: found.by)
+  }
+
+  /// The reason of a UserPromptSubmit block, which Claude Code shows to the user. It holds only the skill's name,
+  /// so neither the skill's file nor the classifier's reason reaches it.
+  public static func promptReason(skill: String, conversation: String) -> String {
+    "Switchboard blocked /\(skill) in this Manager conversation. /\(skill) is a work skill, and a Manager rereads "
+      + "everything it loads on every later turn. Start a session for it instead: in Switchboard's chat pane, "
+      + "send it again and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
+      + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(conversation) "
+      + "--run-here \"/\(skill) …\" in a terminal. sb manager skills lists the labels."
+  }
+
+  /// The reason of a PreToolUse deny, which the model reads. It holds only the skill's name.
+  public static func toolReason(skill: String) -> String {
+    "Switchboard denied the \(skill) skill. It is a work skill, and this Manager conversation rereads everything "
+      + "it loads on every later turn. Start a session for the work instead, with the spawn tool or sb new <repo> "
+      + "--branch <branch> --prompt \"/\(skill) <args>\", and follow it with a wait. Don't load the skill's text "
+      + "another way, such as by reading its SKILL.md."
+  }
+}

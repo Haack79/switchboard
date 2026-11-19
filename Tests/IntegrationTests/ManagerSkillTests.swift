@@ -10,104 +10,11 @@ private let spentReading =
 /// `safe` through `claude -p --model haiku`, and caches the label in `skill-labels.json` by a hash of the file.
 /// `sb manager skills --json` answers an array of rows `{name, origin, path?, label?, by?, reason?, error?, pending}`.
 ///
-/// In this stage sbd scans an account at its own start, at a manager-kind SessionStart, and on `relabel`. So each
-/// test writes its skill files before one of those. The stub answers a classification by the markers in the skill's
+/// sbd scans an account at its own start, at a manager-kind SessionStart, on `relabel`, and on a manager-kind
+/// prompt or Skill call at most once a minute. So each test writes its skill files before one of those. The stub answers a classification by the markers in the skill's
 /// text, and it logs one line per call with the skill's name to `skill-classify-calls.log`. A test that expects no
 /// new call writes a new skill before the refresh and waits for that skill's label, which shows that the refresh ran.
-@Suite(.blocking(timeLimit: .seconds(180))) struct ManagerSkillTests {
-  func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try JSONCoding.decode(type, from: text) }
-
-  /// A sbd with one account A, which new sessions use, so a test can write A's skills before any session starts.
-  func instance(config extra: [String: JSON] = [:], idleStopSeconds: Int = 600) throws -> Instance {
-    let sbd = try Instance(idleStopSeconds: idleStopSeconds, accounts: ["A"], inheriting: .unset, config: extra)
-    try sbd.sb("account", "use", "A")
-    return sbd
-  }
-
-  /// Writes `<account>/skills/<name>/SKILL.md`. The stub reads its markers from `body`.
-  func writeSkill(_ account: String, _ name: String, _ body: String = "Run the pipeline.") throws {
-    let folder = "\(account)/skills/\(name)"
-    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-    try "---\nname: \(name)\ndescription: The \(name) skill.\n---\n\(body)\n".write(
-      toFile: "\(folder)/SKILL.md", atomically: true, encoding: .utf8)
-  }
-
-  /// Starts a Manager conversation and waits until its claude runs, which sends SessionStart.
-  @discardableResult
-  func newConversation(_ sbd: Instance) throws -> SessionSummary {
-    let c = try decode(SessionSummary.self, sbd.sb("manager", "new", "--json"))
-    return try sbd.waitFor(c.id, "the Manager's stub") { $0.live }
-  }
-
-  /// The rows of `sb manager skills [<conv>] --json`.
-  func skills(_ sbd: Instance, _ conversation: String? = nil) throws -> [JSON] {
-    try #require(JSON.parse(try sbd.sb(["manager", "skills"] + (conversation.map { [$0] } ?? []) + ["--json"]))?.array)
-  }
-
-  func row(_ name: String, _ rows: [JSON]) -> JSON? { rows.first { $0["name"]?.string == name } }
-
-  /// Waits until the skill's row matches and returns it.
-  @discardableResult
-  func waitForRow(
-    _ sbd: Instance, _ name: String, _ what: String, conversation: String? = nil, timeout: Double = 30,
-    _ match: (JSON) -> Bool
-  ) throws -> JSON {
-    try sbd.waitFor(
-      "\(name): \(what)", timeout: timeout, fetch: { row(name, try skills(sbd, conversation)) }, until: match)
-  }
-
-  @discardableResult
-  func waitForLabel(_ sbd: Instance, _ name: String, _ label: String, conversation: String? = nil) throws -> JSON {
-    try waitForRow(sbd, name, "label \(label)", conversation: conversation) { $0["label"]?.string == label }
-  }
-
-  /// Waits until the skill's row shows a failure and no longer waits for a run.
-  @discardableResult
-  func waitForError(_ sbd: Instance, _ name: String) throws -> JSON {
-    try waitForRow(sbd, name, "an error") { $0["error"]?.string != nil && $0["pending"]?.bool != true }
-  }
-
-  /// The skill names of the stub's classification calls, oldest first.
-  func calls(_ sbd: Instance) -> [String] {
-    let text = (try? String(contentsOfFile: "\(sbd.home.path)/skill-classify-calls.log", encoding: .utf8)) ?? ""
-    return text.split(separator: "\n").map(String.init)
-  }
-
-  func calls(_ sbd: Instance, _ name: String) -> Int { calls(sbd).filter { $0 == name }.count }
-
-  /// The arguments of the last classification call. `--tools ""` and `--setting-sources ""` are empty arguments,
-  /// so empty fields count.
-  func classifyArguments(_ sbd: Instance) throws -> [String] {
-    let text = try String(contentsOfFile: "\(sbd.home.path)/skill-classify-args", encoding: .utf8)
-    return text.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map(String.init)
-  }
-
-  /// The value that follows the flag in the arguments, or nil.
-  func value(_ flag: String, _ args: [String]) -> String? {
-    args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
-  }
-
-  /// The labels in `skill-labels.json` by cache key, or none when the file is missing.
-  func cachedLabels(_ sbd: Instance) throws -> [String: JSON] {
-    guard let text = try? String(contentsOfFile: "\(sbd.home.path)/skill-labels.json", encoding: .utf8) else {
-      return [:]
-    }
-    return try #require(JSON.parse(text)?.object, "skill-labels.json: \(text)")
-  }
-
-  func cachedWorkLabels(_ sbd: Instance) throws -> Int {
-    try cachedLabels(sbd).values.filter { $0["label"]?.string == "work" }.count
-  }
-
-  /// Checks the condition every 0.2 s for the seconds, and fails at the first check that is false.
-  func stays(_ what: String, for seconds: Double = 2, _ condition: () throws -> Bool) throws {
-    let deadline = Date().addingTimeInterval(seconds)
-    while Date() < deadline {
-      try #require(try condition(), "\(what)")
-      usleep(200_000)
-    }
-  }
-
+@Suite(.blocking(timeLimit: .seconds(180))) struct ManagerSkillTests: ManagerSkillSuite {
   // MARK: Labels
 
   @Test func userSkillComesOutWorkByHaiku() throws {

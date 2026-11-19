@@ -115,6 +115,11 @@ let usage = """
                                   send images with the message. sbd keeps a copy of
                                   each (png, jpg, gif, webp, heic, up to 20 MB) until
                                   the session is removed
+    send <session> --run-here <text>
+                                  send a message that starts with a work skill,
+                                  such as /go, to a Manager conversation or the
+                                  operator, past the block. The skills that its
+                                  turn calls run too. It refuses inside Claude Code
     send --group G [--yes] <text> send a message to every session in the group, after
                                   listing them and asking. Without a terminal, it
                                   needs --yes. Inside a Claude session, it sends
