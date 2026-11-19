@@ -61,3 +61,37 @@ public enum KnownRepos {
     return counts.max { a, b in a.value != b.value ? a.value < b.value : a.key > b.key }?.key
   }
 }
+
+/// The known repository that a prompt names, for the New Session sheet that a Manager's work-skill offer opens.
+public enum PromptRepo {
+  /// The repository that the first naming token of the prompt names, on any line. A token names a repository when,
+  /// stripped of surrounding backticks, quotes, and `,.:;()`, it is the repository's `owner/name` in any case, or a
+  /// path that starts with `/` or `~` and equals or sits inside the repository's path. A word without a `/` never
+  /// names one, because a repository without a GitHub remote has its folder's name as its name.
+  public static func named(in prompt: String, repos: [KnownRepo]) -> KnownRepo? {
+    for word in prompt.split(whereSeparator: \.isWhitespace) {
+      let token = word.trimmingCharacters(in: wrapping)
+      if token.hasPrefix("/") || token.hasPrefix("~") {
+        let path = trimmingSlashes(token.expandingTilde)
+        if let repo = repos.first(where: { inside(path, trimmingSlashes($0.path)) }) { return repo }
+      } else if token.wholeMatch(of: #/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/#) != nil,
+        let repo = repos.first(where: { Dependencies.sameRepo($0.name, token) })
+      {
+        return repo
+      }
+    }
+    return nil
+  }
+
+  private static let wrapping = CharacterSet(charactersIn: "`\"'(),.:;")
+
+  private static func inside(_ path: String, _ repo: String) -> Bool {
+    !repo.isEmpty && (path == repo || path.hasPrefix(repo + "/"))
+  }
+
+  private static func trimmingSlashes(_ path: String) -> String {
+    var path = path
+    while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+    return path
+  }
+}

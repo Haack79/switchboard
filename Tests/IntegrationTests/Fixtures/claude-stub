@@ -70,6 +70,22 @@
 #   a prompt that holds "Switchboard plan artifact task." plays the chat's
 #                    side of the task with a fake Artifact tool. See artifact
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
+#   /<command> ...   replies "Done: <prompt>". Its UserPromptSubmit goes
+#                    first, as Claude Code runs the hook before it writes the
+#                    prompt to the transcript. A hook answer whose decision is
+#                    block ends the turn there: no transcript line, no reply,
+#                    and no Stop, as Claude Code 2.1.318 does. A prompt that
+#                    holds " skill <name>" also calls the Skill tool for
+#                    the text after its last " skill " in its turn, as a skill
+#                    that loads another skill does, and replies "Denied:
+#                    <reason>" when its PreToolUse hook denies the call
+#   skill <name>     calls the Skill tool with {skill: <name>} and replies
+#                    "Skill <name>", or "Denied: <reason>" when the
+#                    PreToolUse hook answers a permissionDecision of deny. A
+#                    deny sends no PostToolUse. A block of its
+#                    UserPromptSubmit ends the turn as for /<command>
+#   subskill <name>  does the same from a subagent, whose PreToolUse carries
+#                    agent_id
 #   anything else    replies "Done: <prompt>"
 # `claude -p ...` is the summary call. It reads the prompt on stdin and prints
 # the JSON that claude prints with --output-format json, with 100 input, 20
@@ -91,8 +107,21 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt that holds <skill-file> is the skill classification
+# call. It is checked first, because a skill file can hold any other tag. It
+# writes each argument with a NUL after it to $SB_HOME/skill-classify-args,
+# replacing that file, and writes $CLAUDE_CONFIG_DIR, or nothing when that
+# variable is unset, to $SB_HOME/skill-classify-account. It appends the
+# skill's name, the text between <skill-name> and </skill-name>, as one line
+# per call to $SB_HOME/skill-classify-calls.log. It keeps the last prompt in
+# $SB_HOME/skill-classify-input.txt, and writes $SB_SESSION_ID, or unset when
+# that variable is unset, to $SB_HOME/skill-classify-session. A prompt that
+# holds FAIL-SKILL makes it exit 1, and SLOW-SKILL makes it exec sleep 30.
+# BAD-SKILL answers {"label":"maybe","reason":"x"}, LABEL-SAFE answers
+# {"label":"safe","reason":"It reads notes."}, and anything else answers
+# {"label":"work","reason":"It runs a pipeline."}, in the same envelope.
 # A `claude -p` prompt that holds <switchboard-state> is the quick ask call.
-# It is checked first, because the snapshot can hold <rows> or <pr-body>. It
+# It is checked next, because the snapshot can hold <rows> or <pr-body>. It
 # writes each argument with a NUL after it to $SB_HOME/quick-ask-args,
 # replacing that file, so a test can split the last call's arguments exactly.
 # It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one
@@ -152,7 +181,26 @@ envelope() {
 }
 if [ "${1-}" = -p ]; then
   input=$(cat)
-  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
+  # A skill file can hold any of the tags below, so this check comes first.
+  if [[ $input == *"<skill-file>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/skill-classify-args"
+    printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/skill-classify-account"
+    name=${input#*<skill-name>}
+    name=${name%%</skill-name>*}
+    printf '%s\n' "$name" >>"$SB_HOME/skill-classify-calls.log"
+    printf '%s' "$input" >"$SB_HOME/skill-classify-input.txt"
+    printf '%s' "${SB_SESSION_ID-unset}" >"$SB_HOME/skill-classify-session"
+    case $input in
+    *FAIL-SKILL*) echo "skill failed" >&2 && exit 1 ;;
+    *SLOW-SKILL*) exec sleep 30 ;;
+    *BAD-SKILL*) out='{"label":"maybe","reason":"x"}' ;;
+    *LABEL-SAFE*) out='{"label":"safe","reason":"It reads notes."}' ;;
+    *) out='{"label":"work","reason":"It runs a pipeline."}' ;;
+    esac
+    envelope "$out"
+    exit 0
+  fi
+  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes next.
   if [[ $input == *"<switchboard-state>"* ]]; then
     printf '%s\0' "$@" >"$SB_HOME/quick-ask-args"
     printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/quick-ask-account"
@@ -504,6 +552,8 @@ vars() {
 # It writes an additionalContext to the transcript as the attachment line
 # that Claude Code 2.1.318 writes.
 answer() {
+  # gated reads the last answer. It is set only when the hook runs in this shell, not in a pipeline's subshell.
+  last_answer=$1
   [ -z "$1" ] && return
   printf '%s\t%s\0' "$session" "$1" >>"$SB_HOME/hook-output.log"
   local context
@@ -648,6 +698,62 @@ asks() {
   event turn Stop | emit "$(vars "$1" "$reply")"
 }
 
+# skill_call <name> [agent]: calls the Skill tool for <name>, from the
+# subagent <agent> when it is given, and prints "Denied: <reason>" when the
+# PreToolUse hook denies the call, or nothing when it allows it. Like claude,
+# it writes the call's tool_use line to the transcript before PreToolUse, and
+# it sends PostToolUse only for a call that ran.
+skill_call() {
+  local fields
+  fields=$(jq -nc --arg n "$1" '{tool_name: "Skill", tool_input: {skill: $n}, tool_use_id: "s1"}')
+  [ -n "${2:-}" ] && fields=$(jq -c --arg a "$2" '. + {agent_id: $a, agent_type: "general-purpose"}' <<<"$fields")
+  mkdir -p "$project"
+  jq -nc --arg n "$1" \
+    '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "s1", name: "Skill", input: {skill: $n}}]}}' \
+    >>"$project/$session.jsonl"
+  last_answer=''
+  [ "${STUB_HOOKS-}" = off ] || answer "$(payload PreToolUse "$fields" | sh -c "$hook_cmd")"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$last_answer" 2>/dev/null)" = deny ]; then
+    echo "Denied: $(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"$last_answer")"
+    return
+  fi
+  hook PostToolUse "$(jq -c '. + {tool_response: {success: true}}' <<<"$fields")"
+}
+
+# gated <prompt>: plays a turn of a prompt that sbd's hooks may refuse: a
+# /<command>, skill <name>, or subskill <name>. See the list at the top.
+gated() {
+  local p=$1 reply denied
+  last_answer=''
+  emit "$(vars "$p" "")" < <(event turn UserPromptSubmit)
+  if [ "$(jq -r '.decision // empty' <<<"$last_answer" 2>/dev/null)" = block ]; then
+    printf 'UserPromptSubmit operation blocked by hook:\n%s\n' "$(jq -r '.reason // ""' <<<"$last_answer")"
+    status
+    return
+  fi
+  transcript "$p"
+  status
+  case $p in
+  skill\ *)
+    denied=$(skill_call "${p#skill }")
+    reply=${denied:-"Skill ${p#skill }"}
+    ;;
+  subskill\ *)
+    denied=$(skill_call "${p#subskill }" sub1)
+    reply=${denied:-"Skill ${p#subskill }"}
+    ;;
+  *\ skill\ *)
+    denied=$(skill_call "${p##* skill }")
+    reply=${denied:-"Done: $p"}
+    ;;
+  *) reply="Done: $p" ;;
+  esac
+  echo "⏺ $reply"
+  reply_line "$reply"
+  emit "$(vars "$p" "$reply")" < <(event turn Stop)
+  status
+}
+
 # artifact <prompt>: plays a Switchboard plan artifact task with a fake
 # Artifact tool, and prints the reply. The artifact whose URL ends in <id> is
 # the text in $SB_HOME/artifacts/<id>, and its version is the text in
@@ -745,6 +851,12 @@ turn() {
     awk 1 "$SB_HOME/skill-listing.jsonl" >>"$project/$session.jsonl"
   fi
   listed=1
+  case $p in
+  /* | skill\ * | subskill\ *)
+    gated "$p"
+    return
+    ;;
+  esac
   transcript "$p"
   status
   case $p in

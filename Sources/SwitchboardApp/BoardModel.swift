@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwitchboardCore
 import UserNotifications
@@ -161,6 +162,10 @@ final class BoardModel: ObservableObject {
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
   @Published var slashCommands: [String: [SlashCommand]] = [:]
+  /// The work-skill command that each Manager conversation's or the operator's pane holds back, by session id.
+  @Published var workSkillOffers: [String: WorkSkillOffer] = [:]
+  /// The watch on each offer's draft, which closes the offer when the user edits the draft.
+  var workSkillOfferWatches: [String: AnyCancellable] = [:]
   /// Options whose click is on its way to sbd, as "<session>/<number>".
   @Published var choosing: Set<String> = []
   /// Cards whose answer is on its way to sbd. Their views stay disabled
@@ -1123,13 +1128,15 @@ final class BoardModel: ObservableObject {
   /// file name and the image's bytes. `ref` names the Inbox item that the
   /// message answers. A message to a chat shows in the chat at once as a
   /// pending message, which carries sbd's refusal in place of `actionError`.
+  /// `runHere` lets a work skill's command past a Manager's gate once.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
-    sent: (() -> Void)? = nil
+    runHere: Bool = false, sent: (() -> Void)? = nil
   ) {
     guard sending.insert(id).inserted else { return }
     var args: [String: JSON] = ["session": .string(id), "text": .string(text)]
     if let ref { args["ref"] = .string(ref) }
+    if runHere { args["runHere"] = true }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
     let pending =
       summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
@@ -1530,14 +1537,15 @@ final class BoardModel: ObservableObject {
   }
 
   /// Reads the commands that the session's claude takes after `/`. A failed read keeps the stored rows, which the
-  /// message field shows while sbd answers.
-  func loadSlashCommands(_ session: String) {
+  /// message field shows while sbd answers. `then` gets the rows that sbd answered, or nil when the read failed.
+  func loadSlashCommands(_ session: String, then: (([SlashCommand]?) -> Void)? = nil) {
     let send = send
     poller.async {
       let commands = try? JSONCoding.convert(
         send("slash-commands", ["session": .string(session)])["commands"], to: [SlashCommand].self)
       Task { @MainActor in
         if let commands, self.slashCommands[session] != commands { self.slashCommands[session] = commands }
+        then?(commands)
       }
     }
   }
@@ -1807,12 +1815,14 @@ final class BoardModel: ObservableObject {
   }
 
   /// Puts the session's repository first in `knownRepos` at once. A New Session sheet opened before `new`
-  /// returns preselects it, because the sheet's `repos` request waits behind `new` on `worker`.
-  func create(_ args: NewSession) {
+  /// returns preselects it, because the sheet's `repos` request waits behind `new` on `worker`. Once sbd creates
+  /// the session, it empties the draft of `clearingDraft`'s session unless the user changed it from that text.
+  func create(_ args: NewSession, clearingDraft: (session: String, text: String)? = nil) {
     guard let json = try? JSON(encoding: args).object else { return }
     if let repo = knownRepos?.first(where: { $0.path == args.path }) { moveToFront(repo) }
     perform("new", json) { value in
       if let id = value["id"]?.string { self.selectUnlisted(id) }
+      if let clearingDraft { self.clearDraft(of: clearingDraft.session, ifStill: clearingDraft.text) }
     }
   }
 
