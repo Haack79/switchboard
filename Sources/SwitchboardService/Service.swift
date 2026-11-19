@@ -2686,11 +2686,7 @@ public final class Service {
         facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
-    if s.kind == .manager {
-      out.pinned = s.pinned
-      // Last, because the archive rule reads the rest of the summary.
-      if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
-    }
+    if s.kind == .manager { addConversationFields(to: &out, s) }
     return out
   }
 

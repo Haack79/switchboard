@@ -51,6 +51,14 @@ extension Service {
     return try JSON(encoding: summary(id))
   }
 
+  /// Sets the summary fields that only a Manager conversation has. `summary`
+  /// calls it after every other field is set.
+  func addConversationFields(to out: inout SessionSummary, _ s: Session) {
+    out.pinned = s.pinned
+    // Last, because the archive rule reads the rest of the summary.
+    if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
+  }
+
   func recordRead(_ id: String, _ replies: Int) {
     record(id, ChatActivity.readEvent, ["replies": .number(Double(replies))])
   }
