@@ -4,7 +4,7 @@ import SwitchboardCore
 extension Service {
   /// Answers a one-off question from a snapshot of the state, with a `claude`
   /// turn that has no tools, so the turn can't change anything. It records
-  /// no event. It runs off the state queue and takes that queue only to read
+  /// no event, only a `quickAsk` headless call. It runs off the state queue and takes that queue only to read
   /// the snapshot. The turn ends when `clientGone` turns true.
   func quickAsk(_ args: JSON, clientGone: @escaping @Sendable () -> Bool) throws -> JSON {
     let question = args["question"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -21,11 +21,11 @@ extension Service {
     try requireSignedIn(["account": .string(account.folder)])
     if clientGone() { throw APIError("cancelled") }
     let model = config.quickAsk.model
+    let call = headlessCall(
+      .quickAsk, session: nil, arguments: QuickAsk.arguments(model: model), input: input, env: env, folder: home.path,
+      timeout: min(config.quickAsk.timeoutSeconds, QuickAsk.maxTimeout), cancelled: clientGone, parse: QuickAsk.parse)
     do {
-      let reply = try headlessCall(
-        arguments: QuickAsk.arguments(model: model), input: input, env: env, folder: home.path,
-        timeout: min(config.quickAsk.timeoutSeconds, QuickAsk.maxTimeout), cancelled: clientGone)
-      return try JSON(encoding: QuickAskAnswer(answer: QuickAsk.parse(reply.output), model: model))
+      return try JSON(encoding: QuickAskAnswer(answer: call.result.get(), model: model))
     } catch {
       logLine("quick ask failed: \(error)")
       throw error

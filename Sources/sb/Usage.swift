@@ -2,6 +2,7 @@ import Foundation
 import SwitchboardCore
 
 func usageCommand(_ a: Args) {
+  if a.positional.first == "headless" { return headlessUsage(a) }
   let result = call("usage", ["refresh": true], timeout: 90)
   if a.json { return printJSON(result) }
   let readings = decode(result, as: [AccountUsage].self)
@@ -24,4 +25,22 @@ func usageRow(_ limit: UsageLimit) -> String {
     row += "  resets \(Wait.formatTime(resets)) (\(Usage.until(resets)))"
   }
   return row
+}
+
+/// `sb usage headless [--since 7d]`: the calls and tokens of sbd's own `claude -p` calls, per day and kind.
+private func headlessUsage(_ a: Args) {
+  let since = a.values["--since"] ?? "7d"
+  let result = call("headless-usage", sinceArgs(since))
+  if a.json { return printJSON(result) }
+  let report = decode(result, as: HeadlessUsageReport.self)
+  guard !report.rows.isEmpty else { return print("sbd made no claude -p calls in the last \(since)") }
+  let pad = { (text: String) in text.padding(toLength: 12, withPad: " ", startingAt: 0) }
+  print("day         kind               calls      errors       input      output  cache read cache write  models")
+  for row in report.rows {
+    let u = row.usage
+    let counts = [row.calls, row.errors, u.input, u.output, u.cacheRead, u.cacheWrite]
+    print(
+      pad(row.day) + pad(row.kind) + counts.map { String(format: "%12d", $0) }.joined() + "  "
+        + row.models.joined(separator: ", "))
+  }
 }

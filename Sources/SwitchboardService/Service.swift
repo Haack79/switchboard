@@ -760,6 +760,8 @@ public final class Service {
       return try activityReport(args)
     case "activity-clear":
       return try activityClear()
+    case "headless-usage":
+      return try headlessUsage(args)
     case "live":
       return try liveRequest(args)
     case "live-next":

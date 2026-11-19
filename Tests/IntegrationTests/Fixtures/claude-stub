@@ -72,7 +72,8 @@
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
 #   anything else    replies "Done: <prompt>"
 # `claude -p ...` is the summary call. It reads the prompt on stdin and prints
-# the JSON that claude prints with --output-format json: a decision with two
+# the JSON that claude prints with --output-format json, with 100 input, 20
+# output, 300 cache read, and 40 cache write tokens under the --model it got: a decision with two
 # options for a reply that holds "Postgres or SQLite", an approval with one for
 # "Want me to", and info otherwise. $SB_HOME/summary-answer.json, a fixture
 # that the test writes, replaces that answer. A reply that holds FAIL-SUMMARY
@@ -136,6 +137,16 @@
 # arrived, with the paste markers.
 
 args=("$@")
+# Prints the JSON that claude -p --output-format json prints for the structured output $1, with fixed token counts
+# under the model that --model named, as claude reports them.
+envelope() {
+  local model=haiku i
+  for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --model ] && model=${args[i + 1]}; done
+  jq -nc --argjson o "$1" --arg m "$model" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson),
+    structured_output: $o, usage: {input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 300,
+    cache_creation_input_tokens: 40}, modelUsage: {($m): {inputTokens: 100, outputTokens: 20,
+    cacheReadInputTokens: 300, cacheCreationInputTokens: 40}}}'
+}
 if [ "${1-}" = -p ]; then
   input=$(cat)
   # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
@@ -150,14 +161,14 @@ if [ "${1-}" = -p ]; then
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<rows>"* ]]; then
     printf '%s\0' "${args[*]}" >>"$SB_HOME/plan-calls.log"
     printf '%s' "$input" >"$SB_HOME/plan-input.txt"
     out=$(cat "$SB_HOME/plan-answer.json" 2>/dev/null) || out='{"rows":[]}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<pr-body>"* ]]; then
@@ -165,7 +176,7 @@ if [ "${1-}" = -p ]; then
     printf '%s' "$input" >"$SB_HOME/pr-brief-input.txt"
     [[ $input == *FAIL-BRIEF* ]] && echo "brief failed" >&2 && exit 1
     out=$(cat "$SB_HOME/pr-brief-answer.json" 2>/dev/null) || out='{"summary":"It changes the code."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   printf '%s\0' "${args[*]}" >>"$SB_HOME/summary-calls.log"
@@ -186,7 +197,7 @@ if [ "${1-}" = -p ]; then
   *) out='{"title":"Read the reply","kind":"info","summary":"It finished.","options":[]}' ;;
   esac
   [ -f "$SB_HOME/summary-answer.json" ] && out=$(cat "$SB_HOME/summary-answer.json")
-  jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+  envelope "$out"
   exit 0
 fi
 printf '%s\t%s\t%s\0' "${CLAUDE_CONFIG_DIR-}" "${SSH_AUTH_SOCK-}" "${args[*]}" >>"$SB_HOME/stub-calls.log"

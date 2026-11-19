@@ -190,17 +190,21 @@ extension Service {
     do {
       var stats = GitHubPoller.Stats()
       let text = try github.queue.sync { try github.readDocument(job.plan.source, stats: &stats) }
-      let reply = try headlessCall(
-        arguments: PlanUpdates.arguments(model: config.planUpdates.model), input: PlanUpdates.input(rows: job.rows),
-        env: job.env, folder: job.folder, timeout: config.planUpdates.timeoutSeconds)
-      let edits = try PlanUpdates.edits(
-        PlanUpdates.parse(reply.output), rows: job.rows, markdown: text,
-        today: Date(timeIntervalSince1970: Double(now) / 1000))
-      guard !edits.isEmpty else {
-        queue.sync { updatePlan(id) { $0.settled = key } }
-        throw APIError("the model left every row as it was")
-      }
-      try PlanUpdates.verify(old: text, new: try PlanUpdates.apply(text, edits), rows: job.rows)
+      let edits = try headlessCall(
+        .planUpdate, session: nil, arguments: PlanUpdates.arguments(model: config.planUpdates.model),
+        input: PlanUpdates.input(rows: job.rows), env: job.env, folder: job.folder,
+        timeout: config.planUpdates.timeoutSeconds
+      ) { output in
+        let edits = try PlanUpdates.edits(
+          PlanUpdates.parse(output), rows: job.rows, markdown: text,
+          today: Date(timeIntervalSince1970: Double(now) / 1000))
+        guard !edits.isEmpty else {
+          queue.sync { updatePlan(id) { $0.settled = key } }
+          throw APIError("the model left every row as it was")
+        }
+        try PlanUpdates.verify(old: text, new: try PlanUpdates.apply(text, edits), rows: job.rows)
+        return edits
+      }.result.get()
       proposal = try queue.sync {
         guard plans[id] != nil else { throw APIError("\(job.plan.source.text) was detached") }
         let taken = plans.values.compactMap(\.proposal?.id)

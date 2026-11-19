@@ -52,6 +52,11 @@ public final class Store {
       "CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, kind TEXT NOT NULL, session TEXT, data TEXT NOT NULL)"
     )
     try exec("CREATE INDEX IF NOT EXISTS activity_t ON activity (t)")
+    // `delete(session:)` leaves a session's headless calls, so the counts outlive the session.
+    try exec(
+      "CREATE TABLE IF NOT EXISTS headless_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, kind TEXT NOT NULL, session TEXT, model TEXT, input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, error TEXT)"
+    )
+    try exec("CREATE INDEX IF NOT EXISTS headless_calls_t ON headless_calls (t)")
     try exec(
       "CREATE TABLE IF NOT EXISTS resolved_todos (id INTEGER PRIMARY KEY, session TEXT, name TEXT, repo TEXT, branch TEXT, pr INTEGER, note TEXT, text TEXT, by TEXT, added INTEGER, resolved INTEGER, how TEXT)"
     )
@@ -403,6 +408,37 @@ public final class Store {
 
   public func knownRepos() throws -> [(path: String, used: Int64)] {
     try query("SELECT path, used FROM known_repos", []) { ($0.text(0), $0.int(1)) }
+  }
+
+  // MARK: Headless calls
+
+  @discardableResult
+  public func append(headlessCall call: HeadlessCall) throws -> HeadlessCall {
+    try run(
+      "INSERT INTO headless_calls (t, kind, session, model, input, output, cache_read, cache_write, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        call.t, call.kind, call.session as Any, call.model as Any, call.usage?.input as Any, call.usage?.output as Any,
+        call.usage?.cacheRead as Any, call.usage?.cacheWrite as Any, call.error as Any,
+      ])
+    var stored = call
+    stored.id = sqlite3_last_insert_rowid(db)
+    return stored
+  }
+
+  /// The headless calls at or after `since`, oldest first.
+  public func headlessCalls(since: Int64 = 0) throws -> [HeadlessCall] {
+    try query(
+      "SELECT id, t, kind, session, model, input, output, cache_read, cache_write, error FROM headless_calls WHERE t >= ? ORDER BY id",
+      [since]
+    ) { row in
+      HeadlessCall(
+        id: row.int(0), t: row.int(1), kind: row.text(2), session: row.optionalText(3), model: row.optionalText(4),
+        usage: row.optionalInt(5).map {
+          HeadlessUsage(
+            input: $0, output: row.optionalInt(6) ?? 0, cacheRead: row.optionalInt(7) ?? 0,
+            cacheWrite: row.optionalInt(8) ?? 0)
+        }, error: row.optionalText(9))
+    }
   }
 
   // MARK: Activity log

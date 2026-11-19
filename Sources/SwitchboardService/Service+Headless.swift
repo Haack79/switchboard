@@ -23,17 +23,52 @@ extension Service {
 
   /// Runs `claude` with the arguments and the input on stdin, in the folder,
   /// ends it after `timeout` seconds or once `cancelled` returns true, and
-  /// returns what it printed with the tokens and the model that its envelope
-  /// reports. It throws only when claude prints no answer. Every one-shot call
-  /// that sbd makes runs through it. Runs off the state queue.
-  func headlessCall(
-    arguments: [String], input: String, env: [String: String], folder: String, timeout: Double,
-    cancelled: @escaping @Sendable () -> Bool = { false }
-  ) throws -> HeadlessReply {
-    guard let claude = findExecutable(config.claude) else { throw APIError("can't find \(config.claude)") }
-    return Headless.reply(
-      try Headless.run(
-        claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
-        cancelled: cancelled))
+  /// parses what it printed. Every one-shot call that sbd makes runs through
+  /// it, and it stores one `headless_calls` row per call: the model and the
+  /// tokens that claude's envelope reports, and the error when the call
+  /// gave no answer that `parse` accepts. Runs off the state queue.
+  func headlessCall<T>(
+    _ kind: HeadlessKind, session: String?, arguments: [String], input: String, env: [String: String],
+    folder: String, timeout: Double, cancelled: @escaping @Sendable () -> Bool = { false },
+    parse: (String) throws -> T
+  ) -> HeadlessOutcome<T> {
+    let outcome: HeadlessOutcome<T>
+    do {
+      guard let claude = findExecutable(config.claude) else { throw APIError("can't find \(config.claude)") }
+      let reply = Headless.reply(
+        try Headless.run(
+          claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
+          cancelled: cancelled))
+      outcome = HeadlessOutcome(reply: reply, result: Result { try parse(reply.output) })
+    } catch {
+      outcome = HeadlessOutcome(reply: nil, result: .failure(error))
+    }
+    let (reply, error) = (outcome.reply, outcome.error.map { "\($0)" })
+    queue.async { [self] in
+      let call = HeadlessCall(
+        t: nowMs(), kind: kind.rawValue, session: session, model: reply?.model, usage: reply?.usage, error: error)
+      do { try store.append(headlessCall: call) } catch { logLine("can't store the \(kind.rawValue) call: \(error)") }
+    }
+    return outcome
+  }
+
+  /// The headless calls per day and kind. `durationMs` limits the report to
+  /// the calls from that many milliseconds before now onward.
+  func headlessUsage(_ args: JSON) throws -> JSON {
+    let since = try sinceMs(args)
+    let calls = try store.headlessCalls(since: since ?? 0)
+    return try JSON(encoding: HeadlessUsageReport.build(calls, since: since, timeZone: .current))
+  }
+}
+
+/// What `headlessCall` returns: claude's reply, which is nil when claude
+/// printed no answer, and what `parse` made of it.
+struct HeadlessOutcome<T> {
+  var reply: HeadlessReply?
+  var result: Result<T, Error>
+
+  var error: Error? {
+    if case .failure(let error) = result { return error }
+    return nil
   }
 }

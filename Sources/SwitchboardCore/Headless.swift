@@ -159,4 +159,12 @@ public struct HeadlessReply: Sendable {
     self.usage = usage
     self.model = model
   }
+
+  /// The `usage` and `model` keys that a `triage` or `mergeBrief` event records.
+  public var eventFields: [String: JSON] {
+    var fields: [String: JSON] = [:]
+    if let usage { fields["usage"] = try? JSON(encoding: usage) }
+    if let model { fields["model"] = .string(model) }
+    return fields
+  }
 }
