@@ -1768,19 +1768,11 @@ public final class Service {
     }
     var data: [String: JSON] = ["text": .string(message.text)]
     do {
-      if let session = entries[id]?.session {
-        // A restart looks for the message after this size, so a size that a host did not answer must not
-        // read as a missing transcript.
-        let named = entries[id]?.facts.transcriptPath
-        let found: (path: String, size: UInt64)? = try site(for: session).confirmed("the transcript size of \(id)") {
-          guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
-          else { return nil }
-          return (path, size)
-        }
-        if let found {
-          data["transcript"] = .string(found.path)
-          data["transcript_bytes"] = .number(Double(found.size))
-        }
+      // A restart looks for the message after this size, so a size that a host did not answer must not
+      // read as a missing transcript.
+      if let found = try transcriptSize(id) {
+        data["transcript"] = .string(found.path)
+        data["transcript_bytes"] = .number(Double(found.size))
       }
       if let sent = message.sent {
         guard let row = try store.event(id: sent.id), row.session == id, row.t == sent.t, row.kind == "sent",
@@ -1798,6 +1790,18 @@ public final class Service {
       logLine("can't start a paste into \(id): \(error)")
       requeue(id, message)
       return false
+    }
+  }
+
+  /// The session's transcript and its size in bytes, or nil when the session or its transcript is missing. It
+  /// throws when the session's host did not answer the read.
+  func transcriptSize(_ id: String) throws -> (path: String, size: UInt64)? {
+    guard let session = entries[id]?.session else { return nil }
+    let named = entries[id]?.facts.transcriptPath
+    return try site(for: session).confirmed("the transcript size of \(id)") {
+      guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
+      else { return nil }
+      return (path, size)
     }
   }
 
