@@ -86,11 +86,25 @@ select_tests() {
     fi
   }
 
+  # add_file_suites <target> <file> [<decls>]
+  # Selects the suites of a test file. A file whose tests have no type adds the
+  # smoke suites, because a suite filter cannot name those tests.
+  add_file_suites() {
+    local line
+    line=$(file_suites "$@")
+    if [ -n "$line" ]; then
+      suites+=("$line")
+    elif grep -q '@Test' "$2"; then
+      echo "bin/test: $2: its tests have no type to filter by, so the smoke suites run" >&2
+      smoke=1
+    fi
+  }
+
   # add_user_files <target> <changed> <files>
   # Selects the suites of <files>, one path per line, which use <changed>. When
   # there are more than max_user_files, selects the smoke suites instead.
   add_user_files() {
-    local n file line
+    local n file
     n=$(grep -c . <<<"$3" || true)
     if [ "$n" -gt "$max_user_files" ]; then
       echo "bin/test: $2: $n $1 test files use it, more than $max_user_files, so the smoke suites run in their place" >&2
@@ -99,10 +113,7 @@ select_tests() {
     fi
     [ "$n" -gt 0 ] || return 0
     echo "bin/test: $2: runs the suites of the $n $1 test files that use it:" $3 >&2
-    while IFS= read -r file; do
-      line=$(file_suites "$1" "$file")
-      [ -z "$line" ] || suites+=("$line")
-    done <<<"$3"
+    while IFS= read -r file; do add_file_suites "$1" "$file"; done <<<"$3"
   }
 
   # add_ci_only_file <target> <target-dir> <file>
@@ -113,15 +124,14 @@ select_tests() {
   # file without tests whose names no other test file uses add the smoke
   # suites.
   add_ci_only_file() {
-    local decls names own users
+    local decls names users
     if [ ! -f "$3" ]; then
       echo "bin/test: $3: the smoke suites run in its place" >&2
       smoke=1
       return
     fi
     decls=$(top_level_decls "$3")
-    own=$(file_suites "$1" "$3" "$decls")
-    [ -z "$own" ] || suites+=("$own")
+    add_file_suites "$1" "$3" "$decls"
     if grep -qx unreadable <<<"$decls"; then
       echo "bin/test: $3: the smoke suites run, because the selector cannot read every name it declares" >&2
       smoke=1
@@ -138,7 +148,7 @@ select_tests() {
       users=$(find "$2" -name '*.swift' | grep -vxF -- "$3" | files_matching -wE -- "($names)" |
         files_matching '@Test') || true
     fi
-    if [ -z "$users" ] && [ -z "$own" ]; then
+    if [ -z "$users" ] && ! grep -q '@Test' "$3"; then
       echo "bin/test: $3: no other $1 test file uses its names, so the smoke suites run" >&2
       smoke=1
       return

@@ -636,6 +636,26 @@ private let integrationFileCases: [SelectionCase] = [
     change: { try $0.edit("Tests/IntegrationTests/FxPlatformTests.swift") },
     filters: [suiteFilter("IntegrationTests", "FxPlatformTests"), smoke]),
   SelectionCase(
+    name: "helper whose only user declares tests outside a type",
+    files: [
+      "Tests/IntegrationTests/FxValue.swift": "func fxValue() -> Int { 1 }\n",
+      "Tests/IntegrationTests/FxFreeUserTests.swift":
+        "import Testing\n\n@Test func checksValue() { #expect(fxValue() == 1) }\n",
+    ],
+    change: { try $0.edit("Tests/IntegrationTests/FxValue.swift") },
+    filters: [smoke]),
+  SelectionCase(
+    name: "file with a test outside a type and a helper another suite uses",
+    files: [
+      "Tests/IntegrationTests/FxFreeOwnTests.swift":
+        "import Testing\n\nfunc fxOwnHelper() -> Int { 1 }\n\n@Test func free() { #expect(fxOwnHelper() == 1) }\n",
+      "Tests/IntegrationTests/FxOwnUserTests.swift":
+        "import Testing\n\nstruct FxOwnUserTests {\n  @Test func uses() { #expect(fxOwnHelper() == 1) }\n}\n",
+    ],
+    listing: ["IntegrationTests.free()", "IntegrationTests.FxOwnUserTests/uses()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxFreeOwnTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxOwnUserTests"), smoke]),
+  SelectionCase(
     name: "helper as many files use as the cap allows",
     files: sharedHelperFiles(users: 10), listing: sharedHelperListing(users: 10),
     change: { try $0.edit("Tests/IntegrationTests/FxShared.swift") },
