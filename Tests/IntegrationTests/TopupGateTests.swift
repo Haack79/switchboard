@@ -5,8 +5,8 @@ import Testing
 /// A schedule with a top-up gate (`sb schedule <session> --topup …`). On each due time sbd counts the active work
 /// sessions of the gate's group in the gate's repository. When the group has its target and nothing needs the
 /// Operator, sbd records the check and sends nothing. Otherwise it sends the fallback message: the queue status, the
-/// prompt, the rubric, and the template. A top-up decision sends the fallback message too until sbd starts sessions
-/// itself, so no test here expects a session to start.
+/// prompt, the rubric, and the template. TopupTests covers a group short of its target, which starts sessions. This
+/// sbd's gh can't list issues, so a top-up here fails and sends the fallback message.
 ///
 /// The counted session has a long date wait, which puts it in Waiting. An idle session is in Needs you, which the
 /// gate does not count. Each clock move stays well short of the idle stop and of the date wait.
@@ -214,6 +214,44 @@ import Testing
     #expect(try gatedEvents(sbd, op.id).isEmpty)
   }
 
+  /// Decision 35 counts an action wait only when sbd will run it. sbd skips the waits of a holder marked done, so a
+  /// Done session whose only removal wait sits on such a holder needs the Operator, and the gate opens. sbd puts a
+  /// merge wait only on the Operator, which can't be marked done, so only a removal wait can sit on a done holder.
+  @Test func aDoneSessionWhoseOnlyRemovalWaitSitsOnADoneHolderOpensTheGate() throws {
+    let sbd = try Instance()
+    let work = try waitingSession(sbd)
+    let finished = try sbd.session(in: Self.repo, branch: "haacked/finished", folder: "finished", name: "finished")
+    try sbd.waitFor(finished.id, "sbd's read of the repository") { $0.repository == Self.repo }
+    let holder = try sbd.idleSession(name: "holder")
+    let r = try sbd.run(
+      [
+        "wait", "--json", holder.id, "--kind", "session", "--target", finished.id, "--state", "done", "--then",
+        "rm-worktree",
+      ])
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+    try #require(
+      try sbd.get(holder.id).waits.contains { $0.action?.kind == .rmWorktree && $0.actionSubject?.id == finished.id })
+    try sbd.sb("done", holder.id)
+    try sbd.sb("done", finished.id)
+    try sbd.waitFor(finished.id, "Done") { $0.state == .done }
+    _ = try addGroup(sbd, work.id, finished.id)
+    let op = try operatorHelpers.idleOperator(sbd)
+    let made = try addTopup(sbd, op.id, target: 1)
+    let mark = try sbd.lastEventId(op.id)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let run = try fire.waitForRun(sbd, op.id, made.id, timeout: 30)
+    sleep(2)
+    let messages = try sbd.sbdMessages(op.id, after: mark)
+    try #require(messages.count == 1, "\(messages)")
+    let text = messages[0].data["text"]?.string ?? ""
+    #expect(text.hasPrefix("Work queue: 1/1 "), "\(text)")
+    #expect(text.contains(finished.id), "\(text)")
+    #expect(run.outcome == .pasted, "\(run)")
+    #expect(try gatedEvents(sbd, op.id).isEmpty)
+  }
+
   /// The run after gated due times takes their count, and the gate's count starts again.
   @Test func theRunAfterAGatedDueTimeCarriesTheGatedCount() throws {
     let github = try FakeGitHub()
@@ -241,9 +279,13 @@ import Testing
     #expect(messages[0].data["text"]?.string?.hasPrefix("Work queue: ") == true, "\(messages[0])")
   }
 
-  /// Until sbd starts sessions itself, a group short of its target gets the fallback message.
-  @Test func aGroupShortOfItsTargetGetsTheFallbackMessage() throws {
-    let sbd = try Instance()
+  /// A group short of its target starts a top-up. This sbd's gh can't list the issues, so the top-up fails and the
+  /// Operator gets the fallback message with the failure first.
+  @Test func aGroupShortOfItsTargetWhoseIssueReadFailsGetsTheFallbackMessage() throws {
+    // gh-merge-stub answers `issue list` with a 404 when the test writes no list, so no real gh runs.
+    let github = try FakeGitHub()
+    defer { withExtendedLifetime(github) {} }
+    let sbd = try gitHubInstance(github)
     let work = try waitingSession(sbd)
     _ = try addGroup(sbd, work.id)
     let op = try operatorHelpers.idleOperator(sbd)
@@ -256,7 +298,9 @@ import Testing
     let messages = try sbd.sbdMessages(op.id, after: mark)
     try #require(messages.count == 1, "\(messages)")
     let text = messages[0].data["text"]?.string ?? ""
-    #expect(text.hasPrefix("Work queue: 1/3 "), "\(text)")
+    let lines = text.split(separator: "\n").map(String.init)
+    #expect(lines.first?.hasPrefix("The top-up failed: ") == true, "\(text)")
+    #expect(lines.dropFirst().first?.hasPrefix("Work queue: 1/3 ") == true, "\(text)")
     #expect(text.contains(Self.rubric), "\(text)")
     #expect(try gatedEvents(sbd, op.id).isEmpty)
   }

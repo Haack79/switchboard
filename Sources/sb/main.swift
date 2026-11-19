@@ -205,8 +205,12 @@ let usage = """
                                   R (owner/name). When the group has its
                                   target N (1 to 20) and none needs you, it
                                   records the check and sends nothing.
-                                  Otherwise it sends the prompt with the
-                                  status, the rubric F2, and the template F.
+                                  When it is short and none needs you, sbd
+                                  starts the open issues and follow-ups
+                                  that a judge picks by the rubric F2, each
+                                  from the template F. Otherwise, or when
+                                  the top-up fails, it sends the prompt with
+                                  the status, the rubric, and the template.
                                   Without a prompt sbd writes one. Only a
                                   Manager conversation, the Operator, or you
                                   can add or edit one

@@ -188,7 +188,7 @@ extension MCPToolServer {
         "topup": [
           "type": "object",
           "description": .string(
-            "Makes the schedule a work queue top-up. On each run Switchboard counts the active work sessions of the group in the repository. When the group has its target and no session needs attention, it records the check and sends nothing. Otherwise it sends the prompt with the queue status, the rubric, and the template in front of the session. Only a Manager conversation, the Operator, or the user can add one, and a group chat can't."
+            "Makes the schedule a work queue top-up. On each run Switchboard counts the active work sessions of the group in the repository. When the group has its target and no session needs attention, it records the check and sends nothing. When the group is short and no session needs attention, a one-shot judge picks the most important open issues and follow-ups by the rubric, and Switchboard starts each pick from the template, arms the removal of its worktree once it is done, and records one report. Otherwise, or when the top-up fails, it sends the prompt with the queue status, the rubric, and the template to the session. Only a Manager conversation, the Operator, or the user can add one, and a group chat can't."
           ),
           "properties": [
             "group": group,

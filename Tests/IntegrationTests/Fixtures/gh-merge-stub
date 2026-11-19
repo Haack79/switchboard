@@ -13,6 +13,8 @@
 #   gh pr view <N> --repo <owner/name> ...   pr/<owner>/<name>/<N>
 #   gh api [flags] <path>                     api/<path>, without a leading
 #                                             slash or a query string
+#   gh issue list --repo <owner/name> ...     issue-list/<owner>/<name>
+#   gh pr list --repo <owner/name> ...        pr-list/<owner>/<name>
 # The stub prints <key>.json when it exists. When <key>.error exists instead, it
 # prints that file to stderr and exits 1. With neither, it prints a 404 to
 # stderr and exits 1, so a read that the test did not set up is unknown. It
@@ -80,6 +82,22 @@ pr_view_key() {
   echo "pr/$repo/$number"
 }
 
+# The key of `gh issue list --repo <owner/name>` or `gh pr list --repo <owner/name>`.
+list_key() {
+  local kind=$1 repo=''
+  shift 2
+  while [ $# -gt 0 ]; do
+    case $1 in
+    --repo | -R)
+      repo=$2
+      shift 2
+      ;;
+    *) shift ;;
+    esac
+  done
+  echo "$kind-list/$repo"
+}
+
 case "$1 $2" in
 "auth token")
   echo "token-1"
@@ -100,6 +118,9 @@ case "$1 $2" in
   ;;
 "pr view")
   serve "$(pr_view_key "$@")"
+  ;;
+"issue list" | "pr list")
+  serve "$(list_key "$@")"
   ;;
 "api graphql")
   echo '{"data":{"node":{"author":{"login":"haacked"},"suggestedReviewers":[{"isAuthor":true,"isCommenter":false,"reviewer":{"login":"ann"}},{"isAuthor":true,"isCommenter":true,"reviewer":{"login":"haacked"}}]}}}'

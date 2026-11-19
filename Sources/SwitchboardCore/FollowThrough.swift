@@ -444,6 +444,8 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
   public var holdLimitSeconds = 21600
   /// The model that answers judgment calls.
   public var judgeModel = "sonnet"
+  /// How long a top-up's pick may run before sbd sends the schedule's prompt instead.
+  public var topupTimeoutSeconds = 120
 
   public init(mergeRepos: [String] = []) {
     self.mergeRepos = mergeRepos
@@ -456,6 +458,7 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
     holdRetrySeconds = try c.decodeIfPresent(Int.self, forKey: .holdRetrySeconds) ?? d.holdRetrySeconds
     holdLimitSeconds = try c.decodeIfPresent(Int.self, forKey: .holdLimitSeconds) ?? d.holdLimitSeconds
     judgeModel = try c.decodeIfPresent(String.self, forKey: .judgeModel) ?? d.judgeModel
+    topupTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .topupTimeoutSeconds) ?? d.topupTimeoutSeconds
   }
 
   /// Whether sbd may merge a PR of `repository`. The match ignores case.

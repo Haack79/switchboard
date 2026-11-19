@@ -132,6 +132,10 @@ public final class Service {
   var merging: Set<String> = []
   /// Runs wait actions, one at a time, off the state queue.
   let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// Runs top-ups, one at a time, off the state queue.
+  let topupQueue = DispatchQueue(label: "sbd.topup")
+  /// The schedules whose top-up runs on `topupQueue`. The tick skips them, so they stay due until the top-up ends.
+  var topupsInFlight: Set<String> = []
   /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
   /// `loadSbdMerges` rebuilds it at startup.
   var lastSbdMerges: [String: SbdMergeRecord] = [:]
@@ -2663,6 +2667,7 @@ public final class Service {
         resolveDueWaits(now: now)
         fireDueSchedules(now: now)
       }
+      armTopupMerges()
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)

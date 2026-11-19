@@ -151,8 +151,10 @@ extension Service {
   /// stay due, so Undo lets them run.
   ///
   /// A schedule with a gate checks the gate first. A closed gate sends
-  /// nothing, so its check runs while the session is busy. An open gate sends
-  /// the fallback message only when the session is free.
+  /// nothing, so its check runs while the session is busy. A short group
+  /// starts a top-up on `topupQueue` without waiting for the session either.
+  /// An open gate sends the fallback message only when the session is free.
+  /// A schedule whose top-up is running stays due and runs no check.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
       e.session.scheduleHold == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
@@ -161,7 +163,7 @@ extension Service {
       guard let session = entries[id]?.session else { continue }
       let due = (session.schedules ?? []).filter { $0.isDue(now: now) }
         .sorted { ($0.next, $0.id) < ($1.next, $1.id) }
-      for schedule in due {
+      for schedule in due where !topupsInFlight.contains(schedule.id) {
         var text = schedule.prompt
         var check: Schedule.Gate.Check?
         if let gate = schedule.gate {
@@ -170,7 +172,10 @@ extension Service {
           case .gated:
             recordGated(id, schedule, status: status, now: now)
             continue
-          case .open, .topup:
+          case .topup(let k):
+            dispatchTopup(id, schedule, status: status, k: k, now: now)
+            continue
+          case .open:
             text = gate.fallbackMessage(status: status, prompt: schedule.prompt)
             check = Self.gateCheck(.prompted, status, now: now)
           }
@@ -218,7 +223,7 @@ extension Service {
     record(id, "schedule-gated", .object(data))
   }
 
-  private static func gateCheck(_ result: Schedule.Gate.Check.Result, _ status: QueueStatus, now: Int64)
+  static func gateCheck(_ result: Schedule.Gate.Check.Result, _ status: QueueStatus, now: Int64)
     -> Schedule.Gate.Check
   {
     Schedule.Gate.Check(
@@ -228,18 +233,7 @@ extension Service {
   /// The gate's rows: the work sessions in the gate's group, with the facts that `QueueStatus.compute` reads. It
   /// runs on the state queue.
   func queueRows(_ gate: Schedule.Gate) -> [QueueStatus.Row] {
-    var merging = Set<String>()
-    var removing = Set<String>()
-    for e in entries.values {
-      for wait in e.session.waits ?? [] {
-        guard let action = wait.action?.kind, let subject = wait.actionSubject?.id else { continue }
-        switch action {
-        case .merge: merging.insert(subject)
-        case .rmWorktree, .rm: removing.insert(subject)
-        case .report: break
-        }
-      }
-    }
+    let (merging, removing) = actionSubjects()
     let now = nowMs()
     return entries.values.filter { $0.session.kind == .work && $0.session.group == gate.group }.map { e in
       let s = e.session
@@ -252,9 +246,27 @@ extension Service {
     }.sorted { $0.id < $1.id }
   }
 
+  /// The sessions that an action wait will merge, and the sessions that one will remove. sbd resolves no wait of a
+  /// holder marked done, so such a holder's waits count for neither. It runs on the state queue.
+  func actionSubjects() -> (merging: Set<String>, removing: Set<String>) {
+    var merging = Set<String>()
+    var removing = Set<String>()
+    for e in entries.values where !e.session.done {
+      for wait in e.session.waits ?? [] {
+        guard let action = wait.action?.kind, let subject = wait.actionSubject?.id else { continue }
+        switch action {
+        case .merge: merging.insert(subject)
+        case .rmWorktree, .rm: removing.insert(subject)
+        case .report: break
+        }
+      }
+    }
+    return (merging, removing)
+  }
+
   /// Saves the schedule's next run, sets it on `schedule`, and returns how many due times the run skips. It returns
   /// nil when the next run can't be saved.
-  private func saveNextRun(_ id: String, _ schedule: inout Schedule, now: Int64) -> Int? {
+  func saveNextRun(_ id: String, _ schedule: inout Schedule, now: Int64) -> Int? {
     let (next, skipped) = schedule.fired(at: now)
     do {
       try changeSchedule(id, schedule.id) { $0.next = next }
@@ -268,7 +280,7 @@ extension Service {
 
   /// Sends `text` to the session, then saves the run on `schedule` and records a `schedule-ran` event. A gated
   /// schedule's `check` is saved as the gate's last check in the same save, as failed when the send fails.
-  private func sendAndRecord(
+  func sendAndRecord(
     _ id: String, _ schedule: Schedule, text: String, skipped: Int, check: Schedule.Gate.Check? = nil, now: Int64
   ) {
     var ran = schedule
@@ -302,14 +314,14 @@ extension Service {
   }
 
   /// The schedule without its run history, which neither an edit nor a Run Now request changes.
-  private func eventJSON(_ schedule: Schedule) throws -> JSON {
+  func eventJSON(_ schedule: Schedule) throws -> JSON {
     var schedule = schedule
     schedule.runs = nil
     return try JSON(encoding: schedule)
   }
 
   /// Changes one schedule of the session and saves the session's row.
-  private func changeSchedule(_ id: String, _ scheduleId: String, _ change: (inout Schedule) -> Void) throws {
+  func changeSchedule(_ id: String, _ scheduleId: String, _ change: (inout Schedule) -> Void) throws {
     try update(id) { s in
       s.schedules = s.schedules?.map { schedule in
         var schedule = schedule
