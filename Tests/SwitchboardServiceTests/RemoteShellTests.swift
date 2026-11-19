@@ -648,7 +648,7 @@ private let everyByte = Data((0...255).map { UInt8($0) })
 
       // The shell removes a command's files after it prints the answer.
       #expect(
-        waitUntil(seconds: 5) { (try? FileManager.default.contentsOfDirectory(atPath: shellFolder)) == ["f"] })
+        waitUntil(seconds: 5) { (try? FileManager.default.contentsOfDirectory(atPath: shellFolder)) == [] })
       t.shell.close()
       #expect(Processes.waitForExit([pid], seconds: 5).isEmpty)
       #expect(try FileManager.default.contentsOfDirectory(atPath: folder) == [])
@@ -905,7 +905,7 @@ private let everyByte = Data((0...255).map { UInt8($0) })
   @Test(.timeLimit(.minutes(1)), arguments: remoteShellPrograms)
   func aHostWithNoBase64IsReportedAsUnsupported(program: String) throws {
     try withRemoteShellTempFolder { folder in
-      for tool in ["/usr/bin/mktemp", "/usr/bin/mkfifo", "/usr/bin/stat", "/usr/bin/wc", "/usr/bin/head", "/bin/rm"] {
+      for tool in ["/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/wc", "/usr/bin/head", "/bin/rm"] {
         try FileManager.default.createSymbolicLink(
           atPath: folder + "/" + (tool as NSString).lastPathComponent, withDestinationPath: tool)
       }
@@ -1011,32 +1011,6 @@ private let everyByte = Data((0...255).map { UInt8($0) })
     #expect(throws: (any Error).self) { try t.run(["/bin/echo", "hi"]) }
   }
 
-  /// The shell's PATH holds the programs that the boot script needs except `mkfifo`.
-  @Test(.timeLimit(.minutes(1)), arguments: remoteShellPrograms)
-  func aHostWithNoMkfifoClosesBeforeTheHandshakeWithAReason(program: String) throws {
-    try withRemoteShellTempFolder { folder in
-      let tools = folder + "/bin"
-      let temporary = folder + "/tmp"
-      for path in [tools, temporary] {
-        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-      }
-      for tool in ["/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/base64", "/usr/bin/wc", "/usr/bin/head", "/bin/rm"] {
-        try FileManager.default.createSymbolicLink(
-          atPath: tools + "/" + (tool as NSString).lastPathComponent, withDestinationPath: tool)
-      }
-
-      let t = try TestShell.open(program, environment: ["PATH": tools, "TMPDIR": temporary])
-      defer { t.shell.close() }
-
-      #expect(t.events.readies == 0)
-      #expect(t.events.waitForClose())
-      #expect(t.events.closes.first?.contains("mkfifo") == true)
-      #expect(throws: (any Error).self) { try t.run(["/bin/echo", "hi"]) }
-      #expect(Processes.waitForExit([Int(t.shell.pid)], seconds: 5).isEmpty)
-      #expect(try FileManager.default.contentsOfDirectory(atPath: temporary) == [])
-    }
-  }
-
   /// The shell's `rm` fails, so the next command would open the files of this one.
   @Test(.timeLimit(.minutes(1)), arguments: remoteShellPrograms)
   func aShellThatCannotRemoveACommandsFilesAnswersItAndThenCloses(program: String) throws {
@@ -1047,7 +1021,7 @@ private let everyByte = Data((0...255).map { UInt8($0) })
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
       }
       for tool in [
-        "/usr/bin/mktemp", "/usr/bin/mkfifo", "/usr/bin/stat", "/usr/bin/base64", "/usr/bin/wc", "/usr/bin/head",
+        "/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/base64", "/usr/bin/wc", "/usr/bin/head",
       ] {
         try FileManager.default.createSymbolicLink(
           atPath: tools + "/" + (tool as NSString).lastPathComponent, withDestinationPath: tool)
