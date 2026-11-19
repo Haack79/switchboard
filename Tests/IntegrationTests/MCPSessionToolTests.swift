@@ -71,6 +71,57 @@ import Testing
     #expect(events.count == 2)
   }
 
+  /// An idle session in group Flags, a server for the group or for every session, and the `events` arguments
+  /// that read the session's events from that server.
+  func eventsServer(_ sbd: Instance, scoped: Bool) throws -> (SessionSummary, MCPClient, [String: JSON]) {
+    let s = try idle(sbd, name: "alpha")
+    let group = try addGroup(sbd, "Flags", s.id)
+    let mcp = try MCPClient(sbd, group: scoped ? group.id : nil)
+    return (s, mcp, scoped ? [:] : ["session": .string(s.id)])
+  }
+
+  @Test(arguments: [false, true]) func eventsWithoutALimitListsTheNewest20(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    for i in 0..<25 { try sbd.addNote(s.id, "note \(i)") }
+    let newest = try sbd.events(s.id).suffix(20).map(\.id)
+
+    let events = try mcp.call("events", args).decode([Event].self)
+
+    #expect(events.map(\.id) == Array(newest))
+  }
+
+  @Test(arguments: [false, true]) func eventsPassesKindsThrough(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    try sbd.addNote(s.id, "one")
+    try sbd.addNote(s.id, "two")
+    try sbd.postProbe(s.id)
+    let notes = try sbd.events(s.id).filter { $0.kind == "note" }.map(\.id)
+
+    let events = try mcp.call("events", args.merging(["kinds": ["note"]]) { $1 }).decode([Event].self)
+
+    #expect(events.map(\.id) == notes)
+  }
+
+  @Test(arguments: [false, true]) func eventsPassesFullThrough(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    let response: JSON = ["stdout": "hello", "stderr": "", "interrupted": false]
+    try sbd.postHook(
+      s.id, "PostToolUse", ["tool_name": "Bash", "tool_use_id": "toolu_full", "tool_response": response])
+    let read = { (extra: [String: JSON]) throws -> JSON? in
+      try mcp.call("events", args.merging(extra) { $1 }).decode([Event].self)
+        .last { $0.data["tool_use_id"] == "toolu_full" }?.data["tool_response"]
+    }
+
+    let full = try read(["kinds": ["PostToolUse"], "full": true])
+    let slim = try read(["kinds": ["PostToolUse"]])
+
+    #expect(full == response)
+    #expect(slim?.string != nil, "\(slim?.text ?? "nil")")
+  }
+
   @Test func sendDeliversTheText() throws {
     let sbd = try Instance()
     let s = try sbd.new(name: "alpha")
