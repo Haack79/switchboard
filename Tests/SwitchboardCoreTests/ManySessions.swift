@@ -3,6 +3,8 @@
 /// Inputs for timing a scan for many session ids.
 enum ManySessions {
   static let prefixes = ["s", SessionID.prefix]
+  /// The number of ids in the large input of `expectLinearGrowth`.
+  static let largeIdCount = prefixes.count * LinearGrowth.largeCount
 
   /// `count` distinct ids of each form in the session id alphabet.
   static func ids(_ count: Int) -> [String] {

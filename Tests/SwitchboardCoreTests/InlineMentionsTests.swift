@@ -797,8 +797,6 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
   private static let filler =
     " to rebase, then check café ☕ build 1.2#3 for the stream, see https://example.com/a,#4 and step 12:30 on main; "
 
-  private static let largeIdCount = ManySessions.prefixes.count * LinearGrowth.largeCount
-
   @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachInOneRunGrowsLinearly() {
     let ((text, _), pieces) = expectLinearGrowth { count in
       let ids = ManySessions.ids(count)
@@ -809,8 +807,9 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.largeIdCount)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.largeIdCount)
+    #expect(
+      pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == ManySessions.largeIdCount)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == ManySessions.largeIdCount)
   }
 
   @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachAcrossManyRunsGrowsLinearly() {
@@ -825,7 +824,8 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.largeIdCount)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.largeIdCount)
+    #expect(
+      pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == ManySessions.largeIdCount)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == ManySessions.largeIdCount)
   }
 }

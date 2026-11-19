@@ -702,8 +702,6 @@ private let changedMarkdown: [(String, [Piece])] = [
   private static let filler =
     " to rebase, then check the café ☕ build log for the stream, switch, and submit steps on main street; "
 
-  private static let largeIdCount = ManySessions.prefixes.count * LinearGrowth.largeCount
-
   @Test func matchingTwoThousandIdsOfEachFormInOneRunGrowsLinearly() {
     let ((text, _), matched) = expectLinearGrowth { count in
       let ids = ManySessions.ids(count)
@@ -713,7 +711,7 @@ private let changedMarkdown: [(String, [Piece])] = [
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(matched == Self.largeIdCount)
+    #expect(matched == ManySessions.largeIdCount)
   }
 
   @Test func matchingTwoThousandIdsOfEachFormAcrossManyRunsGrowsLinearly() {
@@ -727,6 +725,6 @@ private let changedMarkdown: [(String, [Piece])] = [
     }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(matched == Self.largeIdCount)
+    #expect(matched == ManySessions.largeIdCount)
   }
 }

@@ -16,7 +16,7 @@ enum LinearGrowth {
 /// Expects the time of `work` to grow linearly with its input.
 ///
 /// `input` builds the input of a size. Every part of the input must grow with that size, so that a scan that does work for each pair of parts is quadratic.
-/// The two sizes alternate for several rounds, and the fastest round of each size counts. A burst of load on a shared runner therefore slows down neither fastest round.
+/// The two sizes alternate for several rounds, and the fastest round of each size counts. A burst of load on a shared runner changes the result only if it slows every round of one size.
 /// - Returns: the large input and the result of `work` on it.
 func expectLinearGrowth<Input, Output>(
   _ input: (Int) -> Input, sourceLocation: SourceLocation = #_sourceLocation, _ work: (Input) -> Output
