@@ -324,11 +324,36 @@ import Testing
   ) async -> (BoardModel, SentRequests, MessageField.Draft) {
     let (model, sent) = recordingModel()
     model.apply(.success([owner, theOperator()]), followups: nil)
-    let draft = model.messageDraft(for: owner)
+    let draft = model.inboxDraft(for: owner)
     draft.text = text
     draft.submit(owner.id, ref: ref, to: model)
     await settle { !sent.value.isEmpty }
     return (model, sent, draft)
+  }
+
+  /// The session view and the chat pane show the owner's own draft, so an answer typed on the ask must not be in it.
+  @Test func anAnswerOnAnAskLeavesTheOwnersOwnDraftEmpty() {
+    let (model, _) = recordingModel()
+    let owner = Self.askOwner()
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+
+    model.inboxDraft(for: owner).text = "Yes, merge it."
+
+    #expect(model.messageDraft(for: owner).text.isEmpty)
+  }
+
+  /// Once the ask closes, the Inbox field shows the owner's own draft, which never received the unsent answer.
+  @Test func anAnswerOnAnAskThatClosesNeverReachesTheOwnersDraft() {
+    let (model, _) = recordingModel()
+    var owner = Self.askOwner()
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+    model.inboxDraft(for: owner).text = "Yes, merge it."
+
+    owner.triage = nil
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+
+    #expect(model.inboxDraft(for: owner).text.isEmpty)
+    #expect(model.messageDraft(for: owner).text.isEmpty)
   }
 
   @Test func theFieldOnAnAskSendsAChooseForTheOwnersItem() async throws {
@@ -389,7 +414,7 @@ import Testing
     let (model, sent) = recordingModel()
     let owner = Self.askOwner()
     model.apply(.success([owner, Self.theOperator()]), followups: nil)
-    let draft = model.messageDraft(for: owner)
+    let draft = model.inboxDraft(for: owner)
     draft.text = "Yes"
 
     draft.submit(owner.id, ref: "report:6", to: model)
@@ -404,7 +429,7 @@ import Testing
     let (model, sent) = recordingModel()
     let owner = Self.askOwner(options: [TriageOption(label: "Dismiss", action: .dismiss)])
     model.apply(.success([owner, Self.theOperator()]), followups: nil)
-    let draft = model.messageDraft(for: owner)
+    let draft = model.inboxDraft(for: owner)
     draft.text = "Yes"
 
     draft.submit(owner.id, ref: "report:7", to: model)
@@ -418,7 +443,7 @@ import Testing
     let (model, sent) = recordingModel()
     let owner = Self.askOwner()
     model.apply(.success([owner, Self.theOperator()]), followups: nil)
-    let draft = model.messageDraft(for: owner)
+    let draft = model.inboxDraft(for: owner)
     draft.text = "See this"
     draft.images = [.init(name: "a.png", data: Data([1]), thumbnail: nil)]
 

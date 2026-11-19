@@ -49,12 +49,13 @@ extension SessionFacts {
   /// certain, so only these close with a generic `ack` on the operator.
   var unroutedReports: [OperatorReport] { openReports.filter { reportOwners[$0.id] == nil } }
 
-  /// Keeps the `needsYou` reports that are open (Decision 40). A message that the user wrote closes the reports
-  /// recorded before it: those that its `reports` key names, or every one when it has no such key. Only a `sent`
-  /// event whose `by` is `you` closes them. A message from sbd or from a Claude Code closes none. A `sent` that names
-  /// no author closes none either. A `report-closed` event closes the reports that it names. An `ack` closes the
-  /// unrouted reports, unless a prompt blocks the session: the Inbox then shows that prompt, so the user did not see
-  /// them. The reports that an `ack` closes replace `acknowledgedReports`. An `unack` reopens them.
+  /// Keeps the `needsYou` reports that are open (Decision 40 in the notes repo's `plans/410-invisible-operator.md`).
+  /// A message that the user wrote closes the reports recorded before it: those that its `reports` key names, or
+  /// every one when it has no such key. Only a `sent` event whose `by` is `you` closes them. A message from sbd or
+  /// from a Claude Code closes none. A `sent` that names no author closes none either. A `report-closed` event closes
+  /// the reports that it names. An `ack` closes the unrouted reports, unless a prompt blocks the session: the Inbox
+  /// then shows that prompt, so the user did not see them. The reports that an `ack` closes replace
+  /// `acknowledgedReports`. An `unack` reopens them.
   mutating func applyReports(_ event: Event) {
     if event.kind == "sent" { workFrom = event.data["handedFrom"]?.string }
     switch event.kind {
@@ -119,7 +120,8 @@ extension Attention {
 
 extension Triage {
   /// The operator's item: a blocking prompt's, then that of an ask or an overdue wait that sbd left on it, then a
-  /// rule item for an exit at the trust dialog or a `notify` outcome (Decision 43).
+  /// rule item for an exit at the trust dialog or a `notify` outcome (Decision 43 in the notes repo's
+  /// `plans/410-invisible-operator.md`).
   static func operatorItem(_ facts: SessionFacts, _ verdict: Verdict) -> TriageItem? {
     if let item = promptItem(facts, verdict) ?? operatorSourcedItem(facts, verdict) { return item }
     guard verdict.state == .needsYou, verdict.byWaitRule || facts.exitedAtTrust else { return nil }

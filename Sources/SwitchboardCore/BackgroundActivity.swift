@@ -1,7 +1,7 @@
 import Foundation
 
 /// The Loops tab's Background Activity list: the Operator's reports, the actions it ran, and its judgments, built from
-/// the Operator's own events only (#410, Decision 44).
+/// the Operator's own events only (Decision 44 in the notes repo's `plans/410-invisible-operator.md`).
 public enum BackgroundActivity {
   /// The event kinds that the list reads from the Operator.
   public static let kinds = [OperatorReport.event, "wait-resolved", "judge"]

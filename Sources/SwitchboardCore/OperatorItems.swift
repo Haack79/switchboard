@@ -3,7 +3,7 @@ import Foundation
 /// The Operator's open questions and waits that show on one session's Inbox item: the session that they are about,
 /// or a Manager conversation, or the Operator itself when no other owner is live. sbd derives them from the
 /// Operator's facts and waits with `assign` and sets them on each owner's `SessionFacts.operatorItems`. No event
-/// folds them.
+/// folds them. The Decision numbers in this file are those of `plans/410-invisible-operator.md` in the notes repo.
 public struct OperatorItems: Codable, Equatable, Sendable {
   /// The open `needsYou` reports that this session owns, oldest first.
   public var asks: [OperatorReport] = []

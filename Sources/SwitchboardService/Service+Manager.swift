@@ -212,10 +212,11 @@ extension Service {
 
   func mostRecentManager() -> String? { managerList().first?.id }
 
-  /// The id of the conversation that `mostRecentManager` gives, read from the entries without building summaries.
-  /// It orders by the fields that `Manager.newestFirst` compares.
+  /// The newest conversation that may own the Operator's items, read from the entries without building summaries.
+  /// It orders by the fields that `Manager.newestFirst` compares. It skips a paused or done conversation, which
+  /// `mostRecentManager` would give, so that an item goes to the next conversation and not to the Operator.
   func newestConversation() -> String? {
-    entries.values.filter { $0.session.kind == .manager }.min {
+    entries.values.filter { $0.session.kind == .manager && mayOwnOperatorItems($0.session.id) }.min {
       ($0.facts.lastActivity, $0.session.created) > ($1.facts.lastActivity, $1.session.created)
     }?.session.id
   }

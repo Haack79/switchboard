@@ -629,7 +629,8 @@ public enum Attention {
     if let verdict = docketVerdict(session, facts) { return verdict }
     if let unread = facts.unread { return unreadVerdict(session, facts, unread, stateOf: stateOf) }
     let ask = askVerdict(facts.operatorItems)
-    // An ask outranks a card that doesn't block, which a conversation's Inbox would not show (Decision 55).
+    // An ask outranks a card that doesn't block, which a conversation's Inbox would not show (Decision 55 in the
+    // notes repo's `plans/410-invisible-operator.md`).
     if let card = facts.cards.first, ask == nil || facts.hasBlockingPrompt {
       return Verdict(state: .needsYou, reason: oneLine(card.reason))
     }
@@ -639,9 +640,12 @@ public enum Attention {
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning { return workingVerdict(facts, now: now) }
     let idle = idleRules(session, facts, now: now, stateOf: stateOf)
-    // A merge wait watches for Ready to merge, which `openPR` gives below the session's own waits, so a routed held
-    // wait must not hide it (Risk B). It comes before every other idle verdict, the session's own waits included.
-    if idle.state != .readyToMerge, let held = heldWaitVerdict(facts.operatorItems, now: now) { return held }
+    // A merge wait watches for Ready to merge, which `openPR` gives below the session's own waits, and a `session` wait
+    // settles on Stale, so a routed held wait must hide neither. It comes before every other idle verdict, the
+    // session's own waits included.
+    if idle.state != .readyToMerge, idle.state != .stale, let held = heldWaitVerdict(facts.operatorItems, now: now) {
+      return held
+    }
     return idle
   }
 

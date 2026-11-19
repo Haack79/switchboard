@@ -704,15 +704,14 @@ import Testing
     #expect(try item(sbd, op.id) == nil)
   }
 
-  /// Risk C: the conversation becomes the owner of the ask that no session could hold. Only a tick runs the sync for
-  /// a new conversation, so the test reads after one tick.
+  /// Risk C: the conversation becomes the owner of the ask that no session could hold. Creating a conversation runs
+  /// the sync, so the ask moves with no tick (Decision 53).
   @Test func anUnownedAskMovesToAConversationCreatedAfterIt() throws {
     let sbd = try Instance()
     let op = try idleOperator(sbd)
     let report = try ask(sbd, op)
 
     let c = try conversationHelpers.newConversation(sbd, name: "Queue work")
-    try sbd.advanceClock(1)
 
     #expect(try holders(sbd, report) == [c.id])
     #expect(try sbd.get(op.id).state != .needsYou)
@@ -728,6 +727,23 @@ import Testing
     let report = try ask(sbd, op, about: kid.id)
 
     try sbd.sb("rm", kid.id)
+
+    #expect(try holders(sbd, report) == [c.id])
+    #expect(try isOpen(sbd, report) == true)
+  }
+
+  /// A paused session and a session marked done can't show an ask, so `update` moves an ask they own at once.
+  @Test(arguments: ["pause", "done"]) func anOwnerThatCantShowAnAskMovesItToTheMostRecentConversationAtOnce(
+    _ command: String
+  ) throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd, "Queue work")
+    let op = try idleOperator(sbd)
+    let kid = try sbd.new(name: "kid")
+    let report = try ask(sbd, op, about: kid.id)
+    try #require(try holders(sbd, report) == [kid.id])
+
+    try sbd.sb(command, kid.id)
 
     #expect(try holders(sbd, report) == [c.id])
     #expect(try isOpen(sbd, report) == true)
@@ -834,6 +850,25 @@ import Testing
     #expect(s.triage?.ref.hasPrefix("held:") != true, "\(String(describing: s.triage))")
   }
 
+  /// A held item's Acknowledge is the generic `ack` on its owner. It closes no report and leaves the Operator's wait.
+  @Test func acknowledgingAHeldItemRecordsAnAckOnTheOwnerAndKeepsTheWait() throws {
+    let sbd = try Instance()
+    let op = try idleOperator(sbd)
+    let kid = try sbd.new(name: "kid")
+    let c = try conversation(sbd, "Plan the cache fix")
+    try sbd.sb("wait", c.id, "--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm")
+    let wait = try #require(try handoff.theOperator(sbd).waits.last)
+    try sbd.advanceClock(25 * WaitTests.hourMs)
+    try sbd.waitFor(kid.id, "the held item") { $0.triage?.ref.hasPrefix("held:") == true }
+
+    try sbd.sb("ack", kid.id)
+
+    #expect(try events(sbd, kid.id, "ack").count == 1)
+    #expect(try events(sbd, op.id, "report-closed").isEmpty)
+    #expect(try handoff.theOperator(sbd).waits.contains { $0.id == wait.id })
+    #expect(try sbd.get(kid.id).acknowledged == true)
+  }
+
   /// Decision 43: a `notify` outcome on the Operator, such as a manual wait's recheck, keeps a rule item there.
   @Test func aManualWaitsRecheckOnTheOperatorGivesItARuleItem() throws {
     let sbd = try Instance()
@@ -923,6 +958,11 @@ import Testing
 
     #expect(try isOpen(sbd, report) == false)
     #expect(try holders(sbd, report).isEmpty)
+
+    try sbd.sb("ack", "--undo", "Operator")
+
+    #expect(try isOpen(sbd, report) == true)
+    #expect(try holders(sbd, report) == [kid.id])
   }
 
   // MARK: The Operator is not woken by its own question (Decision 53)
@@ -965,6 +1005,30 @@ import Testing
     #expect(try holders(sbd, onKid) == [kid.id])
     #expect(try holders(sbd, onC) == [c.id])
     #expect(try sbd.get(op.id).state != .needsYou)
+  }
+
+  /// A restart reads the ask into the child's item before it seeds the parent's mark, so the parent hears it once.
+  @Test func restartingSbdDoesNotTellAParentAgainAboutAnAskItHeard() throws {
+    let sbd = try Instance()
+    let managers = ManagerTests()
+    let parent = try managers.idle(sbd, name: "p")
+    let kid = try managers.child(sbd, of: parent.id, name: "kid", prompt: "slow 60")
+    try sbd.waitFor(kid.id, "the child's turn") { $0.state == .working }
+    // sbd ticks every 0.2 s. The wait lets a tick record the child as working before the ask.
+    try sbd.restart(setting: "tickSeconds", to: 0.2)
+    sleep(2)
+    let heard = try sbd.count("sent", of: parent.id)
+    let op = try idleOperator(sbd)
+    try ask(sbd, op, about: kid.id)
+    try sbd.waitFor(
+      "the parent hears the ask", fetch: { try sbd.count("sent", of: parent.id) }, until: { $0 > heard })
+    let sent = try sbd.count("sent", of: parent.id)
+
+    sbd.stopSbd()
+    try sbd.startSbd()
+    sleep(2)
+
+    #expect(try sbd.count("sent", of: parent.id) == sent)
   }
 
   @Test func anAcknowledgedAskStaysClosedAfterARestart() throws {

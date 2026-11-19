@@ -6,7 +6,7 @@ import SwitchboardCore
 struct MessageField: View {
   @EnvironmentObject var model: BoardModel
   let session: String
-  /// From `BoardModel.messageDraft(for:)`, so that the text survives a switch to another view.
+  /// From `BoardModel.messageDraft(for:)` or `inboxDraft(for:)`, so that the text survives a switch to another view.
   @ObservedObject var draft: Draft
   var shortcut: KeyboardShortcut?
   /// The ref of the Inbox item that the field answers, so sbd can hold the session while it works on the

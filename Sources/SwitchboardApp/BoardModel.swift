@@ -788,7 +788,7 @@ final class BoardModel: ObservableObject {
       drafts = drafts.filter { open.contains($0.key) }
       messageDrafts.prune(
         keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.otherAnswerKeys(list))
-          .union(MessageDrafts.replyKeys(list)))
+          .union(MessageDrafts.replyKeys(list)).union(MessageDrafts.operatorAnswerKeys(list)))
       if !sameShown(allSessions, list) { allSessions = list }
       // After the new list, so that the filter change reads each session's group from the same poll as the groups.
       if let groups { applyGroups(groups) }
@@ -1721,6 +1721,13 @@ final class BoardModel: ObservableObject {
 
   func messageDraft(for session: SessionSummary) -> MessageField.Draft {
     messageDrafts.draft(for: MessageDrafts.key(for: session))
+  }
+
+  /// The draft of the Inbox field on `session`. On an Operator question it is the answer's own draft, which the
+  /// session view and the chat pane never show. The answer is dropped, not sent to claude, once the question closes.
+  func inboxDraft(for session: SessionSummary) -> MessageField.Draft {
+    guard MessageField.Draft.answersOperator(ref: session.triage?.ref) else { return messageDraft(for: session) }
+    return messageDrafts.draft(for: MessageDrafts.operatorAnswerKey(session: session.id))
   }
 
   /// What the user typed as the Other answer to one decision and has not sent.

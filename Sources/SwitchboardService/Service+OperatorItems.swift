@@ -3,7 +3,8 @@ import SwitchboardCore
 
 /// The Operator's needs-you reports and waits show on the sessions that they are about, or on a Manager
 /// conversation. sbd records who owns each report and derives every session's `SessionFacts.operatorItems` from the
-/// Operator's facts and waits. All of it runs on the state queue.
+/// Operator's facts and waits. All of it runs on the state queue. The Decision numbers in this file are those of
+/// `plans/410-invisible-operator.md` in the notes repo.
 extension Service {
   /// Whether session `id` may own an item of the Operator's. A host session, a paused session, a session marked done,
   /// a session under removal, an unstarted follow-up, and a docket row get a verdict before an ask, so an item routed

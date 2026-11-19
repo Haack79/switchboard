@@ -1011,6 +1011,17 @@ extension OperatorItemsTests {
       #expect(v.state == .done, "\(v.reason)")
     }
 
+    /// A `session` wait settles on Stale, so a routed held wait must never hide it.
+    @Test func aHeldWaitLeavesStale() {
+      let f = facts(opIdle)
+      let now = 3 * Attention.staleAfterMs
+      #expect(oiVerdict(session(), f, now: now).state == .stale)
+
+      let v = oiVerdict(session(), withItems(f, OperatorItems(heldWaits: [heldWait("w1")])), now: now)
+
+      #expect(v.state == .stale, "\(v.reason)")
+    }
+
     @Test func aHeldWaitLeavesAMarkedDoneSessionDone() {
       let v = oiVerdict(
         session(done: true), withItems(facts(opIdle), OperatorItems(heldWaits: [heldWait("w1")])))

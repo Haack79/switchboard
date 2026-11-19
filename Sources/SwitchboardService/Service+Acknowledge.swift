@@ -27,7 +27,8 @@ extension Service {
       let closesReports = e.session.kind == .operator && e.facts.ackClosesReports
       if closesReports { try Service.refuseClaude(args, "an ack closes the operator's reports") }
       // A report from before routing shows on the session that it is about, so the operator can be out of the
-      // Inbox. An ack on the operator still closes it (Decision 51).
+      // Inbox. An ack on the operator still closes it (Decision 51 in the notes repo's
+      // `plans/410-invisible-operator.md`).
       if closesReports, !AttentionState.inbox.contains(verdict.state) {
         record(id, "ack", try JSON(encoding: Acknowledgment(verdict, e.facts)))
       } else {
@@ -38,7 +39,8 @@ extension Service {
   }
 
   /// Closes the asks that the user saw on `id`'s item with a `report-closed` event on the operator `op`, which has
-  /// no undo. It records no `ack` on `id`, so the item that the ask hid shows again (Decision 40).
+  /// no undo. It records no `ack` on `id`, so the item that the ask hid shows again (Decision 40 in the notes repo's
+  /// `plans/410-invisible-operator.md`).
   private func closeAsks(_ id: String, on op: String, _ args: JSON) throws {
     try Service.refuseClaude(args, "an ack closes the operator's question")
     let ids = entries[id]!.facts.operatorItems.asks.map { JSON.number(Double($0.id)) }

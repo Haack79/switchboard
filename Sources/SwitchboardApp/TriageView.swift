@@ -79,7 +79,7 @@ struct TriageDetail: View {
           StartButton(session: session).padding(8)
         } else if session.runsClaude {
           MessageField(
-            session: session.id, draft: model.messageDraft(for: session),
+            session: session.id, draft: model.inboxDraft(for: session),
             shortcut: KeyboardShortcut(.return, modifiers: [.command]), ref: session.triage?.ref
           )
           .padding(8)

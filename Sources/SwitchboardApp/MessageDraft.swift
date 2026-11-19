@@ -27,7 +27,8 @@ extension MessageField {
 
     /// Sends the trimmed text and the images, and empties the field once sbd accepts them, unless the user
     /// changed it meanwhile. `then` runs after that. On an Operator question's ref, it answers through the item's
-    /// Reply, so sbd sends the text to the Operator and not to the session's claude (#410, Decision 49).
+    /// Reply, so sbd sends the text to the Operator and not to the session's claude (Decision 49 in the notes repo's
+    /// `plans/410-invisible-operator.md`).
     @MainActor func submit(
       _ session: String, ref: String? = nil, to model: BoardModel, runHere: Bool = false, then: (() -> Void)? = nil
     ) {
