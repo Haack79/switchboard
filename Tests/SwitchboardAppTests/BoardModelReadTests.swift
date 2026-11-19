@@ -38,7 +38,7 @@ private func replied(_ lastReply: String?, id: String = "s1") -> SessionSummary 
   return s
 }
 
-// MARK: The reply cache (Decision 8)
+// MARK: The reply cache
 
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct BoardModelReadReplyCache {
@@ -132,7 +132,7 @@ private func replied(_ lastReply: String?, id: String = "s1") -> SessionSummary 
   }
 }
 
-// MARK: When the Inbox reads the reply again (Decision 8)
+// MARK: When the Inbox reads the reply again
 
 @Suite struct TriageDetailReplyKey {
   @Test func twoRepliesOfTheSameLengthReadAgain() {

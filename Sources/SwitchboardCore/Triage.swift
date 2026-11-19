@@ -565,7 +565,7 @@ public enum Triage {
   static func addRule(_ verdict: Verdict, to item: inout TriageItem) {
     if let review = verdict.review { item.review = review }
     let kind: Callout.Kind = verdict.state == .needsYou ? .warning : .info
-    item.callouts.insert(contentsOf: [Callout(kind: kind, title: title(verdict.reason))] + verdict.callouts, at: 0)
+    item.callouts.insert(contentsOf: [Callout(kind: kind, title: ruleTitle(verdict.reason))] + verdict.callouts, at: 0)
     item.details.overdueWaits = verdict.overdueWaits
     let lead = item.primary
     let added = verdict.options.filter { rule in
@@ -605,31 +605,29 @@ public enum Triage {
   /// because its reply belongs to an earlier turn. `listOpen` is true while
   /// the item's decision list is open.
   public static func replyPresentation(item: TriageItem, reply: String, listOpen: Bool) -> ReplyPresentation {
-    let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return .none }
-    let short =
-      text.count <= wholeReplyCharacters
-      && text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).count <= wholeReplyLines
-    let decides = listOpen || !item.decisions.isEmpty
+    let whole: ReplyPresentation
     switch item.source {
     case .card, .report: return .none
-    case .session: return .collapsed
-    case .summary, .fallback: return short && !decides ? .replacesSummary : .collapsed
+    case .session: whole = .collapsed
+    case .summary, .fallback: whole = .replacesSummary
     case .rule:
       guard item.callouts.contains(where: { $0.kind == .decision && $0.title.hasPrefix(replyAskPrefix) }) else {
         return .none
       }
-      return short && !decides ? .expanded : .collapsed
+      whole = .expanded
     }
+    guard let first = reply.firstIndex(where: { !$0.isWhitespace }),
+      let last = reply.lastIndex(where: { !$0.isWhitespace })
+    else { return .none }
+    guard whole != .collapsed, !listOpen, item.decisions.isEmpty else { return .collapsed }
+    // The selected card calls this on every render, so a long reply is read only one character past the limit.
+    let text = reply[first...last].prefix(wholeReplyCharacters + 1)
+    let short = text.count <= wholeReplyCharacters && text.lazy.filter(\.isNewline).count < wholeReplyLines
+    return short ? whole : .collapsed
   }
 
   /// The question or the offer that the reply ends with, as `Attention.classify` finds it, or nil.
-  public static func replyAsk(_ reply: String) -> String? {
-    switch Attention.classify(reply) {
-    case .question(let ask), .offer(let ask): ask
-    case .other: nil
-    }
-  }
+  public static func replyAsk(_ reply: String) -> String? { Attention.classify(reply).ask }
 
   /// Whether the turn that just ended needs a summary: the reply decides the
   /// session's state, and no summary exists yet.
@@ -642,7 +640,7 @@ public enum Triage {
     switch card.kind {
     case .send:
       return TriageItem(
-        title: title(card.reason, max: titleLength), kind: .approval,
+        title: title(card.reason), kind: .approval,
         summary: "Claude asks to send \(card.summary). Nothing is sent until you send it.",
         options: [
           TriageOption(label: "Send", action: .allow),
@@ -653,7 +651,7 @@ public enum Triage {
           targets: (card.send?.targets ?? []).map { sessionMention(name: $0.name, id: $0.id) }))
     case .trust:
       return TriageItem(
-        title: title(card.reason, max: titleLength), kind: .approval,
+        title: title(card.reason), kind: .approval,
         summary:
           "Claude Code asks whether you trust \(codeSpan(card.summary)) before it starts. Trust lets it read, edit, and run files there. Exit stops it and keeps your message for the next start.",
         options: [
@@ -662,7 +660,7 @@ public enum Triage {
         ], source: .card)
     case .mcp:
       return TriageItem(
-        title: title(card.reason, max: titleLength), kind: .approval, summary: card.mcpRequest?.effect ?? "",
+        title: title(card.reason), kind: .approval, summary: card.mcpRequest?.effect ?? "",
         options: [
           TriageOption(label: "Allow", action: .allow, recommended: true),
           TriageOption(label: "Deny", action: .deny),
@@ -671,7 +669,7 @@ public enum Triage {
           openByDefault: true, toolInput: .init(tool: card.tool, text: card.mcpRequest?.reason ?? "")))
     case .permission:
       return TriageItem(
-        title: title(card.reason, max: titleLength), kind: .approval, summary: permissionSummary(card),
+        title: title(card.reason), kind: .approval, summary: permissionSummary(card),
         options: [
           TriageOption(label: "Allow", action: .allow, recommended: true),
           TriageOption(label: "Deny", action: .deny),
@@ -689,7 +687,7 @@ public enum Triage {
         TriageOption(label: $0.label, detail: $0.description, action: .answer, message: $0.label)
       }
       return TriageItem(
-        title: title(card.reason, max: titleLength), kind: .question,
+        title: title(card.reason), kind: .question,
         summary: card.questions.map(\.question).joined(separator: " "), options: options,
         multiSelect: only?.multiSelect ?? false, source: .card)
     }
@@ -698,7 +696,7 @@ public enum Triage {
   static func ruleItem(_ verdict: Verdict) -> TriageItem {
     let text = capitalized(verdict.reason)
     return TriageItem(
-      title: title(verdict.reason), kind: verdict.kind,
+      title: ruleTitle(verdict.reason), kind: verdict.kind,
       summary: verdict.summary ?? (text.hasSuffix(".") ? text : text + "."),
       options: verdict.options, callouts: verdict.callouts, review: verdict.review, source: .rule,
       details: TriageDetails(overdueWaits: verdict.overdueWaits))
@@ -713,13 +711,9 @@ public enum Triage {
   /// because a prompt starts a turn whose Stop replaces the reply.
   static func addReplyAsk(_ facts: SessionFacts, to item: inout TriageItem) {
     guard item.source == .rule, !facts.turnRunning else { return }
-    let ask: String
-    let answers: [TriageOption]
-    switch Attention.classify(facts.lastReply ?? "") {
-    case .question(let question): (ask, answers) = (question, [])
-    case .offer(let offer): (ask, answers) = (offer, yesNo(offer))
-    case .other: return
-    }
+    let kind = Attention.classify(facts.lastReply ?? "")
+    guard let ask = kind.ask else { return }
+    let answers = kind.isQuestion ? [] : yesNo(ask)
     item.callouts.insert(Callout(kind: .decision, title: oneLine(replyAskPrefix + ask, max: 120)), at: 0)
     for i in item.options.indices { item.options[i].recommended = false }
     var added: [TriageOption] = []
@@ -747,17 +741,17 @@ public enum Triage {
     switch Attention.classify(reply) {
     case .question:
       return TriageItem(
-        title: title(verdict.reason, max: titleLength), kind: .question, summary: summary, source: .fallback)
+        title: title(verdict.reason), kind: .question, summary: summary, source: .fallback)
     case .offer(let step):
       guard let asked = Attention.lastQuestion(reply), asked.question == step else {
-        return TriageItem(title: title(step, max: titleLength), kind: .approval, summary: summary, source: .fallback)
+        return TriageItem(title: title(step), kind: .approval, summary: summary, source: .fallback)
       }
       return TriageItem(
         title: OfferText.title(question: step, previous: asked.previous), kind: .approval,
         summary: summary, options: yesNo(step), source: .fallback)
     case .other:
       return TriageItem(
-        title: title(verdict.reason, max: titleLength), kind: .info, summary: summary, source: .fallback)
+        title: title(verdict.reason), kind: .info, summary: summary, source: .fallback)
     }
   }
 
@@ -818,10 +812,13 @@ public enum Triage {
   /// The ref of a rule item with this title.
   static func ruleRef(_ title: String) -> String { "rule:\(title)" }
 
-  static func title(_ reason: String, max: Int = ruleTitleLength) -> String {
+  static func title(_ reason: String, max: Int = titleLength) -> String {
     let text = capitalized(reason).replacingOccurrences(of: "; ", with: ": ")
     return oneLine(text, max: max)
   }
+
+  /// The title of a rule item. `ruleItem`, `addRule`, and `ItemContext` must agree on it, so a `rule:` ref matches.
+  static func ruleTitle(_ reason: String) -> String { title(reason, max: ruleTitleLength) }
 
   /// The picks as one option, whose message is the one reply that they send.
   /// `picks` is not empty.

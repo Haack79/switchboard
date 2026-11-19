@@ -59,8 +59,7 @@ final class GitHubPoller {
   var queuedWaits: Set<String> = []
   var deploys = Deploys()
   /// The PRs of edges that left a session's list before the poller read
-  /// their PR again, and the PRs of sessions whose acknowledgment expired.
-  /// The next poll reads them whether or not they are due.
+  /// their PR again. The next poll reads them whether or not they are due.
   var recheck: Set<String> = []
   /// What the poller knows about each plan document, by plan id.
   var trackedPlans: [String: TrackedPlan] = [:]
@@ -246,9 +245,15 @@ final class GitHubPoller {
       for id in recheck { waited.created[id] = max(waited.created[id] ?? 0, now) }
       // A request's hold ends `readMs` after a turn ends. The PR reads once after each such turn, so the hold sees
       // a push that the turn made even when the PR polls at the idle rate.
+      // The PR also reads once after an acknowledgment expires, so the item that returns to the Inbox shows what
+      // GitHub shows now.
+      let acknowledgedMs = service.config.recheck.acknowledgedMs
       for s in sessions {
-        guard let ended = s.facts.request?.ended, let id = s.facts.pr?.id else { continue }
-        waited.created[id] = max(waited.created[id] ?? 0, ended)
+        guard let id = s.facts.pr?.id else { continue }
+        if let ended = s.facts.request?.ended { waited.created[id] = max(waited.created[id] ?? 0, ended) }
+        if let at = s.facts.acknowledgment?.at, at + acknowledgedMs <= now {
+          waited.created[id] = max(waited.created[id] ?? 0, at + acknowledgedMs)
+        }
       }
       try readPRs(all: all, now: now, waited: waited, queued: queuedPRs(), stats: &stats)
       try checkDeploys(

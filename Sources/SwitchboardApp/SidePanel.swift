@@ -5,13 +5,18 @@ extension Wait {
   /// The wait's kind, who set it, how long ago, and what happens when it resolves.
   /// `age` is how long ago the wait was set, such as `5m`.
   func caption(age: String) -> String {
-    let outcome: String
-    switch then {
-    case .resume: outcome = "resumes claude"
-    case .notify: outcome = "moves to Needs you"
-    case .caller: outcome = "ends sb wait --block"
+    [kind.rawValue, by.rawValue, "\(age) ago", then.outcome].joined(separator: " · ")
+  }
+}
+
+extension Wait.Then {
+  /// What sbd does when the wait resolves, such as "resumes claude".
+  var outcome: String {
+    switch self {
+    case .resume: "resumes claude"
+    case .notify: "moves to Needs you"
+    case .caller: "ends sb wait --block"
     }
-    return [kind.rawValue, by.rawValue, "\(age) ago", outcome].joined(separator: " · ")
   }
 }
 

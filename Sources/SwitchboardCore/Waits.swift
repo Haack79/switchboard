@@ -223,10 +223,16 @@ public struct Wait: Codable, Equatable, Sendable {
   /// when the list is nil or empty.
   public func pendingReviewer(in requests: [String]?) -> Bool? {
     guard let who, let requests, !requests.isEmpty else { return nil }
-    let bare = who.hasPrefix("@") ? String(who.dropFirst()) : who
-    guard let slash = bare.lastIndex(of: "/") else { return requests.contains { Wait.sameLogin($0, bare) } }
-    let slug = bare[bare.index(after: slash)...]
-    return requests.contains { $0.caseInsensitiveCompare(slug) == .orderedSame }
+    let name = Wait.reviewerName(who)
+    guard who.contains("/") else { return requests.contains { Wait.sameLogin($0, name) } }
+    return requests.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+  }
+
+  /// The login or the team slug that a reviewer names, without its "@" or a team's org. GitHub names a requested
+  /// team by its slug alone.
+  public static func reviewerName(_ who: String) -> String {
+    let bare = who.hasPrefix("@") ? who.dropFirst() : Substring(who)
+    return String(bare.lastIndex(of: "/").map { bare[bare.index(after: $0)...] } ?? bare)
   }
 
   /// The reason line after the wait resolved with `notify`.

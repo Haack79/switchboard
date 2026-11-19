@@ -536,16 +536,28 @@ func replyFixture(_ name: String) throws -> String {
     #expect(summary.summary == Self.eightLines)
   }
 
-  @Test func keepsOneLinePerDecisionUpToTheMostItAsksFor() throws {
-    let lines =
-      ["It planned."] + (1...TriageSummarizer.maxDecisions).map { "\($0). Decision \($0)." } + [
-        "It needs them.", "extra",
-      ]
+  static let fullSummary =
+    ["It asks ten things."] + (1...TriageSummarizer.maxDecisions).map { "\($0). Decision \($0)." } + [
+      "It planned.", "It needs them.",
+    ]
+
+  @Test func keepsTheFirstLineEveryDecisionAndTwoLinesOfContext() throws {
+    let text = Self.fullSummary.joined(separator: "\n")
+    let payload: JSON = ["title": "Decide", "kind": "decision", "summary": .string(text)]
+
+    let summary = try TriageSummarizer.parse(envelope(payload), reply: "")
+
+    #expect(Self.fullSummary.count == 1 + TriageSummarizer.maxDecisions + 2)
+    #expect(summary.summary == text)
+  }
+
+  @Test func dropsTheLinesAfterTheMostItAsksFor() throws {
+    let lines = Self.fullSummary + ["extra"]
     let payload: JSON = ["title": "Decide", "kind": "decision", "summary": .string(lines.joined(separator: "\n"))]
 
     let summary = try TriageSummarizer.parse(envelope(payload), reply: "")
 
-    #expect(summary.summary == lines.dropLast().joined(separator: "\n"))
+    #expect(summary.summary == Self.fullSummary.joined(separator: "\n"))
     #expect(!summary.summary.contains("extra"))
   }
 
@@ -889,7 +901,7 @@ private func readyVerdict(_ f: SessionFacts) throws -> Verdict {
   }
 }
 
-// MARK: Rule titles (Decision 13, Risk 3)
+// MARK: Rule titles
 
 /// A rule reason of 71 characters, past the 60 that model and session titles keep.
 private let longRuleReason = "merge main in; #1204 conflicts with main after the release branch moved"
@@ -917,24 +929,25 @@ private let longOverdueWait = Wait(
     let reason = "a review from PostHog/clickhouse on #135173: still open after 1 d"
     try #require(reason.count == 65)
 
-    #expect(Triage.title(reason) == "A review from PostHog/clickhouse on #135173: still open after 1 d")
+    #expect(Triage.ruleTitle(reason) == "A review from PostHog/clickhouse on #135173: still open after 1 d")
   }
 
   @Test func aHundredCharacterReasonStaysWhole() {
     let reason = String(repeating: "x", count: 100)
 
-    #expect(Triage.title(reason) == "X" + String(repeating: "x", count: 99))
+    #expect(Triage.ruleTitle(reason) == "X" + String(repeating: "x", count: 99))
   }
 
   @Test(arguments: [101, 120, 300])
   func aLongerReasonIsCutAtAHundred(_ length: Int) {
-    let title = Triage.title(String(repeating: "x", count: length))
+    let title = Triage.ruleTitle(String(repeating: "x", count: length))
 
     #expect(title == "X" + String(repeating: "x", count: 98) + "…")
   }
 
   @Test func theTitleStillTurnsTheFirstSemicolonIntoAColon() {
-    #expect(Triage.title(longRuleReason) == "Merge main in: #1204 conflicts with main after the release branch moved")
+    #expect(
+      Triage.ruleTitle(longRuleReason) == "Merge main in: #1204 conflicts with main after the release branch moved")
   }
 
   @Test func aRuleItemKeepsItsLongTitleWhole() throws {
@@ -972,7 +985,7 @@ private let longOverdueWait = Wait(
     let built = try #require(Triage.item(f, open, kind: kind))
 
     #expect(built.title == Triage.capitalized(open.reason))
-    #expect(built.ref == Triage.ruleRef(Triage.title(open.reason)))
+    #expect(built.ref == Triage.ruleRef(Triage.ruleTitle(open.reason)))
     #expect(
       TranscriptAnchor.of(item: built, facts: f) == .toolCall(tool: "Bash", input: f.openPermission?.input ?? [:]))
   }
@@ -987,7 +1000,7 @@ private let longOverdueWait = Wait(
     let work = try #require(Triage.item(f, v, kind: .work))
 
     #expect(op.title == Triage.capitalized(v.reason))
-    #expect(op.ref == Triage.ruleRef(Triage.title(v.reason)))
+    #expect(op.ref == Triage.ruleRef(Triage.ruleTitle(v.reason)))
     #expect(op.ref == work.ref)
   }
 
@@ -1001,7 +1014,7 @@ private let longOverdueWait = Wait(
   }
 }
 
-// MARK: Decision first in the summary (Decision 11)
+// MARK: Decision first in the summary
 
 @Suite struct TriageReplySummaryOrder {
   /// The `summary` bullet of the system prompt, up to the `options` bullet.

@@ -64,7 +64,7 @@ private func onlyRow(
 
 private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue, .merge, .deploy]
 
-// MARK: The rows and their facts (Decision 3)
+// MARK: The rows and their facts
 
 @Suite struct WaitPanelRows {
   @Test func eachOverdueIdGivesOneRowInTheOrderOfTheIds() {
@@ -121,7 +121,7 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
   }
 }
 
-// MARK: The target and its state (Decision 3, Risk 4)
+// MARK: The target and its state
 
 @Suite struct WaitPanelTargets {
   @Test(arguments: prKinds)
@@ -183,7 +183,7 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
 
     let row = try onlyRow(session, loads: load.map { [ref.key: $0] } ?? [:])
 
-    #expect(row.target == .pullRequest(.loading))
+    #expect(row.target == .pullRequest(ref, .loading))
   }
 
   @Test(arguments: [
@@ -193,7 +193,7 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
     let ref = gitHubRef("acme/widgets", 7)
     let session = holder(waits: [wait(.ci, pr: Wait.PullRequest(repository: "acme/widgets", number: 7))])
 
-    #expect(try onlyRow(session, loads: [ref.key: load]).target == .pullRequest(load))
+    #expect(try onlyRow(session, loads: [ref.key: load]).target == .pullRequest(ref, load))
   }
 
   /// The read of the session's own PR is the one that the lookup gets, not one keyed by the wait alone.
@@ -201,9 +201,11 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
     let details = prDetails("acme/widgets", 1)
     let session = holder(pr: ("acme/widgets", 1), waits: [wait(.merge)])
 
-    let row = try onlyRow(session, loads: [gitHubRef("acme/widgets", 1).key: .loaded(details)])
+    let ref = gitHubRef("acme/widgets", 1)
 
-    #expect(row.target == .pullRequest(.loaded(details)))
+    let row = try onlyRow(session, loads: [ref.key: .loaded(details)])
+
+    #expect(row.target == .pullRequest(ref, .loaded(details)))
   }
 
   @Test func aSessionWaitShowsItsTargetsCurrentState() throws {
@@ -252,7 +254,7 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
   }
 }
 
-// MARK: Whether the reviewer is still requested (Decision 3, Risk 4)
+// MARK: Whether the reviewer is still requested
 
 @Suite struct WaitPanelReviewer {
   private func requested(
@@ -328,36 +330,27 @@ private let prKinds: [Wait.Kind] = [.ci, .review, .botReview, .approval, .queue,
   }
 }
 
-// MARK: When the card shows the panel
+// MARK: When the panel shows nothing
 
-@Suite struct DecisionCardWaitPanel {
-  private func item(overdue: [String]) -> TriageItem {
-    TriageItem(
-      title: "CI on #7: still open after 3h", kind: .info, summary: "", source: .rule,
-      details: TriageDetails(overdueWaits: overdue))
-  }
-
-  @Test func anItemWithoutOverdueWaitsShowsNoPanel() {
-    let session = holder(waits: [wait(id: "w1")])
-
-    #expect(!DecisionCard.showsWaitPanel(item(overdue: []), session: session))
+/// The panel shows nothing, its header included, when no id of the item names a wait that the session still has.
+@Suite struct WaitPanelEmpty {
+  @Test func anItemWithoutOverdueWaitsHasNoRows() {
+    #expect(rows(holder(waits: [wait(id: "w1")]), ids: []).isEmpty)
   }
 
   /// The user or sbd cleared the wait since the item was built.
-  @Test func anItemWhoseOverdueWaitsAreGoneShowsNoPanel() {
-    let session = holder(waits: [wait(id: "w2")])
-
-    #expect(!DecisionCard.showsWaitPanel(item(overdue: ["w1"]), session: session))
+  @Test func anItemWhoseOverdueWaitsAreGoneHasNoRows() {
+    #expect(rows(holder(waits: [wait(id: "w2")]), ids: ["w1"]).isEmpty)
   }
 
-  @Test func anItemThatNamesAWaitOfTheSessionShowsThePanel() {
+  @Test func anItemThatNamesAWaitOfTheSessionHasItsRow() {
     let session = holder(waits: [wait(id: "w1"), wait(id: "w2")])
 
-    #expect(DecisionCard.showsWaitPanel(item(overdue: ["gone", "w2"]), session: session))
+    #expect(rows(session, ids: ["gone", "w2"]).map(\.id) == ["w2"])
   }
 }
 
-// MARK: Clear wait, Check now (Decision 4)
+// MARK: Clear wait, Check now
 
 /// `firstRequest` waits for ever when nothing is sent, so these tests wait at most 3 seconds for the request.
 @MainActor

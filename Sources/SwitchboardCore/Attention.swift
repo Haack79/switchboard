@@ -512,6 +512,14 @@ public enum ReplyKind: Equatable, Sendable {
     if case .question = self { return true }
     return false
   }
+
+  /// The question or the offer, or nil for `other`.
+  var ask: String? {
+    switch self {
+    case .question(let ask), .offer(let ask): ask
+    case .other: nil
+    }
+  }
 }
 
 /// The attention rules. They follow the `/sessions` skill

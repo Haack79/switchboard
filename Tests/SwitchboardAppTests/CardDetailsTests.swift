@@ -210,7 +210,7 @@ private func startedFollowup(_ id: String) -> SessionSummary {
     #expect(parts == [.transcript])
   }
 
-  // MARK: Unanchored steps collapse (Decision 6, Decision 19 Q2)
+  // MARK: Unanchored steps collapse
 
   /// The newest steps of a wait, rule, or report item can be about anything, so they go last behind a closed group.
   @Test func anUnanchoredRuleItemShowsItsStepsLastInAClosedGroup() {

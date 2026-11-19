@@ -88,7 +88,7 @@ private let decision = PendingDecision(
   number: 1, header: "Name", question: "Hub or Switchboard?",
   options: [PendingDecision.Option(label: "Hub"), PendingDecision.Option(label: "Switchboard", recommended: true)])
 
-// MARK: Short reply limits (Decision 9, Risk 6)
+// MARK: Short reply limits
 
 @Suite struct TriageReplyLimits {
   @Test func aShortReplyHasAtMostTwelveHundredCharactersAndTwentyLines() {
@@ -97,7 +97,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: Triage.replyPresentation (Decision 9)
+// MARK: Triage.replyPresentation
 
 @Suite struct TriageReplyPresentation {
   static let modelSources: [TriageSource] = [.summary, .fallback]
@@ -275,7 +275,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: Triage.replyAsk (Decision 10)
+// MARK: Triage.replyAsk
 
 @Suite struct TriageReplyAsk {
   @Test func aQuestionReplyGivesItsQuestion() {
@@ -304,7 +304,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: The question on a rule item (Decisions 10 and 19)
+// MARK: The question on a rule item
 
 @Suite struct TriageReplyRuleQuestion {
   @Test func theDepotItemLeadsWithTheFixturesQuestion() throws {
@@ -333,7 +333,7 @@ private let decision = PendingDecision(
   @Test func theItemKeepsTheRulesTitleAndKind() throws {
     let (built, v) = try depotItem(try replyFixture("rule-hides-question"))
 
-    #expect(built.title == Triage.title(v.reason))
+    #expect(built.title == Triage.ruleTitle(v.reason))
     #expect(built.kind == v.kind)
   }
 
@@ -434,7 +434,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: Where the question is not added (Risk 5)
+// MARK: Where the question is not added
 
 @Suite struct TriageReplyRuleGuards {
   @Test(arguments: [asksNothing, "Pushed."])
@@ -542,7 +542,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: Options that the rule already has (Decision 19)
+// MARK: Options that the rule already has
 
 @Suite struct TriageReplyExistingOptions {
   static let fix = TriageOption(
@@ -592,7 +592,7 @@ private let decision = PendingDecision(
   }
 }
 
-// MARK: sbd's callout and the app's reply display agree (Risk 6)
+// MARK: sbd's callout and the app's reply display agree
 
 @Suite struct TriageReplyParity {
   static let replies = [

@@ -599,7 +599,7 @@ let sessionCard = TriageSummary(
   }
 }
 
-// MARK: The card ends with its turn (Risk 1)
+// MARK: The card ends with its turn
 
 private let cardPrompt = event("UserPromptSubmit", 0, ["prompt": "go"])
 

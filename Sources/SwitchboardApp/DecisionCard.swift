@@ -26,26 +26,26 @@ struct DecisionCard: View {
       header
       VStack(alignment: .leading, spacing: 8) {
         SectionTitle(text: "Summary")
-        let shown = Self.shownItem(item, reply: reply)
-        switch Self.summaryLayout(item: shown, listOpen: list != nil) {
+        let text = Self.summaryText(item, reply: reply)
+        switch Self.summaryLayout(summary: text, callouts: item.callouts, listOpen: list != nil) {
         case .firstLine:
-          if let line = shown.summary.split(separator: "\n").first { summary(String(line)) }
+          if let line = text.split(separator: "\n").first { summary(String(line)) }
         case .columns:
           SummaryCalloutColumns {
-            summary(shown.summary)
+            summary(text)
             callouts
           }
         case .stack:
-          if !shown.summary.isEmpty { summary(shown.summary) }
+          if !text.isEmpty { summary(text) }
           if !item.callouts.isEmpty { callouts }
         }
-        switch reply {
-        case .expanded(let text): LastReplySection(text: text, caption: "Latest reply")
-        case .collapsed(let text): ReplyDisclosure(text: text).id(item.ref)
+        switch reply.presentation {
+        case .expanded: LastReplySection(text: reply.text, caption: "Latest reply")
+        case .collapsed: ReplyDisclosure(text: reply.text).id(item.ref)
         case .none, .replacesSummary: EmptyView()
         }
       }
-      if Self.showsWaitPanel(item, session: session) {
+      if !item.details.overdueWaits.isEmpty {
         WaitPanel(store: model.references, session: session, ids: item.details.overdueWaits)
       }
       if Self.showsReview(item, listOpen: list != nil), let review = item.review {
@@ -64,18 +64,16 @@ struct DecisionCard: View {
         } else if session.decisionsSent == true {
           Text("Sent your answers. The session gets them as its next prompt.").foregroundStyle(.secondary)
         }
-        actions(reply)
+        actions(reply.presentation)
       }
     }
   }
 
-  /// What the Summary shows of the session's last reply. The choice reads the hook's `lastReply`, as sbd's
-  /// `addReplyAsk` does, and the text shown is `reply`, the transcript's text when it was read.
-  enum SummaryReply: Equatable {
-    case none
-    case replacesSummary(String)
-    case expanded(String)
-    case collapsed(String)
+  /// What the Summary shows of the session's last reply. `presentation` reads the hook's `lastReply`, as sbd's
+  /// `addReplyAsk` does, and `text` is the transcript's text when it was read.
+  struct SummaryReply: Equatable {
+    var presentation: ReplyPresentation
+    var text: String
   }
 
   static func summaryReply(item: TriageItem, session: SessionSummary, reply: String?, listOpen: Bool)
@@ -83,25 +81,12 @@ struct DecisionCard: View {
   {
     let hook = session.lastReply ?? ""
     let text = reply.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? hook
-    switch Triage.replyPresentation(item: item, reply: hook, listOpen: listOpen) {
-    case .none: return .none
-    case .replacesSummary: return .replacesSummary(text)
-    case .expanded: return .expanded(text)
-    case .collapsed: return .collapsed(text)
-    }
+    return SummaryReply(presentation: Triage.replyPresentation(item: item, reply: hook, listOpen: listOpen), text: text)
   }
 
-  /// The item with the reply in place of its summary when the reply replaces it.
-  static func shownItem(_ item: TriageItem, reply: SummaryReply) -> TriageItem {
-    guard case .replacesSummary(let text) = reply else { return item }
-    var shown = item
-    shown.summary = text
-    return shown
-  }
-
-  /// Whether the card shows the wait panel: the item names an overdue wait that the session still has.
-  static func showsWaitPanel(_ item: TriageItem, session: SessionSummary) -> Bool {
-    item.details.overdueWaits.contains { id in session.waits.contains { $0.id == id } }
+  /// The Summary's text: the reply when it replaces the item's summary, and the item's summary otherwise.
+  static func summaryText(_ item: TriageItem, reply: SummaryReply) -> String {
+    reply.presentation == .replacesSummary ? reply.text : item.summary
   }
 
   /// How the Summary shows the item's summary and callouts.
@@ -112,15 +97,15 @@ struct DecisionCard: View {
     case stack
   }
 
-  static func summaryLayout(item: TriageItem, listOpen: Bool) -> SummaryLayout {
+  static func summaryLayout(summary: String, callouts: [Callout], listOpen: Bool) -> SummaryLayout {
     if listOpen { return .firstLine }
-    return splitsSummary(item) ? .columns : .stack
+    return summary.isEmpty || callouts.isEmpty ? .stack : .columns
   }
 
   /// Whether the card shows its summary and its callouts as two columns
   /// when it is wide enough. A card without either one keeps a single stack.
   static func splitsSummary(_ item: TriageItem) -> Bool {
-    !item.summary.isEmpty && !item.callouts.isEmpty
+    summaryLayout(summary: item.summary, callouts: item.callouts, listOpen: false) == .columns
   }
 
   /// Whether the card shows Before you merge. The step view takes the card
@@ -144,11 +129,9 @@ struct DecisionCard: View {
 
   /// Whether the Action says that the item has no summary: a fallback item
   /// with no options whose reply gave no closing section, and whose reply does not show in its place.
-  static func showsMissingSummary(_ item: TriageItem, reply: SummaryReply = .none) -> Bool {
-    guard case .replacesSummary = reply else {
-      return item.source == .fallback && item.summary.isEmpty && item.options.isEmpty
-    }
-    return false
+  static func showsMissingSummary(_ item: TriageItem, reply: ReplyPresentation) -> Bool {
+    if case .replacesSummary = reply { return false }
+    return item.source == .fallback && item.summary.isEmpty && item.options.isEmpty
   }
 
   private func summary(_ text: String) -> some View {
@@ -176,7 +159,7 @@ struct DecisionCard: View {
   }
 
   @ViewBuilder
-  private func actions(_ reply: SummaryReply) -> some View {
+  private func actions(_ reply: ReplyPresentation) -> some View {
     if session.canMerge {
       MergeBatch(sessions: session.readyToMergeSessions(all: model.sessions))
     }
@@ -571,9 +554,24 @@ struct CardDetails: View {
   }
 
   private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
+    CaptionedSection(caption: title, content: content)
+  }
+}
+
+/// Content under a caption, as Details shows each of its parts.
+struct CaptionedSection<Content: View>: View {
+  let caption: String
+  let content: Content
+
+  init(caption: String, @ViewBuilder content: () -> Content) {
+    self.caption = caption
+    self.content = content()
+  }
+
+  var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.caption.bold()).foregroundStyle(.secondary)
-      content()
+      Text(caption).font(.caption.bold()).foregroundStyle(.secondary)
+      content
     }
   }
 }
@@ -584,10 +582,7 @@ struct LastReplySection: View {
   var caption = "Last reply"
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(caption).font(.caption.bold()).foregroundStyle(.secondary)
-      MarkdownView(text: text)
-    }
+    CaptionedSection(caption: caption) { MarkdownView(text: text) }
   }
 }
 

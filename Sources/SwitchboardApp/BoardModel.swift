@@ -1379,7 +1379,7 @@ final class BoardModel: ObservableObject {
 
   /// Asks sbd to drop one wait of the session. A refusal shows in the wait panel, not in the error banner.
   func clearWait(_ session: String, wait: String) {
-    let key = "\(session)/\(wait)"
+    let key = Self.clearingWaitKey(session, wait)
     guard clearingWaits.insert(key).inserted else { return }
     perform(
       "clear-wait", ["session": .string(session), "wait": .string(wait)],
@@ -1387,6 +1387,13 @@ final class BoardModel: ObservableObject {
       failed: { self.waitErrors[session] = "\($0)" },
       finally: { self.clearingWaits.remove(key) })
   }
+
+  /// Whether sbd has not yet answered the Clear wait of this wait.
+  func isClearingWait(_ session: String, _ wait: String) -> Bool {
+    clearingWaits.contains(Self.clearingWaitKey(session, wait))
+  }
+
+  private static func clearingWaitKey(_ session: String, _ wait: String) -> String { "\(session)/\(wait)" }
 
   /// Reads the blocks of the session's recent assistant messages for the copy buttons in its Claude terminal.
   /// A failed read gives no blocks, so a quote's button copies the screen's text.

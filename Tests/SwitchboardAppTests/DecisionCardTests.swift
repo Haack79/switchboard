@@ -182,39 +182,40 @@ import Testing
 /// How the Summary section lays out the item's summary and callouts.
 @Suite struct DecisionCardSummaryLayout {
   static let callouts = [Callout(kind: .warning, title: "CI is red", body: "The lint job fails.")]
+  static let summary = "Two review items are open.\nThe parser changed."
 
-  func item(
-    summary: String = "Two review items are open.\nThe parser changed.",
-    callouts: [Callout] = DecisionCardSummaryLayout.callouts
+  func layout(
+    summary: String = DecisionCardSummaryLayout.summary, callouts: [Callout] = DecisionCardSummaryLayout.callouts,
+    listOpen: Bool
   )
-    -> TriageItem
+    -> DecisionCard.SummaryLayout
   {
-    TriageItem(title: "Pick how to land #98", kind: .decision, summary: summary, callouts: callouts, source: .session)
+    DecisionCard.summaryLayout(summary: summary, callouts: callouts, listOpen: listOpen)
   }
 
   /// The step view moves the callouts into Details, so the Summary keeps only its first line.
   @Test func anOpenDecisionListShowsTheFirstLine() {
-    #expect(DecisionCard.summaryLayout(item: item(), listOpen: true) == .firstLine)
+    #expect(layout(listOpen: true) == .firstLine)
   }
 
   @Test func anOpenDecisionListShowsTheFirstLineOfAnEmptySummary() {
-    #expect(DecisionCard.summaryLayout(item: item(summary: "", callouts: []), listOpen: true) == .firstLine)
+    #expect(layout(summary: "", callouts: [], listOpen: true) == .firstLine)
   }
 
   @Test func aSummaryWithCalloutsShowsColumns() {
-    #expect(DecisionCard.summaryLayout(item: item(), listOpen: false) == .columns)
+    #expect(layout(listOpen: false) == .columns)
   }
 
   @Test func aSummaryWithoutCalloutsStacks() {
-    #expect(DecisionCard.summaryLayout(item: item(callouts: []), listOpen: false) == .stack)
+    #expect(layout(callouts: [], listOpen: false) == .stack)
   }
 
   @Test func calloutsWithoutASummaryStack() {
-    #expect(DecisionCard.summaryLayout(item: item(summary: ""), listOpen: false) == .stack)
+    #expect(layout(summary: "", listOpen: false) == .stack)
   }
 
   @Test func anItemWithNeitherStacks() {
-    #expect(DecisionCard.summaryLayout(item: item(summary: "", callouts: []), listOpen: false) == .stack)
+    #expect(layout(summary: "", callouts: [], listOpen: false) == .stack)
   }
 
   /// The columns layout and `splitsSummary` must not disagree about a closed list.
@@ -222,11 +223,11 @@ import Testing
     arguments: [("Two review items are open.", callouts), ("Two review items are open.", []), ("", callouts), ("", [])]
       as [(String, [Callout])])
   func columnsShowExactlyWhenTheSummarySplits(summary: String, callouts: [Callout]) {
-    let shown = item(summary: summary, callouts: callouts)
+    let item = TriageItem(
+      title: "Pick how to land #98", kind: .decision, summary: summary, callouts: callouts, source: .session)
 
-    let layout = DecisionCard.summaryLayout(item: shown, listOpen: false)
-
-    #expect((layout == .columns) == DecisionCard.splitsSummary(shown))
+    #expect(
+      (layout(summary: summary, callouts: callouts, listOpen: false) == .columns) == DecisionCard.splitsSummary(item))
   }
 }
 
@@ -246,33 +247,33 @@ import Testing
     options: yesNo, source: .fallback)
 
   @Test func theExampleShowsNoMissingSummaryLine() {
-    #expect(!DecisionCard.showsMissingSummary(Self.example))
+    #expect(!DecisionCard.showsMissingSummary(Self.example, reply: .none))
   }
 
   @Test func aFallbackWithAnEmptySummaryAndNoOptionsShowsTheLine() {
     let item = TriageItem(title: "Read its last reply", kind: .info, summary: "", source: .fallback)
 
-    #expect(DecisionCard.showsMissingSummary(item))
+    #expect(DecisionCard.showsMissingSummary(item, reply: .none))
   }
 
   @Test func aFallbackWithASummaryAndNoOptionsShowsNoLine() {
     let item = TriageItem(
       title: "Read its last reply", kind: .info, summary: "The flaky test is unrelated.", source: .fallback)
 
-    #expect(!DecisionCard.showsMissingSummary(item))
+    #expect(!DecisionCard.showsMissingSummary(item, reply: .none))
   }
 
   @Test func aFallbackWithOptionsAndAnEmptySummaryShowsNoLine() {
     let item = TriageItem(title: "Push?", kind: .approval, summary: "", options: Self.yesNo, source: .fallback)
 
-    #expect(!DecisionCard.showsMissingSummary(item))
+    #expect(!DecisionCard.showsMissingSummary(item, reply: .none))
   }
 
   @Test(arguments: [TriageSource.summary, .session, .rule, .card])
   func anItemThatIsNotAFallbackShowsNoLine(_ source: TriageSource) {
     let item = TriageItem(title: "Read the reply", kind: .info, summary: "", source: source)
 
-    #expect(!DecisionCard.showsMissingSummary(item))
+    #expect(!DecisionCard.showsMissingSummary(item, reply: .none))
   }
 
   /// The message equals the label, so a button shows no "Sends:" line.

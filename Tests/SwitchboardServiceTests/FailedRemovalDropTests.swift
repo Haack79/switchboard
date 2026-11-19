@@ -119,7 +119,7 @@ struct DropEvent: Sendable, CustomTestStringConvertible {
       data: ["prompt": .null, "mcp": [], "permission_mode": .null, "trigger": .string(trigger.rawValue)])
   }
 
-  /// The events that show the session came back to life (Decision 14): a main-session prompt, peer messages
+  /// The events that show the session came back to life: a main-session prompt, peer messages
   /// included, a launch, a resume, `undone`, and the event that `unpause` records.
   static let drops: [DropEvent] = [
     .prompt("Carry on with the PR.", name: "UserPromptSubmit"),
@@ -159,7 +159,7 @@ enum CleanRemoval: String, CaseIterable, Sendable {
 }
 
 /// A removal that the guard must keep. Each one breaks one part of the property that clearing needs: the folder is
-/// at `cwd`, git still lists the worktree, and no removal step is pending (Risk 2).
+/// at `cwd`, git still lists the worktree, and no removal step is pending.
 enum KeptRemoval: String, CaseIterable, Sendable {
   case queued
   case running
@@ -171,7 +171,7 @@ enum KeptRemoval: String, CaseIterable, Sendable {
   /// git already dropped the worktree's record.
   case failedReleased
   case failedReleasedWithFolderInTrash
-  /// sbd can't check a remote folder the way it checks one on this Mac (Decision 19). The same path exists on this
+  /// sbd can't check a remote folder the way it checks one on this Mac. The same path exists on this
   /// Mac, so a guard that checked `cwd` here would find it.
   case failedOnARemoteHost
   /// Nothing is at `cwd` and nothing is in the trash, so sbd can't show where the folder is. This goes past
@@ -287,7 +287,7 @@ enum KeptRemoval: String, CaseIterable, Sendable {
 
 // MARK: Guard
 
-/// The guard keeps every removal whose folder sbd can't show is safe at `cwd` (Risk 2).
+/// The guard keeps every removal whose folder sbd can't show is safe at `cwd`.
 @Suite struct FailedRemovalDropGuard {
   @Test(arguments: DropEvent.drops, KeptRemoval.allCases)
   func aRemovalThatIsNotCleanStays(_ trigger: DropEvent, _ shape: KeptRemoval) throws {
@@ -416,7 +416,7 @@ struct ParityRemoval: Sendable, CustomTestStringConvertible {
   ]
 }
 
-/// `rm-keep` on a clean failed removal and the auto-drop leave the same session record (Risk 2).
+/// `rm-keep` on a clean failed removal and the auto-drop leave the same session record.
 @Suite struct FailedRemovalDropParity {
   /// One home gets `rm-keep` and then the event, so both homes record the same event. The other gets only the
   /// event, which drops the removal.

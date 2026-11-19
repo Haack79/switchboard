@@ -1418,7 +1418,7 @@ let qualifiedTargets = [
 
 // MARK: Whether the wait's reviewer is still requested
 
-/// `pendingReviewer(in:)` reads GitHub's review requests, where a team comes back as its slug alone (Risk 4).
+/// `pendingReviewer(in:)` reads GitHub's review requests, where a team comes back as its slug alone.
 @Suite struct WaitPendingReviewer {
   func review(_ who: String?) -> Wait { waitOn(.review, pr: pr1204, who: who) }
 
@@ -1467,5 +1467,16 @@ let qualifiedTargets = [
   @Test(arguments: [("alex", ["alex"], true), ("PostHog/clickhouse", ["clickhouse"], true), ("alex", ["sam"], false)])
   func anApprovalWaitUsesTheSameMatch(_ who: String, _ requests: [String], _ requested: Bool) {
     #expect(waitOn(.approval, pr: pr1204, who: who).pendingReviewer(in: requests) == requested)
+  }
+}
+
+/// `reviewerName` gives the name that GitHub's review requests use. The wait panel shows it.
+@Suite struct WaitReviewerName {
+  @Test(arguments: [
+    ("alex", "alex"), ("@alex", "alex"), ("copilot[bot]", "copilot[bot]"), ("PostHog/clickhouse", "clickhouse"),
+    ("@PostHog/clickhouse", "clickhouse"),
+  ])
+  func aReviewerLosesItsAtSignAndItsTeamsOrg(_ who: String, _ name: String) {
+    #expect(Wait.reviewerName(who) == name)
   }
 }

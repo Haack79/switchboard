@@ -13,7 +13,7 @@ struct WaitPanel: View {
 
   /// The state of a wait's target.
   enum Target: Equatable {
-    case pullRequest(ReferenceLoad)
+    case pullRequest(GitHubRef, ReferenceLoad)
     /// A PR kind whose repository the session gives no way to tell.
     case unresolved
     case session(AttentionState)
@@ -32,15 +32,23 @@ struct WaitPanel: View {
     var set: String
     var rechecked: Int64?
     var target: Target?
-    /// The PR that the panel reads for a PR kind.
-    var pr: GitHubRef?
     var who: String?
     /// Whether GitHub still requests a review from `who`, or nil when the panel can't tell.
     var requested: Bool?
+    var footnote: String?
+
+    /// The PR that the panel reads for a PR kind.
+    var pr: GitHubRef? {
+      guard case .pullRequest(let pr, _)? = target else { return nil }
+      return pr
+    }
+
     /// The PR's pending review requests once it has loaded, with teams as slugs. Nil when GitHub's answer left
     /// them out.
-    var reviewRequests: [String]?
-    var footnote: String?
+    var reviewRequests: [String]? {
+      guard case .pullRequest(_, .loaded(let details))? = target else { return nil }
+      return details.reviewRequests
+    }
   }
 
   static let deployFootnote = "sbd checks the deploy on its own"
@@ -75,18 +83,14 @@ struct WaitPanel: View {
     case .date, .manual:
       row.target = wait.until.map(Target.time)
     case .ci, .review, .botReview, .approval, .queue, .merge, .deploy:
-      row.pr = pullRequest(of: wait, in: session)
-      guard let pr = row.pr else {
+      guard let pr = pullRequest(of: wait, in: session) else {
         row.target = .unresolved
         break
       }
-      let load = reference(pr)
-      row.target = .pullRequest(load ?? .loading)
-      if case .loaded(let details)? = load {
-        row.reviewRequests = details.reviewRequests
-        if wait.kind == .review || wait.kind == .approval {
-          row.requested = wait.pendingReviewer(in: details.reviewRequests)
-        }
+      let load = reference(pr) ?? .loading
+      row.target = .pullRequest(pr, load)
+      if case .loaded(let details) = load, wait.kind == .review || wait.kind == .approval {
+        row.requested = wait.pendingReviewer(in: details.reviewRequests)
       }
       if wait.kind == .deploy { row.footnote = deployFootnote }
     }
@@ -105,12 +109,15 @@ struct WaitPanel: View {
   var body: some View {
     let rows = Self.rows(
       session: session, ids: ids, sessions: model.allSessions, reference: { store.details[$0.key] }, now: nowMs())
-    VStack(alignment: .leading, spacing: 8) {
-      SectionTitle(text: rows.count == 1 ? "Overdue wait" : "Overdue waits")
-      ForEach(rows) { WaitPanelRow(session: session, row: $0) }
-      RefusalLabel(refusal: model.waitErrors[session.id])
+    // The user or sbd can clear every wait that the item names, and then the panel shows nothing, not even a refusal.
+    if !rows.isEmpty {
+      VStack(alignment: .leading, spacing: 8) {
+        SectionTitle(text: rows.count == 1 ? "Overdue wait" : "Overdue waits")
+        ForEach(rows) { WaitPanelRow(session: session, row: $0) }
+        RefusalLabel(refusal: model.waitErrors[session.id])
+      }
+      .announcesRefusal(model.waitErrors[session.id])
     }
-    .announcesRefusal(model.waitErrors[session.id])
   }
 }
 
@@ -133,7 +140,7 @@ private struct WaitPanelRow: View {
       ForEach(targetLines, id: \.self) { line in
         Text(verbatim: line).font(.callout).fixedSize(horizontal: false, vertical: true)
       }
-      if row.target == .pullRequest(.loading) {
+      if case .pullRequest(_, .loading)? = row.target {
         HStack(spacing: 6) {
           ProgressView().controlSize(.small)
           Text("Loading the PR…").font(.caption).foregroundStyle(.secondary)
@@ -146,7 +153,7 @@ private struct WaitPanelRow: View {
         Button("Clear wait") { model.clearWait(session.id, wait: row.id) }
           .help("Ask sbd to drop this wait")
           .accessibilityLabel("Clear wait: \(row.summary)")
-          .disabled(model.clearingWaits.contains("\(session.id)/\(row.id)"))
+          .disabled(model.isClearingWait(session.id, row.id))
         if let pr = row.pr {
           Button("Check now") { model.checkReference(pr) }
             .help("Read the PR from GitHub again. The wait resolves at sbd's next poll.")
@@ -166,18 +173,13 @@ private struct WaitPanelRow: View {
   private var facts: String {
     var parts = [row.set]
     if let rechecked = row.rechecked { parts.append("rechecked \(ago(rechecked)) ago") }
-    switch row.then {
-    case .resume: parts.append("resumes the session when it resolves")
-    case .notify: parts.append("moves the session to Needs you when it resolves")
-    case .caller: parts.append("tells its sb wait --block when it resolves")
-    }
+    parts.append("\(row.then.outcome) when it resolves")
     return parts.joined(separator: " · ")
   }
 
   private var targetLines: [String] {
     switch row.target {
-    case .pullRequest(let load)?:
-      guard let pr = row.pr else { return [] }
+    case .pullRequest(let pr, let load)?:
       let content = ReferenceCardContent(pr, load: load, sessions: [], now: nowMs())
       var lines: [String] = []
       if let chip = content.chip {
@@ -187,7 +189,7 @@ private struct WaitPanelRow: View {
       if let requests = row.reviewRequests, !requests.isEmpty {
         lines.append("Pending review requests: \(requests.joined(separator: ", "))")
       }
-      if let who = row.who.map(Self.reviewerName), let requested = row.requested {
+      if let who = row.who.map(Wait.reviewerName), let requested = row.requested {
         lines.append(requested ? "Review still requested: \(who)" : "Review no longer requested: \(who)")
       }
       return lines
@@ -197,10 +199,5 @@ private struct WaitPanelRow: View {
     case .time(let t)?: return ["Due \(Wait.formatTime(t))"]
     case nil: return []
     }
-  }
-
-  /// GitHub names a team by its slug alone, so `org/slug` shows as its slug.
-  private static func reviewerName(_ who: String) -> String {
-    who.split(separator: "/").last.map(String.init) ?? who
   }
 }

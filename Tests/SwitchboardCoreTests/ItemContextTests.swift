@@ -943,7 +943,7 @@ private struct TailOnlyMachine: Machine {
     #expect(TranscriptAnchor.of(item: try promptItem(facts), facts: facts) == .end)
   }
 
-  /// A title over 60 characters must still give the ref that the anchor compares with (Risk 3).
+  /// A title over 60 characters must still give the ref that the anchor compares with.
   @Test(arguments: [false, true])
   func aPromptWithoutACardWhoseReasonIsOverSixtyCharactersAnchorsAtItsCall(_ question: Bool) throws {
     let text = "Which of the three release branches should the hotfix for #1204 land on first?"

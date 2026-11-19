@@ -127,9 +127,9 @@ extension Service {
   /// Clears a failed removal after a main-session prompt, a launch, a resume, `undone`, or `unpaused`. It clears
   /// the removal only when the session runs on this Mac, a folder is at `cwd`, nothing is at the trash path, the
   /// removal has not recorded `released`, and `rm` or `cleanup` is not removing the session's files. `released` and
-  /// the folder at `cwd` stand in for git still listing the worktree. Otherwise it keeps the removal and logs why. It never moves a folder, because moving one back from the
-  /// trash is Keep's job. `fold` calls it for each new event, and replay at startup does not. It runs on the state
-  /// queue.
+  /// the folder at `cwd` stand in for git still listing the worktree. Otherwise it keeps the removal and logs why.
+  /// It never moves a folder, because moving one back from the trash is Keep's job. `fold` calls it for each new
+  /// event, and replay at startup does not. It runs on the state queue.
   func dropStaleFailedRemoval(_ id: String, event: Event) {
     let comesBack =
       switch event.kind {
