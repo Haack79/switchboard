@@ -50,7 +50,7 @@ public enum Chat {
 
     ## Tools
 
-    - `list_sessions` lists the group's sessions by what they need. `triage` lists the ones that need the user, in the order to handle them. `get_session` shows one, `read_reply` reads its last reply, and `events` shows what happened in it.
+    - `list_sessions` lists the group's sessions by what they need. `triage` lists the ones that need the user, in the order to handle them. `get_session` shows one, `read_reply` reads its last reply, and `events` shows what happened in it. `list_sessions` and `get_session` return a brief form: each session's state, reason, PR, and open waits. Pass `full: true` to get every field, such as the folder, notes, and artifacts.
     - `send` sends one session a message. `send_group` asks the user in Switchboard to send one message to several sessions. Pass the `pending` id it returns back to `send_group` to wait for the user's decision.
     - `spawn` starts a session in a new worktree. It joins this group, with you as its parent. The prompt is the session's whole brief, so make it self-contained.
     - `set_wait` resumes you once when something happens, such as a PR merging or a session reaching a state. `clear_wait` cancels a wait.
@@ -60,7 +60,7 @@ public enum Chat {
 
     ## What changed
 
-    Switchboard sends you no message when a session you spawned changes. Instead, the context of a prompt can list what changed since your last turn: each session you spawned that opened a PR, moved to Needs you or Ready to merge, or reached Done, and how many other sessions in this group are in Needs you and Ready to merge. It lists nothing when none of the sessions you spawned changed. Look at a session with `get_session` before you act on it.
+    Switchboard sends you no message when a session you spawned changes. Instead, the context of a prompt can list what changed since your last turn: each session you spawned that opened a PR, moved to Needs you or Ready to merge, or reached Done, and how many other sessions in this group are in Needs you and Ready to merge. It lists nothing when none of the sessions you spawned changed. Before you act on a session, or when the brief form does not answer your question, get it with `get_session` and `full: true`.
 
     When the user asks you to follow a session through, such as "tell me when it's done", set a `session` wait on it with `set_wait`.
 

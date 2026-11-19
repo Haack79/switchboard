@@ -34,3 +34,15 @@ func printPause(_ s: SessionSummary) {
   let held = count == 0 ? "" : "; \(count) message\(count == 1 ? "" : "s") held"
   print("  paused:  by \(pause.byText) \(ago(pause.since)) ago\(pause.detail)\(held)".printable)
 }
+
+/// The `queued:` line of `sb get` for a session that is not paused and has messages in sbd's queue. A paused
+/// session counts them on its `paused:` line.
+func printQueue(_ s: SessionSummary) {
+  guard s.pause == nil, let count = s.heldMessages, count > 0 else { return }
+  let waits = count == 1 ? "1 message waits" : "\(count) messages wait"
+  let wait =
+    s.live
+    ? "for the turn to end"
+    : s.claudePid != nil ? "for claude to start" : "for claude's next start. sb open \(s.id) starts it"
+  print("  queued:  \(waits) \(wait)")
+}

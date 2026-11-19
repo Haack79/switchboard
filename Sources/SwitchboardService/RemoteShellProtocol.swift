@@ -37,15 +37,22 @@ enum RemoteShellProtocol {
   /// command keeps the removed files, and no later command reads what it writes or gives it
   /// input. The shell exits when it can't remove them.
   ///
-  /// A timeout is a `sleep` that holds the write end of the FIFO `$sb_d/f` and a subshell that
-  /// reads the FIFO. The subshell reads the end of the FIFO when the `sleep` ends, and then it
-  /// ends the program. `sb_run` ends the subshell first and the `sleep` second when the program
-  /// ends in time. A `sleep` that the subshell ran itself would run on for the whole timeout
-  /// after every command, because ending a subshell does not end its child. The `sleep` sends
-  /// stderr to /dev/null before it opens the FIFO, because bash reports an open that a signal
-  /// interrupts. The subshell creates `$sb_d/t` before it ends the program. A program that
-  /// exits 0 on the signal, as a tmux client does, then still answers with 143, so a command
-  /// that its timeout ended never reads as one that succeeded.
+  /// A timeout is a subshell that runs a `sleep` in the background and waits for it. When the
+  /// `sleep` ends, the subshell ends the program. `sb_run` sends the subshell SIGTERM when the
+  /// program ends in time. The subshell's trap then sends SIGKILL to the `sleep`, because ending a
+  /// subshell does not end its child. A SIGTERM can arrive after the fork and before `sb_k` holds
+  /// the pid, so the trap sets `sb_q` and the subshell checks it once `sb_k` is set. The `sleep`
+  /// gets SIGKILL rather than SIGTERM, because a child that has not run exec yet still runs the
+  /// subshell's trap. Only `sb_q` stops the subshell from ending the program. A `sleep` that
+  /// fails, or that the host lacks, then ends the program at once instead of leaving it without a
+  /// timeout. No process of the subshell waits on the shell, so once the subshell starts, it ends
+  /// the program within the timeout and 2 s, also after the shell dies.
+  ///
+  /// The subshell creates `$sb_d/t` before it ends the program. It runs `true` rather than `:`
+  /// for that, because a failed redirect on `:` ends a POSIX shell. The redirect fails when the
+  /// EXIT trap has already removed `$sb_d`. A program that exits 0 on the signal, as a tmux
+  /// client does, then still answers with 143, so a command that its timeout ended never reads as
+  /// one that succeeded.
   ///
   /// `sb_emit` runs one `wc` on both files from inside `$sb_d`, so the words of its output are
   /// `<stdout bytes> o <stderr bytes> e <sum> total` whatever the folder's name holds.
@@ -53,7 +60,6 @@ enum RemoteShellProtocol {
     #"""
     sb_d=$(mktemp -d "${TMPDIR:-/tmp}/sb-sh.XXXXXX") || exit 97
     trap 'rm -rf "$sb_d"' EXIT
-    mkfifo "$sb_d/f" || exit 97
     if sb_p=$(stat -c '%s %.9Y' -- / 2>/dev/null); then sb_s=gnu
     elif sb_p=$(stat -f '%z %Fm' -- / 2>/dev/null); then sb_s=bsd
     else sb_s=none; sb_p='0 0'; fi
@@ -72,13 +78,20 @@ enum RemoteShellProtocol {
       ( exec "$@" ) <"$sb_d/i" >"$sb_d/o" 2>"$sb_d/e" & sb_c=$!
       sb_w=
       if [ -n "$sb_t" ]; then
-        sleep "$sb_t" 2>/dev/null >"$sb_d/f" & sb_k=$!
-        ( read sb_z <"$sb_d/f"; : >"$sb_d/t"; kill -TERM "$sb_c"; sleep 2; kill -KILL "$sb_c" ) >/dev/null 2>&1 & sb_w=$!
+        (
+          sb_k=; sb_q=
+          trap 'sb_q=1; [ -z "$sb_k" ] || kill -KILL "$sb_k"' TERM
+          sleep "$sb_t" & sb_k=$!
+          [ -z "$sb_q" ] || kill -KILL "$sb_k"
+          wait "$sb_k"
+          [ -z "$sb_q" ] || exit
+          trap - TERM
+          true >"$sb_d/t"; kill -TERM "$sb_c"; sleep 2; kill -KILL "$sb_c"
+        ) >/dev/null 2>&1 & sb_w=$!
       fi
       wait "$sb_c" 2>/dev/null; sb_x=$?
       if [ -n "$sb_w" ]; then
         kill "$sb_w" 2>/dev/null; wait "$sb_w" 2>/dev/null
-        kill "$sb_k" 2>/dev/null; wait "$sb_k" 2>/dev/null
         if [ -e "$sb_d/t" ]; then
           rm -f "$sb_d/t" || exit 97
           [ "$sb_x" -ne 0 ] || sb_x=143
