@@ -47,7 +47,7 @@ extension Service {
       try requireUser(args, "Only you can add a link to a group. Ask the user to run sb group link add")
       return try updateGroup(args) { group in
         let url = try GroupLink.cleanURL(args["url"]?.string)
-        let title = try GroupLink.cleanTitle(args["title"]?.string) ?? url
+        let title = try GroupLink.cleanTitle(args["title"]?.string, url: url)
         guard group.addLink(GroupLink(id: shortId("l"), title: title, url: url, by: .you, t: nowMs())) else {
           throw APIError("\(group.name) already has a link to \(url)")
         }

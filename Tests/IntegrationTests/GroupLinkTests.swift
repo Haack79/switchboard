@@ -250,6 +250,18 @@ import Testing
     #expect(try links(sbd, g.id).map(\.url) == [url])
   }
 
+  @Test func aLongURLWithoutATitleKeepsTheWholeURLAndCutsTheTitle() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let url = Self.url(ofLength: GroupLink.titleLimit + 1)
+
+    _ = try linkAdd(sbd, "Flags", url)
+
+    let added = try #require(try links(sbd, g.id).first)
+    #expect(added.url == url)
+    #expect(added.title.count == GroupLink.titleLimit)
+  }
+
   @Test func addRefusesAURLOneOverTheLimitAndAddsNoLink() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")

@@ -211,4 +211,36 @@ import Testing
     #expect(summary.descriptionBy == .claude)
     #expect(summary.links == links)
   }
+
+  // MARK: Titles
+
+  /// An https URL of exactly `count` characters.
+  static func url(ofLength count: Int) -> String {
+    let base = "https://example.com/"
+    return base + String(repeating: "a", count: count - base.count)
+  }
+
+  @Test(arguments: [nil, "", "  \n "]) func withoutATitleTheTitleIsTheURL(_ title: String?) throws {
+    let url = Self.url(ofLength: GroupLink.titleLimit)
+
+    #expect(try GroupLink.cleanTitle(title, url: url) == url)
+  }
+
+  /// A session reads the title, so a long URL doesn't make the title pass its limit.
+  @Test(arguments: [GroupLink.titleLimit + 1, GroupLink.urlLimit])
+  func aURLOverTheTitleLimitIsCutForTheTitle(_ length: Int) throws {
+    let url = Self.url(ofLength: length)
+
+    let title = try GroupLink.cleanTitle(nil, url: url)
+
+    #expect(title.count == GroupLink.titleLimit)
+    #expect(title.hasSuffix("…"))
+    #expect(url.hasPrefix(title.dropLast()))
+  }
+
+  @Test func aGivenTitleOverTheLimitIsRefused() {
+    let title = String(repeating: "a", count: GroupLink.titleLimit + 1)
+
+    #expect(throws: (any Error).self) { try GroupLink.cleanTitle(title, url: "https://a.example") }
+  }
 }

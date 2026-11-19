@@ -162,9 +162,11 @@ public struct GroupLink: Codable, Equatable, Sendable, Identifiable {
     return url
   }
 
-  /// The title on one line, or nil when nothing remains. It refuses a title over `titleLimit`.
-  public static func cleanTitle(_ text: String?) throws -> String? {
-    try SessionGroup.cleanLine(text, limit: titleLimit, noun: "a link title")
+  /// The title on one line. Without a title, it is the URL, cut to `titleLimit` characters with an ellipsis when it
+  /// is longer. It refuses a given title over `titleLimit`.
+  public static func cleanTitle(_ text: String?, url: String) throws -> String {
+    if let title = try SessionGroup.cleanLine(text, limit: titleLimit, noun: "a link title") { return title }
+    return url.count <= titleLimit ? url : String(url.prefix(titleLimit - 1)) + "…"
   }
 }
 
