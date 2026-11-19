@@ -666,6 +666,7 @@ func printSession(_ s: SessionSummary) {
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
+  printQueue(s)
   printWaitsAndNotes(s)
   printSchedules(s)
 }
