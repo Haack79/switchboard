@@ -41,22 +41,22 @@ extension Service {
       )
     }
     let request = try JSONCoding.convert(args, to: ScheduleRequest.self)
-    let group = try request.gate.map { try topupGroup($0, args, origin: origin, caller: caller) }
+    let group = try request.gate.flatMap { try topupGroup($0, args, origin: origin, caller: caller) }
     let taken = entries.values.flatMap { $0.session.schedules ?? [] }.map(\.id)
-    let schedule = try request.makeSchedule(
-      id: shortId("r", taken: taken), now: nowMs(), groupID: group?.id, groupName: group?.name)
+    let schedule = try request.makeSchedule(id: shortId("r", taken: taken), now: nowMs(), group: group)
     if let duplicate = Schedule.duplicate(of: schedule, in: open) { throw APIError(duplicate) }
     try update(id) { $0.schedules = open + [schedule] }
     record(id, "schedule", ["schedule": try JSON(encoding: schedule)])
     return try JSON(encoding: scheduleRow(id, schedule))
   }
 
-  /// The group that a top-up's gate names, after the checks of `checkTopupCaller`.
+  /// The group that a top-up's gate names, after the checks of `checkTopupCaller`. It returns nil when the gate
+  /// names no group, which `makeSchedule` refuses.
   private func topupGroup(_ gate: ScheduleRequest.Gate, _ args: JSON, origin: RequestOrigin, caller: Caller) throws
-    -> (id: String, name: String)
+    -> (id: String, name: String)?
   {
     try checkTopupCaller(args, origin: origin, caller: caller)
-    guard let ref = gate.group, !ref.isEmpty else { throw APIError("a top-up needs a group") }
+    guard let ref = gate.group, !ref.isEmpty else { return nil }
     let id = try lookupGroup(["group": .string(ref)])
     return (id, groups[id]?.name ?? id)
   }
@@ -109,6 +109,12 @@ extension Service {
     return try JSON(encoding: scheduleRow(id, schedule))
   }
 
+  /// True when the schedule that `args` names has a gate, so its edit runs the caller check. It runs on the state
+  /// queue.
+  func editsGatedSchedule(_ args: JSON) -> Bool {
+    (try? ownedSchedule(args))?.schedule.gate != nil
+  }
+
   /// Changes the interval, the prompt, or both. It sends nothing: a next run
   /// that the edit makes due fires through `fireDueSchedules`.
   private func editSchedule(_ args: JSON, origin: RequestOrigin, caller: Caller) throws -> JSON {
@@ -159,15 +165,18 @@ extension Service {
     let ids = entries.compactMap { id, e in
       e.session.scheduleHold == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
     }
+    // A pass arms and clears no action wait, so it reads the action waits once, at the first gate.
+    var subjects: ActionSubjects?
     for id in ids.sorted() {
       guard let session = entries[id]?.session else { continue }
       let due = (session.schedules ?? []).filter { $0.isDue(now: now) }
         .sorted { ($0.next, $0.id) < ($1.next, $1.id) }
       for schedule in due where !topupsInFlight.contains(schedule.id) {
-        var text = schedule.prompt
-        var check: Schedule.Gate.Check?
+        var opened: (gate: Schedule.Gate, status: QueueStatus)?
         if let gate = schedule.gate {
-          let status = QueueStatus.compute(queueRows(gate), gate: gate)
+          let found = subjects ?? actionSubjects()
+          subjects = found
+          let status = QueueStatus.compute(queueRows(gate, subjects: found), gate: gate)
           switch status.decision {
           case .gated:
             recordGated(id, schedule, status: status, now: now)
@@ -176,8 +185,7 @@ extension Service {
             dispatchTopup(id, schedule, status: status, k: k, now: now)
             continue
           case .open:
-            text = gate.fallbackMessage(status: status, prompt: schedule.prompt)
-            check = Self.gateCheck(.prompted, status, now: now)
+            opened = (gate, status)
           }
         }
         // A run makes the session busy, so the guard runs again before each schedule.
@@ -185,6 +193,8 @@ extension Service {
           Schedule.blocker(facts: e.facts, process: promptProcess(id), messageWaiting: messageWaiting(e, now: now))
             == nil
         else { continue }
+        let text = opened.map { $0.gate.fallbackMessage(status: $0.status, prompt: schedule.prompt) } ?? schedule.prompt
+        let check = opened.map { Schedule.Gate.Check(.prompted, status: $0.status, now: now) }
         fire(id, schedule, text: text, check: check, now: now)
       }
     }
@@ -199,11 +209,10 @@ extension Service {
     sendAndRecord(id, ran, text: text, skipped: skipped, check: check, now: now)
   }
 
-  /// A due time where the gate closed: saves the next run, the count of gated due times, and the check, and records
-  /// a `schedule-gated` event. It appends no run and sends nothing.
+  /// A due time where the gate closed. It appends no run and sends nothing.
   private func recordGated(_ id: String, _ schedule: Schedule, status: QueueStatus, now: Int64) {
     let (next, _) = schedule.fired(at: now)
-    let check = Self.gateCheck(.gated, status, now: now)
+    let check = Schedule.Gate.Check(.gated, status: status, now: now)
     var gated = schedule
     let mark = { (s: inout Schedule) in
       s.next = next
@@ -218,41 +227,43 @@ extension Service {
       logLine("can't save the gated check of schedule \(schedule.id) of \(id): \(error)")
       return
     }
-    var data: [String: JSON] = ["status": .array(status.lines.map(JSON.string))]
-    data["schedule"] = try? eventJSON(gated)
-    record(id, "schedule-gated", .object(data))
+    record(id, "schedule-gated", gateEventData(gated, status: status))
   }
 
-  static func gateCheck(_ result: Schedule.Gate.Check.Result, _ status: QueueStatus, now: Int64)
-    -> Schedule.Gate.Check
-  {
-    Schedule.Gate.Check(
-      t: now, result: result, active: status.counted.count, target: status.target, started: [], skipped: [])
+  /// The `status` and `schedule` of a `schedule-gated` or `schedule-topup` event.
+  func gateEventData(_ schedule: Schedule?, status: QueueStatus, _ extra: [String: JSON] = [:]) -> JSON {
+    var data = extra
+    data["status"] = .array(status.lines.map(JSON.string))
+    data["schedule"] = schedule.flatMap { try? eventJSON($0) }
+    return .object(data)
   }
 
-  /// The gate's rows: the work sessions in the gate's group, with the facts that `QueueStatus.compute` reads. It
-  /// runs on the state queue.
-  func queueRows(_ gate: Schedule.Gate) -> [QueueStatus.Row] {
-    let (merging, removing) = actionSubjects()
+  /// The sessions that an action wait will merge, and the sessions that one will remove.
+  typealias ActionSubjects = (merging: Set<String>, removing: Set<String>)
+
+  /// The gate's rows: the started work sessions in the gate's group, with the facts that `QueueStatus.compute`
+  /// reads. `subjects` is what `actionSubjects` returned. It runs on the state queue.
+  func queueRows(_ gate: Schedule.Gate, subjects: ActionSubjects) -> [QueueStatus.Row] {
     let now = nowMs()
-    return entries.values.filter { $0.session.kind == .work && $0.session.group == gate.group }.map { e in
+    return entries.values.filter {
+      $0.session.kind == .work && $0.session.group == gate.group && !$0.session.waitsToStart
+    }.map { e in
       let s = e.session
       return QueueStatus.Row(
-        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: checkout(s).flatMap { repository($0, of: s) },
-        markedDone: s.done, paused: Pause.blocker(s) != nil, removing: s.removal?.holdsSession == true,
+        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: repository(of: s), markedDone: s.done,
+        paused: Pause.blocker(s) != nil, removing: s.removal?.holdsSession == true,
         state: Attention.evaluate(s, e.facts, now: now, stateOf: lastState).state, unreadHost: e.facts.unread != nil,
-        prMerged: e.facts.pr?.state == .merged, hasMergeAction: merging.contains(s.id),
-        hasRemovalAction: removing.contains(s.id), started: !s.waitsToStart)
+        prMerged: e.facts.pr?.state == .merged, hasMergeAction: subjects.merging.contains(s.id),
+        hasRemovalAction: subjects.removing.contains(s.id), started: true)
     }.sorted { $0.id < $1.id }
   }
 
-  /// The sessions that an action wait will merge, and the sessions that one will remove. sbd resolves no wait of a
-  /// holder marked done, so such a holder's waits count for neither. It runs on the state queue.
-  func actionSubjects() -> (merging: Set<String>, removing: Set<String>) {
+  /// The subjects of the action waits of `waitHolders`. It runs on the state queue.
+  func actionSubjects() -> ActionSubjects {
     var merging = Set<String>()
     var removing = Set<String>()
-    for e in entries.values where !e.session.done {
-      for wait in e.session.waits ?? [] {
+    for holder in waitHolders() {
+      for wait in holder.waits ?? [] {
         guard let action = wait.action?.kind, let subject = wait.actionSubject?.id else { continue }
         switch action {
         case .merge: merging.insert(subject)
@@ -314,7 +325,7 @@ extension Service {
   }
 
   /// The schedule without its run history, which neither an edit nor a Run Now request changes.
-  func eventJSON(_ schedule: Schedule) throws -> JSON {
+  private func eventJSON(_ schedule: Schedule) throws -> JSON {
     var schedule = schedule
     schedule.runs = nil
     return try JSON(encoding: schedule)

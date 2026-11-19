@@ -229,7 +229,7 @@ extension Service {
   func showsGitHub(_ id: String, to origin: RequestOrigin) -> Bool {
     guard case .remote(let host) = origin else { return true }
     guard let e = entries[id], e.session.host == host else { return false }
-    return hostMayRead(e.facts.pr?.repo ?? checkout(e.session).flatMap { repository($0, of: e.session) }, on: host)
+    return hostMayRead(e.facts.pr?.repo ?? repository(of: e.session), on: host)
   }
 
   /// The facts of session `id` as `origin` may read them: without the GitHub data when `showsGitHub` is false.

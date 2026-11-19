@@ -5,11 +5,8 @@ import SwitchboardCore
 /// of these names is scheduled by its id.
 let scheduleSubcommands = ["ls", "rm", "pause", "resume", "edit", "run"]
 
-/// The flags of `sb schedule <session> --topup` that set the gate, and the field of the `gate` request that each sets.
-let topupFlags = [
-  ("--group", "group"), ("--repo", "repo"), ("--target", "target"), ("--template-file", "template"),
-  ("--rubric-file", "rubric"),
-]
+/// The flags of `sb schedule <session> --topup` that set the gate.
+let topupFlags = ["--group", "--repo", "--target", "--template-file", "--rubric-file"]
 
 /// `sb schedule <session> --every <interval> <prompt>` adds a schedule, and
 /// `--topup` with each of `topupFlags` adds a gate to it.
@@ -69,25 +66,29 @@ func scheduleCommand(_ a: Args) {
 /// read.
 func topupGate(_ a: Args) -> JSON? {
   guard a.switches.contains("--topup") else {
-    if let (flag, _) = topupFlags.first(where: { a.values[$0.0] != nil }) { die("\(flag) goes with --topup") }
+    if let flag = topupFlags.first(where: { a.values[$0] != nil }) { die("\(flag) goes with --topup") }
     return nil
   }
-  var gate: [String: JSON] = [:]
-  for (flag, key) in topupFlags {
+  func need(_ flag: String) -> String {
     guard let value = a.values[flag] else { die("--topup needs \(flag)") }
-    switch flag {
-    case "--target":
-      guard let target = Int(value) else { die("--target needs a number of sessions, not \(value)") }
-      gate[key] = .number(Double(target))
-    case "--template-file", "--rubric-file":
-      let path = URL(fileURLWithPath: value.expandingTilde).path
-      guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { die("can't read \(flag) \(value)") }
-      gate[key] = .string(text)
-    default:
-      gate[key] = .string(value)
-    }
+    return value
   }
-  return .object(gate)
+  func text(of flag: String) -> String {
+    let value = need(flag)
+    let path = URL(fileURLWithPath: value.expandingTilde).path
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { die("can't read \(flag) \(value)") }
+    return text
+  }
+  let group = need("--group")
+  let repo = need("--repo")
+  let targetValue = need("--target")
+  guard let target = Int(targetValue) else { die("--target needs a number of sessions, not \(targetValue)") }
+  let template = text(of: "--template-file")
+  let rubric = text(of: "--rubric-file")
+  return [
+    "group": .string(group), "repo": .string(repo), "target": .number(Double(target)), "template": .string(template),
+    "rubric": .string(rubric),
+  ]
 }
 
 /// The name of each group that a schedule's gate names, by id. sbd keeps the group's id in the gate, so a rename

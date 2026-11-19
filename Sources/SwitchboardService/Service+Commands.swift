@@ -23,11 +23,6 @@ extension Service {
     return r.stdout
   }
 
-  /// gh's output as JSON, or nil when gh failed or printed something else.
-  func ghJSON(_ args: [String]) -> JSON? {
-    (try? runGh(args, timeout: 30)).flatMap(JSON.parse)
-  }
-
   /// Runs gh and returns how it exited, for a caller that classifies a
   /// failure. It throws only when gh can't start.
   func runGhResult(_ args: [String], timeout: TimeInterval) throws -> CommandResult {

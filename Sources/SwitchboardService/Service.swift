@@ -1,5 +1,6 @@
 import Foundation
 import SwitchboardCore
+import os
 
 /// sbd's state and operations. Every change runs on `queue`, so requests,
 /// hooks, and the stop rule see one consistent state. Work that takes long,
@@ -136,6 +137,9 @@ public final class Service {
   let topupQueue = DispatchQueue(label: "sbd.topup")
   /// The schedules whose top-up runs on `topupQueue`. The tick skips them, so they stay due until the top-up ends.
   var topupsInFlight: Set<String> = []
+  /// The operator settings that `operatorSettings` last read, with config.json's modification date at that read.
+  /// The lock guards it, because the follow-through and top-up queues read the settings too.
+  let operatorSettingsRead = OSAllocatedUnfairLock<(stamp: Date?, settings: OperatorSettings)?>(initialState: nil)
   /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
   /// `loadSbdMerges` rebuilds it at startup.
   var lastSbdMerges: [String: SbdMergeRecord] = [:]
@@ -520,7 +524,8 @@ public final class Service {
     case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
       // A top-up's caller check reads the client's panes, so it takes a new snapshot.
       let checksCaller =
-        (request.op == "schedule" && request.args["gate"] != nil) || request.op == "edit-schedule"
+        (request.op == "schedule" && request.args["gate"] != nil)
+        || (request.op == "edit-schedule" && queue.sync { editsGatedSchedule(request.args) })
       let fresh = checksCaller ? buildSnapshot() : nil
       return try .success(
         prepared(request, origin: origin) {
@@ -1162,6 +1167,11 @@ public final class Service {
       }
     }
     return nil
+  }
+
+  /// The owner/name of the session's checkout, or nil until sbd has read both.
+  func repository(of s: Session) -> String? {
+    checkout(s).flatMap { repository($0, of: s) }
   }
 
   /// Whether sbd has read the session's checkout and, when it has one, the

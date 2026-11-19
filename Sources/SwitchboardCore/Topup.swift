@@ -5,10 +5,6 @@ extension Schedule {
   /// It counts the group's active work sessions in the repository and starts
   /// sessions from the open issues and follow-ups when the group is short.
   public struct Gate: Codable, Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable {
-      case topup
-    }
-
     /// One check of the gate. The Loops tab and `sb schedule ls` show the last one.
     public struct Check: Codable, Equatable, Sendable {
       /// Agents read these raw values in `sb schedule ls --json`.
@@ -24,7 +20,6 @@ extension Schedule {
       public var result: Result
       public var active: Int
       public var target: Int
-      /// The ids of the sessions that the check started.
       public var started: [String]
       public var skipped: [Skip]
       public var error: String?
@@ -39,6 +34,16 @@ extension Schedule {
         self.started = started
         self.skipped = skipped
         self.error = error
+      }
+
+      /// A check at `now` that counts `status`'s active sessions.
+      public init(
+        _ result: Result, status: QueueStatus, now: Int64, started: [String] = [], skipped: [Skip] = [],
+        error: String? = nil
+      ) {
+        self.init(
+          t: now, result: result, active: status.counted.count, target: status.target, started: started,
+          skipped: skipped, error: error)
       }
     }
 
@@ -56,7 +61,6 @@ extension Schedule {
 
     public static let targets = 1...20
 
-    public var kind: Kind
     /// The group's id.
     public var group: String
     /// owner/name
@@ -73,10 +77,9 @@ extension Schedule {
     public var last: Check?
 
     public init(
-      kind: Kind = .topup, group: String, repo: String, target: Int, template: String, rubric: String,
+      group: String, repo: String, target: Int, template: String, rubric: String,
       started: [String]? = nil, gated: Int? = nil, last: Check? = nil
     ) {
-      self.kind = kind
       self.group = group
       self.repo = repo
       self.target = target
@@ -133,7 +136,6 @@ extension Schedule {
 
 /// The work sessions of a top-up gate's group, sorted by what each means for the gate.
 public struct QueueStatus: Equatable, Sendable {
-  /// The facts about one session that the gate reads.
   public struct Row: Equatable, Sendable {
     public var id: String
     public var name: String
@@ -176,13 +178,12 @@ public struct QueueStatus: Equatable, Sendable {
       self.started = started
     }
 
-    var label: String { "\(name) (\(id))" }
+    var label: String { sessionMention(name: name, id: id) }
   }
 
   public enum Decision: Equatable, Sendable {
     /// The group has its target, and nothing needs the Operator.
     case gated
-    /// Start `k` sessions.
     case topup(k: Int)
     /// Send the schedule's prompt. Each reason names a session.
     case open(reasons: [String])
@@ -271,7 +272,8 @@ public struct TopupCandidates: Equatable, Sendable {
 
   /// A session whose branch, issue link, or PR may cover an issue.
   public struct SessionRow: Equatable, Sendable {
-    /// owner/name of the session's checkout.
+    /// owner/name of the session's checkout, or nil when sbd hasn't read it. A session without a repository covers
+    /// issues as if it worked in the gate's repository, because the top-up never guesses that an issue is uncovered.
     public var repository: String?
     public var branch: String?
     public var prNumber: Int?
@@ -313,13 +315,14 @@ public struct TopupCandidates: Equatable, Sendable {
     followups: [Session], viewer: String?, team: IssueTeam
   ) -> TopupCandidates {
     var covered = Set<String>()
-    func cover(_ repo: String?, _ number: Int?) {
-      if let repo, let number { covered.insert(InboxIssue.id(repo, number)) }
+    func cover(_ repo: String, _ number: Int?) {
+      if let number { covered.insert(InboxIssue.id(repo, number)) }
     }
     for session in sessions {
-      cover(session.repository, Issues.branchNumber(session.branch, prNumber: session.prNumber))
+      let repository = session.repository ?? repo
+      cover(repository, Issues.branchNumber(session.branch, prNumber: session.prNumber))
       for ref in [session.issue].compactMap({ $0 }) + (session.closesIssues ?? []) {
-        cover(ref.repo ?? session.repository, ref.number)
+        cover(ref.repo ?? repository, ref.number)
       }
     }
     for pr in openPRs {

@@ -112,11 +112,19 @@ extension TopupCandidatesTests {
       #expect(refs(result) == ["#12"])
     }
 
-    @Test func aBranchWithNoRepositoryDoesNotCoverTheIssue() {
+    /// A session whose repository sbd hasn't read may work in the gate's repository.
+    @Test func aBranchWithNoRepositoryCoversTheIssue() {
       let result = build(
         issues: [issue(12)], sessions: [sessionRow(repository: nil, branch: "haacked/12-fix-the-thing")])
 
-      #expect(refs(result) == ["#12"])
+      #expect(refs(result).isEmpty)
+    }
+
+    @Test func anIssueLinkWithoutARepositoryOnASessionWithNoRepositoryCoversTheIssue() {
+      let result = build(
+        issues: [issue(12)], sessions: [sessionRow(repository: nil, issue: IssueRef(repo: nil, number: 12))])
+
+      #expect(refs(result).isEmpty)
     }
 
     @Test func aBranchInTheRepositoryWrittenInAnotherCaseCoversTheIssue() {

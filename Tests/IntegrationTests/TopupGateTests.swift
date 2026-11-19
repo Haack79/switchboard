@@ -351,7 +351,6 @@ import Testing
     let made = try addTopup(sbd, op.id, target: 4, every: "30m")
 
     let gate = try #require(made.gate)
-    #expect(gate.kind == .topup)
     #expect(gate.group == group.id)
     #expect(gate.repo == Self.repo)
     #expect(gate.target == 4)

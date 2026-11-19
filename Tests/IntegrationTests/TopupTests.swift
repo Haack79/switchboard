@@ -158,9 +158,7 @@ final class TopupBench {
         closes.map { n -> JSON in
           [
             "number": .number(Double(n)), "url": .string(issueURL(n)),
-            "repository": [
-              "name": .string(parts[1]), "owner": ["login": .string(parts[0])], "nameWithOwner": .string(repo),
-            ],
+            "repository": ["name": .string(parts[1]), "owner": ["login": .string(parts[0])]],
           ]
         }),
     ]

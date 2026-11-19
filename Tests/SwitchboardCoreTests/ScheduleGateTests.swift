@@ -29,7 +29,7 @@ private func make(
   id: String = "rk3x9p", every: String? = "30m", prompt: String? = nil, gate: ScheduleRequest.Gate? = gateRequest()
 ) throws -> Schedule {
   try ScheduleRequest(every: every, prompt: prompt, by: nil, gate: gate).makeSchedule(
-    id: id, now: now, groupID: groupID, groupName: groupName)
+    id: id, now: now, group: (groupID, groupName))
 }
 
 private func plain(id: String = "rm76hh", prompt: String = "check the queue") -> Schedule {
@@ -133,12 +133,6 @@ extension ScheduleGateTests {
       r.gated = 3
 
       #expect(try JSONCoding.decode(Schedule.Run.self, from: try JSONCoding.encode(r)) == r)
-    }
-
-    @Test func theGateKindIsTopupOnTheWire() throws {
-      let object = try #require(JSON.parse(try JSONCoding.encode(gate()))?.object)
-
-      #expect(object["kind"]?.string == "topup")
     }
 
     /// The Loops tab and `sb schedule ls --json` read these raw values.
@@ -286,6 +280,15 @@ extension ScheduleGateTests {
       #expect(request.gate == nil)
     }
 
+    /// The group check comes before the interval check, so a request missing both names the group.
+    @Test func aGatedRequestWithoutAResolvedGroupIsRefusedBeforeItsInterval() {
+      let refusal = message {
+        try ScheduleRequest(every: nil, prompt: nil, by: nil, gate: gateRequest()).makeSchedule(id: "rk3x9p", now: now)
+      }
+
+      #expect(refusal.contains("a top-up needs a group"))
+    }
+
     @Test func aGatedScheduleStoresTheResolvedGroupId() throws {
       #expect(try make(gate: gateRequest(group: "Switchboard")).gate?.group == groupID)
     }
@@ -380,7 +383,7 @@ extension ScheduleGateTests {
     /// A request's prompt is trimmed before it is stored, so two prompts that differ only at their ends are the same.
     @Test func aSecondScheduleWhosePromptDiffersOnlyInSurroundingSpaceIsRefused() throws {
       let new = try ScheduleRequest(every: "30m", prompt: "  check the queue \n", by: nil, gate: nil).makeSchedule(
-        id: "new111", now: now, groupID: nil, groupName: nil)
+        id: "new111", now: now)
 
       #expect(Schedule.duplicate(of: new, in: [plain(id: "rm76hh")]) != nil)
     }

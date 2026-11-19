@@ -187,12 +187,28 @@ extension Service {
     queue.sync { waitsToResolve().filter { kinds.contains($0.wait.kind) } }
   }
 
-  /// The open waits that may resolve. A session marked done keeps its waits,
-  /// and they don't resume it. A wait whose action runs waits for the run to end, which resolves it.
+  /// The open waits that may resolve. A wait whose action runs waits for the run to end, which resolves it.
   private func waitsToResolve() -> [(session: Session, wait: Wait)] {
-    entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }.flatMap { s in
+    waitHolders().flatMap { s in
       s.resolvableWaits.filter { $0.actionStatus?.kind != .running }.map { (session: s, wait: $0) }
     }
+  }
+
+  /// Arms `--kind session --target <target> --state <state>`, with `--then <action>` when it has one, on `holder`, in
+  /// process. `state` is an `AttentionState` raw value. It runs on the state queue.
+  func armSessionWait(holder: String, target: String, state: String, then action: WaitAction.Kind? = nil) throws {
+    var args: [String: JSON] = [
+      "session": .string(holder), "kind": .string(Wait.Kind.session.rawValue), "target": .string(target),
+      "state": .string(state), "by": .string(Author.claude.rawValue),
+    ]
+    if let action { args["then"] = .string(action.rawValue) }
+    _ = try waitRequest("wait", .object(args), caller: .inProcess)
+  }
+
+  /// The sessions whose waits sbd resolves, by id. A session marked done keeps its waits, and they don't resume it.
+  /// It runs on the state queue.
+  func waitHolders() -> [Session] {
+    entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }
   }
 
   /// Resolves an open wait and runs its `then`, through the `resolve-wait`

@@ -39,7 +39,7 @@ extension Service {
       let holder = topupHolder(id)
       let followups = entries.values.map(\.session).filter { $0.waitsToStart && !starting.contains($0.id) }
       let built = TopupCandidates.build(
-        repo: gate.repo, group: gate.group, issues: lists.issues, openPRs: lists.openPRs, sessions: coverageRows(gate),
+        repo: gate.repo, group: gate.group, issues: lists.issues, openPRs: lists.openPRs, sessions: coverageRows(),
         followups: followups, viewer: issueCache.viewer, team: issueSettings.team)
       let env = headlessEnv(session: holder, account: config.triage.account.map(ClaudeAccount.init(folder:)))
       return (holder, built, env)
@@ -84,21 +84,7 @@ extension Service {
         continue
       }
       started.append((pick.ref, session))
-      queue.sync {
-        do {
-          try changeSchedule(id, scheduleID) { s in
-            let ids = (s.gate?.started ?? []) + [session.id]
-            s.gate?.started = ids
-          }
-        } catch {
-          logLine("can't save \(session.id) as started by the top-up of schedule \(scheduleID): \(error)")
-        }
-        do {
-          try armTopupWait(holder, on: session.id, state: .done, then: .rmWorktree)
-        } catch {
-          logLine("can't arm the removal of \(session.id) for the top-up of schedule \(scheduleID): \(error)")
-        }
-      }
+      queue.sync { recordTopupStart(id, scheduleID, session: session.id, holder: holder) }
     }
     queue.sync {
       finishTopup(
@@ -131,6 +117,25 @@ extension Service {
     return (issues.compactMap { Self.inboxIssue($0, repo: repo) }, openPRs)
   }
 
+  /// Saves `session` in the gate's `started` and arms the removal of its worktree once it is done, held by `holder`.
+  /// It runs on the state queue.
+  private func recordTopupStart(_ id: String, _ scheduleID: String, session: String, holder: String) {
+    do {
+      try changeSchedule(id, scheduleID) { s in
+        // The exclusivity check refuses a read of `s.gate` inside an optional-chained assignment to it.
+        let ids = (s.gate?.started ?? []) + [session]
+        s.gate?.started = ids
+      }
+    } catch {
+      logLine("can't save \(session) as started by the top-up of schedule \(scheduleID): \(error)")
+    }
+    do {
+      try armSessionWait(holder: holder, target: session, state: AttentionState.done.rawValue, then: .rmWorktree)
+    } catch {
+      logLine("can't arm the removal of \(session) for the top-up of schedule \(scheduleID): \(error)")
+    }
+  }
+
   private func ghRows(_ args: [String], what: String) throws -> [JSON] {
     let text: String
     do {
@@ -153,7 +158,8 @@ extension Service {
       createdAt: row["createdAt"]?.string ?? "", updatedAt: row["updatedAt"]?.string ?? "")
   }
 
-  /// One row of `gh pr list --json number,headRefName,closingIssuesReferences`, or nil when a field is missing.
+  /// One row of `gh pr list --json number,headRefName,closingIssuesReferences`, or nil when a field is missing. gh
+  /// names a closing reference's repository by `owner.login` and `name`.
   private static func openPR(_ row: JSON) -> TopupCandidates.OpenPR? {
     guard let number = row["number"]?.int, let branch = row["headRefName"]?.string,
       let references = row["closingIssuesReferences"]?.array
@@ -162,24 +168,20 @@ extension Service {
     for reference in references {
       guard let issue = reference["number"]?.int else { return nil }
       let repository = reference["repository"]
-      let owner = repository?["owner"]?["login"]?.string
-      let name =
-        repository?["nameWithOwner"]?.string ?? owner.flatMap { o in repository?["name"]?.string.map { "\(o)/\($0)" } }
+      let name = repository?["owner"]?["login"]?.string.flatMap { owner in
+        repository?["name"]?.string.map { "\(owner)/\($0)" }
+      }
       closes.append(IssueRef(repo: name, number: issue))
     }
     return TopupCandidates.OpenPR(number: number, headRefName: branch, closes: closes)
   }
 
   /// Every session sbd has, as the candidate list reads it for coverage. It runs on the state queue.
-  private func coverageRows(_ gate: Schedule.Gate) -> [TopupCandidates.SessionRow] {
+  private func coverageRows() -> [TopupCandidates.SessionRow] {
     entries.values.map { e in
-      let s = e.session
-      // A session whose repository sbd doesn't know may work in the gate's repository, and the top-up never guesses
-      // that an issue is uncovered.
-      let repository = checkout(s).flatMap { repository($0, of: s) } ?? gate.repo
-      return TopupCandidates.SessionRow(
-        repository: repository, branch: s.branch, prNumber: e.facts.pr?.number, issue: s.issue,
-        closesIssues: e.facts.pr?.closesIssues)
+      TopupCandidates.SessionRow(
+        repository: repository(of: e.session), branch: e.session.branch, prNumber: e.facts.pr?.number,
+        issue: e.session.issue, closesIssues: e.facts.pr?.closesIssues)
     }
   }
 
@@ -189,11 +191,12 @@ extension Service {
     _ candidate: TopupCandidates.Candidate, gate: Schedule.Gate, openPRs: [TopupCandidates.OpenPR], started: [String]
   ) -> String? {
     // A session that this top-up started may not count yet, because sbd reads its repository after it starts.
-    let active = Set(QueueStatus.compute(queueRows(gate), gate: gate).counted.map(\.id)).union(started)
+    let rows = queueRows(gate, subjects: actionSubjects())
+    let active = Set(QueueStatus.compute(rows, gate: gate).counted.map(\.id)).union(started)
     if active.count >= gate.target { return "the group has its target of \(gate.target) active sessions" }
     guard case .issue(let issue) = candidate else { return nil }
     let fresh = TopupCandidates.build(
-      repo: gate.repo, group: gate.group, issues: [issue], openPRs: openPRs, sessions: coverageRows(gate),
+      repo: gate.repo, group: gate.group, issues: [issue], openPRs: openPRs, sessions: coverageRows(),
       followups: [], viewer: issueCache.viewer, team: issueSettings.team)
     guard !fresh.candidates.contains(candidate) else { return nil }
     return fresh.skips.first?.reason ?? "a session covers it now"
@@ -212,28 +215,27 @@ extension Service {
     }
   }
 
-  /// Saves the check, records the `schedule-topup` event, and records one info report on `holder` when the top-up
-  /// started a session. It sends nothing. It runs on the state queue.
+  /// It sends nothing. It runs on the state queue.
   private func finishTopup(
     _ id: String, _ scheduleID: String, holder: String, status: QueueStatus, picks: [TopupPick.Pick],
     started: [(ref: String, session: SessionSummary)], skips: [Schedule.Gate.Skip]
   ) {
-    var check = Self.gateCheck(.started, status, now: nowMs())
-    check.started = started.map(\.session.id)
-    check.skipped = skips
+    let check = Schedule.Gate.Check(
+      .started, status: status, now: nowMs(), started: started.map(\.session.id), skipped: skips)
     do {
       try changeSchedule(id, scheduleID) { $0.gate?.last = check }
     } catch {
       logLine("can't save the top-up check of schedule \(scheduleID) of \(id): \(error)")
     }
-    var data: [String: JSON] = [
-      "status": .array(status.lines.map(JSON.string)),
-      "picks": .array(picks.map { ["ref": .string($0.ref), "reason": .string($0.reason)] }),
-      "started": .array(started.map { ["ref": .string($0.ref), "session": .string($0.session.id)] }),
-      "skipped": .array(skips.map { ["ref": .string($0.ref), "reason": .string($0.reason)] }),
-    ]
-    data["schedule"] = (entries[id]?.session.schedules?.first { $0.id == scheduleID }).flatMap { try? eventJSON($0) }
-    record(id, "schedule-topup", .object(data))
+    let schedule = entries[id]?.session.schedules?.first { $0.id == scheduleID }
+    let data = gateEventData(
+      schedule, status: status,
+      [
+        "picks": .array(picks.map { ["ref": .string($0.ref), "reason": .string($0.reason)] }),
+        "started": .array(started.map { ["ref": .string($0.ref), "session": .string($0.session.id)] }),
+        "skipped": (try? JSON(encoding: skips)) ?? .array([]),
+      ])
+    record(id, "schedule-topup", data)
     guard !started.isEmpty else { return }
     do {
       try recordReport(Self.topupReport(started: started, skips: skips), needsYou: false, about: nil, on: holder)
@@ -258,36 +260,22 @@ extension Service {
     queue.sync {
       guard let schedule = entries[id]?.session.schedules?.first(where: { $0.id == scheduleID }) else { return }
       let now = nowMs()
-      var check = Self.gateCheck(.failed, status, now: now)
-      check.error = failure
-      let text = (schedule.gate ?? gate).fallbackMessage(status: status, prompt: schedule.prompt, failure: failure)
+      let check = Schedule.Gate.Check(.failed, status: status, now: now, error: failure)
+      let text = gate.fallbackMessage(status: status, prompt: schedule.prompt, failure: failure)
       sendAndRecord(id, schedule, text: text, skipped: skipped, check: check, now: now)
     }
   }
 
-  /// The session that holds a top-up's waits and reports: the Operator, else the schedule's session.
   private func topupHolder(_ id: String) -> String { operatorID() ?? id }
-
-  /// Arms `--kind session --state <state> --then <action>` on `subject`, held by `holder`, in process. It runs on the
-  /// state queue.
-  private func armTopupWait(_ holder: String, on subject: String, state: AttentionState, then action: WaitAction.Kind)
-    throws
-  {
-    _ = try waitRequest(
-      "wait",
-      [
-        "session": .string(holder), "kind": .string(Wait.Kind.session.rawValue), "target": .string(subject),
-        "state": .string(state.rawValue), "then": .string(action.rawValue), "by": .string(Author.claude.rawValue),
-      ], caller: .inProcess)
-  }
 
   /// For each session that a top-up started and that sbd still has, arms the merge of its open PR once it is Ready
   /// to merge, held by the Operator, when `operator.mergeRepos` lists the PR's repository and no wait will merge it
   /// yet. It drops from each gate's `started` the ids that sbd no longer has. The tick calls it on the state queue.
   func armTopupMerges() {
-    var settings: OperatorSettings?
-    var merging: Set<String>?
-    for (id, e) in entries.sorted(by: { $0.key < $1.key }) {
+    let owners = entries.filter { _, e in e.session.schedules?.contains { $0.gate?.started?.isEmpty == false } == true }
+    guard !owners.isEmpty else { return }
+    var candidates: [(id: String, scheduleID: String, subject: String, repo: String)] = []
+    for (id, e) in owners.sorted(by: { $0.key < $1.key }) {
       for schedule in e.session.schedules ?? [] {
         guard let started = schedule.gate?.started, !started.isEmpty else { continue }
         let kept = started.filter { entries[$0] != nil }
@@ -300,19 +288,20 @@ extension Service {
         }
         for subject in kept {
           guard let s = entries[subject], !s.session.done, let pr = s.facts.pr, pr.state == .open else { continue }
-          let waits = merging ?? actionSubjects().merging
-          merging = waits
-          guard !waits.contains(subject) else { continue }
-          let current = settings ?? operatorSettings
-          settings = current
-          guard current.mergesIn(pr.repo) else { continue }
-          do {
-            try armTopupWait(topupHolder(id), on: subject, state: .readyToMerge, then: .merge)
-            merging?.insert(subject)
-          } catch {
-            logLine("can't arm the merge of \(subject) for schedule \(schedule.id): \(error)")
-          }
+          candidates.append((id, schedule.id, subject, pr.repo))
         }
+      }
+    }
+    guard !candidates.isEmpty else { return }
+    var merging = actionSubjects().merging
+    let settings = operatorSettings
+    for c in candidates where !merging.contains(c.subject) && settings.mergesIn(c.repo) {
+      do {
+        try armSessionWait(
+          holder: topupHolder(c.id), target: c.subject, state: AttentionState.readyToMerge.rawValue, then: .merge)
+        merging.insert(c.subject)
+      } catch {
+        logLine("can't arm the merge of \(c.subject) for schedule \(c.scheduleID): \(error)")
       }
     }
   }

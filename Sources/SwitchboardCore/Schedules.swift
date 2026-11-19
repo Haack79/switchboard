@@ -120,10 +120,10 @@ public struct Schedule: Codable, Equatable, Sendable {
   /// but at least 10 minutes and at most an hour.
   public static func overdueGrace(_ every: Int64) -> Int64 { min(max(every, 600_000), 3_600_000) }
 
-  /// The prompt without the spaces and newlines at its ends. It refuses a prompt with nothing else.
-  public static func cleanPrompt(_ text: String?) throws -> String {
+  /// The prompt without the spaces and newlines at its ends. A prompt with nothing else throws `refusal`.
+  public static func cleanPrompt(_ text: String?, refusal: String = "a schedule needs a prompt") throws -> String {
     guard let prompt = text?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
-      throw APIError("a schedule needs a prompt")
+      throw APIError(refusal)
     }
     return prompt
   }
@@ -331,14 +331,9 @@ public struct ScheduleRequest: Codable, Equatable, Sendable {
       guard let target, Schedule.Gate.targets.contains(target) else {
         throw APIError("a top-up's target is 1 to 20 sessions, not \(target.map(String.init) ?? "nothing")")
       }
-      guard let template = Self.clean(template) else { throw APIError("a top-up needs a template") }
-      guard let rubric = Self.clean(rubric) else { throw APIError("a top-up needs a rubric") }
+      let template = try Schedule.cleanPrompt(template, refusal: "a top-up needs a template")
+      let rubric = try Schedule.cleanPrompt(rubric, refusal: "a top-up needs a rubric")
       return Schedule.Gate(group: group, repo: repo, target: target, template: template, rubric: rubric)
-    }
-
-    private static func clean(_ text: String?) -> String? {
-      guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
-      return text
     }
   }
 
@@ -350,24 +345,22 @@ public struct ScheduleRequest: Codable, Equatable, Sendable {
   }
 
   /// Checks the arguments and builds a schedule whose first run is one
-  /// interval after `now`. A request with a gate needs `groupID` and
-  /// `groupName`, the group that sbd resolved from the gate's `group`, and
-  /// gets the default prompt when it has none.
-  public func makeSchedule(id: String, now: Int64, groupID: String? = nil, groupName: String? = nil) throws
-    -> Schedule
-  {
+  /// interval after `now`. A request with a gate needs `group`, the group
+  /// that sbd resolved from the gate's `group`, and gets the default prompt
+  /// when it has none.
+  public func makeSchedule(id: String, now: Int64, group: (id: String, name: String)? = nil) throws -> Schedule {
+    if gate != nil && group == nil { throw APIError("a top-up needs a group") }
     guard let every else { throw APIError("a schedule needs every, an interval such as 30m") }
     let (ms, next) = try Schedule.interval(every, after: now)
-    guard let request = gate else {
+    guard let request = gate, let group else {
       return Schedule(
         id: id, prompt: try Schedule.cleanPrompt(prompt), every: ms, next: next, by: try Author(parsing: by),
         created: now)
     }
-    guard let groupID, let groupName else { throw APIError("a top-up needs a group") }
-    let gate = try request.make(group: groupID)
+    let gate = try request.make(group: group.id)
     let prompt =
       (try? Schedule.cleanPrompt(prompt))
-      ?? Schedule.Gate.defaultPrompt(groupName: groupName, repo: gate.repo, target: gate.target)
+      ?? Schedule.Gate.defaultPrompt(groupName: group.name, repo: gate.repo, target: gate.target)
     return Schedule(
       id: id, prompt: prompt, every: ms, next: next, by: try Author(parsing: by), created: now, gate: gate)
   }
