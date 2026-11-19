@@ -261,7 +261,14 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// The folder that names the session's repo. An sbd that predates
   /// `checkout` sends only `repo`.
   public var repoFolder: String? { checkout ?? repo }
+  /// The branch that the session's folder has checked out.
   public var branch: String?
+  /// The branch that the session started on, set only when `BranchSwitch.startBranch` finds that the folder
+  /// moved off it. Only this Mac gets it.
+  public var startBranch: String?
+  /// The numbers of every PR that the session has had except its current one, in ascending order. Nil when it
+  /// had none. Only this Mac gets them.
+  public var earlierPRs: [Int]?
   public var claudeSessionId: String
   public var state: AttentionState
   public var reason: String

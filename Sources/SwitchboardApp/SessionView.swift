@@ -246,6 +246,7 @@ struct SessionView: View {
         }
         IssueBadge(session: session)
         CleanupNote(session: session)
+        BranchSwitchNote(session: session)
         // The title row wraps the session's name at 1024 pt when the account sits in it.
         HStack(spacing: 8) {
           // ChatHeader shows the account above a chat's terminal view, which nests this view.

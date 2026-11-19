@@ -159,6 +159,7 @@ public enum SessionSearch {
     add(.name, s.name)
     if let branch = s.branch { add(.branch, branch) }
     if let pr = s.pr { add(.pr, String(pr.number)) }
+    for number in s.earlierPRs ?? [] { add(.pr, String(number), shown: false) }
     // The row's issue badge names only the first issue.
     for (i, issue) in (s.issues ?? []).enumerated() { add(.issue, String(issue.number), shown: i == 0) }
     if let repo { add(.repo, repo, shown: RepoLabels.capped(repo) == repo) }

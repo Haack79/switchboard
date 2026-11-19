@@ -50,7 +50,8 @@ enum HostScope {
     "wait": Rule(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Rule(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Rule(keys: waitKeys, refs: ["session"]),
-    "events": Rule(keys: ["session", "sessions", "since", "limit"], refs: ["session"], refLists: ["sessions"]),
+    "events": Rule(
+      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
     // No `images`, so the path that reads image files never runs.
     "send": Rule(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Rule(
@@ -83,7 +84,7 @@ enum HostScope {
     for op in ["rm", "cleanup", "rm-done"] { refused[op] = stops }
     for op in [
       "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe",
-      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log",
+      "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat", "chat-log", "parent",
     ] {
       refused[op] = reaches
     }

@@ -17,7 +17,7 @@ The design plan is `~/dev/haacked/notes/Dev/repositories/haacked/switchboard/pla
 
 - Swift for the app and the service.
 - Sessions run the unmodified `claude` CLI under the user's Claude subscription. Never call the Claude API with a subscription login.
-- Only Xcode's Command Line Tools are installed (Swift 6.4). The service, the CLI, and the app bundle build with SwiftPM.
+- This Mac builds with Xcode 27.2 (Swift 6.4), which xcode-select selects. The Command Line Tools alone can't build the app, because the SwiftUI macros in the macOS 27 SDK need a plugin that only Xcode ships. The service, the CLI, and the app bundle build with SwiftPM.
 
 ## Building and testing
 

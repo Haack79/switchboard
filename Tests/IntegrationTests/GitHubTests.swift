@@ -327,7 +327,10 @@ extension FakeGitHub {
     #expect(try sbd.get(s.id).pr?.number == 122896)
     try sbd.git(s.cwd, "checkout", "-q", "-b", "haacked/no-pr-yet")
     try sbd.poll()
-    #expect(try sbd.get(s.id).pr == nil)
+    let after = try sbd.get(s.id)
+    #expect(after.pr == nil)
+    #expect(after.earlierPRs == [122896, 122953])
+    #expect(after.startBranch == "haacked/cdp-dlq-breaker-counts-lookups")
   }
 
   @Test func showsTheBranchThatTheFolderHasCheckedOut() throws {
@@ -337,20 +340,40 @@ extension FakeGitHub {
     try sbd.poll()
     #expect(try sbd.get(s.id).branch == "haacked/cdp-dlq-breaker-counts-lookups")
     #expect(try sbd.count("branch", of: s.id) == 0)
+    let before = try sbd.get(s.id)
+    #expect(before.startBranch == nil)
+    #expect(before.earlierPRs == nil)
     try sbd.git(s.cwd, "checkout", "-q", "-b", "haacked/mcp-experiment-condition-ids")
     try sbd.poll()
-    #expect(try sbd.get(s.id).branch == "haacked/mcp-experiment-condition-ids")
-    #expect(try sbd.get(s.id).pr?.number == 122896)
-    #expect(try sbd.sb("get", s.id).contains("branch:  haacked/mcp-experiment-condition-ids"))
-    #expect(try sbd.client.sessions().first { $0.id == s.id }?.branch == "haacked/mcp-experiment-condition-ids")
+    let switched = try sbd.get(s.id)
+    #expect(switched.branch == "haacked/mcp-experiment-condition-ids")
+    #expect(switched.pr?.number == 122896)
+    #expect(switched.startBranch == "haacked/cdp-dlq-breaker-counts-lookups")
+    #expect(switched.earlierPRs == [122953])
+    let get = try sbd.sb("get", s.id)
+    #expect(get.contains("branch:  haacked/mcp-experiment-condition-ids"))
+    #expect(
+      get.contains(
+        "warning: Switched from haacked/cdp-dlq-breaker-counts-lookups to haacked/mcp-experiment-condition-ids"))
+    #expect(get.contains("earlier PRs: #122953"))
+    #expect(try sbd.sb("ls").contains("[switched from haacked/cdp-dlq-breaker-counts-lookups]"))
+    let listed = try sbd.client.sessions().first { $0.id == s.id }
+    #expect(listed?.branch == "haacked/mcp-experiment-condition-ids")
+    #expect(listed?.startBranch == "haacked/cdp-dlq-breaker-counts-lookups")
+    #expect(listed?.earlierPRs == [122953])
     // A detached HEAD keeps the last branch. A poll that finds no change records nothing.
     try sbd.git(s.cwd, "checkout", "-q", "--detach")
     try sbd.poll(all: true)
-    #expect(try sbd.get(s.id).branch == "haacked/mcp-experiment-condition-ids")
+    let detached = try sbd.get(s.id)
+    #expect(detached.branch == "haacked/mcp-experiment-condition-ids")
     #expect(try sbd.count("branch", of: s.id) == 1)
+    #expect(detached.startBranch == "haacked/cdp-dlq-breaker-counts-lookups")
     sbd.stopSbd()
     try sbd.startSbd()
-    #expect(try sbd.get(s.id).branch == "haacked/mcp-experiment-condition-ids")
+    let restarted = try sbd.get(s.id)
+    #expect(restarted.branch == "haacked/mcp-experiment-condition-ids")
+    #expect(restarted.startBranch == "haacked/cdp-dlq-breaker-counts-lookups")
+    #expect(restarted.earlierPRs == [122953])
   }
 
   @Test func showsTheCheckedOutBranchOfAFolderWithoutAGitHubRemote() throws {
@@ -360,6 +383,7 @@ extension FakeGitHub {
     try sbd.git(s.cwd, "checkout", "-q", "-b", "haacked/local-only")
     try sbd.poll()
     #expect(try sbd.get(s.id).branch == "haacked/local-only")
+    #expect(try sbd.get(s.id).startBranch == nil)
   }
 
   @Test func showsTheStartingBranchAfterACheckoutBackToIt() throws {
@@ -376,6 +400,10 @@ extension FakeGitHub {
     #expect(try sbd.get(s.id).pr?.number == 122953)
     #expect(try sbd.get(s.id).branch == "haacked/cdp-dlq-breaker-counts-lookups")
     #expect(try sbd.count("branch", of: s.id) == 2)
+    let back = try sbd.get(s.id)
+    #expect(back.startBranch == nil)
+    #expect(back.earlierPRs == [122896])
+    #expect(try !sbd.sb("get", s.id).contains("warning: Switched"))
   }
 
   @Test func aResolvedTodoRecordsTheBranchOfItsPR() throws {

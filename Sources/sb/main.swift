@@ -187,6 +187,12 @@ let usage = """
                                   shows: 123, #123, owner/name#123, or an issue
                                   URL. It replaces the issue that sbd finds in
                                   the PR body or the branch name
+    parent <session> [<parent> | --clear]
+                                  show the session's parent, move it to another
+                                  parent, or unlink it with --clear. The parent
+                                  stops hearing what changed in it. Its group,
+                                  account, host, and waits stay. Refuses the
+                                  session that runs it
     rm <session> [--worktree [--delete-branch [--delete-remote-branch]]] [--resolve <id>]...
                                   remove the session, and its worktree with --worktree, which refuses
                                   uncommitted files, unpushed commits, and a folder sbd didn't make.
@@ -250,8 +256,13 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--follow]
-                                  the newest events, or those after an id
+    events [--session S] [--since ID] [--kind K]... [--limit N] [--full]
+        [--follow]
+                                  the newest events, or those after an id,
+                                  \(Event.defaultLimit) at a time. --kind, which
+                                  repeats, shows only those kinds. --json
+                                  leaves out tool output and cuts long
+                                  strings unless --full
 
   What needs you:
     triage                        the sessions that need you or that Claude can
@@ -578,7 +589,8 @@ func printTable(_ sessions: [SessionSummary]) {
     let live = s.live ? "●" : "○"
     let name = oneLine(s.name, max: nameWidth)
     let todos = s.openTodos.count
-    let marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    var marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    if let start = s.startBranch { marker += "  [switched from \(start)]" }
     let lead = s.isHighlighted ? "* " : "  "
     print(
       "\(lead)\(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
@@ -613,7 +625,9 @@ func printSession(_ s: SessionSummary) {
   if let account = s.account { print("  account: \(ClaudeAccount(folder: account).name)") }
   if let mode = s.permissionMode { print("  mode:    \(PermissionMode.title(mode))".printable) }
   if let b = s.branch { print("  branch:  \(b)") }
+  if let note = s.branchSwitchNote { print("  warning: \(note)".printable) }
   if let pr = s.pr { print("  pr:      \(pr.line)  \(pr.url)") }
+  if let earlier = s.earlierPRs { print("  earlier PRs: " + earlier.map { "#\($0)" }.joined(separator: ", ")) }
   for issue in s.issues ?? [] {
     print(
       "  issue:   \(issue.label(from: s.pr?.repo)) (\(issue.via.title))\(issue.url.map { "  \($0)" } ?? "")".printable)
@@ -754,12 +768,18 @@ func watch(_ a: Args) -> Never {
 }
 
 /// Prints the newest events, or the events after --since, and with --follow
-/// keeps printing new ones.
+/// keeps printing new ones. --kind, which repeats, prints only those kinds.
 func events(_ a: Args) -> Never {
-  var cursor = EventCursor(since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"])
+  var cursor = EventCursor(
+    since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
+    full: a.switches.contains("--full"))
+  let limit = a.values["--limit"].map { value -> Int in
+    guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
+    return limit
+  }
   while true {
     let list: [Event]
-    do { list = try cursor.next() } catch { die("\(error)") }
+    do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
     for e in list {
       if a.json {
         printJSON((try? JSON(encoding: e)) ?? .null)
@@ -977,6 +997,8 @@ case "issue":
   let clear = a.switches.contains("--clear")
   guard a.positional.count == (clear ? 1 : 2) else { die("issue needs a session and an issue, or --clear") }
   sessionCommand("issue", a, extra: clear ? ["clear": .bool(true)] : ["issue": .string(a.positional[1])])
+case "parent":
+  parentCommand(a)
 case "send" where a.values["--pending"] != nil:
   awaitGroupMessage(a, id: a.values["--pending"]!)
 case "send" where a.values["--group"] != nil:

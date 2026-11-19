@@ -709,6 +709,8 @@ public final class Service {
       try refuseRename(id, to: name)
       try update(id) { $0.name = name }
       return try JSON(encoding: summary(id, for: origin))
+    case "parent":
+      return try parentRequest(args, origin: origin)
     case "issue":
       let id = try lookup(args)
       let session = entries[id]!.session
@@ -729,13 +731,17 @@ public final class Service {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
       let limit = args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":
@@ -1200,7 +1206,7 @@ public final class Service {
   }
 
   func newSessionID(using generator: inout some RandomNumberGenerator) -> String {
-    shortId("s", taken: Set(entries.keys).union(removedNames.keys), using: &generator)
+    shortId(SessionID.prefix, taken: Set(entries.keys).union(removedNames.keys), using: &generator)
   }
 
   /// `configure` changes the session before its first launch. A session that host h asked for takes a parent only
@@ -1353,7 +1359,8 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    if session.kind == .manager { config.manager.apply(to: &env) }
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
@@ -2606,6 +2613,13 @@ public final class Service {
       openPrompt: facts.openPermission != nil || facts.openQuestion != nil, pr: facts.pr.map(PRSummary.init),
       markedDone: s.done)
     out.url = SessionLink.url(for: id).absoluteString
+    // `prNumbers` keeps no repo, so a host could read the number of an earlier PR in a repo that it may not read.
+    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip notices a parent already got.
+    if origin == .mac {
+      out.startBranch = BranchSwitch.startBranch(s, facts)
+      let earlier = facts.earlierPRNumbers
+      if !earlier.isEmpty { out.earlierPRs = earlier }
+    }
     if s.schedules?.isEmpty == false { out.schedules = s.schedules }
     if s.kind == .work {
       out.checkout = checkout(s)

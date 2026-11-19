@@ -345,6 +345,8 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// The undo manager that Edit > Undo reads for the session menu's actions. Tests replace it.
+  var actionUndoManager: () -> UndoManager? = { NSApp.keyWindow?.undoManager ?? NSApp.mainWindow?.undoManager }
   /// Posts the notification that a session needs the user. Tests replace it.
   lazy var notifier: @MainActor (SessionSummary) -> Void = { [weak self] s in self?.notify(s) }
   /// Sends a quick ask to sbd. Tests replace it.
@@ -836,6 +838,19 @@ final class BoardModel: ObservableObject {
         self.refresh(followups: true)
       }
     }
+  }
+
+  /// Registers `handler` as the undo of an action named `name` on `actionUndoManager`. An answer from sbd arrives
+  /// outside any event, so no undo group is open then. This opens one, because an undo manager that doesn't group
+  /// by event refuses a registration outside a group. An undo or a redo has its own group open. The undo manager
+  /// holds the model weakly.
+  func registerUndo(named name: String, _ handler: @escaping @MainActor (BoardModel) -> Void) {
+    guard let undo = actionUndoManager() else { return }
+    let opens = undo.groupingLevel == 0
+    if opens { undo.beginUndoGrouping() }
+    undo.registerUndo(withTarget: self) { model in MainActor.assumeIsolated { handler(model) } }
+    undo.setActionName(name)
+    if opens { undo.endUndoGrouping() }
   }
 
   /// The account that new sessions without a parent use.
@@ -1528,11 +1543,12 @@ final class BoardModel: ObservableObject {
     }
   }
 
-  /// Reads the session's events of `kind` among the newest that sbd returns by default, off the main thread.
+  /// Reads the session's newest events of `kind`, with their whole payloads, off the main thread.
   func events(_ session: String, kind: String) async -> [Event] {
     let client = client
     return await Task.detached {
-      ((try? client.call("events", ["session": .string(session)], as: [Event].self)) ?? []).filter { $0.kind == kind }
+      (try? client.call(
+        "events", ["session": .string(session), "kinds": [.string(kind)], "full": true], as: [Event].self)) ?? []
     }.value
   }
 
