@@ -61,11 +61,13 @@ extension MCPToolServer {
     ),
     Tool(
       "events",
-      "Lists events from sessions. Without `since`, it lists the newest events. With `since`, it lists the events after that id.",
+      "Lists events from sessions. Without `since`, it lists the newest events. With `since`, it lists the events after that id. Without `full`, each event leaves out a tool's output (`tool_response`) and cuts strings longer than \(Event.slimStringLimit) characters.",
       [
         "since": integer("An event id. The answer lists the events after it."),
         "session": session,
-        "limit": integer("The maximum number of events to list. Default \(Event.defaultLimit)."),
+        "limit": integer("The maximum number of events to list. Default \(MCPToolServer.defaultEventLimit)."),
+        "kinds": strings("Lists only events of these kinds, such as Stop, UserPromptSubmit, or PostToolUse."),
+        "full": boolean("Lists each event's whole payload, including tool output. Default false."),
       ]),
     Tool(
       "send",

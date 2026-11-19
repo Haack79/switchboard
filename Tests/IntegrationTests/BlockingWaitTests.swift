@@ -72,8 +72,10 @@ import Testing
       sbd, ["--block", "--kind", "manual", "--note", "ask Alex"], env: ["SB_SESSION_ID": s.id, "CLAUDECODE": "1"])
     let id = try blockedWaitId(sbd, s, blocked)
     let before = try sbd.lastEventId(s.id)
+    // The outcome is longer than `Event.slimStringLimit`. A wait that read slimmed events would print it cut.
+    let outcome = "Alex answered " + String(repeating: "x", count: Event.slimStringLimit)
 
-    try sbd.sb("wait", s.id, "--id", id, "--resolve", "Alex answered")
+    try sbd.sb("wait", s.id, "--id", id, "--resolve", outcome)
     let r = try blocked.finish(within: 15)
 
     #expect(blocked.terminationReason == .exit)
@@ -83,7 +85,7 @@ import Testing
     #expect(e.session == s.id)
     #expect(e.data["wait"]?["id"]?.string == id)
     #expect(e.data["wait"]?["then"]?.string == "caller")
-    #expect(e.data["outcome"]?.string == "Alex answered")
+    #expect(e.data["outcome"]?.string == outcome)
     try expectUntouched(sbd, s, like: idle, after: before)
   }
 
