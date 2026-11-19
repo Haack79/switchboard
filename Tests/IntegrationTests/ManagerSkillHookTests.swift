@@ -377,12 +377,12 @@ private func write(_ text: String, to path: String) throws {
   static let names: [(name: String, blocked: Bool)] = [
     ("u-work", true), ("c-work", true), ("cmd-work", true), ("dup", false), ("both", false), ("p:s", true),
     ("p:pc", true), ("q:qs", false), ("bundled-review", true), ("cfg-only", true), ("forced-safe", false),
-    ("off-work", false), ("nope", false), ("clear", false), ("flaky", false),
+    ("off-work", false), ("nope", false), ("clear", false), ("flaky", false), ("forced-work", true),
   ]
 
   /// A Manager whose account and cwd hold one skill for each row of `names`, after every label has landed.
   func nameTable() throws -> (Instance, SessionSummary) {
-    let sbd = try instance(config: ["managerSkills": ["work": ["cfg-only"], "safe": ["forced-safe"]]])
+    let sbd = try instance(config: ["managerSkills": ["work": ["cfg-only", "forced-work"], "safe": ["forced-safe"]]])
     let account = sbd.account("A")
     let cwd = "\(sbd.home.managerFolder)/.claude"
     let safe = "Append to the notes file. LABEL-SAFE"
@@ -395,6 +395,7 @@ private func write(_ text: String, to path: String) throws {
     try write("Run the pipeline.\n", to: "\(account)/commands/both.md")
     try writeSkill(account, "off-work")
     try writeSkill(account, "forced-safe")
+    try writeSkill(account, "forced-work", safe)
     try writeSkill(account, "flaky", "FAIL-SKILL")
     let p = "\(sbd.home.path)/plugin-cache/p/1.0.0"
     let q = "\(sbd.home.path)/plugin-cache/q/1.0.0"
@@ -411,7 +412,13 @@ private func write(_ text: String, to path: String) throws {
     try write(plugins.text, to: "\(account)/plugins/installed_plugins.json")
     let settings: JSON = ["enabledPlugins": ["p@market": true], "skillOverrides": ["off-work": "off"]]
     try write(settings.text, to: "\(account)/settings.json")
-    try writeListing(sbd, [("bundled-review", "Reviews a diff.")])
+    // Claude Code's listing names every skill and command that it loads, and `slash-commands` takes its rows from
+    // the listing when there is one. It leaves out the skill that `skillOverrides` turns off and the plugin that
+    // settings don't enable.
+    let loaded = ["u-work", "c-work", "cmd-work", "dup", "both", "forced-safe", "forced-work", "flaky"]
+    try writeListing(
+      sbd,
+      [("bundled-review", "Reviews a diff."), ("p:s", "The s skill."), ("p:pc", nil)] + loaded.map { ($0, nil) })
     let c = try newConversation(sbd)
     // The stub writes the listing into the transcript before the first prompt, and relabel scans it.
     try prompt(sbd, c, "hello")
@@ -437,7 +444,15 @@ private func write(_ text: String, to path: String) throws {
 
   // MARK: Parity
 
+  /// The names whose `slash-commands` row the parity test requires: a user skill, a plugin skill and a plugin
+  /// command, a listing-only bundled skill, a work file forced safe and a safe file forced work, a safe label, an
+  /// unlabeled failure, and a built-in.
+  static let slashNames = [
+    "u-work", "p:s", "p:pc", "bundled-review", "forced-safe", "forced-work", "dup", "flaky", "clear",
+  ]
+
   /// The hook, for a prompt and for a Skill call, refuses a name exactly when its `manager-skills` row says `work`.
+  /// The `slash-commands` row that the app reads carries the same label as the `manager-skills` row.
   @Test func theHookAgreesWithTheManagerSkillsRowOfEveryName() throws {
     let (sbd, c) = try nameTable()
     let rows = try skills(sbd)
@@ -450,6 +465,22 @@ private func write(_ text: String, to path: String) throws {
       let call = try hookSkillCall(sbd, c, name)
       #expect(isBlock(prompt) == work, "/\(name): row \(row.text), hook \(prompt.text)")
       #expect(isDeny(call) == work, "Skill \(name): row \(row.text), hook \(call.text)")
+    }
+
+    let slash = try slashRows(sbd, c.id)
+    for name in Self.slashNames {
+      try #require(slash[name] != nil, "no slash-commands row for \(name): \(slash.keys.sorted())")
+    }
+    for (name, slashRow) in slash {
+      let label = slashRow["label"]?.string
+      let skill = row(name, rows)
+      #expect(
+        label == skill?["label"]?.string,
+        "\(name): slash-commands \(slashRow.text), manager-skills \(skill?.text ?? "none")")
+      let prompt = try hookPrompt(sbd, c, "/\(name)")
+      let call = try hookSkillCall(sbd, c, name)
+      #expect(isBlock(prompt) == (label == "work"), "/\(name): slash-commands \(slashRow.text), hook \(prompt.text)")
+      #expect(isDeny(call) == (label == "work"), "Skill \(name): slash-commands \(slashRow.text), hook \(call.text)")
     }
   }
 }

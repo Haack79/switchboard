@@ -13,11 +13,15 @@ public struct SlashCommand: Codable, Equatable, Sendable {
   public let name: String
   public let description: String?
   public let source: Source
+  /// The gate's label of the command, which sbd sets only for a Manager conversation or the operator. It is nil
+  /// for a command that the gate lets through without a label, and for a built-in.
+  public var label: SkillLabel?
 
-  public init(name: String, description: String?, source: Source) {
+  public init(name: String, description: String?, source: Source, label: SkillLabel? = nil) {
     self.name = name
     self.description = description
     self.source = source
+    self.label = label
   }
 
   /// Claude Code's own commands that the listing never carries. The bundled

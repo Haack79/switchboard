@@ -99,6 +99,68 @@ private let spentReading =
     #expect(lines.contains { $0.hasPrefix("-  flaky  user  ") }, "\(lines)")
   }
 
+  // MARK: Labels in slash-commands
+
+  /// The app reads the labels from the `slash-commands` rows, which sbd fills from the same decision as the hook.
+  @Test func slashCommandsOfAManagerCarryEachSkillsLabel() throws {
+    let sbd = try instance()
+    try writeSkill(sbd.account("A"), "go")
+    try writeSkill(sbd.account("A"), "notes", "Append to the notes file. LABEL-SAFE")
+    try writeSkill(sbd.account("A"), "flaky", "FAIL-SKILL")
+    let c = try newConversation(sbd)
+    try waitForLabel(sbd, "go", "work")
+    try waitForLabel(sbd, "notes", "safe")
+    try waitForError(sbd, "flaky")
+
+    let rows = try slashRows(sbd, c.id)
+
+    #expect(try #require(rows["go"], "\(rows.keys.sorted())")["label"]?.string == "work")
+    #expect(try #require(rows["notes"], "\(rows.keys.sorted())")["label"]?.string == "safe")
+    #expect(try #require(rows["flaky"], "\(rows.keys.sorted())")["label"] == nil)
+    #expect(try #require(rows["clear"], "\(rows.keys.sorted())")["label"] == nil)
+  }
+
+  @Test func slashCommandsOfTheOperatorCarryTheWorkLabel() throws {
+    let sbd = try instance()
+    try writeSkill(sbd.account("A"), "go")
+    let op = try decode(SessionSummary.self, sbd.sb("operator", "--json"))
+    try sbd.waitFor(op.id, "the operator's claude") { $0.live }
+    try waitForLabel(sbd, "go", "work")
+
+    let rows = try slashRows(sbd, op.id)
+
+    #expect(try #require(rows["go"], "\(rows.keys.sorted())")["label"]?.string == "work")
+  }
+
+  enum Unchecked: CaseIterable {
+    case work, chat
+  }
+
+  /// A work session and a group chat are never gated, so their rows carry no label, even for a skill file that a
+  /// Manager on the same account has labeled `work`.
+  @Test(arguments: Unchecked.allCases) func slashCommandsOfAWorkSessionOrAChatCarryNoLabel(_ kind: Unchecked) throws {
+    let sbd = try instance()
+    try writeSkill(sbd.account("A"), "go")
+    try newConversation(sbd)
+    try waitForLabel(sbd, "go", "work")
+    let s: SessionSummary
+    switch kind {
+    case .work:
+      let w = try sbd.new(prompt: "hello")
+      s = try sbd.waitFor(w.id, "the work session's reply", timeout: 30) { $0.lastReply == "Done: hello" }
+    case .chat:
+      _ = try sbd.sb("group", "add", "--json", "Flags")
+      let chat = try decode(SessionSummary.self, sbd.sb("chat", "Flags", "--json"))
+      s = try sbd.waitFor(chat.id, "the chat's claude") { $0.live }
+    }
+
+    let rows = try slashRows(sbd, s.id)
+
+    let go = try #require(rows["go"], "no go row: \(rows.keys.sorted())")
+    #expect(go["label"] == nil, "\(go.text)")
+    #expect(rows.values.allSatisfy { $0["label"] == nil }, "\(rows.values.map(\.text))")
+  }
+
   // MARK: Config overrides
 
   @Test func configOverridesShowByConfigAndNeverReachTheClassifier() throws {

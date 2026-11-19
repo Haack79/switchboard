@@ -479,6 +479,16 @@ public enum ManagerSkillGate {
     case blocked(by: ManagerSkillRow.By)
     /// Allowed without a label. The failure is the one stored for the entry's current key, or nil when none is.
     case unchecked(SkillFailure?)
+
+    /// The label that a `slash-commands` row carries: `work` for a block, `safe` for a labeled allow, and nil
+    /// otherwise.
+    public var label: SkillLabel? {
+      switch self {
+      case .blocked: .work
+      case .allowed: .safe
+      case .ignored, .bypassed, .unchecked: nil
+      }
+    }
   }
 
   public static func decide(

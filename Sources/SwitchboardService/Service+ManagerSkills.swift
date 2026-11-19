@@ -1,6 +1,8 @@
 import Foundation
 import SwitchboardCore
 
+typealias SkillDecider = @Sendable (String, SkillBypass?) -> ManagerSkillGate.Decision
+
 /// The skills that Manager conversations and the operator can load, and their `work` or `safe` labels.
 extension Service {
   /// How long a refresh waits before it runs a failed key again.
@@ -284,9 +286,27 @@ extension Service {
 
   /// The gate's decision for a name in the account's index. Runs on the state queue.
   private func skillDecision(_ name: String, account: String, bypass: SkillBypass?) -> ManagerSkillGate.Decision {
-    ManagerSkillGate.decide(
-      name: name, catalog: skillIndex[account] ?? [:], labels: skillLabels, failures: skillFailures,
-      settings: config.managerSkills, bypass: bypass)
+    skillDecider(account: account)(name, bypass)
+  }
+
+  /// The gate's decision on a copy of the account's index, labels, failures, and settings, which a caller can run
+  /// off the state queue. Runs on the state queue.
+  private func skillDecider(account: String) -> SkillDecider {
+    let (catalog, labels, failures, settings) = (
+      skillIndex[account] ?? [:], skillLabels, skillFailures, config.managerSkills
+    )
+    return { name, bypass in
+      ManagerSkillGate.decide(
+        name: name, catalog: catalog, labels: labels, failures: failures, settings: settings, bypass: bypass)
+    }
+  }
+
+  /// The gate's decider for a manager-kind session on this Mac, from the same state as its hook, or nil for every
+  /// other session. Unlike the hook, it never starts a scan. Runs on the state queue.
+  func managerSkillDecider(_ id: String) -> SkillDecider? {
+    guard entries[id]?.session.kind.runsInManagerFolder == true, case .local(let account) = claudeAccount(of: id)
+    else { return nil }
+    return skillDecider(account: account.folder)
   }
 
   /// Records `skill_unchecked` for a skill of the account's index that the gate let through without a label, once

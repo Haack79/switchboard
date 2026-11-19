@@ -5,20 +5,30 @@ extension Service {
   /// The `slash-commands` request: the commands that the user can type in
   /// the session's claude. It reads the transcript and the folders off the
   /// state queue. A repeat request on the same transcript reads only the
-  /// lines added since the last one.
+  /// lines added since the last one. For a Manager conversation or the
+  /// operator, each row carries the label of the hook's decision.
   func slashCommands(_ args: JSON) throws -> JSON {
-    let (id, findTranscript, account, cwd, machine, cached) = try queue.sync {
-      () -> (String, () -> String?, String?, String, any Machine, (path: String, state: SkillListing.State)?) in
+    let (id, findTranscript, account, cwd, machine, cached, decide) = try queue.sync {
+      () -> (
+        String, () -> String?, String?, String, any Machine, (path: String, state: SkillListing.State)?,
+        SkillDecider?
+      ) in
       let id = try lookup(args)
       let session = entries[id]!.session
       // Until a host answers, its folder is unknown. The scan then reads only the cwd.
       let account = try? claudeFolder(of: session)
-      return (id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id])
+      return (
+        id, transcriptFinder(id), account, session.cwd, try site(of: id).machine, slashListings[id],
+        managerSkillDecider(id)
+      )
     }
     let listing = skillListing(id, findTranscript: findTranscript, machine: machine, cached: cached)
-    let commands = SlashCommands.merge(
+    var commands = SlashCommands.merge(
       listing: listing, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
       overrides: SkillFolders.overrides(account: account, on: machine))
+    if let decide {
+      for i in commands.indices { commands[i].label = decide(commands[i].name, nil).label }
+    }
     return ["commands": try JSON(encoding: commands), "listing": .bool(listing != nil)]
   }
 

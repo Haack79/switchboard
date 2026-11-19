@@ -100,7 +100,7 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     let pidFile = "\(folder)/pid"
     let start = Date()
 
-    let error = #expect(throws: APIError.self) {
+    let error = #expect(throws: Headless.TimedOut.self) {
       try run(neverEnds(pidFile: pidFile), folder: folder, timeout: 0.5)
     }
 
@@ -168,14 +168,15 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
     let input = String(repeating: "q", count: 1_000_000)
     let start = Date()
 
-    let error = #expect(throws: APIError.self) {
+    let error = #expect(throws: (any Error).self) {
       try run(
         neverEnds(pidFile: pidFile), input: input, folder: folder, timeout: byCancel ? 30 : 0.5,
         cancelled: { byCancel && since(start) > 0.3 })
     }
 
+    #expect(byCancel ? error is APIError : error is Headless.TimedOut)
     let expected = byCancel ? "cancelled" : "timed out"
-    #expect(error?.description.contains(expected) == true, "\(String(describing: error))")
+    #expect(error.map { "\($0)" }?.contains(expected) == true, "\(String(describing: error))")
     #expect(since(start) < 2 * scale)
     #expect(writtenPid(pidFile).map(exists) != true)
   }

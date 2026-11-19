@@ -28,9 +28,11 @@ struct ChatView: View {
         let proposals = session.chat.map { g in model.planProposals.filter { $0.group == g } } ?? []
         if !proposals.isEmpty { PlanProposalList(proposals: proposals) }
         PauseBanner(session: session)
+        WorkSkillOfferBar(session: session)
         MessageField(
           session: session.id, draft: model.messageDraft(for: session),
-          shortcut: KeyboardShortcut(.return, modifiers: [.command])
+          shortcut: KeyboardShortcut(.return, modifiers: [.command]),
+          intercept: session.kind.runsInManagerFolder ? { model.submitChecked(session: session.id, draft: $0) } : nil
         )
         .padding(8)
       }

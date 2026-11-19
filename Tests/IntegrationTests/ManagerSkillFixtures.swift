@@ -37,6 +37,13 @@ extension ManagerSkillSuite {
 
   func row(_ name: String, _ rows: [JSON]) -> JSON? { rows.first { $0["name"]?.string == name } }
 
+  /// The rows of `sb slash <session> --json` by name.
+  func slashRows(_ sbd: Instance, _ session: String) throws -> [String: JSON] {
+    let answer = try #require(JSON.parse(try sbd.sb("slash", session, "--json")))
+    let rows = try #require(answer["commands"]?.array, "\(answer.text)")
+    return Dictionary(rows.compactMap { r in r["name"]?.string.map { ($0, r) } }, uniquingKeysWith: { a, _ in a })
+  }
+
   /// Waits until the skill's row matches and returns it.
   @discardableResult
   func waitForRow(
