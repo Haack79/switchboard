@@ -57,13 +57,17 @@ import Testing
       }, until: { _ in true })
   }
 
-  /// Runs five ticks a second apart and checks that the operator kept its conversation.
+  /// Runs five ticks a second apart and checks that the operator kept its conversation. sbd stops a running claude
+  /// on one tick and swaps the id on a later one, so the check also refuses a stop with the reset's reason.
   func expectNoReset(
     _ sbd: Instance, _ op: SessionSummary, _ what: String, sourceLocation: SourceLocation = #_sourceLocation
   ) throws {
     for _ in 0..<5 { try sbd.advanceClock(1000) }
     usleep(300_000)
     #expect(try resets(sbd, op.id).isEmpty, "\(what)", sourceLocation: sourceLocation)
+    #expect(
+      try sbd.events(op.id, kind: "stopped").allSatisfy { $0.data["reason"]?.string != Self.stopReason },
+      "\(what)", sourceLocation: sourceLocation)
     #expect(
       try sbd.get(op.id).claudeSessionId == op.claudeSessionId, "\(what)", sourceLocation: sourceLocation)
   }

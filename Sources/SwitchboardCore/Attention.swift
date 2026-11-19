@@ -203,9 +203,10 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
   public var openReports: [OperatorReport] = []
   /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
-  /// is open, because a new report clears it.
+  /// is open, because a new report clears it. A `conversation-reset` clears it too, because the new conversation
+  /// never saw those reports.
   public var acknowledgedReports: [OperatorReport] = []
-  /// The `UserPromptSubmit` events since the last `conversation-reset`, each of which starts a turn.
+  /// The main session's `UserPromptSubmit` events since the last `conversation-reset`, each of which starts a turn.
   public var turnsSinceReset = 0
   /// When sbd last started a fresh conversation for the session, from its last `conversation-reset`.
   public var conversationStarted: Int64?
@@ -267,6 +268,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       transcriptPath = nil
       turnsSinceReset = 0
       conversationStarted = event.t
+      acknowledgedReports = []
       if let from = d["from"]?.string { pastConversations.append(from) }
     case "docket":
       docket.apply(d)

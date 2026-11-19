@@ -51,8 +51,8 @@ import Testing
     event("UserPromptSubmit", t: t, ["prompt": "look up the PR", "agent_id": "a1b2c3"])
   }
 
-  static func reset(t: Int64) -> Event {
-    event("conversation-reset", t: t, ["from": "old-uuid", "to": "new-uuid", "turns": 20])
+  static func reset(t: Int64, from: String = "old-uuid") -> Event {
+    event("conversation-reset", t: t, ["from": .string(from), "to": "new-uuid", "turns": 20])
   }
 }
 
@@ -212,6 +212,18 @@ extension OperatorResetTests {
       #expect(OperatorReset.blocker(waits: [], facts: facts) != nil)
     }
 
+    /// The new conversation never saw the reports that an ack closed before the reset, so an undo reopens none.
+    @Test func anUndoAfterAResetReopensNoReport() {
+      let acked = T.folded([Self.report(id: 1, needsYou: true), T.event("ack", id: 2), T.reset(t: T.created + 5)])
+      let undone = T.folded([
+        Self.report(id: 1, needsYou: true), T.event("ack", id: 2), T.reset(t: T.created + 5), T.event("unack", id: 4),
+      ])
+
+      #expect(acked.acknowledgedReports.isEmpty)
+      #expect(undone.openReports.isEmpty)
+      #expect(OperatorReset.blocker(waits: [], facts: undone) == nil)
+    }
+
     /// sbd's own message does not answer the report, so the question still sits in the old conversation.
     @Test func aReportThatOnlySbdWroteAfterStillBlocks() {
       let facts = T.folded([
@@ -307,6 +319,15 @@ extension OperatorResetTests {
       ])
 
       #expect(facts.conversationStarted == T.created + 9)
+    }
+
+    @Test func eachResetAddsTheConversationItLeftToPastConversations() {
+      let facts = T.folded([
+        T.prompt(), T.reset(t: T.created + 5, from: "first"), T.prompt("two", t: T.created + 6),
+        T.reset(t: T.created + 9, from: "second"),
+      ])
+
+      #expect(facts.pastConversations == ["first", "second"])
     }
 
     @Test func aSessionStartAfterAResetKeepsConversationStarted() {

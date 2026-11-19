@@ -12,7 +12,6 @@ public struct ManagerSettings: Codable, Equatable, Sendable {
     autoCompactWindow =
       try c.decodeIfPresent(Int.self, forKey: .autoCompactWindow) ?? ManagerSettings().autoCompactWindow
   }
-
 }
 
 /// Claude Code's auto-compact window, which sbd sets for the kinds of session that config.json gives a window.
