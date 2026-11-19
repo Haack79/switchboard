@@ -217,11 +217,11 @@ extension Service {
     let input = TriageSummarizer.input(session: session, reply: reply)
     let env = headlessEnv(session: id, account: triageAccount)
     triageJobs.addOperation { [self] in
-      let result = Result {
-        try TriageSummarizer.parse(
-          triageCall(TriageSummarizer.arguments(model: config.triage.model), input, env), reply: reply)
-      }
-      queue.async { self.finishSummary(id, stop: stop, result) }
+      let call = headlessCall(
+        .triage, session: id, arguments: TriageSummarizer.arguments(model: config.triage.model), input: input, env: env,
+        folder: home.path, timeout: config.triage.timeoutSeconds
+      ) { try TriageSummarizer.parse($0, reply: reply) }
+      queue.async { self.finishSummary(id, stop: stop, call) }
     }
   }
 
@@ -255,13 +255,14 @@ extension Service {
     let env = headlessEnv(session: id, account: triageAccount)
     let (number, title) = (pr.number, pr.title)
     triageJobs.addOperation { [self] in
-      let result = Result {
-        try MergeBrief.parse(triageCall(MergeBrief.arguments(model: config.triage.model), input, env), title: title)
-      }
+      let call = headlessCall(
+        .mergeBrief, session: id, arguments: MergeBrief.arguments(model: config.triage.model), input: input, env: env,
+        folder: home.path, timeout: config.triage.timeoutSeconds
+      ) { try MergeBrief.parse($0, title: title) }
       queue.async {
         guard self.entries[id] != nil else { return }
-        var data = key
-        switch result {
+        var data = key.merging(call.reply?.eventFields ?? [:]) { $1 }
+        switch call.result {
         case .success(let text): data["text"] = .string(text)
         case .failure(let error):
           logLine("can't summarize #\(number) of \(id): \(error)")
@@ -270,11 +271,6 @@ extension Service {
         self.record(id, MergeBrief.event, .object(data))
       }
     }
-  }
-
-  /// Runs one `claude -p` call under the triage settings, off the state queue.
-  private func triageCall(_ arguments: [String], _ input: String, _ env: [String: String]) throws -> String {
-    try runHeadless(arguments, input: input, env: env, folder: home.path, timeout: config.triage.timeoutSeconds)
   }
 
   /// Why the turn summary does not run: the session wrote its card, or the budget is spent.
@@ -293,13 +289,13 @@ extension Service {
     return nil
   }
 
-  private func finishSummary(_ id: String, stop: Int64, _ result: Result<TriageSummary, Error>) {
+  private func finishSummary(_ id: String, stop: Int64, _ call: HeadlessOutcome<TriageSummary>) {
     // A call for a turn the user moved on from still counts toward
     // `triage.perHour`. applyTriage ignores its summary because its stop no
     // longer matches.
     guard entries[id] != nil else { return }
     var data: [String: JSON]
-    switch result {
+    switch call.result {
     case .success(let summary):
       data = (try? JSON(encoding: summary).object) ?? [:]
     case .failure(let error):
@@ -307,6 +303,7 @@ extension Service {
       data = ["error": .string("\(error)")]
     }
     data["stop"] = .number(Double(stop))
+    data.merge(call.reply?.eventFields ?? [:]) { $1 }
     record(id, "triage", .object(data))
   }
 }

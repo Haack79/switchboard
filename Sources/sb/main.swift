@@ -62,6 +62,8 @@ let usage = """
                                   session's claude first
     usage                         show each account's use of its 5-hour and
                                   weekly limits, and when each resets
+    usage headless [--since 7d]   sum the tokens of sbd's own claude -p calls
+                                  per day and kind
     manager [<conv>] [<text>]     open a Manager conversation, a session that manages
                                   the others: the one named by id or name, else the
                                   most recent, starting one the first time. With

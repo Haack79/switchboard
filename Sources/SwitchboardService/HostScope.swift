@@ -101,7 +101,8 @@ enum HostScope {
       "plan-artifact-apply", "plan-artifact-reject", "plan-artifact-report", "plan-followup", "plan-ls", "plan-get",
       "plan-detach", "plan-auto", "plan-proposals", "plan-reject", "followup-add", "followup-ls", "followup-start",
       "followup-rm", "followup-import", "docket-start", "merge", "review", "ack", "resolved-todos",
-      "dependency-resolved", "activity", "activity-report", "activity-clear", "draft-post", "draft-check", "issues",
+      "dependency-resolved", "activity", "activity-report", "activity-clear", "headless-usage", "draft-post",
+      "draft-check", "issues",
       "issues-refresh", "issues-start", "issues-clone", "issues-source-add", "issues-source-rm", "issues-settings",
       "issues-dismiss",
     ] {

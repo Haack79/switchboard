@@ -20,7 +20,8 @@ struct GroupArtifactRows {
   }
 
   let rows: [Row]
-  /// The link's title, such as `Artifacts (2)`, which counts the artifacts that no delete removed. It is nil when the group has none.
+  /// The link's title, such as `Artifacts 2`, which counts the artifacts that no delete removed. The title leaves out a
+  /// count of zero. It is nil when the group has no artifacts.
   let linkTitle: String?
 
   /// `liveNames` maps each live session's id to its current name. A removed session's row keeps its own name.
@@ -40,7 +41,8 @@ struct GroupArtifactRows {
 
   static func linkTitle(_ group: GroupSummary) -> String? {
     guard let artifacts = group.artifacts, !artifacts.isEmpty else { return nil }
-    return "Artifacts (\(artifacts.count(where: { $0.removed == nil })))"
+    let live = artifacts.count(where: { $0.removed == nil })
+    return live > 0 ? "Artifacts \(live)" : "Artifacts"
   }
 }
 

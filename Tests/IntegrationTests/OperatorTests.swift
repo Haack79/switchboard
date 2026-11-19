@@ -4,8 +4,9 @@ import Testing
 
 /// The operator: one background Manager session of kind `operator` in the
 /// Manager folder. sbd creates it on demand. It launches with the switchboard
-/// server only and with its role prompt appended. Conversation lookups leave
-/// it out, `done` is refused on it, and `rm` is refused while it has an open wait.
+/// server only, with `--no-chrome`, and with its role prompt appended in place
+/// of the triage prompt. Conversation lookups leave it out, `done` is refused
+/// on it, and `rm` is refused while it has an open wait.
 @Suite(.blocking(timeLimit: .seconds(120))) struct OperatorTests {
   let conversationHelpers = ManagerConversationsTests()
 
@@ -99,46 +100,51 @@ import Testing
     #expect(conversationHelpers.serverNames(args) == ["switchboard"], "\(args)")
   }
 
-  @Test func theOperatorsAppendedPromptIsItsRolePromptThenTheTriagePrompt() throws {
-    let sbd = try Instance(config: ["triage": ["systemPrompt": .string(Self.triagePrompt)]])
+  /// Which launch writes the claude.sh that a test reads.
+  enum Launch: CaseIterable { case first, resume }
 
-    let op = try idleOperator(sbd)
-
-    let prompts = try appendedPrompts(sbd, op.id)
-    #expect(prompts == [Manager.operatorPrompt + "\n\n" + Self.triagePrompt], "\(prompts)")
+  /// Stops the idle session's claude and runs `reopen`, which relaunches it with `--resume`.
+  func resume(_ sbd: Instance, _ s: SessionSummary, reopen: () throws -> Void) throws {
+    try sbd.stopClaude(s.id)
+    let before = conversationHelpers.launches(sbd, s).count
+    try reopen()
+    let launched = try conversationHelpers.launch(sbd, s, after: before)
+    try #require(launched.hasPrefix("--resume \(s.claudeSessionId) "), "\(launched)")
   }
 
-  @Test func theOperatorsAppendedPromptIsItsRolePromptAloneWhenTheTriagePromptIsEmpty() throws {
-    let sbd = try Instance()
-
-    let op = try idleOperator(sbd)
-
-    #expect(try appendedPrompts(sbd, op.id) == [Manager.operatorPrompt])
-  }
-
-  @Test func theOperatorKeepsItsRolePromptWhenItResumes() throws {
+  @Test func theOperatorLaunchesWithItsRolePromptInPlaceOfTheTriagePromptAndWithoutChrome() throws {
     let sbd = try Instance(config: ["triage": ["systemPrompt": .string(Self.triagePrompt)]])
     let op = try idleOperator(sbd)
-    try sbd.stopClaude(op.id)
-    let before = conversationHelpers.launches(sbd, op).count
 
-    _ = try openOperator(sbd)
-    let launched = try conversationHelpers.launch(sbd, op, after: before)
-
-    #expect(launched.hasPrefix("--resume \(op.claudeSessionId) "), "\(launched)")
-    #expect(try appendedPrompts(sbd, op.id) == [Manager.operatorPrompt + "\n\n" + Self.triagePrompt])
+    for launch in Launch.allCases {
+      if launch == .resume { try resume(sbd, op) { _ = try openOperator(sbd) } }
+      #expect(try appendedPrompts(sbd, op.id) == [Manager.operatorPrompt], "\(launch)")
+      let args = try conversationHelpers.scriptArgs(sbd, op.id)
+      #expect(args.contains("--no-chrome"), "\(launch): \(args)")
+    }
   }
 
-  /// A session that is not the operator.
-  enum OtherKind: CaseIterable { case work, conversation, chat }
+  /// A set triage prompt with a first launch, and an empty one with a resume.
+  @Test(arguments: zip([true, false], Launch.allCases))
+  func aManagerConversationLaunchesWithItsOwnPromptAndWithChrome(_ triageSet: Bool, _ launch: Launch) throws {
+    let sbd = try Instance(config: ["triage": ["systemPrompt": .string(triageSet ? Self.triagePrompt : "")]])
+
+    let c = try conversationHelpers.idleConversation(sbd)
+    if launch == .resume { try resume(sbd, c) { _ = try sbd.sb("manager", c.id, "--json") } }
+
+    #expect(try appendedPrompts(sbd, c.id) == [Manager.conversationPrompt])
+    let args = try conversationHelpers.scriptArgs(sbd, c.id)
+    #expect(!args.contains("--no-chrome"), "\(args)")
+  }
+
+  /// A session that is neither the operator nor a Manager conversation.
+  enum OtherKind: CaseIterable { case work, chat }
 
   func otherSession(_ sbd: Instance, _ kind: OtherKind) throws -> SessionSummary {
     let s: SessionSummary
     switch kind {
     case .work:
       s = try sbd.new(prompt: "hello", name: "work")
-    case .conversation:
-      s = try conversationHelpers.newConversation(sbd, "hello")
     case .chat:
       _ = try decode(GroupSummary.self, sbd.sb("group", "add", "--json", "Flags"))
       let id = try #require(try decode(JSON.self, sbd.sb("chat", "Flags", "--send", "hello", "--json"))["id"]?.string)
@@ -159,6 +165,7 @@ import Testing
     #expect(prompts == (triageSet ? [Self.triagePrompt] : []), "\(prompts)")
     let args = try conversationHelpers.scriptArgs(sbd, s.id)
     #expect(!args.contains { $0.contains(Manager.operatorPrompt) }, "\(args)")
+    #expect(!args.contains("--no-chrome"), "\(args)")
   }
 
   // MARK: Conversation lookups leave the operator out (Risk 3)

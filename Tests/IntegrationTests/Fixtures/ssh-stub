@@ -42,9 +42,10 @@ with exit 255, as a remote bind does without StreamLocalBindUnlink.
 A master binds a real Unix socket at its ControlPath when nothing is there.
 When something is there, it binds nothing and writes no pid file, as a real
 ssh that disabled multiplexing answers no -O check. It then replaces
-itself with `/bin/sh -c <command>`, so its pid is the remote shell's pid. A
-test drops the connection by killing that pid with SIGKILL, which leaves the
-socket file behind as a killed master does.
+itself with `/bin/sh -c <command>` in home/, as sshd starts a command in the
+user's home, so its pid is the remote shell's pid. A test drops the
+connection by killing that pid with SIGKILL, which leaves the socket file
+behind as a killed master does.
 """
 import hashlib
 import json
@@ -295,4 +296,5 @@ env["HOME"] = box_home
 # the box names the PATH that the box's shell gets.
 if "SB_SSH_STUB_PATH" in env:
     env["PATH"] = env.pop("SB_SSH_STUB_PATH")
+os.chdir(box_home)
 os.execve("/bin/sh", ["/bin/sh", "-c", " ".join(command)], env)
