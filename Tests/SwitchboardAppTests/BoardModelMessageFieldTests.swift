@@ -294,3 +294,139 @@ import Testing
     #expect(model.terminalFocus == "a")
   }
 }
+
+/// On an Operator question, the Inbox's message field answers the Operator through the item's Reply, so the answer
+/// never reaches the owner's claude (#410, Decision 49). sbd turns the `choose` into a message to the Operator.
+@MainActor
+@Suite struct BoardModelMessageFieldAsk {
+  nonisolated static let reply = TriageOption(
+    label: "Reply", action: .reply, placeholder: "Your answer to the operator")
+
+  /// A session that holds the Operator's question as its Inbox item, as sbd builds it, with `options`.
+  nonisolated static func askOwner(options: [TriageOption] = [reply]) -> SessionSummary {
+    var s = needsItem("k1")
+    s.triage = TriageItem(
+      title: "Operator: Merge #7 with an open thread?", kind: .question, summary: "Merge #7 with an open thread?",
+      options: options, source: .report, ref: "report:7")
+    return s
+  }
+
+  static func theOperator() -> SessionSummary {
+    var s = needsItem("op", manager: true, state: .waiting)
+    s.kind = .operator
+    s.name = Manager.operatorName
+    return s
+  }
+
+  /// Types `text` in the owner's Inbox field and submits it with `ref`, as `TriageView`'s field does.
+  static func submit(
+    _ text: String = "  Yes, merge it.\n", ref: String?, owner: SessionSummary = askOwner()
+  ) async -> (BoardModel, SentRequests, MessageField.Draft) {
+    let (model, sent) = recordingModel()
+    model.apply(.success([owner, theOperator()]), followups: nil)
+    let draft = model.messageDraft(for: owner)
+    draft.text = text
+    draft.submit(owner.id, ref: ref, to: model)
+    await settle { !sent.value.isEmpty }
+    return (model, sent, draft)
+  }
+
+  @Test func theFieldOnAnAskSendsAChooseForTheOwnersItem() async throws {
+    let (_, sent, _) = await Self.submit(ref: "report:7")
+
+    let request = try #require(sent.value.first)
+    #expect(request.op == "choose")
+    #expect(request.args["session"] == "k1")
+    #expect(request.args["ref"] == "report:7")
+  }
+
+  @Test func theChooseCarriesTheReplyOptionAndTheTrimmedText() async throws {
+    let (_, sent, _) = await Self.submit(ref: "report:7")
+
+    let request = try #require(sent.value.first { $0.op == "choose" })
+    #expect(request.args["option"] == "1")
+    #expect(request.args["text"] == "Yes, merge it.")
+  }
+
+  /// The field finds the Reply option by its action, wherever it sits in the item's options.
+  @Test func theChooseNamesTheReplyOptionByItsPlace() async throws {
+    let owner = Self.askOwner(options: [TriageOption(label: "Dismiss", action: .dismiss), Self.reply])
+
+    let (_, sent, _) = await Self.submit(ref: "report:7", owner: owner)
+
+    let request = try #require(sent.value.first { $0.op == "choose" })
+    #expect(request.args["option"] == "2")
+  }
+
+  @Test func theFieldOnAnAskSendsNothingToTheOwner() async {
+    let (_, sent, _) = await Self.submit(ref: "report:7")
+    try? await Task.sleep(nanoseconds: 200_000_000)
+
+    #expect(!sent.ops.contains("send"))
+  }
+
+  @Test func theFieldEmptiesOnceSbdAcceptsTheReply() async {
+    let (_, _, draft) = await Self.submit(ref: "report:7")
+    await settle { draft.text.isEmpty }
+
+    #expect(draft.text.isEmpty)
+  }
+
+  /// Only an ask's ref routes to the Operator. The session view's field passes no ref, and a held wait has no Reply,
+  /// so both still message the session's claude.
+  @Test(arguments: [nil, "held:w1", "summary:3", "card:1"] as [String?])
+  func theFieldOnAnyOtherRefSendsToTheSession(_ ref: String?) async throws {
+    let (_, sent, _) = await Self.submit(ref: ref)
+
+    let request = try #require(sent.value.first)
+    #expect(request.op == "send")
+    #expect(request.args["session"] == "k1")
+  }
+
+  /// An ask's ref never falls back to a message to the owner. A ref that is no longer the owner's item, an item with
+  /// no Reply, or a draft with images sends nothing and says why.
+  @Test func theFieldOnAnAskThatIsNoLongerTheItemSendsNothing() async {
+    let (model, sent) = recordingModel()
+    let owner = Self.askOwner()
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+    let draft = model.messageDraft(for: owner)
+    draft.text = "Yes"
+
+    draft.submit(owner.id, ref: "report:6", to: model)
+    try? await Task.sleep(nanoseconds: 200_000_000)
+
+    #expect(sent.value.isEmpty)
+    #expect(draft.error != nil)
+    #expect(draft.text == "Yes")
+  }
+
+  @Test func theFieldOnAnAskWithoutAReplySendsNothing() async {
+    let (model, sent) = recordingModel()
+    let owner = Self.askOwner(options: [TriageOption(label: "Dismiss", action: .dismiss)])
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+    let draft = model.messageDraft(for: owner)
+    draft.text = "Yes"
+
+    draft.submit(owner.id, ref: "report:7", to: model)
+    try? await Task.sleep(nanoseconds: 200_000_000)
+
+    #expect(sent.value.isEmpty)
+    #expect(draft.error != nil)
+  }
+
+  @Test func theFieldOnAnAskRefusesImages() async {
+    let (model, sent) = recordingModel()
+    let owner = Self.askOwner()
+    model.apply(.success([owner, Self.theOperator()]), followups: nil)
+    let draft = model.messageDraft(for: owner)
+    draft.text = "See this"
+    draft.images = [.init(name: "a.png", data: Data([1]), thumbnail: nil)]
+
+    draft.submit(owner.id, ref: "report:7", to: model)
+    try? await Task.sleep(nanoseconds: 200_000_000)
+
+    #expect(sent.value.isEmpty)
+    #expect(draft.error != nil)
+    #expect(draft.images.count == 1)
+  }
+}

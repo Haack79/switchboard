@@ -59,7 +59,7 @@ struct ChatView: View {
   private var emptyText: String {
     switch session.kind {
     case .manager: "No messages yet. Ask the Manager about your sessions."
-    case .operator: "The operator hasn't run yet. It follows through on waits that your conversations hand it."
+    case .operator: "No messages yet."
     case .chat, .work: "No messages yet. Ask the chat about this group's sessions."
     }
   }

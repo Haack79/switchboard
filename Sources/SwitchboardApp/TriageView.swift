@@ -56,6 +56,10 @@ struct TriageDetail: View {
               FailedRemovalActions(session: session)
               reply
             } else if let item = session.triage {
+              if item.source == .report {
+                Label("From background follow-through", systemImage: "gearshape.2")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
               DecisionCard(session: session, item: item, step: $step)
             } else {
               working

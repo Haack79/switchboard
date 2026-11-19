@@ -57,7 +57,7 @@ struct SwitchboardApp: App {
           .keyboardShortcut("j")
         Button("Open Manager") { model.openManager() }
           .keyboardShortcut("m", modifiers: [.command, .shift])
-        Button("Open Operator") { model.openOperator() }
+          .operatorTranscriptAlternate { model.openOperator() }
         ForEach(MainView.allCases, id: \.self) { view in
           Button("Show \(view.title)") { model.show(view) }
             .keyboardShortcut(KeyEquivalent(view.shortcutKey))
@@ -234,5 +234,17 @@ struct MenuBarContent: View {
   private func show() {
     openWindow(id: "main")
     NSApp.activate(ignoringOtherApps: true)
+  }
+}
+
+extension View {
+  /// Holding ⌥ shows "Open Operator Transcript" in place of this menu item. macOS 14 has no alternate items, so the
+  /// Loops view's Transcript button is the only way to the transcript there.
+  @ViewBuilder func operatorTranscriptAlternate(_ open: @escaping () -> Void) -> some View {
+    if #available(macOS 15, *) {
+      modifierKeyAlternate(.option) { Button("Open Operator Transcript", action: open) }
+    } else {
+      self
+    }
   }
 }

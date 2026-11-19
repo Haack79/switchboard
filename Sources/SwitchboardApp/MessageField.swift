@@ -68,7 +68,8 @@ struct MessageField: View {
 
   private var field: some View {
     let slash = slash
-    return TextField("Message Claude…", text: $draft.text, axis: .vertical)
+    let prompt = Draft.answersOperator(ref: ref) ? "Answer background follow-through…" : "Message Claude…"
+    return TextField(prompt, text: $draft.text, axis: .vertical)
       .textFieldStyle(.roundedBorder)
       .focused($focused)
       .onChange(of: focused) { focus.held = focused }

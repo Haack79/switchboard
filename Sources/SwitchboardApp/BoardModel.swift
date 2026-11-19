@@ -335,6 +335,8 @@ final class BoardModel: ObservableObject {
   }
   /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
   @Published var loopSessionFilter: String?
+  /// The Operator's work, newest first, as the Loops view's Background Activity lists it.
+  @Published var backgroundActivity: [BackgroundActivity.Entry] = []
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -601,9 +603,12 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
-  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
+  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd. It reads
+  /// every listed session, because the filter can hide the operator.
   var operatorSession: SessionSummary? {
-    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+    allSessions.filter { !$0.isBeingRemoved && $0.kind == .operator }.min {
+      ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id)
+    }
   }
 
   /// A state's sessions in the sidebar, each one followed by its children.
