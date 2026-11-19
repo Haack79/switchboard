@@ -579,6 +579,66 @@ import Testing
     #expect(try !listed(sbd).contains(c.id))
   }
 
+  /// sbd pasted a message into the running conversation and recorded `delivered`, and the stub holds the prompt's
+  /// UserPromptSubmit until `report` exists. sbd restarts in that window. The restarted sbd reads the paste from the
+  /// log, so the message still counts as on its way, and both `sb manager end` and `sb rm` refuse.
+  @Test func aPasteThatClaudeHasNotSubmittedRefusesEndAndRmAfterARestart() throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd)
+    let mark = try sbd.lastEventId(c.id)
+    let text = "lag held"
+
+    try sbd.sb("send", c.id, text)
+    try sbd.waitFor("the paste's delivered", timeout: 30) { try !sbd.events(c.id, "delivered", text: text).isEmpty }
+    sbd.killSbd()
+    try sbd.startSbd()
+    let before = try sbd.waitFor(c.id, "the restarted sbd to see claude") { $0.claudePid != nil }
+
+    let refused = try refusedEnd(sbd, c)
+    let viaRm = failure(sbd, "rm", ["session": .string(c.id)])
+    let viaEnd = failure(sbd, "manager-end", ["session": .string(c.id)])
+
+    #expect(refused.stderr.contains("has 1 message"), Comment(rawValue: refused.stderr))
+    #expect(refused.stderr.contains("a message that claude has not confirmed yet"), Comment(rawValue: refused.stderr))
+    #expect(viaRm.contains("a message that claude has not confirmed yet"), Comment(rawValue: viaRm))
+    #expect(viaEnd == viaRm)
+    try expectUnchanged(sbd, before)
+    #expect(try sbd.events(c.id, after: mark).allSatisfy { $0.kind != "UserPromptSubmit" })
+
+    sbd.hold("report")
+    try sbd.waitFor(c.id, "the message's reply", timeout: 30) { $0.lastReply == "Done: \(text)" }
+
+    let answer = try end(sbd, c)
+
+    #expect(answer["ended"]?.string == c.id, "\(answer.text)")
+    #expect(try !listed(sbd).contains(c.id))
+  }
+
+  /// `/compact` sends no UserPromptSubmit. `hold-delivered` keeps sbd from recording the paste's `delivered` until
+  /// the command's SessionStart has moved the in-flight window. The paste still clears its own mark once it lands,
+  /// so the end goes through.
+  @Test func aBuiltInCommandWhoseSessionStartComesBeforeDeliveredLetsTheEndThrough() throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd)
+    let mark = try sbd.lastEventId(c.id)
+    let text = "/compact"
+    sbd.hold("hold-delivered")
+
+    try sbd.sb("send", c.id, text)
+    try sbd.waitFor("the command's SessionStart", timeout: 30) {
+      try sbd.events(c.id, after: mark).contains { $0.kind == "SessionStart" && $0.data["source"]?.string == "compact" }
+    }
+    try #require(try sbd.events(c.id, "delivered", text: text).isEmpty, "hold-delivered let delivered through")
+    try sbd.release("hold-delivered")
+    try sbd.waitFor("the paste's delivered", timeout: 30) { try !sbd.events(c.id, "delivered", text: text).isEmpty }
+    try #require(try sbd.events(c.id, after: mark).allSatisfy { $0.kind != "UserPromptSubmit" })
+
+    let answer = try end(sbd, c)
+
+    #expect(answer["ended"]?.string == c.id, "\(answer.text)")
+    #expect(try !listed(sbd).contains(c.id))
+  }
+
   // MARK: Waits handed to the operator (Risk 2)
 
   @Test(arguments: OperatorHandoffTests.handOffShapes)

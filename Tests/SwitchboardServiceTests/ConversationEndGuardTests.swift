@@ -294,7 +294,7 @@ private func refusal(_ body: () throws -> Void) -> String? {
   /// A paste that claude has not confirmed with its UserPromptSubmit left the queue, so only `inFlight` shows it.
   @Test func aMessageInFlightIsRefusedAtBothCheckPoints() throws {
     try withSessions { service in
-      service.queue.sync { service.entries[conversation]?.inFlight = created }
+      service.queue.sync { service.entries[conversation]?.inFlight = Service.InFlight(created) }
 
       let atEntry = refusal { _ = try service.removalEntry(conversation, resolving: [], for: .rm) }
       let atForget = refusal { try service.queue.sync { try service.forgetSession(conversation, resolving: []) } }
@@ -315,7 +315,7 @@ private func refusal(_ body: () throws -> Void) -> String? {
           Service.QueuedMessage(text: "the deploy finished", sent: nil),
           Service.QueuedMessage(text: "check #123", sent: nil),
         ]
-        service.entries[conversation]?.inFlight = created
+        service.entries[conversation]?.inFlight = Service.InFlight(created)
       }
 
       let error = refusal { try service.queue.sync { try service.refuseConversationRemoval(conversation) } }
@@ -364,7 +364,7 @@ private func refusal(_ body: () throws -> Void) -> String? {
   @Test func aMessageInFlightAfterTheFirstCheckRefusesTheForget() throws {
     try withSessions { service in
       _ = try service.removalEntry(conversation, resolving: [], for: .rm)
-      service.queue.sync { service.entries[conversation]?.inFlight = created }
+      service.queue.sync { service.entries[conversation]?.inFlight = Service.InFlight(created) }
 
       let error = refusal { try service.queue.sync { try service.forgetSession(conversation, resolving: []) } }
 
@@ -407,16 +407,6 @@ private func refusal(_ body: () throws -> Void) -> String? {
       let text = try #require(error)
       #expect(text.hasSuffix("They reach claude once it is ready for them. Try again then."), Comment(rawValue: text))
     }
-  }
-
-  /// A built-in command's paste stops counting as a message on its way once it lands. A skill or a custom command
-  /// sends a prompt, so its UserPromptSubmit clears the paste instead.
-  @Test(arguments: [
-    ("/compact", true), ("/compact keep the plan", true), ("/model\nopus", true), ("/code-review", false),
-    ("/compactly", false), ("compact", false), ("the /compact command", false),
-  ])
-  func aBuiltInCommandIsMatchedByItsName(_ text: String, _ expected: Bool) {
-    #expect(Service.isBuiltInCommand(text) == expected)
   }
 
   // MARK: A launch prompt across a restart of sbd (Risk 1)
@@ -504,6 +494,85 @@ private func refusal(_ body: () throws -> Void) -> String? {
         #expect(text.contains(prompt), Comment(rawValue: text))
         #expect(!text.contains("not confirmed"), Comment(rawValue: text))
         #expect(atForget == atEntry)
+      }
+    }
+  }
+
+  /// What the log holds after sbd pasted a message into the running conversation.
+  enum AfterPaste: String, CaseIterable, Sendable, CustomTestStringConvertible {
+    /// The paste landed, and claude has not submitted it.
+    case delivered
+    /// The paste started, and sbd stopped before it recorded `delivered`.
+    case pastingOnly
+    case submitted
+    /// The hook reached sbd before the paste's `delivered` did.
+    case submittedBeforeDelivered
+    /// A built-in command, for which Claude Code sends no UserPromptSubmit.
+    case builtIn
+
+    var testDescription: String { rawValue }
+
+    var text: String { self == .builtIn ? "/compact" : "the deploy finished" }
+
+    var refuses: Bool { self == .delivered || self == .pastingOnly }
+
+    static let pastingAt = created + 2_000
+
+    func events() -> [Event] {
+      let message: JSON = .string(text)
+      let ready = [
+        Event(session: conversation, t: created, kind: "resumed", data: ["prompt": .null]),
+        Event(session: conversation, t: created + 1_000, kind: "SessionStart"),
+        Event(
+          session: conversation, t: created + 1_900, kind: "sent",
+          data: ["text": message, "delivery": "pasted", Delivery.awaitsDeliveredKey: true]),
+        Event(session: conversation, t: Self.pastingAt, kind: "pasting", data: ["text": message]),
+      ]
+      let delivered = Event(session: conversation, t: created + 2_100, kind: "delivered", data: ["text": message])
+      func submit(_ t: Int64) -> Event {
+        Event(session: conversation, t: t, kind: "UserPromptSubmit", data: ["prompt": message])
+      }
+      switch self {
+      case .delivered, .builtIn: return ready + [delivered]
+      case .pastingOnly: return ready
+      case .submitted: return ready + [delivered, submit(created + 3_000)]
+      case .submittedBeforeDelivered: return ready + [submit(created + 2_050), delivered]
+      }
+    }
+  }
+
+  /// A restarted sbd reads a paste that claude has not submitted from the log, so both check points refuse the
+  /// removal. The rebuilt mark is the `pasting` event's time, so it holds back a later paste no longer than the mark
+  /// before the restart would. A submit, in either order with `delivered`, lets the removal through, and so does a
+  /// built-in command, which claude never submits.
+  @Test(arguments: AfterPaste.allCases)
+  func aRestartKeepsAPasteThatClaudeHasNotSubmittedOnItsWay(_ after: AfterPaste) throws {
+    try withService { service, home in
+      try service.store.save(session(conversation, .manager))
+      for event in after.events() { _ = try service.store.append(event) }
+      let restarted = try Service(home: home, sbPath: "/usr/bin/true")
+      defer { for link in restarted.hostLinks.values { link.disconnect() } }
+
+      try restarted.load()
+      let entry = try #require(restarted.queue.sync { restarted.entries[conversation] })
+      let atEntry = refusal { _ = try restarted.removalEntry(conversation, resolving: [], for: .rm) }
+      let atForget = refusal {
+        try restarted.queue.sync { try restarted.forgetSession(conversation, resolving: []) }
+      }
+
+      if after.refuses {
+        #expect(entry.inFlight?.since == AfterPaste.pastingAt)
+        #expect(!restarted.messageWaiting(entry, now: AfterPaste.pastingAt + Service.inFlightMs))
+        let text = try #require(atEntry)
+        #expect(text.contains("has 1 message"), Comment(rawValue: text))
+        #expect(text.contains("a message that claude has not confirmed yet"), Comment(rawValue: text))
+        #expect(atForget == atEntry)
+        #expect(restarted.queue.sync { restarted.entries[conversation] } != nil)
+      } else {
+        #expect(entry.inFlight == nil)
+        #expect(atEntry == nil, Comment(rawValue: atEntry ?? ""))
+        #expect(atForget == nil, Comment(rawValue: atForget ?? ""))
+        #expect(restarted.queue.sync { restarted.entries[conversation] } == nil)
       }
     }
   }

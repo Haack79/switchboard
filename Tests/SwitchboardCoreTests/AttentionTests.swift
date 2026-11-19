@@ -1502,3 +1502,72 @@ extension TriageOperatorTests {
     #expect(f.lastReply == "Hi.")
   }
 }
+
+/// `SessionFacts.promptOnItsWaySince`, which a restarted sbd reads to count a prompt that claude has not submitted
+/// as a message on its way.
+@Suite struct PromptOnItsWayFoldTests {
+  static let text = "the deploy finished"
+
+  static func pasting(_ t: Int64, _ text: String = text) -> Event { event("pasting", t, ["text": .string(text)]) }
+  static func delivered(_ t: Int64, _ text: String = text) -> Event { event("delivered", t, ["text": .string(text)]) }
+  static func submit(_ t: Int64) -> Event { event("UserPromptSubmit", t, ["prompt": .string(text)]) }
+  static let ready = [event("resumed", 0, ["prompt": .null]), event("SessionStart", 100)]
+
+  @Test func aLaunchWithAPromptSetsTheLaunchsTime() {
+    #expect(facts([event("resumed", 50, ["prompt": .string(Self.text)])]).promptOnItsWaySince == 50)
+  }
+
+  @Test func aLaunchWithoutAPromptSetsNothing() {
+    #expect(facts(Self.ready).promptOnItsWaySince == nil)
+  }
+
+  @Test func theLaunchsSessionStartMovesTheTime() {
+    let f = facts([event("resumed", 50, ["prompt": .string(Self.text)]), event("SessionStart", 80)])
+
+    #expect(f.promptOnItsWaySince == 80)
+  }
+
+  /// `pasting` reaches the log before the paste starts, so its time is in the past at any later restart.
+  @Test func aPasteSetsThePastingTimeAndDeliveredKeepsIt() {
+    #expect(facts(Self.ready + [Self.pasting(200)]).promptOnItsWaySince == 200)
+    #expect(facts(Self.ready + [Self.pasting(200), Self.delivered(210)]).promptOnItsWaySince == 200)
+  }
+
+  @Test func theSubmitClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), Self.delivered(210), Self.submit(300)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  /// The hook can reach sbd before the paste's `delivered` does.
+  @Test func aSubmitBeforeDeliveredLeavesNothingOnItsWay() {
+    let f = facts(Self.ready + [Self.pasting(200), Self.submit(205), Self.delivered(210)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  @Test(arguments: ["/compact", "/clear", "/model opus"])
+  func aBuiltInCommandsPasteSetsNothing(_ command: String) {
+    let f = facts(Self.ready + [Self.pasting(200, command), Self.delivered(210, command)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  /// A skill sends a prompt, so its UserPromptSubmit confirms it as for any other message.
+  @Test func aSkillsPasteSetsTheTime() {
+    #expect(facts(Self.ready + [Self.pasting(200, "/code-review")]).promptOnItsWaySince == 200)
+  }
+
+  /// `requeued` puts the message back in the queue, which counts it from then on.
+  @Test func aRequeueClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), event("requeued", 210, ["text": .string(Self.text)])])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  @Test func aLaterLaunchWithoutAPromptClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), event("exited", 250), event("resumed", 300, ["prompt": .null])])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+}

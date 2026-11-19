@@ -29,14 +29,12 @@ public final class Service {
     var pending: [QueuedMessage] = []
     /// When the tick first saw a running claude that no SessionStart reported.
     var unreportedSince: Int64?
-    /// When sbd last pasted a message or launched claude with a prompt. Until
+    /// The message that sbd last pasted or launched claude with. Until
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
     /// A built-in command such as `/compact` sends no UserPromptSubmit. Its paste clears this once it lands.
-    /// `load` sets it for a launch prompt that the log shows claude has not submitted, at the launch's time or its
-    /// SessionStart's time. The replay keeps a paste's message in `pending`, or `load` records whether it reached
-    /// claude, so `load` sets nothing for a paste.
-    var inFlight: Int64?
+    /// `load` sets it from `SessionFacts.promptOnItsWaySince`, which the log keeps for a launch prompt and a paste.
+    var inFlight: InFlight?
     /// Whether a message is queued for the session, or sbd pasted or launched one that claude has not confirmed.
     var hasMessageOnItsWay: Bool { !pending.isEmpty || inFlight != nil }
     /// The text of the last message that a draft in claude's prompt box
@@ -109,7 +107,7 @@ public final class Service {
   /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
   /// because a send then only adds to the queue that the start delivers.
   func messageWaiting(_ e: Entry, now: Int64) -> Bool {
-    if let sent = e.inFlight {
+    if let sent = e.inFlight?.since {
       let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
       if starting || now - sent < Service.inFlightMs { return true }
     }
@@ -119,6 +117,21 @@ public final class Service {
 
   /// How long a message counts as in flight without its UserPromptSubmit.
   static let inFlightMs: Int64 = 10_000
+
+  /// A message that sbd pasted or launched claude with, which claude has not confirmed.
+  struct InFlight: Equatable {
+    /// When sbd started the paste or the launch. A paste's callback finds its own message by it.
+    let sent: Int64
+    /// When the message's in-flight window started. SessionStart moves it, because claude reads a launch's prompt
+    /// after SessionStart.
+    var since: Int64
+
+    init(_ t: Int64) {
+      sent = t
+      since = t
+    }
+  }
+
   /// How long a running claude with no SessionStart may run before the tick
   /// counts it as live, because its hook may have failed.
   static let unreportedMs: Int64 = 10_000
@@ -363,8 +376,8 @@ public final class Service {
 
   public var tickSeconds: Double { config.tickSeconds }
 
-  /// Loads the sessions and rebuilds their facts, queued messages, and unsubmitted launch prompts from the
-  /// event log. It records `delivered` or `delivery_unknown` for each message whose
+  /// Loads the sessions and rebuilds their facts, queued messages, and the prompts that claude has not submitted
+  /// from the event log. It records `delivered` or `delivery_unknown` for each message whose
   /// paste may have reached claude. Its last step queues the pastes of each
   /// running claude's queued messages on the state queue.
   public func load() throws {
@@ -381,9 +394,7 @@ public final class Service {
       var e = Entry(session: session)
       e.facts = replay.facts
       e.pending = replay.pending.map { QueuedMessage(text: $0) }
-      if replay.facts.launchPromptOnItsWay, let launch = replay.facts.lastLaunch {
-        e.inFlight = max(launch, replay.facts.lastStart ?? 0)
-      }
+      e.inFlight = replay.facts.promptOnItsWaySince.map(InFlight.init)
       e.events = replay.events
       entries[session.id] = e
       if !replay.uncertain.isEmpty { uncertain[session.id] = replay.uncertain }
@@ -954,7 +965,7 @@ public final class Service {
       checkFolderRule(session, payload)
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
-      if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
+      entries[id]?.inFlight?.since = event.t
       // This claude takes the queued resume message, so the tick launches no other claude for the resume.
       entries[id]?.resumeLaunch = nil
       refreshSoon()
@@ -1511,7 +1522,7 @@ public final class Service {
     entries[id]?.unreportedSince = nil
     // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
     entries[id]?.skillBypass = nil
-    entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
+    entries[id]?.inFlight = prompt?.isEmpty == false ? InFlight(nowMs()) : nil
     record(
       id, resume ? "resumed" : "started",
       [
@@ -1572,7 +1583,7 @@ public final class Service {
       let start = e.facts.lastStart
     else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
-    if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
+    if let sent = e.inFlight?.since, now - sent < Service.inFlightMs { return false }
     return now - start >= 1500
   }
 
@@ -1662,7 +1673,7 @@ public final class Service {
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
           let startWait = max(0, 1500 - (now - start))
-          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0)) } ?? 0
+          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0.since)) } ?? 0
           let wait = max(startWait, flightWait)
           if wait > 0 { deliverPending(id, after: Double(wait) / 1000 + 0.1) }
         }
@@ -1727,7 +1738,7 @@ public final class Service {
     let name = paneName(id, .claude)
     let parts = Attachments.split(text, folder: home.attachmentsFolder(id))
     let pastedAt = nowMs()
-    entries[id]?.inFlight = pastedAt
+    entries[id]?.inFlight = InFlight(pastedAt)
     let site = try? site(of: id)
     let terminals = try? site?.terminals()
     pasteQueue.async { [self] in
@@ -1750,7 +1761,10 @@ public final class Service {
         queue.async {
           self.record(id, "delivered", ["text": .string(text)])
           // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
-          if Service.isBuiltInCommand(text), self.entries[id]?.inFlight == pastedAt { self.entries[id]?.inFlight = nil }
+          // A `/clear` or `/compact` can move the window with its SessionStart first, so this compares `sent`.
+          if SlashCommand.isBuiltIn(prompt: text), self.entries[id]?.inFlight?.sent == pastedAt {
+            self.entries[id]?.inFlight = nil
+          }
         }
       } catch {
         logLine("can't paste into \(id): \(error)")
@@ -1760,13 +1774,6 @@ public final class Service {
         }
       }
     }
-  }
-
-  /// Whether `text` is one of Claude Code's built-in commands, such as `/compact`, with or without arguments.
-  /// A skill or a custom command does not count, because it sends a prompt.
-  static func isBuiltInCommand(_ text: String) -> Bool {
-    guard let name = SkillCommand.name(inPrompt: text) else { return false }
-    return SlashCommand.builtIns.contains { $0.name == name }
   }
 
   /// Puts the message back at the front of the session's queue and tries again after `delay` seconds.

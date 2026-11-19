@@ -73,9 +73,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Whether the main session sent any hook since the last launch. Claude
   /// sends none while the trust dialog shows.
   public var hookSinceLaunch = false
-  /// Whether the last launch passed claude a prompt that claude has not submitted yet. UserPromptSubmit clears
-  /// it. `trust_closed` clears it too, because that event moves the prompt to the queue.
-  public var launchPromptOnItsWay = false
+  /// Set while a prompt that sbd launched claude with or started to paste has no UserPromptSubmit yet. It holds the
+  /// launch's or the `pasting` event's time, or the time of a later SessionStart, as `Service` moves its in-flight
+  /// window. A built-in command's paste does not set it, because Claude Code sends no UserPromptSubmit for one.
+  /// `requeued` clears it, and so does `trust_closed`, because both move the message to the queue.
+  public var promptOnItsWaySince: Int64?
   /// Background jobs that run under claude, as the last `job` event counted
   /// them. A job sends no hooks, so sbd's tick finds it in the process list.
   public var jobs = 0
@@ -271,6 +273,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     case "SessionStart":
       live = true
       lastStart = event.t
+      if promptOnItsWaySince != nil { promptOnItsWaySince = event.t }
       transcriptPath = d["transcript_path"]?.string
     case "running":
       live = true
@@ -290,7 +293,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       lastResumeTrigger = event.kind == "resumed" ? d["trigger"]?.string.flatMap(LaunchTrigger.init) : nil
       exitedAtTrust = false
       hookSinceLaunch = false
-      launchPromptOnItsWay = lastLaunchPrompt?.isEmpty == false
+      promptOnItsWaySince = lastLaunchPrompt?.isEmpty == false ? event.t : nil
       permissionMode = d["permission_mode"]?.string
     case "imported":
       // The transcript's last line, not the import, is the session's last activity.
@@ -309,8 +312,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       jobs = 0
       endTurn()
       subagents = []
+    case "pasting":
+      if !SlashCommand.isBuiltIn(prompt: d["text"]?.string ?? "") { promptOnItsWaySince = event.t }
+    case "requeued":
+      promptOnItsWaySince = nil
     case "UserPromptSubmit":
-      launchPromptOnItsWay = false
+      promptOnItsWaySince = nil
       if userPrompt { prompts += 1 }
       if !fromSubagent { turnsSinceReset += 1 }
       promptSinceReply = true

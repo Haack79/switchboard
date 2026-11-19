@@ -74,6 +74,9 @@
 #   a prompt that holds "Switchboard plan artifact task." plays the chat's
 #                    side of the task with a fake Artifact tool. See artifact
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
+#   /compact ...     sends only SessionStart with source compact, as Claude
+#                    Code runs a built-in command with no UserPromptSubmit
+#                    and no turn
 #   /<command> ...   replies "Done: <prompt>". Its UserPromptSubmit goes
 #                    first, as Claude Code runs the hook before it writes the
 #                    prompt to the transcript. A hook answer whose decision is
@@ -865,6 +868,11 @@ turn() {
   fi
   listed=1
   case $p in
+  /compact*)
+    hook SessionStart '{"source":"compact"}'
+    echo "⏺ compacted"
+    return
+    ;;
   /* | skill\ * | subskill\ *)
     gated "$p"
     return
