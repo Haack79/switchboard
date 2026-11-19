@@ -234,7 +234,7 @@ extension Service {
     // A stopped claude's queue moves with the session, and its next launch reads the moved transcript.
     case .stopped: break
     case .running where listsRunningAsMovable:
-      if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
+      if e.hasMessageOnItsWay { return "a message is on its way to it" }
     default: return "its claude is running. Stop it first"
     }
     if let source = transcriptFile(e.session) {
