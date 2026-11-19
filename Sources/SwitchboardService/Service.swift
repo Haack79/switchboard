@@ -92,17 +92,18 @@ public final class Service {
   }
 
   /// Whether a message is queued for the session or on its way, so a prompt sent now could land in its turn.
-  /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A stopped claude of a
-  /// session that is not paused has no message on its way. A send launches that claude, and the launch takes
-  /// the queued messages in order before the new one. A claude that exits before its SessionStart leaves its
-  /// queue for that next launch. A start that waits behind the live cap does count, because a send then only
-  /// adds to the queue that the start delivers.
+  /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A paste stays on its way
+  /// for `inFlightMs`, even after claude exits, because the paste queue may not have run it yet. The queue of
+  /// a stopped claude in a session that is not paused does not count. A send launches that claude, and the
+  /// launch takes the queued messages in order before the new one. A claude that exits before its
+  /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
+  /// because a send then only adds to the queue that the start delivers.
   func messageWaiting(_ e: Entry, now: Int64) -> Bool {
-    if e.pending.isEmpty {
-      guard let sent = e.inFlight else { return false }
+    if let sent = e.inFlight {
       let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
-      guard starting || now - sent < Service.inFlightMs else { return false }
+      if starting || now - sent < Service.inFlightMs { return true }
     }
+    guard !e.pending.isEmpty else { return false }
     return e.queuedSince != nil || Pause.blocker(e.session) != nil || claudeState(e.session.id) != .stopped
   }
 

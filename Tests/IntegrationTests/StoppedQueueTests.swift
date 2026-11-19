@@ -342,6 +342,31 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     #expect(try sbd.heldCount(s.id) == 1)
   }
 
+  /// A paste that has not run yet still counts after claude exits, for the in-flight window. A due schedule
+  /// waits, so its launch can't put its prompt ahead of the paste's message.
+  @Test func aDueScheduleWaitsForAPasteStillOnItsWayToAClaudeThatExited() throws {
+    let sbd = try instance()
+    let s = try sbd.liveIdle()
+    let schedules = ScheduleFireTests()
+    let made = try schedules.schedule(sbd, s.id, "tick one")
+    try sbd.advanceClock(55_000)
+    usleep(2_000_000)
+    sbd.hold("hold-paste")
+    try sbd.sb("send", s.id, "the held paste")
+    usleep(500_000)
+    let pid = try waitForClaudePid(sbd, s.id)
+    kill(pid_t(pid), SIGKILL)
+    try sbd.waitFor(s.id, "claude to exit") { $0.claudePid == nil }
+
+    // The schedule comes due 6 s after the paste started, inside the 10 s in-flight window.
+    try sbd.advanceClock(6_000)
+    usleep(1_000_000)
+
+    #expect(try schedules.current(sbd, s.id, made.id)?.last == nil)
+    #expect(try sbd.stubCalls().allSatisfy { !$0.args.contains("tick one") })
+    try sbd.release("hold-paste")
+  }
+
   // MARK: heldMessages and the queued: line
 
   /// `heldMessages` counts the queue of a session that is not paused, and `sb get` prints a `queued:` line.
