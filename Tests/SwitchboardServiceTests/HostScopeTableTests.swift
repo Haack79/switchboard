@@ -45,7 +45,8 @@ enum PlannedScope {
     "clear-wait": Row(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Row(keys: waitKeys, refs: ["session"]),
     "events": Row(
-      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
+      keys: ["session", "sessions", "since", "limit", "all", "kinds", "full"], refs: ["session"],
+      refLists: ["sessions"]),
     "send": Row(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Row(
       keys: ["session", "card", "behavior", "autoMode", "always", "message", "answers"], refs: ["session"]),
@@ -70,9 +71,9 @@ enum PlannedScope {
     "rm", "cleanup", "rm-done", "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move",
     "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp",
     "manager-skills", "chat",
-    "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
-    "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
-    "parent", "schedule", "wait-approve",
+    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-model", "item-context", "manager-mcp-request",
+    "operator", "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
+    "highlight", "parent", "schedule", "wait-approve",
     "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
     "rm-cancel", "rm-keep", "rm-retry",
     "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",
@@ -123,7 +124,7 @@ enum PlannedScope {
         case "answers": ["yes"]
         case "kinds": ["Stop"]
         case "colors", "open", "terminals", "done", "clear", "worktree", "autoMode", "always", "planMode",
-          "manualMode", "full":
+          "manualMode", "full", "all":
           true
         default: .string("\(key) value")
         }

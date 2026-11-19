@@ -51,6 +51,19 @@ extension Service {
     }
   }
 
+  /// The `manager-model` request. With `model`, it saves the model in config.json's `manager` and uses it from
+  /// the next launch of each conversation. The answer is the model.
+  func managerModelRequest(_ args: JSON) throws -> JSON {
+    if let value = args["model"] {
+      guard let model = value.string else { throw APIError("the model is a name, such as sonnet") }
+      if let problem = Manager.modelProblem(model) { throw APIError(problem) }
+      try saveSetting(section: "manager", "model", .string(model))
+      managerModel = model
+      logLine("the Manager's model is \(model)")
+    }
+    return .object(["model": .string(managerModel)])
+  }
+
   /// The `operator` request: sends `text` to the operator, or without text
   /// opens it. It creates the operator when none exists. The answer is the
   /// operator's summary, with `delivery` when it took text. `from` and
@@ -84,12 +97,12 @@ extension Service {
   }
 
   /// The operator's id, or nil when none exists. When the store holds more
-  /// than one, it is the oldest. sbd logs the others and leaves them as they are.
-  func operatorID() -> String? {
+  /// than one, it is the oldest. sbd logs the others, unless `quiet`, and leaves them as they are.
+  func operatorID(quiet: Bool = false) -> String? {
     let operators = entries.values.map(\.session).filter { $0.kind == .operator }
       .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
     guard let oldest = operators.first else { return nil }
-    if operators.count > 1 {
+    if operators.count > 1, !quiet {
       let others = operators.dropFirst().map(\.id).joined(separator: ", ")
       logLine("found more than one operator. Using \(oldest.id), the oldest, and leaving \(others)")
     }

@@ -101,7 +101,7 @@ extension Service {
     let accounts = self.accounts.compactMap(\.claude)
     let listed = try listAgents(accounts, now: now)
     return queue.sync {
-      let owned = Set(macConversations.map(\.claudeSessionId))
+      let owned = Set(conversationOwners.map(\.claudeSessionId))
       let ids = Set(listed.map(\.id))
       remember(listed, owned: owned, ids: ids, now: now)
       return listed + exitedSessions(owned: owned, ids: ids, accounts: Set(accounts.map(\.folder)))
@@ -349,9 +349,14 @@ extension Service {
     return .success(c)
   }
 
-  /// The sessions whose conversation is one of this Mac's. A session on a host names a conversation of that
+  /// Each conversation of this Mac that a session owns, with the session's id. A session also owns the
+  /// conversations that it had before sbd started a fresh one. A session on a host names a conversation of that
   /// host, and the host's SessionStart hook chooses the id. It owns no conversation that import lists.
-  private var macConversations: [Session] { entries.values.map(\.session).filter { $0.host == nil } }
+  private var conversationOwners: [(claudeSessionId: String, session: String)] {
+    entries.values.filter { $0.session.host == nil }.flatMap { e in
+      ([e.session.claudeSessionId] + e.facts.pastConversations).map { ($0, e.session.id) }
+    }
+  }
 
   /// A Switchboard session whose conversation `id` names. `id` is a Claude
   /// session id, or a prefix that only one conversation has. A `/clear` or
@@ -359,8 +364,8 @@ extension Service {
   /// conversation. Two sessions can then hold one conversation, and this
   /// returns either of them.
   private func owner(of id: String) -> String? {
-    let owners = macConversations.filter { $0.claudeSessionId.hasPrefix(id) }
-    return Set(owners.map(\.claudeSessionId)).count == 1 ? owners.first?.id : nil
+    let owners = conversationOwners.filter { $0.claudeSessionId.hasPrefix(id) }
+    return Set(owners.map(\.claudeSessionId)).count == 1 ? owners.first?.session : nil
   }
 
   private func alreadyImported(_ ref: String, id: String) -> APIError? {
