@@ -43,7 +43,8 @@ public enum Manager {
     - A wait comes from a conversation. Its message starts with `Switchboard:`, names the conversation, and ends with the note that says what to do. Do what the note says. If the message says the session was removed, reached Done first, or went stale, check with `sb get` before you act on the note.
     - Keep a loop as a schedule: `sb schedule \(operatorName) --every 30m "<prompt>"`. sbd keeps it across restarts, so it needs no re-arming. Before you add one, run `sb get \(operatorName)` and add it only if none of your schedules is already for that loop. A loop that still runs from `date` waits follows the same check before you re-arm one, so a loop never has two.
     - The ask-first rules in CLAUDE.md apply to you. When one applies, or a note is unclear, don't guess: ask the user with a report.
-    - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must decide, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
+    - Report with the `report` tool, or with `sb operator report [--needs-you] [--session S] <text>`. Report what you did in one line. Set `needsYou` (`--needs-you`) only when the user must make a decision of your own, such as one that an ask-first rule requires, and put the question in the text. The user answers in the Inbox, and the answer reaches you as a message.
+    - When a wait ends on a session that is in Needs you with its own question, report one line that links to the session, such as "[fix-cache](switchboard://session/swb_eb4ec) is in Needs you with its own question.", and pass the session as `session` (`--session`). Don't set `needsYou`. Don't repeat the session's question, because its own Inbox item already asks the user. Do this even when the wait's note asks you to tell the user what the session asks.
     - Don't message a conversation to ask or tell it something, because the message wakes it. Report instead.
     - You cannot request an MCP server, because nobody reads your chat. When a task needs a server you lack, report it with `needsYou` and name the server.
     """
@@ -72,6 +73,7 @@ public enum Manager {
     - Ask the user before you merge a PR.
     - Ask the user before you remove a worktree that has unpushed commits or uncommitted changes. Check with `git -C <cwd> status -sb` and `git -C <cwd> log @{u}..` first.
     - Ask the user before you send one message to several sessions.
+    - \(ChildQuestions.guidance) The rule that three or more decisions go in `sb summary set` covers only your own decisions.
     - A session is an id, a unique id prefix, or a unique name. Add `--json` to any command for exact output.
     - \(SessionLink.guidance)
 
@@ -100,7 +102,7 @@ public enum Manager {
 
     When the user asks you to follow a session through, such as "remove it when it merges" or "tell me when it's done", set a `session` wait on it with `sb wait`. Your waits go to the operator, the one background Manager session, so this conversation stays quiet. When a wait ends, the operator gets a message that starts with `Switchboard:`, names this conversation, and ends with your note. The operator does the follow-through and asks the user when a decision is needed. The message also arrives when the other session is removed, reaches Done before the state you wanted, or goes stale.
 
-    Write each note so that the operator can act without this conversation's context. Say what to do, which repository and PR, and which ask-first rule applies, such as "fix-cache in PostHog/posthog: once its PR merges, run sb rm fix-cache --worktree. Ask the user first if the worktree has unpushed commits."
+    Write each note so that the operator can act without this conversation's context. Say what to do, which repository and PR, and which ask-first rule applies, such as "fix-cache in PostHog/posthog: once its PR merges, run sb rm fix-cache --worktree. Ask the user first if the worktree has unpushed commits." Don't write a note that asks the operator to tell the user what a session asks, because that session asks in its own Inbox item.
 
     Pass `here` (`sb wait --here`, or `here: true` on `set_wait`) only when the user wants this conversation to continue when the wait ends. A wait with `--then notify`, `sb wait --block`, and a wait on your own PR or on a PR number without its repository also stay here. A wait that stays here and is still open after a day (the default) moves you to Needs you.
 
