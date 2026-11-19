@@ -154,7 +154,9 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     #expect(try !sbd.promptsSince(s.id, after: 0).contains(Self.queuedText))
     #expect(sbd.stubInputCount(Self.queuedText) == 0)
     let shown = try sbd.sb("get", s.id)
-    #expect(Self.queuedLines(in: shown).count == 1, "\(shown)")
+    #expect(
+      Self.queuedLines(in: shown) == ["queued:  1 message waits for claude's next start. sb open \(s.id) starts it"],
+      "\(shown)")
     let mark = try sbd.lastEventId(s.id)
 
     try sbd.sb("open", s.id)
@@ -210,11 +212,37 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
 
     #expect(try sbd.waitForPrompts(s.id, after: mark, count: 1) == [Self.queuedText])
     try sbd.waitFor(s.id, "the reply to the queued message") { $0.lastReply == "Done: \(Self.queuedText)" }
+    // sbd records `delivered` after the paste returns, which can come after claude's reply.
+    try sbd.waitFor("the delivery of the queued message") {
+      try !sbd.events(s.id, "delivered", text: Self.queuedText).isEmpty
+    }
     #expect(try sbd.events(s.id, "delivered", text: Self.queuedText).count == 1)
     let launch = try #require(sbd.stubCalls().last { $0.args.contains(s.claudeSessionId) })
     #expect(launch.account == sbd.account("B"))
     #expect(launch.args.contains("--resume \(s.claudeSessionId)"), "\(launch.args)")
     #expect(try sbd.get(s.id).account == sbd.account("B"))
+  }
+
+  /// A paused session's held messages move with it, and the resume under B delivers them.
+  @Test func aMoveTakesAPausedStoppedSessionWithItsHeldMessages() throws {
+    let sbd = try instance()
+    let s = try sbd.pausedStopped()
+    try sbd.sb("send", s.id, "held note")
+    #expect(try sbd.get(s.id).account == sbd.account("A"))
+
+    let moved = try move(sbd, ["--session", s.id])
+
+    #expect(moved.status == 0, "\(moved.result)")
+    #expect(moved.result.moved == [s.id], "\(moved.result)")
+    #expect(try sbd.get(s.id).account == sbd.account("B"))
+    #expect(try sbd.heldCount(s.id) == 1)
+    let mark = try sbd.lastEventId(s.id)
+
+    try sbd.sb("resume", s.id)
+
+    #expect(try sbd.waitForPrompts(s.id, after: mark, count: 2) == [defaultResume, "held note"])
+    let launch = try #require(sbd.stubCalls().last { $0.args.contains(s.claudeSessionId) })
+    #expect(launch.account == sbd.account("B"))
   }
 
   /// The bulk move and the move with `--stop` list the stopped session as one that moves, their dry runs first,
@@ -289,6 +317,32 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     #expect(try sbd.waitForPrompts(s.id, after: mark, count: 2) == [Self.queuedText, "tick one"])
   }
 
+  /// A start that waits behind the full live cap delivers the queue, so its queue still counts as a message on
+  /// its way. The first due schedule queues the start, and the second waits for that start.
+  @Test func aSecondDueScheduleWaitsForAStartQueuedBehindTheLiveCap() throws {
+    let sbd = try Instance(accounts: ["A", "B"], inheriting: .unset, config: ["liveCap": 1])
+    let s = try AccountTests().stoppedSession(sbd)
+    let other = try sbd.new(prompt: "busy", name: "other")
+    try sbd.waitFor(other.id, "the other reply") { $0.lastReply == "Done: busy" }
+    // The tick never stops the session that the user opened last, so the start stays queued.
+    try sbd.sb("open", other.id)
+    let schedules = ScheduleFireTests()
+    let first = try schedules.schedule(sbd, s.id, "tick one")
+    let second = try schedules.schedule(sbd, s.id, "tick two")
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let ran = try sbd.waitFor(
+      "a run of either schedule",
+      fetch: { try [first.id, second.id].filter { try schedules.current(sbd, s.id, $0)?.last != nil } },
+      until: { !$0.isEmpty })
+    try sbd.tickThrice()
+    #expect(try [first.id, second.id].filter { try schedules.current(sbd, s.id, $0)?.last != nil } == ran)
+    #expect(ran.count == 1, "\(ran)")
+    #expect(try sbd.events(s.id).contains { $0.kind == "start-queued" })
+    #expect(try sbd.heldCount(s.id) == 1)
+  }
+
   // MARK: heldMessages and the queued: line
 
   /// `heldMessages` counts the queue of a session that is not paused, and `sb get` prints a `queued:` line.
@@ -298,7 +352,7 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
 
     #expect(try sbd.heldCount(s.id) == 1)
     let shown = try sbd.sb("get", s.id)
-    #expect(Self.queuedLines(in: shown).count == 1, "\(shown)")
+    #expect(Self.queuedLines(in: shown) == ["queued:  1 message waits for the turn to end"], "\(shown)")
   }
 
   /// A paused session's held messages show on its `paused:` line, not on a `queued:` line.
@@ -311,6 +365,6 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
 
     #expect(try sbd.heldCount(s.id) == 1)
     #expect(shown.contains("1 message held"), "\(shown)")
-    #expect(Self.queuedLines(in: try sbd.sb("get", s.id)).isEmpty, "\(shown)")
+    #expect(Self.queuedLines(in: shown).isEmpty, "\(shown)")
   }
 }

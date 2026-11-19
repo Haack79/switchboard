@@ -95,14 +95,15 @@ public final class Service {
   /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A stopped claude of a
   /// session that is not paused has no message on its way. A send launches that claude, and the launch takes
   /// the queued messages in order before the new one. A claude that exits before its SessionStart leaves its
-  /// queue for that next launch.
+  /// queue for that next launch. A start that waits behind the live cap does count, because a send then only
+  /// adds to the queue that the start delivers.
   func messageWaiting(_ e: Entry, now: Int64) -> Bool {
     if e.pending.isEmpty {
       guard let sent = e.inFlight else { return false }
       let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
       guard starting || now - sent < Service.inFlightMs else { return false }
     }
-    return claudeState(e.session.id) != .stopped || Pause.blocker(e.session) != nil
+    return claudeState(e.session.id) != .stopped || e.queuedSince != nil || Pause.blocker(e.session) != nil
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.
