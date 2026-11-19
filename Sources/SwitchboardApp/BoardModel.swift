@@ -115,8 +115,8 @@ final class BoardModel: ObservableObject {
   @Published var showingRecentPlaces = false
   var navigating = false
   /// The last reply of the sessions the Inbox showed, read from their
-  /// transcripts, by session id.
-  @Published var replies: [String: String] = [:]
+  /// transcripts, by session id. `hook` is the `lastReply` that the read was for.
+  @Published var replies: [String: (hook: String?, text: String)] = [:]
   /// The newest events of the sessions whose card details the Inbox showed,
   /// oldest first, by session id.
   @Published var recentEvents: [String: [Event]] = [:]
@@ -174,6 +174,11 @@ final class BoardModel: ObservableObject {
   @Published var deciding: Set<String> = []
   /// sbd's refusal of the last decision request, by session. The card shows it.
   @Published var decisionErrors: [String: String] = [:]
+  /// sbd's refusal of the last Clear wait, by session. The wait panel shows it.
+  @Published var waitErrors: [String: String] = [:]
+  /// The waits, as `<session>/<wait>`, whose Clear wait sbd has not answered. Their buttons stay disabled, so a
+  /// second click can't send it again.
+  @Published var clearingWaits: Set<String> = []
   /// The reply keys of the drafts whose `draft-post` sbd has not answered.
   @Published var postingDrafts: Set<String> = []
   /// The reply keys of the drafts whose `draft-check` sbd has not answered.
@@ -277,8 +282,8 @@ final class BoardModel: ObservableObject {
   /// Issue reads and Starts, which wait on GitHub, gh, or git. They run here so the session list and other
   /// actions do not wait behind them.
   let issueWork = DispatchQueue(label: "switchboard.issues", attributes: .concurrent)
-  /// Item-context reads, which can take seconds for a long or remote transcript. They run apart from the poll.
-  /// The queue is serial, so two reads for one session answer in the order the user asked for them.
+  /// Item-context and reply reads, which can take seconds for a long or remote transcript. They run apart from the
+  /// poll. The queue is serial, so two reads for one session answer in the order the user asked for them.
   private let contextWork = DispatchQueue(label: "switchboard.context")
   private let worker = DispatchQueue(label: "switchboard.actions")
   /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
@@ -1352,15 +1357,35 @@ final class BoardModel: ObservableObject {
   }
 
   /// Reads the session's last reply from its transcript, which can be large,
-  /// so off the main thread.
-  func loadReply(_ session: String) {
-    let client = client
-    poller.async {
-      let text = try? client.call("reply", ["session": .string(session)])["reply"]?.string
+  /// so off the main thread. The text belongs to the session's `lastReply` at the time of the call.
+  func loadReply(_ session: SessionSummary) {
+    let send = send
+    let (id, hook) = (session.id, session.lastReply)
+    contextWork.async {
+      let text = try? send("reply", ["session": .string(id)])["reply"]?.string
       Task { @MainActor in
-        if let text, self.replies[session] != text { self.replies[session] = text }
+        guard let text, self.replies[id].map({ $0.hook != hook || $0.text != text }) ?? true else { return }
+        self.replies[id] = (hook, text)
       }
     }
+  }
+
+  /// The session's last reply: the transcript's text when it was read for the current `lastReply`, and
+  /// `lastReply` otherwise.
+  func reply(for session: SessionSummary) -> String? {
+    guard let read = replies[session.id], read.hook == session.lastReply else { return session.lastReply }
+    return read.text
+  }
+
+  /// Asks sbd to drop one wait of the session. A refusal shows in the wait panel, not in the error banner.
+  func clearWait(_ session: String, wait: String) {
+    let key = "\(session)/\(wait)"
+    guard clearingWaits.insert(key).inserted else { return }
+    perform(
+      "clear-wait", ["session": .string(session), "wait": .string(wait)],
+      then: { _ in self.waitErrors[session] = nil },
+      failed: { self.waitErrors[session] = "\($0)" },
+      finally: { self.clearingWaits.remove(key) })
   }
 
   /// Reads the blocks of the session's recent assistant messages for the copy buttons in its Claude terminal.

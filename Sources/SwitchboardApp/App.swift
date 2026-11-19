@@ -212,8 +212,7 @@ struct MenuBarContent: View {
       Text("Nothing needs you")
     } else {
       ForEach(model.needsUser) { s in
-        let title = "\(model.inboxName(s)): \(model.inboxLine(s))"
-        Button(title) {
+        Button(Self.title(name: model.inboxName(s), line: model.inboxLine(s))) {
           model.selection = s.id
           show()
         }
@@ -222,6 +221,12 @@ struct MenuBarContent: View {
     Divider()
     Button("Open Switchboard") { show() }
     Button("Quit") { NSApp.terminate(nil) }
+  }
+
+  /// A menu item names the session and its Inbox line, cut at `Triage.titleLength`, because a rule title can reach
+  /// 100 characters.
+  static func title(name: String, line: String) -> String {
+    "\(name): \(truncated(line, max: Triage.titleLength))"
   }
 
   private func show() {

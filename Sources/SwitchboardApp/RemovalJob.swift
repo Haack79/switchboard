@@ -163,12 +163,14 @@ struct FailedRemovalActions: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
 
+  static let keepHelp = "Cancel the delete and keep the session"
+
   var body: some View {
     HStack(spacing: 8) {
       // sbd refuses Keep once git has dropped the worktree's record.
       if session.removal?.released != true {
         Button("Keep") { model.keepRemoval(session.id) }
-          .help("Keep the session in Done")
+          .help(Self.keepHelp)
       }
       Button("Retry") { model.retryRemoval(session.id) }
         .help("Ask sbd to delete the session again")

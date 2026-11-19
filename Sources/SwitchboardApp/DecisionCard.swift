@@ -3,9 +3,9 @@ import SwitchboardCore
 
 /// The Inbox message of a session, in sections that never change their
 /// order: the Summary (what it did and needs, and what to read before
-/// deciding), Before you merge on a Ready to merge item, the Drafts when the
-/// session wrote a message for the user to send, the Details (behind a
-/// disclosure), and the Action (the buttons).
+/// deciding), the overdue waits that raised the item, Before you merge on a
+/// Ready to merge item, the Drafts when the session wrote a message for the
+/// user to send, the Details (behind a disclosure), and the Action (the buttons).
 /// An item with decisions shows them one step at a time in its Action. Its
 /// Summary shrinks to its first line, and its callouts move into Details.
 /// The step view owns ⌘⇧Return.
@@ -20,22 +20,33 @@ struct DecisionCard: View {
   var body: some View {
     let list = session.stepList
     let held = Self.heldDrafts(item, listOpen: list != nil)
+    let reply = Self.summaryReply(
+      item: item, session: session, reply: model.reply(for: session), listOpen: list != nil)
     VStack(alignment: .leading, spacing: Self.rowSpacing) {
       header
       VStack(alignment: .leading, spacing: 8) {
         SectionTitle(text: "Summary")
-        switch Self.summaryLayout(item: item, listOpen: list != nil) {
+        let shown = Self.shownItem(item, reply: reply)
+        switch Self.summaryLayout(item: shown, listOpen: list != nil) {
         case .firstLine:
-          if let line = item.summary.split(separator: "\n").first { summary(String(line)) }
+          if let line = shown.summary.split(separator: "\n").first { summary(String(line)) }
         case .columns:
           SummaryCalloutColumns {
-            summary(item.summary)
+            summary(shown.summary)
             callouts
           }
         case .stack:
-          if !item.summary.isEmpty { summary(item.summary) }
+          if !shown.summary.isEmpty { summary(shown.summary) }
           if !item.callouts.isEmpty { callouts }
         }
+        switch reply {
+        case .expanded(let text): LastReplySection(text: text, caption: "Latest reply")
+        case .collapsed(let text): ReplyDisclosure(text: text).id(item.ref)
+        case .none, .replacesSummary: EmptyView()
+        }
+      }
+      if Self.showsWaitPanel(item, session: session) {
+        WaitPanel(store: model.references, session: session, ids: item.details.overdueWaits)
       }
       if Self.showsReview(item, listOpen: list != nil), let review = item.review {
         MergeReviewPanel(session: session, item: item, review: review, held: held).id(item.ref)
@@ -53,9 +64,44 @@ struct DecisionCard: View {
         } else if session.decisionsSent == true {
           Text("Sent your answers. The session gets them as its next prompt.").foregroundStyle(.secondary)
         }
-        actions
+        actions(reply)
       }
     }
+  }
+
+  /// What the Summary shows of the session's last reply. The choice reads the hook's `lastReply`, as sbd's
+  /// `addReplyAsk` does, and the text shown is `reply`, the transcript's text when it was read.
+  enum SummaryReply: Equatable {
+    case none
+    case replacesSummary(String)
+    case expanded(String)
+    case collapsed(String)
+  }
+
+  static func summaryReply(item: TriageItem, session: SessionSummary, reply: String?, listOpen: Bool)
+    -> SummaryReply
+  {
+    let hook = session.lastReply ?? ""
+    let text = reply.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? hook
+    switch Triage.replyPresentation(item: item, reply: hook, listOpen: listOpen) {
+    case .none: return .none
+    case .replacesSummary: return .replacesSummary(text)
+    case .expanded: return .expanded(text)
+    case .collapsed: return .collapsed(text)
+    }
+  }
+
+  /// The item with the reply in place of its summary when the reply replaces it.
+  static func shownItem(_ item: TriageItem, reply: SummaryReply) -> TriageItem {
+    guard case .replacesSummary(let text) = reply else { return item }
+    var shown = item
+    shown.summary = text
+    return shown
+  }
+
+  /// Whether the card shows the wait panel: the item names an overdue wait that the session still has.
+  static func showsWaitPanel(_ item: TriageItem, session: SessionSummary) -> Bool {
+    item.details.overdueWaits.contains { id in session.waits.contains { $0.id == id } }
   }
 
   /// How the Summary shows the item's summary and callouts.
@@ -97,9 +143,12 @@ struct DecisionCard: View {
   }
 
   /// Whether the Action says that the item has no summary: a fallback item
-  /// with no options whose reply gave no closing section.
-  static func showsMissingSummary(_ item: TriageItem) -> Bool {
-    item.source == .fallback && item.summary.isEmpty && item.options.isEmpty
+  /// with no options whose reply gave no closing section, and whose reply does not show in its place.
+  static func showsMissingSummary(_ item: TriageItem, reply: SummaryReply = .none) -> Bool {
+    guard case .replacesSummary = reply else {
+      return item.source == .fallback && item.summary.isEmpty && item.options.isEmpty
+    }
+    return false
   }
 
   private func summary(_ text: String) -> some View {
@@ -114,17 +163,20 @@ struct DecisionCard: View {
 
   private var header: some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
+      // A rule title can reach 100 characters, so it wraps.
       InlineText(plain: session.inboxTitle).font(.title3.bold()).textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
       Text(item.kind.rawValue).font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 2)
         .background(Capsule().fill(session.state.color.opacity(0.18)))
         .foregroundStyle(session.state.color)
+        .fixedSize()
         .accessibilityLabel("Kind: \(item.kind.rawValue)")
-      NotesButton(session: session)
+      NotesButton(session: session).fixedSize()
     }
   }
 
   @ViewBuilder
-  private var actions: some View {
+  private func actions(_ reply: SummaryReply) -> some View {
     if session.canMerge {
       MergeBatch(sessions: session.readyToMergeSessions(all: model.sessions))
     }
@@ -144,7 +196,7 @@ struct DecisionCard: View {
     } else if session.openPrompt {
       // A message would only queue behind the open dialog. The Summary says why the prompt has no card.
       OpenTerminalButton().disabled(!session.runsClaude)
-    } else if Self.showsMissingSummary(item) {
+    } else if Self.showsMissingSummary(item, reply: reply) {
       Text("No summary yet. Details shows the reply.").font(.caption).foregroundStyle(.secondary)
     }
     // A Ready to merge card offers Acknowledge as one of its options.
@@ -355,6 +407,7 @@ struct CardDetails: View {
   /// The item's callouts, when the step view takes their place on the card.
   let callouts: [Callout]
   @State private var open: Bool
+  @State private var latestStepsOpen = false
   /// How many steps before the item to read.
   @State private var steps = ItemContext.defaultSteps
   /// A debug setting with no menu item: `defaults write <bundle id> showsRecentEvents -bool true`.
@@ -385,10 +438,14 @@ struct CardDetails: View {
   }
 
   enum Part: Hashable {
-    case toolInput, targets, callouts, transcript, pullRequest, waits, lastReply, recentEvents
+    /// `latestSteps` is the transcript of an unanchored context, last and in a closed group.
+    case toolInput, targets, callouts, transcript, pullRequest, waits, lastReply, recentEvents, latestSteps
   }
 
+  static let latestStepsTitle = "Latest steps in the conversation"
+
   /// The parts that Details shows, in order. `context` must already belong to the item.
+  /// The steps of an item that didn't come from the conversation can be about anything, so they go last.
   /// `showsRecentEvents` is true only when the setting is on and the loaded events are not empty.
   static func parts(
     details: TriageDetails, callouts: [Callout], context: ItemContext?, reply: String?, session: SessionSummary,
@@ -398,17 +455,20 @@ struct CardDetails: View {
     if details.toolInput != nil { parts.append(.toolInput) }
     if !details.targets.isEmpty { parts.append(.targets) }
     if !callouts.isEmpty { parts.append(.callouts) }
-    if let context, !context.steps.isEmpty { parts.append(.transcript) }
+    let steps = context.map { !$0.steps.isEmpty } ?? false
+    let unanchored = context?.anchor == .unanchored
+    if steps, !unanchored { parts.append(.transcript) }
     if session.pr != nil { parts.append(.pullRequest) }
     if !session.waits.isEmpty { parts.append(.waits) }
     if lastReply(context: context, reply: reply) != nil { parts.append(.lastReply) }
     if showsRecentEvents { parts.append(.recentEvents) }
+    if steps, unanchored { parts.append(.latestSteps) }
     return parts
   }
 
   var body: some View {
     let context = Self.context(for: ref, in: model.itemContexts[session.id])
-    let reply = model.replies[session.id] ?? session.lastReply
+    let reply = model.reply(for: session)
     let events = showsRecentEvents ? model.recentEvents[session.id] ?? [] : []
     let parts = Self.parts(
       details: details, callouts: callouts, context: context, reply: reply, session: session,
@@ -430,7 +490,15 @@ struct CardDetails: View {
               ForEach(Array(callouts.enumerated()), id: \.offset) { CalloutView(callout: $1) }
             }
           case .transcript:
-            if let context { transcript(context) }
+            if let context { transcript(context, title: context.anchored ? "Transcript" : "Latest steps") }
+          case .latestSteps:
+            if let context {
+              DisclosureGroup(isExpanded: $latestStepsOpen) {
+                transcript(context, title: nil).padding(.top, 4)
+              } label: {
+                Text(Self.latestStepsTitle).font(.caption.bold()).foregroundStyle(.secondary)
+              }
+            }
           case .pullRequest:
             if let pr = session.pr {
               section("Pull request") {
@@ -464,10 +532,10 @@ struct CardDetails: View {
   }
 
   /// The steps scroll in a box that starts at the bottom, so the item's own step shows first.
-  private func transcript(_ context: ItemContext) -> some View {
+  private func transcript(_ context: ItemContext, title: String?) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(alignment: .firstTextBaseline) {
-        Text(context.anchored ? "Transcript" : "Latest steps").font(.caption.bold()).foregroundStyle(.secondary)
+        if let title { Text(title).font(.caption.bold()).foregroundStyle(.secondary) }
         Spacer()
         if session.transcriptTarget != nil {
           Button("Open in transcript") { model.openTranscript(session) }.buttonStyle(.link).font(.caption)
@@ -510,14 +578,30 @@ struct CardDetails: View {
   }
 }
 
-/// The session's last reply as Markdown, under a "Last reply" caption.
+/// The session's last reply as Markdown, under a caption.
 struct LastReplySection: View {
   let text: String
+  var caption = "Last reply"
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text("Last reply").font(.caption.bold()).foregroundStyle(.secondary)
+      Text(caption).font(.caption.bold()).foregroundStyle(.secondary)
       MarkdownView(text: text)
+    }
+  }
+}
+
+/// A "Read full reply" button that shows the session's last reply in place.
+struct ReplyDisclosure: View {
+  let text: String
+  @State private var open = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Button(open ? "Hide full reply" : "Read full reply") { open.toggle() }
+        .buttonStyle(.link)
+        .accessibilityHint(open ? "Hides the session's last reply" : "Shows the session's last reply here")
+      if open { MarkdownView(text: text) }
     }
   }
 }

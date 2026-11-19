@@ -210,15 +210,65 @@ private func startedFollowup(_ id: String) -> SessionSummary {
     #expect(parts == [.transcript])
   }
 
-  /// Stage 1 keeps an unanchored transcript in the place of an anchored one, before the PR and the waits.
-  @Test func anUnanchoredRuleItemShowsItsStepsBeforeThePRAndTheWaits() {
+  // MARK: Unanchored steps collapse (Decision 6, Decision 19 Q2)
+
+  /// The newest steps of a wait, rule, or report item can be about anything, so they go last behind a closed group.
+  @Test func anUnanchoredRuleItemShowsItsStepsLastInAClosedGroup() {
     let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false)
 
     let parts = CardDetails.parts(
       details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
       showsRecentEvents: false)
 
+    #expect(parts == [.pullRequest, .waits, .latestSteps])
+  }
+
+  @Test(arguments: ["rule:CI on #1: still open after 3h", "report:7", "rule:Delete failed"])
+  func everyUnanchoredItemCollapsesItsSteps(_ ref: String) {
+    let context = itemContext(ref: ref, anchor: .unanchored, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [Callout(kind: .info, title: "i")], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.callouts, .latestSteps])
+  }
+
+  /// "Last" is after every other part, the debug list of recent events included.
+  @Test func theClosedStepsComeAfterTheRecentEvents() {
+    let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
+      showsRecentEvents: true)
+
+    #expect(parts == [.pullRequest, .waits, .recentEvents, .latestSteps])
+  }
+
+  /// A context whose anchor sbd could not find keeps its steps in today's place, open, with its own caption.
+  @Test(arguments: [ItemContext.Anchor.tool, .reply, .end])
+  func aContextWhoseAnchorWasNotFoundKeepsItsStepsInPlace(_ anchor: ItemContext.Anchor) {
+    let context = itemContext(ref: "card:1", anchor: anchor, anchored: false)
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?", session: workSession(),
+      showsRecentEvents: false)
+
     #expect(parts == [.transcript, .pullRequest, .waits])
+  }
+
+  @Test func anUnanchoredContextWithoutStepsShowsTheLastReply() {
+    let context = itemContext(ref: "rule:Wait for CI", anchor: .unanchored, anchored: false, steps: [])
+
+    let parts = CardDetails.parts(
+      details: TriageDetails(), callouts: [], context: context, reply: "Ship it?",
+      session: workSession(withPRAndWait: false), showsRecentEvents: false)
+
+    #expect(parts == [.lastReply])
+  }
+
+  @Test func theClosedStepsAreTitledLatestStepsInTheConversation() {
+    #expect(CardDetails.latestStepsTitle == "Latest steps in the conversation")
   }
 
   @Test func aMissingContextShowsTheLastReply() {
