@@ -97,4 +97,17 @@ import Testing
   func anotherToolNamesNoSkill(_ tool: String, _ input: JSON) {
     #expect(SkillCommand.name(inToolCall: tool, input: input) == nil)
   }
+
+  // MARK: Resolving a typed name
+
+  /// A name with a `:` is never a bare name. So `x:s` doesn't load `p:x:s`.
+  @Test func aNameWithAColonResolvesOnlyToItself() {
+    #expect(SkillCommand.resolve("x:s", among: ["p:x:s"]) == nil)
+    #expect(SkillCommand.resolve("p:s", among: ["p:s"]) == "p:s")
+  }
+
+  @Test func aBareNameResolvesToTheOneNameWhosePartAfterTheFirstColonMatches() {
+    #expect(SkillCommand.resolve("s", among: ["p:s", "p:ss", "s:p"]) == "p:s")
+    #expect(SkillCommand.resolve("s", among: ["sp:s2"]) == nil)
+  }
 }

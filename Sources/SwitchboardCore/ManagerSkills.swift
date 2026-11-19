@@ -452,9 +452,7 @@ public enum SkillCommand {
   public static func resolve(_ name: String, among names: some Collection<String>) -> String? {
     if names.contains(name) { return name }
     guard !name.contains(":") else { return nil }
-    let plugins = names.filter { full in
-      full.firstIndex(of: ":").map { full[full.index(after: $0)...] == name } ?? false
-    }
+    let plugins = names.filter { full in full.drop { $0 != ":" }.dropFirst() == name }
     return plugins.count == 1 ? plugins.first : nil
   }
 
@@ -515,13 +513,21 @@ public enum ManagerSkillGate {
     case .armed(let armed)? where armed == name: return .bypassed
     default: break
     }
-    // A config.json name decides before a plugin skill of the same bare name.
-    let resolved = settings.override(name) == nil ? SkillCommand.resolve(name, among: catalog.keys) ?? name : name
+    let resolved = resolve(name, catalog: catalog, settings: settings)
     let key = catalog[resolved]?.key(model: settings.model)
     guard let found = ManagerSkillRow.label(of: resolved, key: key, settings: settings, labels: labels) else {
       return .unchecked(key.flatMap { failures[$0] })
     }
     return found.label == .work ? .blocked(by: found.by) : .allowed(by: found.by)
+  }
+
+  /// The name that the gate decides for a typed name. A config.json name decides before a plugin skill of the same
+  /// bare name.
+  public static func resolve(_ name: String, catalog: [String: CatalogEntry], settings: ManagerSkillSettings)
+    -> String
+  {
+    guard settings.override(name) == nil else { return name }
+    return SkillCommand.resolve(name, among: catalog.keys) ?? name
   }
 
   /// The reason of a UserPromptSubmit block, which Claude Code shows to the user. It holds only the skill's name,

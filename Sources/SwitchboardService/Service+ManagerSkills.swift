@@ -319,9 +319,10 @@ extension Service {
   /// that sbd knows, so it records nothing. Runs on the state queue.
   private func recordSkillUnchecked(_ id: String, _ name: String, account: String, _ failure: SkillFailure?) {
     let catalog = skillIndex[account] ?? [:]
-    guard let entry = SkillCommand.resolve(name, among: catalog.keys).flatMap({ catalog[$0] }) else { return }
+    let settings = config.managerSkills
+    guard let entry = catalog[ManagerSkillGate.resolve(name, catalog: catalog, settings: settings)] else { return }
     let why = failure?.category.rawValue ?? "unlabeled"
-    let key = entry.key(model: config.managerSkills.model) ?? "\(account)/\(name)"
+    let key = entry.key(model: settings.model) ?? "\(account)/\(name)"
     guard skillUnchecked.insert("\(why) \(key)").inserted else { return }
     var data: [String: JSON] = ["skill": .string(name), "why": .string(why)]
     if let failure { data["error"] = .string(failure.message) }

@@ -293,14 +293,6 @@ private func blocks(_ decision: ManagerSkillGate.Decision) -> Bool {
     #expect(decide("s", entries, settings: settings(work: ["p:s"])) == .blocked(by: .config))
   }
 
-  /// A name with a `:` is never a bare name, so `x:s` doesn't load `p:x:s`.
-  @Test func aNameWithAColonResolvesOnlyToItself() {
-    #expect(SkillCommand.resolve("x:s", among: ["p:x:s"]) == nil)
-    #expect(SkillCommand.resolve("p:s", among: ["p:s"]) == "p:s")
-    #expect(SkillCommand.resolve("s", among: ["p:s", "p:ss", "s:p"]) == "p:s")
-    #expect(SkillCommand.resolve("s", among: ["sp:s2"]) == nil)
-  }
-
   @Test func aBuiltInNameIsIgnoredEvenWithAPluginCommandOfThatName() {
     let entries = catalog(entry("p:clear", origin: .plugin))
 
