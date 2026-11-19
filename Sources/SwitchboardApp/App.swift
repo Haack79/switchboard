@@ -62,6 +62,8 @@ struct SwitchboardApp: App {
           Button("Show \(view.title)") { model.show(view) }
             .keyboardShortcut(KeyEquivalent(view.shortcutKey))
         }
+        Button("New Loop…") { model.loopEditor = .new }
+          .disabled(model.presentingSheet)
         Button("Filter Sessions…") { model.showingFilter.toggle() }
           .keyboardShortcut("o", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)

@@ -33,6 +33,11 @@ struct LoopRow: Identifiable {
   }
 }
 
+extension SessionSummary {
+  /// The name, with the host when the session runs on one, as the Loops view and the loop editor show it.
+  var nameWithHost: String { host.map { "\(name) · \($0)" } ?? name }
+}
+
 extension BoardModel {
   /// The shown sessions that have a loop, by name. The Loops view's session filter lists them.
   var loopSessions: [SessionSummary] {
@@ -66,6 +71,12 @@ extension BoardModel {
     allLoopRows(now: now).filter(\.status.needsAttention).count
   }
 
+  /// The loop that an Edit… request names, from every listed session, or nil for New Loop… or a loop that is gone.
+  func editedSchedule(_ request: LoopEditorRequest) -> Schedule? {
+    guard case .edit(let id) = request else { return nil }
+    return allSessions.lazy.flatMap { $0.schedules ?? [] }.first { $0.id == id }
+  }
+
   /// The focused loop while the list shows it, else the first row.
   var currentLoop: LoopRow? { currentLoop(in: loopRows(now: nowMs())) }
 
@@ -91,7 +102,7 @@ extension BoardModel {
     }
   }
 
-  private static func byName(_ a: SessionSummary, _ b: SessionSummary) -> Bool {
+  static func byName(_ a: SessionSummary, _ b: SessionSummary) -> Bool {
     switch a.name.localizedStandardCompare(b.name) {
     case .orderedAscending: true
     case .orderedDescending: false

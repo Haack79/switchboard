@@ -79,7 +79,7 @@ struct ScheduleTiming: View {
   }
 }
 
-/// Pause or Resume, Run Now, and Delete…, which asks first because the prompt is lost.
+/// Pause or Resume, Run Now, Edit…, and Delete…, which asks first because the prompt is lost.
 struct ScheduleActions: View {
   @EnvironmentObject var model: BoardModel
   let schedule: Schedule
@@ -100,6 +100,9 @@ struct ScheduleActions: View {
         .help(caption.runNowBlocker ?? "Run the loop now, or once its session is free.")
         .accessibilityLabel("Run loop now: \(caption.prompt)")
         .accessibilityHint(caption.runNowBlocker ?? "")
+      Button("Edit…") { model.loopEditor = .edit(schedule.id) }
+        .help("Change the loop's interval or prompt")
+        .accessibilityLabel("Edit loop: \(caption.prompt)")
       Button("Delete…") { confirmingDelete = true }
         .help("Delete the loop. It does not run again.")
         .accessibilityLabel("Delete loop: \(caption.prompt)")

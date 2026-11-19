@@ -14,7 +14,9 @@ struct LoopsView: View {
         ContentUnavailableView {
           Label("No loops", systemImage: MainView.loops.symbol)
         } description: {
-          Text("A loop sends a prompt to a session on an interval. `sb schedule` adds one.")
+          Text("A loop sends a prompt to a session on an interval. New Loop… or `sb schedule` adds one.")
+        } actions: {
+          NewLoopButton()
         }
       } else {
         ListDetailSplit {
@@ -33,7 +35,17 @@ struct LoopsView: View {
   }
 }
 
-/// The session filter and the sort menu.
+/// Opens the loop editor for a new loop.
+private struct NewLoopButton: View {
+  @EnvironmentObject var model: BoardModel
+
+  var body: some View {
+    Button("New Loop…") { model.loopEditor = .new }
+      .help("Add a loop that sends a prompt to a session on an interval")
+  }
+}
+
+/// The session filter, the sort menu, and New Loop….
 private struct LoopListHeader: View {
   @EnvironmentObject var model: BoardModel
 
@@ -42,7 +54,7 @@ private struct LoopListHeader: View {
       Picker("Session", selection: Binding(get: { model.loopSessionChoice }, set: { model.loopSessionFilter = $0 })) {
         Text("All Sessions").tag(String?.none)
         Divider()
-        ForEach(model.loopSessions) { Text(LoopSessionLink.title($0)).tag(Optional($0.id)) }
+        ForEach(model.loopSessions) { Text($0.nameWithHost).tag(Optional($0.id)) }
       }
       .pickerStyle(.menu)
       .labelsHidden()
@@ -59,6 +71,8 @@ private struct LoopListHeader: View {
       .fixedSize()
       .help("Sort the loops by status or by session. The loops that need attention stay on top")
       .accessibilityLabel("Sort")
+      Spacer(minLength: 0)
+      NewLoopButton().fixedSize()
     }
     .padding(8)
   }
@@ -118,17 +132,13 @@ private struct LoopSessionLink: View {
   @EnvironmentObject var model: BoardModel
   let row: LoopRow
 
-  static func title(_ session: SessionSummary) -> String {
-    session.host.map { "\(session.name) · \($0)" } ?? session.name
-  }
-
   var body: some View {
-    Button(Self.title(row.session)) { model.showInSidebar(row.session) }
+    Button(row.session.nameWithHost) { model.showInSidebar(row.session) }
       .buttonStyle(.link)
       .font(.caption)
       .lineLimit(1)
       .help("Open \(row.session.name)")
-      .accessibilityLabel("Open session \(Self.title(row.session)) of loop: \(row.schedule.prompt)")
+      .accessibilityLabel("Open session \(row.session.nameWithHost) of loop: \(row.schedule.prompt)")
   }
 }
 

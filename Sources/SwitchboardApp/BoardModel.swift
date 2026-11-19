@@ -131,9 +131,15 @@ final class BoardModel: ObservableObject {
   var showingDoneRemoval: Bool { doneRemoval != nil }
   /// The quick-ask panel's state, or nil while it is closed.
   @Published var quickAsk: QuickAskState?
+  /// The New Loop… or Edit… sheet's opening, or nil while it is closed. A save closes it once sbd accepts the loop.
+  @Published var loopEditor: LoopEditorRequest? { didSet { loopEditorOpening += 1 } }
+  /// Changes on every open and close of the loop editor, so a late save answer can tell a reopened editor from its own.
+  private(set) var loopEditorOpening = 0
+  /// A loop editor's save is on its way to sbd, so a second Save would add a second loop.
+  @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil
+      || pickingSnoozeTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)

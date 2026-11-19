@@ -84,6 +84,10 @@ struct ContentView: View {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
   }
 
+  private var isEditingLoop: Binding<Bool> {
+    Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
+  }
+
   private var isShowingQuickAsk: Binding<Bool> {
     Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
   }
@@ -196,6 +200,15 @@ struct ContentView: View {
     }
     .sheet(isPresented: isPickingSnoozeTime) {
       if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
+    .sheet(isPresented: isEditingLoop) {
+      if let request = model.loopEditor {
+        LoopEditor(
+          request: request, schedule: model.editedSchedule(request),
+          choices: LoopEditor.sessionChoices(model.sessions, operatorID: model.operatorSession?.id)
+        )
+        .environmentObject(model)
+      }
     }
     .inlineLinks(model)
   }
