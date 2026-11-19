@@ -57,6 +57,8 @@ import Testing
   @Test func theChatGuideNamesTheScheduleTools() {
     #expect(Chat.guide.contains("add_schedule"))
     #expect(Chat.guide.contains("remove_schedule"))
+    #expect(Chat.guide.contains("edit_schedule"))
+    #expect(Chat.guide.contains("run_schedule"))
   }
 
   @Test func theOperatorIsNamedOperator() {
