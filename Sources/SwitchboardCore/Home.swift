@@ -176,7 +176,8 @@ public struct Config: Codable, Equatable, Sendable {
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
-      quickAsk, manager
+      quickAsk
+    case manager
     case issues
     case recheck = "recheckSeconds"
     case testTrashOtherVolume

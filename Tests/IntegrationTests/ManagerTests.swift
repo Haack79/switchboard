@@ -166,7 +166,7 @@ import Testing
     let told = try sbd.waitFor(parent.id, "the message") { $0.lastReply?.hasPrefix("Done: Switchboard:") == true }
     #expect(
       told.lastReply
-        == "Done: Switchboard: sessions you started changed: kid (\(kid.id)) needs you: read its last reply and decide what's next."
+        == "Done: Switchboard: sessions you started changed: kid (\(kid.id)) needs you in its own Inbox item (switchboard://session/\(kid.id)): read its last reply and decide what's next."
     )
     #expect(try sbd.events(parent.id).filter { $0.kind == "sent" }.count == 1)
   }

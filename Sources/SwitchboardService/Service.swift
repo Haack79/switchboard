@@ -1364,7 +1364,8 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    if session.kind == .manager { config.manager.apply(to: &env) }
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
