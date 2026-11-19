@@ -11,8 +11,7 @@ extension Instance {
     let config: [String: JSON] = [
       "github": [
         "gh": .string("\(FakeGitHub.fixtures)/gh-api-stub"), "url": .string(github.url), "pollSeconds": 0,
-      ],
-      "tickSeconds": 1,
+      ]
     ]
     return try Instance(config: config.merging(extra) { $1 })
   }

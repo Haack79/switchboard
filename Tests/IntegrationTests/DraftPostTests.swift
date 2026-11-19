@@ -563,7 +563,8 @@ extension Instance {
 
     _ = try sbd.postDraft(s.id)
     try sbd.waitForPost(s.id, "unknown")
-    Thread.sleep(forTimeInterval: 3)
+    // sbd ticks every 0.2 s, so about five ticks run.
+    Thread.sleep(forTimeInterval: 1)
 
     #expect(try sbd.draftPost(s.id)?["state"]?.string == "unknown")
     #expect(!sbd.askedForTheLogin(), "\(sbd.ghCalls())")
