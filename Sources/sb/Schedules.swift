@@ -32,8 +32,8 @@ func scheduleCommand(_ a: Args) {
   case "edit":
     guard a.positional.count >= 2 else { die("schedule edit needs a schedule id") }
     var args: [String: JSON] = ["schedule": .string(a.positional[1])]
-    let prompt = a.positional.dropFirst(2).joined(separator: " ")
-    if !prompt.isEmpty { args["prompt"] = .string(prompt) }
+    // An empty prompt argument still goes to sbd, which refuses it and keeps the interval too.
+    if a.positional.count > 2 { args["prompt"] = .string(a.positional.dropFirst(2).joined(separator: " ")) }
     if let every = a.values["--every"] { args["every"] = .string(every) }
     guard args.count > 1 else { die("schedule edit needs --every or a prompt") }
     result = call("edit-schedule", args)

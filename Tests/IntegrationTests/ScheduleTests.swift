@@ -827,6 +827,29 @@ extension ScheduleTests {
     #expect(try sbd.get(s.id).schedules == [r.schedule])
   }
 
+  @Test func editRefusesAnEmptyPromptArgumentWithAnIntervalAndKeepsTheRow() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let result = try sbd.run(["schedule", "edit", r.schedule.id, "--every", "1h", "", "--json"])
+
+    #expect(result.status != 0)
+    #expect(try sbd.get(s.id).schedules == [r.schedule])
+  }
+
+  /// `--json` before the subcommand still lets `edit` read its flags.
+  @Test func aLeadingFlagStillReadsTheEditsInterval() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let r = try schedule(sbd, s.id)
+
+    let changed = try row(sbd.sb(["schedule", "--json", "edit", r.schedule.id, "--every", "1h"]))
+
+    #expect(changed.schedule.every == 3_600_000)
+    #expect(changed.schedule.prompt == r.schedule.prompt)
+  }
+
   /// sbd refuses on its own, for a caller that skips the CLI.
   @Test func theEditRequestRefusesWhatTheCLIRefuses() throws {
     let sbd = try Instance()
