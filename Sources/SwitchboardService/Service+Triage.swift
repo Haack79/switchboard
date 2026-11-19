@@ -187,6 +187,14 @@ extension Service {
 
   // MARK: Summaries
 
+  /// The account of a one-shot call that sbd makes for the session `id`: `triage.account` when it is set, or else
+  /// the session's own. `key` is the account that the call's quota counts against. `account` is the override that
+  /// `headlessEnv` applies, nil when the call takes the session's pane environment.
+  func triageAccount(for id: String) -> (key: String, account: ClaudeAccount?) {
+    let account = config.triage.account.map(ClaudeAccount.init(folder:))
+    return (account?.folder ?? claudeAccount(of: id).key, account)
+  }
+
   /// Starts each model call that `verdict` asks for: the turn's summary and the PR's merge brief.
   func startSummaries(_ id: String, _ verdict: Verdict) {
     summarizeTurn(id, verdict)
@@ -205,9 +213,8 @@ extension Service {
     // A skip records an event, which calls this again. Setting `summaryAttempt` first makes that call return at the
     // guard above.
     entries[id]?.summaryAttempt = stop
-    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
-    let account = triageAccount?.folder ?? claudeAccount(of: id).key
-    if let skip = summarySkip(e.facts, account: account) {
+    let triage = triageAccount(for: id)
+    if let skip = summarySkip(e.facts, account: triage.key) {
       record(id, "triage", ["stop": .number(Double(stop)), "skipped": .string(skip)])
       return
     }
@@ -217,7 +224,7 @@ extension Service {
     guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)
-    let env = headlessEnv(session: id, account: triageAccount)
+    let env = headlessEnv(session: id, account: triage.account)
     triageJobs.addOperation { [self] in
       let call = headlessCall(
         .triage, session: id, arguments: TriageSummarizer.arguments(model: config.triage.model), input: input, env: env,
@@ -240,9 +247,8 @@ extension Service {
     else { return }
     let attempt = "#\(pr.number)@\(pr.headSha)"
     guard e.mergeBriefAttempt != attempt || e.mergeBriefSkipped else { return }
-    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
-    let account = triageAccount?.folder ?? claudeAccount(of: id).key
-    let skip = budgetSkip(e.facts, account: account)
+    let triage = triageAccount(for: id)
+    let skip = budgetSkip(e.facts, account: triage.key)
     // A head records one skip, and then waits for the budget.
     if e.mergeBriefAttempt == attempt, skip != nil { return }
     // A skip records an event, which calls this again.
@@ -254,7 +260,7 @@ extension Service {
       return
     }
     let input = MergeBrief.input(pr, description: details.description)
-    let env = headlessEnv(session: id, account: triageAccount)
+    let env = headlessEnv(session: id, account: triage.account)
     let (number, title) = (pr.number, pr.title)
     triageJobs.addOperation { [self] in
       let call = headlessCall(
