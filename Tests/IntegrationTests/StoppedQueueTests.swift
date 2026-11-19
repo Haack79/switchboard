@@ -363,7 +363,7 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     usleep(1_000_000)
 
     #expect(try schedules.current(sbd, s.id, made.id)?.last == nil)
-    #expect(try sbd.stubCalls().allSatisfy { !$0.args.contains("tick one") })
+    #expect(sbd.stubCalls().allSatisfy { !$0.args.contains("tick one") })
     try sbd.release("hold-paste")
   }
 
