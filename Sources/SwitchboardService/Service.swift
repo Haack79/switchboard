@@ -294,6 +294,8 @@ public final class Service {
   var memoryPinOff = false
   /// The most claude processes that may run at once. `sb live --set` changes it.
   var liveCap: Int
+  /// The `operator` settings that the tick last read, with config.json's modification time then.
+  var cachedOperatorSettings: (modified: Date?, settings: OperatorSettings)?
   /// The model of a Manager conversation without its own. `sb manager model` changes it.
   var managerModel: String
   /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
@@ -820,7 +822,7 @@ public final class Service {
       if case .remote = origin, session == nil, sessions == nil {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
-      let limit = args["limit"]?.int ?? Event.defaultLimit
+      let limit = args["all"]?.bool == true ? Int.max : args["limit"]?.int ?? Event.defaultLimit
       let kinds = try args["kinds"].map { value in
         guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
         return kinds
@@ -862,7 +864,8 @@ public final class Service {
       // A session that started after the user asked, such as on a second click, is already where it should be.
       try openSession(try lookup(args))
       return try liveRequest(.object([:]))
-    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-account",
+    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-link-add",
+      "group-link-rm", "group-account",
       "group-suggest",
       "send-group",
       "send-pending":
@@ -1477,7 +1480,13 @@ public final class Service {
     let site = self.site(for: session)
     let terminals = try site.terminals()
     var env = try newPaneEnv(id)
-    if session.kind == .manager { config.manager.apply(to: &env) }
+    let window =
+      switch session.kind {
+      case .manager: config.manager.autoCompactWindow
+      case .operator: operatorSettings.autoCompactWindow
+      case .work, .chat: 0
+      }
+    AutoCompact.apply(window: window, to: &env)
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
@@ -2686,6 +2695,7 @@ public final class Service {
         resolveDueWaits(now: now)
         fireDueSchedules(now: now)
       }
+      rotateOperatorIfDue(now: now)
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
@@ -2786,6 +2796,7 @@ public final class Service {
     if !facts.dependencies.isEmpty { out.dependencies = facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
     if !facts.artifacts.isEmpty { out.artifacts = facts.artifacts }
+    out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }

@@ -201,7 +201,7 @@ public struct MCPToolServer: Sendable {
       guard let scoped else { return try client.call("group-ls") }
       return try JSON(encoding: GroupList(groups: [scoped.group], ungrouped: []))
     case "add_group":
-      var request = pick(args, ["name", "sessions", "note"])
+      var request = pick(args, ["name", "sessions", "note", "description"])
       request["by"] = MCPToolServer.byClaude
       return try client.call("group-add", request)
     case "remove_group":
@@ -239,12 +239,16 @@ public struct MCPToolServer: Sendable {
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)
       request["by"] = MCPToolServer.byClaude
-      return try scheduleCall("schedule", request, group: scoped?.group.id)
+      return try scheduleCall("schedule", request, scoped)
     case "list_schedules":
       let request = try args["session"].map { _ in ["session": try sessionID(args, scoped)] } ?? [:]
-      return try scheduleCall("schedules", request, group: scoped?.group.id)
+      return try scheduleCall("schedules", request, scoped)
     case "remove_schedule":
-      return try scheduleCall("remove-schedule", pick(args, ["schedule"]), group: scoped?.group.id)
+      return try scheduleCall("remove-schedule", pick(args, ["schedule"]), scoped)
+    case "edit_schedule":
+      return try scheduleCall("edit-schedule", pick(args, ["schedule", "every", "prompt"]), scoped)
+    case "run_schedule":
+      return try scheduleCall("run-schedule", pick(args, ["schedule"]), scoped)
     case "request_mcp_server":
       guard let caller else {
         throw APIError("request_mcp_server works only in a Manager conversation that Switchboard started.")

@@ -45,7 +45,8 @@ enum PlannedScope {
     "clear-wait": Row(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Row(keys: waitKeys, refs: ["session"]),
     "events": Row(
-      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
+      keys: ["session", "sessions", "since", "limit", "all", "kinds", "full"], refs: ["session"],
+      refLists: ["sessions"]),
     "send": Row(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Row(
       keys: ["session", "card", "behavior", "autoMode", "always", "message", "answers"], refs: ["session"]),
@@ -68,7 +69,8 @@ enum PlannedScope {
   /// `live-next`, and `slash-commands` ops came from main after the plan, and the table denies every op it doesn't name.
   static let refused: [String] = [
     "rm", "cleanup", "rm-done", "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move",
-    "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp",
+    "group-note", "group-describe", "group-link-add", "group-link-rm", "group-account", "group-suggest", "manager",
+    "manager-ls", "manager-mcp",
     "manager-skills", "chat",
     "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-end", "manager-hint", "manager-model",
     "item-context", "manager-mcp-request",
@@ -124,7 +126,7 @@ enum PlannedScope {
         case "answers": ["yes"]
         case "kinds": ["Stop"]
         case "colors", "open", "terminals", "done", "clear", "worktree", "autoMode", "always", "planMode",
-          "manualMode", "full":
+          "manualMode", "full", "all":
           true
         default: .string("\(key) value")
         }

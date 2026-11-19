@@ -114,7 +114,10 @@ let usage = """
                                   session that follows through on the waits that
                                   conversations hand it, creating it the first
                                   time. With text, send it a message
-    operator --log                the operator's last messages
+    operator --log                the last messages of the operator's current
+                                  conversation. sbd starts a fresh one after
+                                  operator.maxTurns turns (20) or
+                                  operator.resetEverySeconds (1 day)
     operator report [--needs-you] [--session S] <text>
                                   record a report. Only the operator runs it.
                                   --needs-you puts it in the Inbox until you
@@ -309,10 +312,11 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--kind K]... [--limit N] [--full]
-        [--follow]
+    events [--session S] [--since ID] [--kind K]... [--limit N | --all]
+        [--full] [--follow]
                                   the newest events, or those after an id,
-                                  \(Event.defaultLimit) at a time. --kind, which
+                                  \(Event.defaultLimit) at a time. --all reads
+                                  every matching event. --kind, which
                                   repeats, shows only those kinds. --json
                                   leaves out tool output and cuts long
                                   strings unless --full
@@ -387,6 +391,11 @@ let usage = """
     group describe <group> <text> | --clear
                                   set or clear the group's description, at
                                   most \(SessionGroup.descriptionLimit) characters
+    group link add <group> <url> [--title T]
+                                  add an http or https link, such as an RFC;
+                                  the title defaults to the URL. Only you add
+                                  links: inside Claude it is refused
+    group link rm <group> <link-id>
     group account <group> [<account> | --clear]
                                   show, set, or clear the Claude account that the
                                   group's sessions run under. A stopped session
@@ -838,11 +847,12 @@ func watch(_ a: Args) -> Never {
 func events(_ a: Args) -> Never {
   var cursor = EventCursor(
     since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
-    full: a.switches.contains("--full"))
+    full: a.switches.contains("--full"), all: a.switches.contains("--all"))
   let limit = a.values["--limit"].map { value -> Int in
     guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
     return limit
   }
+  if cursor.all, limit != nil { die("pass --all or --limit, not both") }
   while true {
     let list: [Event]
     do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
