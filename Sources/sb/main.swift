@@ -233,8 +233,8 @@ let usage = """
                                   --yes. With --json and without --yes, it removes nothing
     rm --keep <session>           cancel the session's failed delete and keep the session, as the
                                   Inbox's Keep button does: move its folder back from the trash
-                                  and clear the delete. Refuses a session whose delete didn't fail
-                                  or can't be undone
+                                  and clear the delete. Refuses a session whose delete didn't fail,
+                                  whose folder can't move back, or whose worktree git dropped
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits
                                   after the merge, a running turn, and a folder sbd didn't make.
