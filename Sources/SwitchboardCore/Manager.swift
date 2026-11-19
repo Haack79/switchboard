@@ -49,6 +49,11 @@ public enum Manager {
     - You cannot request an MCP server, because nobody reads your chat. When a task needs a server you lack, report it with `needsYou` and name the server.
     """
 
+  /// What sbd appends to a Manager conversation's system prompt in place of `triage.systemPrompt`. The chat pane
+  /// shows an AskUserQuestion call as a card. The rest of the triage prompt is about Inbox cards, which a
+  /// conversation's turns never get.
+  public static let conversationPrompt = TriageSettings.choiceGuidance
+
   /// What `sb manager mcp` and the server menu say while a change waits for claude to relaunch.
   public static let relaunchPendingText = "Claude restarts with them when its turn ends."
 
@@ -77,7 +82,7 @@ public enum Manager {
     - Ask the user before you merge a PR.
     - Ask the user before you remove a worktree that has unpushed commits or uncommitted changes. Check with `git -C <cwd> status -sb` and `git -C <cwd> log @{u}..` first.
     - Ask the user before you send one message to several sessions.
-    - \(ChildQuestions.guidance) The rule that three or more decisions go in `sb summary set` covers only your own decisions.
+    - \(ChildQuestions.guidance)
     - A session is an id, a unique id prefix, or a unique name. Add `--json` to any command for exact output.
     - \(SessionLink.guidance)
 
