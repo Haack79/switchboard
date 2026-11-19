@@ -108,7 +108,8 @@ final class Instance {
       FileManager.default.createFile(atPath: "\(folder)/.claude.json", contents: Data("{}".utf8))
     }
     let config: [String: JSON] = [
-      "claude": .string(Instance.stub), "idleStopSeconds": .number(Double(idleStopSeconds)), "tickSeconds": 0.2,
+      "claude": .string(Instance.stub), "idleStopSeconds": .number(Double(idleStopSeconds)),
+      "tickSeconds": .number(Instance.tickSeconds),
       "worktreeRoot": .string("\(home.path)/worktrees"), "testClock": .bool(testClock), "shell": .string(shell),
       "claudeConfigDirs": .array(folders.map(JSON.string)), "github": ["pollSeconds": 0],
       // No test reaches the real Depot API. DepotTests point sbd at a FakeDepot.
@@ -472,8 +473,14 @@ final class Instance {
   /// How long after SessionStart the sbd of a test waits before it pastes a message.
   static let pasteSettleSeconds = 0.2
 
-  /// The config.json key that restores sbd's production wait of 1.5 s between SessionStart and a paste.
-  static let productionPasteSettle: [String: JSON] = ["pasteSettleSeconds": 1.5]
+  /// sbd's production wait between SessionStart and a paste.
+  static let productionPasteSettleMs = Int64(Config().pasteSettleSeconds * 1000)
+
+  /// The config.json key that restores sbd's production wait between SessionStart and a paste.
+  static let productionPasteSettle: [String: JSON] = ["pasteSettleSeconds": .number(Config().pasteSettleSeconds)]
+
+  /// How often the sbd of a test ticks.
+  static let tickSeconds = 0.2
 
   /// The config.json key that makes a stop wait 2 s, in place of 5 s, for claude to exit and then for the session's
   /// processes. A test that waits out the stop for processes other than claude sets it.

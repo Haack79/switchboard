@@ -128,7 +128,7 @@ public struct Config: Codable, Equatable, Sendable {
   /// How long after claude's SessionStart sbd waits before it pastes a message. 1.5 s covers the redraws of
   /// claude's prompt that Phase 0 measured. Only tests change it.
   public var pasteSettleSeconds: Double = 1.5
-  /// How long a stop waits for claude to exit after SIGTERM, and how long a pane stop then waits for the session's
+  /// How long a stop waits for claude to exit after SIGTERM. A pane stop then waits as long for the session's
   /// processes. Only tests change it.
   public var stopWaitSeconds: Double = 5
   /// How long sbd waits for a gh call that requests a review or posts or lists a draft reply. Only tests change it.

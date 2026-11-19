@@ -86,7 +86,9 @@ path=${path%%\?*}
 base="$SB_HOME/gh-api/${method}_${path//\//_}"
 
 if [ -p "$base.gate" ]; then read -r _ <"$base.gate"; fi
-if [ -f "$base.sleep" ]; then sleep "$(cat "$base.sleep")"; fi
+# sleep gets no pipe from gh's caller. A caller that kills this script at its timeout then reads the end of the
+# output at once.
+if [ -f "$base.sleep" ]; then sleep "$(cat "$base.sleep")" >/dev/null 2>&1; fi
 if [ -f "$base.error" ]; then
   cat "$base.error" >&2
   exit "$(cat "$base.status" 2>/dev/null || echo 1)"

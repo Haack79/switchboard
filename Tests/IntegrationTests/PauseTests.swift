@@ -431,7 +431,7 @@ extension Instance {
     let sbd = try Instance()
     let s = try sbd.liveIdle()
     // sbd pastes only `pasteSettleSeconds` after SessionStart. A paste that `send` starts reaches the gate at once.
-    usleep(UInt32((Instance.pasteSettleSeconds + 0.3) * 1_000_000))
+    Thread.sleep(forTimeInterval: Instance.pasteSettleSeconds + 0.3)
     sbd.hold("hold-paste")
     let reply = try #require(JSON.parse(try sbd.sb("send", "--json", s.id, "late note")))
     try #require(reply["delivery"] == "pasted", "\(reply.text)")
