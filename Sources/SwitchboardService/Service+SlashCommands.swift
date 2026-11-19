@@ -27,7 +27,7 @@ extension Service {
       listing: listing, scanned: SkillFolders.scan(account: account, cwd: cwd, on: machine),
       overrides: SkillFolders.overrides(account: account, on: machine))
     if let decide {
-      for i in commands.indices { commands[i].label = decide(commands[i].name, nil).label }
+      for i in commands.indices { commands[i].label = decide(commands[i].name).label }
     }
     return ["commands": try JSON(encoding: commands), "listing": .bool(listing != nil)]
   }

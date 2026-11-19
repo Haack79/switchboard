@@ -124,17 +124,12 @@ extension ManagerSkillSuite {
     return try sbd.waitFor(s.id, "the reply to \(text)", timeout: timeout) { $0.lastReply == "Done: \(text)" }
   }
 
-  /// The session's events of one kind, oldest first.
-  func events(_ sbd: Instance, _ id: String, _ kind: String) throws -> [Event] {
-    try sbd.events(id).filter { $0.kind == kind }
-  }
-
   /// Waits until the session has `count` events of the kind, and returns them.
   @discardableResult
   func waitForEvents(_ sbd: Instance, _ id: String, _ kind: String, count: Int = 1, timeout: Double = 30) throws
     -> [Event]
   {
-    try sbd.waitFor("\(count) \(kind) of \(id)", timeout: timeout, fetch: { try events(sbd, id, kind) }) {
+    try sbd.waitFor("\(count) \(kind) of \(id)", timeout: timeout, fetch: { try sbd.events(id, kind: kind) }) {
       $0.count >= count
     }
   }
@@ -153,7 +148,7 @@ extension ManagerSkillSuite {
 
   /// The `sent` events that hold the text.
   func sent(_ sbd: Instance, _ id: String, _ text: String) throws -> [Event] {
-    try events(sbd, id, "sent").filter { $0.data["text"]?.string == text }
+    try sbd.events(id, kind: "sent").filter { $0.data["text"]?.string == text }
   }
 
   /// Sends a hook payload of the session's claude to sbd's own socket, as `sb hook` does, and returns sbd's

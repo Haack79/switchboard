@@ -337,8 +337,7 @@ import Testing
     let request = try #require(model.newSession)
     #expect(request.prompt == "/go In haacked/switchboard, fix it.")
     #expect(request.parent == "m")
-    #expect(request.repoFromPrompt)
-    #expect(request.clearsDraftOf == "m")
+    #expect(request.fromOffer)
   }
 
   @Test func spawnSendsNothing() async throws {

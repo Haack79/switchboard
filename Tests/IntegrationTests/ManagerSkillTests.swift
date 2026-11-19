@@ -11,9 +11,9 @@ private let spentReading =
 /// `sb manager skills --json` answers an array of rows `{name, origin, path?, label?, by?, reason?, error?, pending}`.
 ///
 /// sbd scans an account at its own start, at a manager-kind SessionStart, on `relabel`, and on a manager-kind
-/// prompt or Skill call at most once a minute. So each test writes its skill files before one of those. The stub answers a classification by the markers in the skill's
-/// text, and it logs one line per call with the skill's name to `skill-classify-calls.log`. A test that expects no
-/// new call writes a new skill before the refresh and waits for that skill's label, which shows that the refresh ran.
+/// prompt or Skill call at most once a minute. So each test writes its skill files before one of those. The stub
+/// answers a classification by the markers in the skill's text. It logs one line per call with the skill's name to
+/// `skill-classify-calls.log`. A test that expects no new call writes a new skill before the refresh and waits for that skill's label, which shows that the refresh ran.
 @Suite(.blocking(timeLimit: .seconds(180))) struct ManagerSkillTests: ManagerSkillSuite {
   // MARK: Labels
 

@@ -1,7 +1,8 @@
 import Foundation
 import SwitchboardCore
 
-typealias SkillDecider = @Sendable (String, SkillBypass?) -> ManagerSkillGate.Decision
+typealias SkillDecider = @Sendable (String) -> ManagerSkillGate.Decision
+typealias SkillRunOutcome = Result<(key: String, answer: SkillClassifier.Answer), SkillFailure>
 
 /// The skills that Manager conversations and the operator can load, and their `work` or `safe` labels.
 extension Service {
@@ -14,12 +15,20 @@ extension Service {
   /// the account's most recently active one. Runs on the state queue.
   func managerSkillAccounts() -> [String: String] {
     var latest: [String: (id: String, at: Int64)] = [:]
-    for (id, e) in entries where e.session.kind.runsInManagerFolder {
-      guard case .local(let account) = claudeAccount(of: id) else { continue }
-      if let seen = latest[account.folder], seen.at >= e.facts.lastActivity { continue }
-      latest[account.folder] = (id, e.facts.lastActivity)
+    for (id, e) in entries {
+      guard let account = managerSkillAccount(id) else { continue }
+      if let seen = latest[account], seen.at >= e.facts.lastActivity { continue }
+      latest[account] = (id, e.facts.lastActivity)
     }
     return latest.mapValues(\.id)
+  }
+
+  /// The account folder of a manager-kind session on this Mac, or nil for every other session. Runs on the state
+  /// queue.
+  func managerSkillAccount(_ id: String) -> String? {
+    guard entries[id]?.session.kind.runsInManagerFolder == true, case .local(let account) = claudeAccount(of: id)
+    else { return nil }
+    return account.folder
   }
 
   /// Scans the skills of every account that a manager-kind session uses. Runs on the state queue.
@@ -78,11 +87,9 @@ extension Service {
   /// label's key is the hash of the text that the run read, which differs
   /// from the queued key when the file changed after the scan.
   private func classifySkill(_ entry: CatalogEntry, account: String, settings: ManagerSkillSettings)
-    -> Result<(key: String, answer: SkillClassifier.Answer), SkillFailure>
+    -> SkillRunOutcome
   {
-    func failure(_ category: SkillFailure.Category, _ message: String) -> Result<
-      (key: String, answer: SkillClassifier.Answer), SkillFailure
-    > {
+    func failure(_ category: SkillFailure.Category, _ message: String) -> SkillRunOutcome {
       .failure(SkillFailure(category: category, message: message, t: nowMs()))
     }
     do {
@@ -96,10 +103,8 @@ extension Service {
     let text: String
     let hash: String
     if let path = entry.path {
-      guard let head = SkillFolders.head(path, on: mac.machine), let size = mac.machine.size(path) else {
-        return failure(.failed, "can't read \(path)")
-      }
-      (text, hash) = (String(decoding: head, as: UTF8.self), SkillHash.file(head: head, size: size))
+      guard let read = SkillHash.read(path, on: mac.machine) else { return failure(.failed, "can't read \(path)") }
+      (text, hash) = (String(decoding: read.head, as: UTF8.self), read.hash)
     } else if let description = entry.description {
       (text, hash) = ("description: \(description)", SkillHash.listing(name: entry.name, description: description))
     } else {
@@ -123,10 +128,7 @@ extension Service {
   }
 
   /// Saves a label, or keeps the failure in memory. Runs on the state queue.
-  private func finishSkillRun(
-    _ entry: CatalogEntry, key: String, account: String,
-    _ outcome: Result<(key: String, answer: SkillClassifier.Answer), SkillFailure>
-  ) {
+  private func finishSkillRun(_ entry: CatalogEntry, key: String, account: String, _ outcome: SkillRunOutcome) {
     skillQueued.remove(key)
     switch outcome {
     case .success(let (labelKey, answer)):
@@ -155,9 +157,7 @@ extension Service {
   /// does the same for every name. It runs off the state queue.
   func managerSkills(_ args: JSON) throws -> JSON {
     let all = args["all"]?.bool == true
-    let names = (args["relabel"]?.array ?? []).compactMap(\.string).map {
-      $0.hasPrefix("/") ? String($0.dropFirst()) : $0
-    }
+    let names = (args["relabel"]?.array ?? []).compactMap(\.string).map { String($0.trimmingPrefix("/")) }
     let rescan = all || !names.isEmpty
     let scans = try queue.sync {
       () -> [(account: String, scan: (() -> [String: CatalogEntry])?)] in
@@ -221,7 +221,7 @@ extension Service {
   /// It returns the block answer for a work skill, after it records `skill_blocked` and delivers the next queued
   /// message, because Claude Code sends no Stop after a block. Runs on the state queue.
   func managerSkillPromptGate(_ id: String, _ payload: JSON, stamp: HostEventStamp?) -> JSON? {
-    guard let account = gatedSkillAccount(id, stamp: stamp), let session = entries[id]?.session else { return nil }
+    guard let account = gatedSkillAccount(id, stamp: stamp) else { return nil }
     let bypass = entries[id]?.skillBypass
     entries[id]?.skillBypass = nil
     let armed = bypass == .turn ? nil : bypass
@@ -274,38 +274,30 @@ extension Service {
   /// session. A host's hook answer never reaches claude. It scans the account again when its last scan is at
   /// least `skillRescanMs` old, and it never waits for the scan. Runs on the state queue.
   private func gatedSkillAccount(_ id: String, stamp: HostEventStamp?) -> String? {
-    guard stamp == nil, entries[id]?.session.kind.runsInManagerFolder == true,
-      case .local(let account) = claudeAccount(of: id)
-    else { return nil }
-    if nowMs() - (skillRefreshed[account.folder] ?? 0) >= Self.skillRescanMs {
-      refreshManagerSkills(account: account.folder)
-    }
-    return account.folder
+    guard stamp == nil, let account = managerSkillAccount(id) else { return nil }
+    if nowMs() - (skillRefreshed[account] ?? 0) >= Self.skillRescanMs { refreshManagerSkills(account: account) }
+    return account
   }
 
   /// The gate's decision for a name in the account's index. Runs on the state queue.
   private func skillDecision(_ name: String, account: String, bypass: SkillBypass?) -> ManagerSkillGate.Decision {
-    skillDecider(account: account)(name, bypass)
+    ManagerSkillGate.decide(
+      name: name, catalog: skillIndex[account] ?? [:], labels: skillLabels, failures: skillFailures,
+      settings: config.managerSkills, bypass: bypass)
   }
 
-  /// The gate's decision on a copy of the account's index, labels, failures, and settings, which a caller can run
-  /// off the state queue. Runs on the state queue.
-  private func skillDecider(account: String) -> SkillDecider {
+  /// The gate's decision without a bypass for a manager-kind session on this Mac, or nil for every other session.
+  /// It decides on a copy of the account's index, labels, failures, and settings, so a caller can run it off the
+  /// state queue. Unlike the hook, it never starts a scan. Runs on the state queue.
+  func managerSkillDecider(_ id: String) -> SkillDecider? {
+    guard let account = managerSkillAccount(id) else { return nil }
     let (catalog, labels, failures, settings) = (
       skillIndex[account] ?? [:], skillLabels, skillFailures, config.managerSkills
     )
-    return { name, bypass in
+    return { name in
       ManagerSkillGate.decide(
-        name: name, catalog: catalog, labels: labels, failures: failures, settings: settings, bypass: bypass)
+        name: name, catalog: catalog, labels: labels, failures: failures, settings: settings, bypass: nil)
     }
-  }
-
-  /// The gate's decider for a manager-kind session on this Mac, from the same state as its hook, or nil for every
-  /// other session. Unlike the hook, it never starts a scan. Runs on the state queue.
-  func managerSkillDecider(_ id: String) -> SkillDecider? {
-    guard entries[id]?.session.kind.runsInManagerFolder == true, case .local(let account) = claudeAccount(of: id)
-    else { return nil }
-    return skillDecider(account: account.folder)
   }
 
   /// Records `skill_unchecked` for a skill of the account's index that the gate let through without a label, once

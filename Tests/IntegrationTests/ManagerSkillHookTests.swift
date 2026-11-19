@@ -77,13 +77,13 @@ private func write(_ text: String, to path: String) throws {
   @Test func aBlockedPromptLeavesWorkingWithoutAStop() throws {
     let sbd = try instance()
     let c = try workGoConversation(sbd)
-    let stops = try events(sbd, c.id, "Stop").count
+    let stops = try sbd.events(c.id, kind: "Stop").count
 
     try sbd.sb("send", c.id, "/go x")
 
     try waitForEvents(sbd, c.id, "skill_blocked")
     try stays("the Manager left Working") { try sbd.get(c.id).state != .working }
-    #expect(try events(sbd, c.id, "Stop").count == stops)
+    #expect(try sbd.events(c.id, kind: "Stop").count == stops)
   }
 
   /// A blocked first prompt doesn't name the conversation and records no digest. The next prompt that runs does.
@@ -92,13 +92,13 @@ private func write(_ text: String, to path: String) throws {
     try writeSkill(sbd.account("A"), "go")
     let c = try newConversation(sbd)
     try waitForLabel(sbd, "go", "work")
-    let digests = try events(sbd, c.id, "digest").count
+    let digests = try sbd.events(c.id, kind: "digest").count
 
     try sbd.sb("send", c.id, "/go x")
 
     try waitForEvents(sbd, c.id, "skill_blocked")
     #expect(try sbd.get(c.id).name == c.name)
-    #expect(try events(sbd, c.id, "digest").count == digests)
+    #expect(try sbd.events(c.id, kind: "digest").count == digests)
     try prompt(sbd, c, "Fix the cache")
     #expect(try sbd.get(c.id).name == "Fix the cache")
   }
@@ -150,7 +150,7 @@ private func write(_ text: String, to path: String) throws {
 
     try waitForEvents(sbd, c.id, "skill_blocked")
     try sbd.waitFor(c.id, "the queued message's reply", timeout: 30) { $0.lastReply == "Done: after" }
-    let pastes = try events(sbd, c.id, "pasting")
+    let pastes = try sbd.events(c.id, kind: "pasting")
     let blocked = try #require(pastes.first { $0.data["text"]?.string == "/go x" })
     let queuedPaste = try #require(pastes.first { $0.data["text"]?.string == "after" })
     #expect(queuedPaste.t - blocked.t < 10_000, "the queued message waited \(queuedPaste.t - blocked.t) ms")
@@ -195,8 +195,8 @@ private func write(_ text: String, to path: String) throws {
       #expect(!sbd.transcriptContains(s, "Done: /go x"))
     } else {
       try sbd.waitFor(s.id, "the reply to /go x", timeout: 30) { $0.lastReply == "Done: /go x" }
-      #expect(try events(sbd, s.id, "skill_blocked").isEmpty)
-      #expect(try events(sbd, s.id, "skill_unchecked").isEmpty)
+      #expect(try sbd.events(s.id, kind: "skill_blocked").isEmpty)
+      #expect(try sbd.events(s.id, kind: "skill_unchecked").isEmpty)
       #expect(blocks(sbd, s).isEmpty)
     }
   }
@@ -212,8 +212,8 @@ private func write(_ text: String, to path: String) throws {
     try prompt(sbd, c, "/notes x")
     try prompt(sbd, c, "/clear")
 
-    #expect(try events(sbd, c.id, "skill_blocked").isEmpty)
-    #expect(try events(sbd, c.id, "skill_unchecked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_unchecked").isEmpty)
     #expect(blocks(sbd, c).isEmpty)
   }
 
@@ -228,11 +228,11 @@ private func write(_ text: String, to path: String) throws {
     try prompt(sbd, c, "/pending a")
     try prompt(sbd, c, "/pending b")
 
-    let unchecked = try events(sbd, c.id, "skill_unchecked")
+    let unchecked = try sbd.events(c.id, kind: "skill_unchecked")
     #expect(unchecked.count == 1, "\(unchecked.map(\.data.text))")
     #expect(unchecked.first?.data["skill"]?.string == "pending")
     #expect(unchecked.first?.data["why"]?.string == "unlabeled")
-    #expect(try events(sbd, c.id, "skill_blocked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
   }
 
   @Test func aFailedSkillRunsAndRecordsOneUncheckedWithWhyFailed() throws {
@@ -244,7 +244,7 @@ private func write(_ text: String, to path: String) throws {
     try prompt(sbd, c, "/flaky a")
     try prompt(sbd, c, "/flaky b")
 
-    let unchecked = try events(sbd, c.id, "skill_unchecked")
+    let unchecked = try sbd.events(c.id, kind: "skill_unchecked")
     #expect(unchecked.count == 1, "\(unchecked.map(\.data.text))")
     #expect(unchecked.first?.data["skill"]?.string == "flaky")
     #expect(unchecked.first?.data["why"]?.string == "failed")
@@ -285,7 +285,7 @@ private func write(_ text: String, to path: String) throws {
     let denied = try #require(denials(sbd, c).first)
     #expect(denied["hookSpecificOutput"]?["hookEventName"]?.string == "PreToolUse")
     #expect(denied["hookSpecificOutput"]?["permissionDecisionReason"]?.string == toolReason("go"))
-    let blocked = try events(sbd, c.id, "skill_blocked")
+    let blocked = try sbd.events(c.id, kind: "skill_blocked")
     #expect(blocked.count == 1)
     #expect(blocked.first?.data["via"]?.string == "tool")
     #expect(blocked.first?.data["by"]?.string == "haiku")
@@ -298,7 +298,7 @@ private func write(_ text: String, to path: String) throws {
     try sbd.sb("send", c.id, "subskill go")
 
     try sbd.waitFor(c.id, "the denied call's reply", timeout: 30) { $0.lastReply?.hasPrefix("Denied:") == true }
-    #expect(try events(sbd, c.id, "skill_blocked").first?.data["via"]?.string == "tool")
+    #expect(try sbd.events(c.id, kind: "skill_blocked").first?.data["via"]?.string == "tool")
   }
 
   @Test func aSafeSkillCallIsAllowed() throws {
@@ -337,7 +337,7 @@ private func write(_ text: String, to path: String) throws {
     try sbd.sb("send", w.id, "skill go")
 
     try sbd.waitFor(w.id, "the call's reply", timeout: 30) { $0.lastReply == "Skill go" }
-    #expect(try events(sbd, w.id, "skill_blocked").isEmpty)
+    #expect(try sbd.events(w.id, kind: "skill_blocked").isEmpty)
   }
 
   // MARK: Refresh
@@ -497,9 +497,9 @@ private func write(_ text: String, to path: String) throws {
     try sbd.sb("send", c.id, "--run-here", "/go x skill go")
 
     try sbd.waitFor(c.id, "the run-here reply", timeout: 30) { $0.lastReply == "Done: /go x skill go" }
-    let bypassed = try events(sbd, c.id, "skill_bypassed")
+    let bypassed = try sbd.events(c.id, kind: "skill_bypassed")
     #expect(bypassed.first?.data["skill"]?.string == "go")
-    #expect(try events(sbd, c.id, "skill_blocked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
     #expect(denials(sbd, c).isEmpty)
     #expect(try sent(sbd, c.id, "/go x skill go").first?.data["runHere"]?.bool == true)
   }
@@ -536,7 +536,7 @@ private func write(_ text: String, to path: String) throws {
     _ = try sbd.client.call("send", ["session": .string(c.id), "text": "/go x", "runHere": true])
 
     try sbd.waitFor(c.id, "the run-here reply", timeout: 30) { $0.lastReply == "Done: /go x" }
-    #expect(try events(sbd, c.id, "skill_bypassed").count == 1)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").count == 1)
   }
 
   /// sbd arms the bypass in the branch that launches claude with the message as its prompt.
@@ -550,8 +550,8 @@ private func write(_ text: String, to path: String) throws {
 
     #expect(delivery.contains("resumed"), "\(delivery)")
     try sbd.waitFor(c.id, "the run-here reply", timeout: 30) { $0.lastReply == "Done: /go x" }
-    #expect(try events(sbd, c.id, "skill_bypassed").count == 1)
-    #expect(try events(sbd, c.id, "skill_blocked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").count == 1)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
   }
 
   /// A run-here message that waits in the queue arms nothing until sbd pastes it. The `/go y` pasted before it
@@ -567,8 +567,8 @@ private func write(_ text: String, to path: String) throws {
     sbd.hold("report")
 
     try sbd.waitFor(c.id, "the run-here reply", timeout: 30) { $0.lastReply == "Done: /go x" }
-    #expect(try events(sbd, c.id, "skill_blocked").count == 1)
-    #expect(try events(sbd, c.id, "skill_bypassed").count == 1)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").count == 1)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").count == 1)
     #expect(!sbd.transcriptContains(c, "Done: /go y"))
   }
 
@@ -587,7 +587,7 @@ private func write(_ text: String, to path: String) throws {
     #expect(!isBlock(other), "\(other.text)")
     try waitForEvents(sbd, c.id, "skill_blocked")
     try prompt(sbd, c, "after")
-    #expect(try events(sbd, c.id, "skill_bypassed").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").isEmpty)
     #expect(!sbd.transcriptContains(c, "Done: /go x"))
   }
 
@@ -600,7 +600,7 @@ private func write(_ text: String, to path: String) throws {
     try sbd.sb("send", c.id, "/go x")
 
     try waitForEvents(sbd, c.id, "skill_blocked")
-    #expect(try events(sbd, c.id, "skill_bypassed").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").isEmpty)
   }
 
   // MARK: Guard: only the user arms it
@@ -646,7 +646,7 @@ private func write(_ text: String, to path: String) throws {
 
     #expect(refused)
     #expect(try sent(sbd, c.id, "/go x").isEmpty)
-    #expect(try events(sbd, c.id, "skill_bypassed").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").isEmpty)
   }
 
   /// The MCP `send` tool never forwards `runHere`. Whether it rejects the key or drops it, the skill doesn't run.
@@ -661,7 +661,7 @@ private func write(_ text: String, to path: String) throws {
       try waitForEvents(sbd, c.id, "skill_blocked")
       try prompt(sbd, c, "after")
     }
-    #expect(try events(sbd, c.id, "skill_bypassed").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_bypassed").isEmpty)
     #expect(!sbd.transcriptContains(c, "Done: /go x"))
   }
 
@@ -701,7 +701,7 @@ private func write(_ text: String, to path: String) throws {
       to: sbd.hostSocket("mini"))
 
     #expect(answer?["ok"] == false, "\(answer?.text ?? "no answer")")
-    #expect(try events(sbd, c.id, "skill_blocked").isEmpty)
+    #expect(try sbd.events(c.id, kind: "skill_blocked").isEmpty)
   }
 
   /// A remote session's hooks arrive stamped. Its `/go` runs, whatever label the Mac's Manager account holds.
@@ -713,7 +713,7 @@ private func write(_ text: String, to path: String) throws {
     try sbd.sb("send", s.id, "/go x")
 
     try sbd.waitFor(s.id, "the remote reply", timeout: 60) { $0.lastReply == "Done: /go x" }
-    #expect(try events(sbd, s.id, "skill_blocked").isEmpty)
-    #expect(try events(sbd, s.id, "skill_unchecked").isEmpty)
+    #expect(try sbd.events(s.id, kind: "skill_blocked").isEmpty)
+    #expect(try sbd.events(s.id, kind: "skill_unchecked").isEmpty)
   }
 }

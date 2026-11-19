@@ -228,7 +228,7 @@ import Testing
   /// The request of "Spawn a session with this" for the prompt, from conversation `m`.
   static func spawn(_ prompt: String, group: String? = nil) -> NewSessionView.Form {
     NewSessionView.Form(
-      request: NewSessionRequest(group: group, prompt: prompt, parent: "m", repoFromPrompt: true, clearsDraftOf: "m"))
+      request: NewSessionRequest(group: group, prompt: prompt, parent: "m", fromOffer: true))
   }
 
   @Test func aSpawnedPromptThatNamesNoRepoSelectsNone() {

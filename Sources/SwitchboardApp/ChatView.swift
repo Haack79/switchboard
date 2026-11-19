@@ -32,7 +32,7 @@ struct ChatView: View {
         MessageField(
           session: session.id, draft: model.messageDraft(for: session),
           shortcut: KeyboardShortcut(.return, modifiers: [.command]),
-          intercept: session.kind.runsInManagerFolder ? { model.submitChecked(session: session.id, draft: $0) } : nil
+          intercept: { model.submitChecked(session: session.id, draft: $0) }
         )
         .padding(8)
       }

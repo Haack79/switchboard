@@ -18,10 +18,10 @@ struct NewSessionRequest: Identifiable {
   var manualMode = false
   /// The id of the Manager conversation that starts the new session, from its pane's New Task button.
   var parent: String?
-  /// The sheet selects the repository that `prompt` names, or none, in place of the group's preferred one.
-  var repoFromPrompt = false
-  /// The id of the conversation whose draft Start empties, unless the user changed the draft from `prompt`.
-  var clearsDraftOf: String?
+  /// The request comes from a work-skill offer in `parent`'s pane. The sheet selects the repository that `prompt`
+  /// names, or none, in place of the group's preferred one. Start empties `parent`'s draft unless the user changed
+  /// it from `prompt`.
+  var fromOffer = false
 }
 
 /// The new session sheet: a repository, a branch for a new worktree, and an optional first prompt.
@@ -65,8 +65,8 @@ struct NewSessionView: View {
       branch = request.branch ?? ""
       let requested = request.prompt ?? ""
       prompt = requested
-      repoPrompt = request.repoFromPrompt ? requested : nil
-      clearsDraft = request.clearsDraftOf.map { ($0, requested) }
+      repoPrompt = request.fromOffer ? requested : nil
+      clearsDraft = request.fromOffer ? request.parent.map { ($0, requested) } : nil
     }
 
     func pick(_ repo: KnownRepo?) {
@@ -75,7 +75,7 @@ struct NewSessionView: View {
     }
 
     /// Selects the repository that the request names, or the one that the request's prompt names when
-    /// `repoFromPrompt` is set, or else the one that `KnownRepos.preferred` names for the group, until the user
+    /// `fromOffer` is set, or else the one that `KnownRepos.preferred` names for the group, until the user
     /// picks one. A named repository with no known checkout, or a prompt that names none, selects none, so Start
     /// waits for the user's pick. The sheet first offers the list that the app kept from its last opening, then the
     /// list that sbd answers.

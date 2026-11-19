@@ -262,7 +262,7 @@ public struct Config: Codable, Equatable, Sendable {
     docket = try c.decodeIfPresent(DocketSettings.self, forKey: .docket) ?? d.docket
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
     quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
-    managerSkills = ManagerSkillSettings(parsing: try c.decodeIfPresent(JSON.self, forKey: .managerSkills))
+    managerSkills = try c.decodeIfPresent(ManagerSkillSettings.self, forKey: .managerSkills) ?? d.managerSkills
     manager = try c.decodeIfPresent(ManagerSettings.self, forKey: .manager) ?? d.manager
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     // sbd logs a bad `issues` section and keeps the defaults. Throwing would make sbd ignore all of config.json.

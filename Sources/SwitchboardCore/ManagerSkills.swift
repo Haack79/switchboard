@@ -18,7 +18,7 @@ public struct ManagerSkillSettings: Codable, Equatable, Sendable {
   /// Names that are always `safe`, whatever the classifier says.
   public var safe: [String] = []
 
-  public static let maxTimeout = 120.0
+  static let maxTimeout = 120.0
 
   public init() {}
 
@@ -26,8 +26,8 @@ public struct ManagerSkillSettings: Codable, Equatable, Sendable {
     self.init(parsing: try JSON(from: decoder))
   }
 
-  /// Reads the section and never fails. A bad value is logged and keeps its
-  /// default, so a typo can't make sbd ignore all of config.json.
+  /// Reads the section and never fails. It logs a bad value and keeps that
+  /// value's default. So a typo can't make sbd ignore all of config.json.
   public init(parsing json: JSON?) {
     guard let json, json != .null else { return }
     guard let fields = json.object else {
@@ -58,7 +58,7 @@ public struct ManagerSkillSettings: Codable, Equatable, Sendable {
     self.safe = safe.filter { !both.contains($0) }
   }
 
-  /// The list's names without a leading `/`. A bad entry is logged and skipped.
+  /// The list's names without a leading `/`. It logs and skips a bad entry.
   private static func names(_ value: JSON?, list: String) -> [String] {
     guard let value, value != .null else { return [] }
     guard let entries = value.array else {
@@ -66,7 +66,7 @@ public struct ManagerSkillSettings: Codable, Equatable, Sendable {
       return []
     }
     return entries.compactMap { entry in
-      let name = entry.string.map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }
+      let name = entry.string.map { String($0.trimmingPrefix("/")) }
       guard let name, !name.isEmpty else {
         logLine("skipping \(entry.text) in managerSkills.\(list): an entry must be a skill name")
         return nil
@@ -116,7 +116,7 @@ public enum SkillCatalog {
     func file(_ skill: ScannedSkill, named name: String, origin: ManagerSkillRow.Origin) -> CatalogEntry {
       CatalogEntry(
         name: name, origin: origin, path: skill.path, description: skill.description,
-        hash: SkillHash.file(skill.path, on: machine))
+        hash: SkillHash.read(skill.path, on: machine)?.hash)
     }
     for skill in SkillFolders.scan(account: account, cwd: cwd, on: machine) {
       add(file(skill, named: skill.name, origin: origin(skill.origin)))
@@ -145,8 +145,8 @@ public enum SkillCatalog {
   }
 
   /// The install folder of each enabled plugin that applies to the cwd, with
-  /// the plugin's name, sorted by `<plugin>@<marketplace>`. Only version 2 of
-  /// installed_plugins.json is read. A plugin is enabled when the account's
+  /// the plugin's name, sorted by `<plugin>@<marketplace>`. It reads only version
+  /// 2 of installed_plugins.json. A plugin is enabled when the account's
   /// settings.json says so, or when the listing names one of its skills.
   static func pluginFolders(account: String, cwd: String, listing: [SlashCommand]?, machine: any Machine)
     -> [(plugin: String, folder: String)]
@@ -189,10 +189,10 @@ public enum SkillHash {
     hex(head + Data(String(size).utf8))
   }
 
-  /// The hash of the file at `path`, or nil when it can't be read.
-  public static func file(_ path: String, on machine: any Machine) -> String? {
+  /// The head of the file at `path` and its hash, or nil when it can't be read.
+  public static func read(_ path: String, on machine: any Machine) -> (head: Data, hash: String)? {
     guard let head = SkillFolders.head(path, on: machine), let size = machine.size(path) else { return nil }
-    return file(head: head, size: size)
+    return (head, file(head: head, size: size))
   }
 
   /// The hash of a name that only the listing holds, from its description.
@@ -289,8 +289,8 @@ public struct SkillLabelCache: Equatable, Sendable {
   /// The key of a hash's label. The same file in two accounts shares one key.
   public static func key(hash: String, model: String) -> String { "\(SkillClassifier.version)/\(model)/\(hash)" }
 
-  /// The cache in the file. A missing or unreadable file reads as empty, and an entry that doesn't decode is
-  /// skipped. Each is logged.
+  /// The cache in the file. A missing or unreadable file reads as empty. It skips an entry that doesn't decode. It
+  /// logs each case.
   public static func load(_ path: String) -> SkillLabelCache {
     var cache = SkillLabelCache()
     guard let data = FileManager.default.contents(atPath: path) else {
@@ -450,7 +450,7 @@ public enum SkillCommand {
     switch tool {
     case "Skill":
       guard let skill = input?["skill"]?.string?.trimmingCharacters(in: .whitespaces) else { return nil }
-      let name = skill.hasPrefix("/") ? String(skill.dropFirst()) : skill
+      let name = String(skill.trimmingPrefix("/"))
       return name.isEmpty ? nil : name
     case "SlashCommand":
       return input?["command"]?.string.flatMap { name(inPrompt: $0) }

@@ -99,8 +99,8 @@ public final class Service {
     /// The message's `sent` event, or nil for a message that sbd restored
     /// from the log. A paste checks that the log still holds it.
     var sent: Event?
-    /// Whether the user sent it with "Run here anyway". sbd restores it from the log as false.
-    var runHere = false
+    /// Whether the user sent it with "Run here anyway". A message that sbd restored from the log reads false.
+    var runHere: Bool { sent?.data["runHere"]?.bool == true }
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.
@@ -899,9 +899,7 @@ public final class Service {
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
       deliverPending(id, after: 1.5)
-      if session.kind.runsInManagerFolder, stamp == nil, case .local(let account) = claudeAccount(of: id) {
-        refreshManagerSkills(account: account.folder)
-      }
+      if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
         answer = ParentDigest.hookOutput(text, event: kind)
@@ -1514,7 +1512,7 @@ public final class Service {
     let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
-      entries[id]?.pending.append(QueuedMessage(text: text, sent: sent, runHere: runHere))
+      entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
       return .queued
     }
     let now = nowMs()
@@ -1532,25 +1530,25 @@ public final class Service {
       return .resumed
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
       let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
-      paste(id, QueuedMessage(text: text, sent: sent, runHere: runHere))
+      paste(id, QueuedMessage(text: text, sent: sent))
       return .pasted
     } else {
       // A stopped session launches without a prompt when older messages wait,
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from, runHere: runHere)
+      try queueMessage(id, text, by: by, from: from, extra: extra)
       return .queued
     }
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, runHere: Bool = false)
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
     throws
   {
-    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: runHere ? ["runHere": true] : [:])
-    entries[id]?.pending.append(QueuedMessage(text: text, sent: sent, runHere: runHere))
+    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
+    entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
   }
 

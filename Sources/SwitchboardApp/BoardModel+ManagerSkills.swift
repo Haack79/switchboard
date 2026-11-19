@@ -59,7 +59,7 @@ extension BoardModel {
   func spawnFromOffer(_ session: String) {
     guard let offer = workSkillOffers[session] else { return }
     dismissOffer(session)
-    newSession = NewSessionRequest(prompt: offer.text, parent: session, repoFromPrompt: true, clearsDraftOf: session)
+    newSession = NewSessionRequest(prompt: offer.text, parent: session, fromOffer: true)
   }
 
   /// Empties the session's draft unless the user changed it from `text`.

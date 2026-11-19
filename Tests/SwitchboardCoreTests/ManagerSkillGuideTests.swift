@@ -3,8 +3,7 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// The Manager guide's `## Work skills` section, and the README paragraph that describes the gate. They sit where
-/// the sibling branch `haacked/manager-lean-guide` does not edit (D27 of the plan).
+/// The Manager guide's `## Work skills` section, and the README paragraph that describes the gate.
 @Suite struct ManagerSkillGuideTests {
   /// The `## ` headings of the guide, in order.
   private var headings: [String] {
