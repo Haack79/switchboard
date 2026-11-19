@@ -527,6 +527,19 @@ private let decision = PendingDecision(
     #expect(hasAsk(built))
   }
 
+  @Test func aReconciledCopyOfTheAnsweredReplyKeepsItAnswered() throws {
+    var f = try depotFacts(yesNoOffer)
+    let v = try depotVerdict(f)
+    f.apply(event("UserPromptSubmit", 3, ["prompt": "Yes"]))
+    f.apply(event("reconciled", 4, ["lastReply": .string(yesNoOffer)]))
+    f.apply(event("idle", 5))
+    try #require(!f.turnRunning)
+
+    let built = try #require(Triage.item(f, v, kind: .work))
+
+    #expect(!hasAsk(built))
+  }
+
   @Test func aCardItemGetsNoQuestion() throws {
     var f = try depotFacts(try replyFixture("rule-hides-question"))
     let v = try depotVerdict(f)

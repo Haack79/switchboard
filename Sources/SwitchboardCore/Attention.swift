@@ -352,7 +352,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     case "link_up":
       unread = nil
     case "reconciled":
-      if let reply = d["lastReply"]?.string {
+      // Reconciliation also runs when only activity advanced, and then carries the reply the user already answered.
+      if let reply = d["lastReply"]?.string, reply != lastReply {
         lastReply = reply
         promptSinceReply = false
       }
