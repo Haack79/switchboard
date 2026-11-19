@@ -51,6 +51,19 @@ extension Service {
     }
   }
 
+  /// The `manager-model` request. With `model`, it saves the model in config.json's `manager` and uses it from
+  /// the next launch of each conversation. The answer is the model.
+  func managerModelRequest(_ args: JSON) throws -> JSON {
+    if let value = args["model"] {
+      guard let model = value.string else { throw APIError("the model is a name, such as sonnet") }
+      if let problem = Manager.modelProblem(model) { throw APIError(problem) }
+      try saveSetting(section: "manager", "model", .string(model))
+      managerModel = model
+      logLine("the Manager's model is \(model)")
+    }
+    return .object(["model": .string(managerModel)])
+  }
+
   /// The `operator` request: sends `text` to the operator, or without text
   /// opens it. It creates the operator when none exists. The answer is the
   /// operator's summary, with `delivery` when it took text. `from` and
