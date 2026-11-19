@@ -126,7 +126,8 @@ final class Instance {
       // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the
       // undo window. A test that checks the undo window sets it.
       "removalDelaySeconds": 0,
-      // The stub draws no prompt, so a message that waits for claude's SessionStart does not wait out 1.5 s.
+      // The stub draws its prompt box once, right after SessionStart, and never redraws it. So a message that waits
+      // for claude's SessionStart does not wait out 1.5 s.
       "pasteSettleSeconds": .number(Instance.pasteSettleSeconds),
     ]
     try JSON.object(config.merging(extra) { $1 }).text.write(toFile: home.config, atomically: true, encoding: .utf8)
@@ -486,10 +487,10 @@ final class Instance {
   /// processes. A test that waits out the stop for processes other than claude sets it.
   static let shortStopWait: [String: JSON] = ["stopWaitSeconds": 2]
 
-  /// The config.json key that makes a stop wait 3 s for claude to exit. A test whose stub claude lingers 5 s to
+  /// The config.json key that makes a stop wait 4 s for claude to exit. A test whose stub claude lingers 6 s to
   /// outlast the first wait, and to exit within a retry's wait, sets it. `timeoutScale` does not stretch the wait
   /// on CI, so each side keeps a margin of about 2 s.
-  static let lingerStopWait: [String: JSON] = ["stopWaitSeconds": 3]
+  static let lingerStopWait: [String: JSON] = ["stopWaitSeconds": 4]
 
   /// A CI runner has 3 CPUs, and it starts sbd, tmux, and a stub claude several times slower than a laptop does.
   /// A wait that succeeds returns at once, so only a failing wait takes longer.

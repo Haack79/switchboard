@@ -192,14 +192,14 @@ private final class Strays {
 
   // MARK: claude that has not exited
 
-  /// The stub outlives the first 3 s wait and exits within the retry's wait. The refusal leaves the Claude pane
+  /// The stub outlives the first 4 s wait and exits within the retry's wait. The refusal leaves the Claude pane
   /// open, which is how the retry finds that claude.
   @Test func rmRefusesAClaudeThatHasNotExitedAfterTheWait() throws {
     let sbd = try Instance(config: Instance.lingerStopWait)
     let repo = try sbd.repoWithOrigin()
     let s = try sbd.worktreeSession(repo)
-    try sbd.sb("send", s.id, "linger 5")
-    try sbd.waitFor(s.id, "the reply") { $0.lastReply == "I'll linger 5 s when I stop." }
+    try sbd.sb("send", s.id, "linger 6")
+    try sbd.waitFor(s.id, "the reply") { $0.lastReply == "I'll linger 6 s when I stop." }
     let pid = try #require(try sbd.waitFor(s.id, "claude's pid") { $0.claudePid != nil }.claudePid)
     let terminals = try sbd.client.terminals(s.id)
 
