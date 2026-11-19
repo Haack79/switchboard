@@ -37,17 +37,20 @@ extension MCPToolServer {
 
   static let session = string("A session: an id, a unique id prefix, or a unique name.")
   static let group = string("A group: an id, a unique id prefix, or a unique name.")
+  static let full = boolean("True returns every field. False, the default, returns the brief form.")
 
   static let allTools = sessionTools + pauseTools
 
   static let sessionTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions with their state, reason, PR, waits, notes, and artifacts. The sessions that need the user come first."
+      "Lists the sessions, with the ones that need the user first. Each one shows its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as the last reply, notes, cards, and artifacts.",
+      ["full": full]
     ),
     Tool(
-      "get_session", "Shows one session, with its group's name and description, and its artifacts.",
-      ["session": session],
+      "get_session",
+      "Shows one session: its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as its folder, branch, last reply, notes, cards, its group's name and description, and its artifacts. Get the full form before you act on the session.",
+      ["session": session, "full": full],
       required: ["session"]),
     Tool(
       "read_reply", "Reads the session's last reply from its transcript, as Markdown.", ["session": session],

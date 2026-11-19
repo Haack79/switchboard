@@ -200,3 +200,21 @@ extension ManagerTextTests {
     #expect(MCPToolServer.allTools.contains { $0.name == "set_parent" })
   }
 }
+
+/// The Manager guide and the chat guide teach the brief form and the `full: true` argument that returns every field.
+extension ManagerTextTests {
+  @Test func theManagerGuidesCommandsNameTheBriefFlagAndTheFullArgument() throws {
+    let guide = Manager.guide
+    let start = try #require(guide.range(of: "## Commands"))
+    let end = try #require(guide.range(of: "## What changed", range: start.upperBound..<guide.endIndex))
+
+    let commands = guide[start.upperBound..<end.lowerBound]
+
+    #expect(commands.contains("--brief`"), "\(commands)")
+    #expect(commands.contains("`full: true`"), "\(commands)")
+  }
+
+  @Test func theChatGuideNamesTheFullArgument() {
+    #expect(Chat.guide.contains("`full: true`"), "\(Chat.guide)")
+  }
+}

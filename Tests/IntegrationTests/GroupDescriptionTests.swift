@@ -714,7 +714,7 @@ import Testing
     _ = try add(sbd, "Flags", description: "Ship the cache.", sessions: [a.id])
     let mcp = try MCPClient(sbd)
 
-    let s = try #require(try mcp.call("get_session", ["session": .string(a.id)]).json)
+    let s = try #require(try mcp.call("get_session", ["session": .string(a.id), "full": true]).json)
 
     #expect(s["groupDescription"]?.string == "Ship the cache.")
   }
@@ -725,7 +725,7 @@ import Testing
     let flags = try add(sbd, "Flags", description: "Ship the cache.", sessions: [a.id])
     let mcp = try MCPClient(sbd, group: flags.id)
 
-    let s = try #require(try mcp.call("get_session", ["session": .string(a.id)]).json)
+    let s = try #require(try mcp.call("get_session", ["session": .string(a.id), "full": true]).json)
 
     #expect(s["groupDescription"]?.string == "Ship the cache.")
   }
@@ -736,7 +736,7 @@ import Testing
     _ = try add(sbd, "Flags", description: "Ship the cache.")
     let mcp = try MCPClient(sbd)
 
-    let s = try #require(try mcp.call("get_session", ["session": .string(a.id)]).json)
+    let s = try #require(try mcp.call("get_session", ["session": .string(a.id), "full": true]).json)
 
     #expect(s["id"]?.string == a.id)
     #expect(s["groupDescription"]?.string == nil)
@@ -750,7 +750,7 @@ import Testing
 
     _ = try clear(sbd, "Flags")
 
-    let s = try #require(try mcp.call("get_session", ["session": .string(a.id)]).json)
+    let s = try #require(try mcp.call("get_session", ["session": .string(a.id), "full": true]).json)
     #expect(s["groupDescription"]?.string == nil)
   }
 }

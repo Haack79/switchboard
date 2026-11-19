@@ -9,8 +9,8 @@ import Testing
     let b = try sbd.new(name: "bravo")
     let mcp = try MCPClient(sbd)
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
-    let got = try mcp.call("get_session", ["session": "bravo"]).decode(SessionSummary.self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
+    let got = try mcp.call("get_session", ["session": "bravo"]).decode(SessionBrief.self)
 
     #expect(Set(listed.map(\.id)) == [a.id, b.id])
     #expect(got.id == b.id)
@@ -286,7 +286,7 @@ import Testing
     try sbd.postArtifactHook(s.id)
     let mcp = try MCPClient(sbd)
 
-    let got = try #require(try mcp.call("get_session", ["session": .string(s.id)]).json)
+    let got = try #require(try mcp.call("get_session", ["session": .string(s.id), "full": true]).json)
 
     #expect(got["artifacts"]?.array?.compactMap { $0["url"]?.string } == [artifactPageURL])
     #expect(got["artifacts"]?.array?.first?["title"]?.string == "Delta Rates")
@@ -299,7 +299,7 @@ import Testing
     try sbd.postArtifactHook(a.id)
     let mcp = try MCPClient(sbd)
 
-    let listed = try #require(try mcp.call("list_sessions").json?.array)
+    let listed = try #require(try mcp.call("list_sessions", ["full": true]).json?.array)
 
     let alpha = try #require(listed.first { $0["id"]?.string == a.id })
     let bravo = try #require(listed.first { $0["id"]?.string == b.id })

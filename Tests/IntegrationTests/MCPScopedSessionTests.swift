@@ -55,7 +55,7 @@ import Testing
     let s = try scope(sbd)
     let mcp = try MCPClient(sbd, group: s.group.id)
 
-    let got = try mcp.call("get_session", ["session": .string(s.member.name)]).decode(SessionSummary.self)
+    let got = try mcp.call("get_session", ["session": .string(s.member.name)]).decode(SessionBrief.self)
 
     #expect(got.id == s.member.id)
   }
@@ -176,7 +176,7 @@ import Testing
     let s = try scope(sbd)
     let mcp = try MCPClient(sbd, group: s.group.id)
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
 
     #expect(listed.map(\.id) == [s.member.id])
   }

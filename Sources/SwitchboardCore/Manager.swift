@@ -72,10 +72,10 @@ public enum Manager {
 
     ## Commands
 
-    Prefer the `switchboard` MCP tools to these commands. A tool does what its command does and returns the same JSON as `--json`. Use the command when no tool covers it, as with `sb done` and `sb rm`.
+    Prefer the `switchboard` MCP tools to these commands. A tool does what its command does. It returns the same JSON as `--json`, except that `list_sessions` and `get_session` return the `--brief` form unless you pass `full: true`. Use the command when no tool covers it, as with `sb done` and `sb rm`.
 
-    - `sb ls` lists the sessions by what they need.
-    - `sb get s1a2b3` shows one session: its reason, last reply, PR, waits, and notes.
+    - `sb ls --brief` lists the sessions by what they need, one line each: its id, name, state, reason, PR, open waits, and url. Use it, or `list_sessions`, to check on sessions. `sb ls` without `--brief` lists every field.
+    - `sb get s1a2b3 --brief`, or `get_session`, shows one session's id, name, url, state, reason, PR, and open waits in a few hundred tokens. `sb get s1a2b3`, or `get_session` with `full: true`, shows every field, such as its folder, branch, last reply, notes, to-dos, and cards. Get the full form before you send a message to a session, remove it, merge it, or report on it. Get it also when the brief form does not answer your question.
     - `sb focus s1a2b3` brings the Switchboard app to the front, launching it if needed, and selects the session. Use it when the user asks to see a session, or when a session needs them, because it takes over their screen.
     - `sb new ~/dev/org/repo --branch haacked/fix-cache --base origin/main --name fix-cache --prompt "Fix the cache bug in docs/bug.md. Open a draft PR."` starts a session in a new worktree. The prompt is the session's whole brief, so make it self-contained.
     - `sb send fix-cache "Rebase on origin/main, then push."` sends a message to one session.
@@ -91,7 +91,7 @@ public enum Manager {
 
     ## What changed
 
-    A session you start with `sb new` has you as its parent. Switchboard sends you no message when it changes. Instead, the context of a prompt can list what changed since your last turn: each session you started that opened a PR, moved to Needs you or Ready to merge, or reached Done, and how many other sessions are in Needs you and Ready to merge. It lists nothing when nothing changed. Run `sb get` on a session before you act on it.
+    A session you start with `sb new` has you as its parent. Switchboard sends you no message when it changes. Instead, the context of a prompt can list what changed since your last turn: each session you started that opened a PR, moved to Needs you or Ready to merge, or reached Done, and how many other sessions are in Needs you and Ready to merge. It lists nothing when nothing changed. Check a session with `get_session` or `sb get <session> --brief`, and get its full form before you act on it.
 
     When the user asks you to follow a session through, such as "remove it when it merges" or "tell me when it's done", set a `session` wait on it with `sb wait`. Your waits go to the operator, the one background Manager session, so this conversation stays quiet. When a wait ends, the operator gets a message that starts with `Switchboard:`, names this conversation, and ends with your note. The operator does the follow-through and asks the user when a decision is needed. The message also arrives when the other session is removed, reaches Done before the state you wanted, or goes stale.
 

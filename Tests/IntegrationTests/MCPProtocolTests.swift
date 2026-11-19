@@ -162,7 +162,7 @@ import Testing
     let s = try sbd.new(name: "alpha")
     let mcp = try MCPClient(server: try #require(try managerConfig(sbd)["mcpServers"]?["switchboard"]))
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
 
     #expect(listed.contains { $0.id == s.id })
   }

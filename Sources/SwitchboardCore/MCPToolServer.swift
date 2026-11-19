@@ -151,9 +151,9 @@ public struct MCPToolServer: Sendable {
     }
     switch name {
     case "list_sessions":
-      return try inScope(client.call("ls"), scoped)
+      return try brief(inScope(client.call("ls"), scoped), args)
     case "get_session":
-      return try session(sessionRef(args), scoped)
+      return try brief(session(sessionRef(args), scoped), args)
     case "read_reply":
       return try client.call("reply", ["session": try sessionID(args, scoped)])
     case "triage":
@@ -324,6 +324,11 @@ public struct MCPToolServer: Sendable {
     if let scoped { request["group"] = .string(scoped.group.id) }
     _ = try client.call("plan-artifact-report", request)
     return ["plan": args["plan"] ?? .null, "kind": args["kind"] ?? .null, "ok": true]
+  }
+
+  /// The sessions in `full` in their brief form, unless `args` asks for every field.
+  private func brief(_ full: JSON, _ args: JSON) throws -> JSON {
+    args["full"]?.bool == true ? full : try SessionBrief.json(full)
   }
 
   /// The items of `list` whose `id` is a session in the group.
