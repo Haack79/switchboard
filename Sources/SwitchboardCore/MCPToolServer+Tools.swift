@@ -37,7 +37,8 @@ extension MCPToolServer {
 
   static let session = string("A session: an id, a unique id prefix, or a unique name.")
   static let schedule = string("The id of the schedule.")
-  static let interval = string("The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m.")
+  static let interval = string(
+    "The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m.")
   static let group = string("A group: an id, a unique id prefix, or a unique name.")
   static let full = boolean("True returns every field. False, the default, returns the brief form.")
 
