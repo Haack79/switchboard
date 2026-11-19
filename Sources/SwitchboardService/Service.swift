@@ -1841,7 +1841,7 @@ public final class Service {
     }
     if !panes.isEmpty {
       let terminals = mac.terminals()
-      pollFor5Seconds { panes.allSatisfy { terminals.isDead($0) != false } }
+      poll(seconds: 5) { panes.allSatisfy { terminals.isDead($0) != false } }
     }
     return picked
   }
@@ -2585,12 +2585,12 @@ public final class Service {
   private func settle(_ id: String) {
     let name = paneName(id, .claude)
     guard let terminals = queue.sync(execute: { try? site(of: id).terminals() }) else { return }
-    pollFor5Seconds { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
+    poll(seconds: 5) { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
   }
 
-  /// Checks `done` every 50 ms until it returns true, or for at most 5 s.
-  private func pollFor5Seconds(_ done: () -> Bool) {
-    let deadline = Date().addingTimeInterval(5)
+  /// Checks `done` every 50 ms until it returns true, or for at most `seconds`.
+  private func poll(seconds: Double, _ done: () -> Bool) {
+    let deadline = Date().addingTimeInterval(seconds)
     while !done(), Date() < deadline { usleep(50_000) }
   }
 
