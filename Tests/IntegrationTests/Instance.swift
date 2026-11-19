@@ -844,6 +844,11 @@ extension Instance {
   /// A test that drops the link and expects a request to fail sets it.
   static let shortHostWait: [String: JSON] = ["hostWaitSeconds": 2]
 
+  /// The config.json key that makes a request that needs a host wait 5 s for the host's link, in place of 15 s.
+  /// A test that needs an ssh attempt to fail inside the wait sets it. `timeoutScale` does not stretch the wait on
+  /// CI, where 2 s can end before the first attempt does.
+  static let attemptHostWait: [String: JSON] = ["hostWaitSeconds": 5]
+
   /// Connects the host's link and waits for it. A sbd with `shortHostWait` connects first, so its first request
   /// that needs the host does not have to connect within the short wait.
   func connectHost(_ name: String = "mini") throws {
