@@ -23,7 +23,7 @@ extension Instance {
   }
 
   /// The session's events as `sb events --json` prints them, one JSON object a line.
-  func eventsFromCLI(_ id: String) throws -> [Event] {
+  fileprivate func eventsFromCLI(_ id: String) throws -> [Event] {
     try sb("events", "--json", "--session", id).split(separator: "\n").map {
       try JSONCoding.decode(Event.self, from: String($0))
     }

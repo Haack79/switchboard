@@ -99,7 +99,7 @@ extension Instance {
     }
 
     #expect(plain(text).hasPrefix("It makes cohort results independent of child order.\n4 files"))
-    let event = try #require(try sbd.eventsFromCLI(s.id).last { $0.kind == MergeBrief.event })
+    let event = try #require(try sbd.events(s.id).last { $0.kind == MergeBrief.event })
     #expect(headlessUsage(event.data["usage"]) == stubUsage)
     #expect(event.data["model"]?.string == "haiku")
     let row = try sbd.waitForHeadlessUsageRow("mergeBrief", calls: 1)

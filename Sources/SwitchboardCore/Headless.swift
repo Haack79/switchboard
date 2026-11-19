@@ -69,10 +69,9 @@ public enum Headless {
     case .timedOut: throw APIError("timed out after \(Int(timeout)) s")
     case .exited, nil: break
     }
-    guard p.terminationStatus == 0 else {
-      throw ExitError(status: p.terminationStatus, output: String(decoding: output, as: UTF8.self))
-    }
-    return String(decoding: output, as: UTF8.self)
+    let text = String(decoding: output, as: UTF8.self)
+    guard p.terminationStatus == 0 else { throw ExitError(status: p.terminationStatus, output: text) }
+    return text
   }
 
   /// What `run` throws when `claude` exits with a nonzero status. claude exits with status 1 after an error
