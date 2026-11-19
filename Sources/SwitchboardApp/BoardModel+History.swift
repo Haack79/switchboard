@@ -9,6 +9,17 @@ struct NavLocation: Hashable {
     case issues
     case loops
     case session(String)
+
+    /// The list view that the place shows, or nil for a session.
+    var mainView: MainView? {
+      switch self {
+      case .inbox: .inbox
+      case .board: .board
+      case .issues: .issues
+      case .loops: .loops
+      case .session: nil
+      }
+    }
   }
 
   var place: Place
@@ -118,21 +129,17 @@ extension BoardModel {
   }
 
   private func restore(_ location: NavLocation) {
+    if let view = location.place.mainView { show(view) }
     switch location.place {
     case .session(let id):
       selection = id
       if summary(id)?.kind.showsAsChat == true { showingTerminal = location.terminal }
     case .inbox(let item):
-      show(.inbox)
       inboxFocus = item
       showingTerminal = location.terminal
       inboxJumps += 1
-    case .board:
-      show(.board)
-    case .issues:
-      show(.issues)
-    case .loops:
-      show(.loops)
+    case .board, .issues, .loops:
+      break
     }
   }
 
@@ -141,11 +148,9 @@ extension BoardModel {
     let name: (String?) -> String? = { self.summary($0)?.name }
     let text: String
     switch location.place {
-    case .board: text = MainView.board.title
-    case .issues: text = MainView.issues.title
-    case .loops: text = MainView.loops.title
     case .inbox(let item): text = name(item).map { "\(MainView.inbox.title): \($0)" } ?? MainView.inbox.title
     case .session(let id): text = name(id) ?? id
+    case .board, .issues, .loops: text = location.place.mainView?.title ?? ""
     }
     return location.terminal ? "\(text) (terminal)" : text
   }

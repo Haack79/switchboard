@@ -119,7 +119,7 @@ private struct LoopListRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       LoopSessionLink(row: row)
-      ScheduleItem(schedule: row.schedule, caption: ScheduleCaption(row.schedule, session: row.session, now: now))
+      ScheduleItem(schedule: row.schedule, caption: row.caption(now: now))
     }
     .listRowChrome(current: current)
     .onTapGesture { model.loopFocus = row.id }
@@ -148,7 +148,7 @@ private struct LoopDetail: View {
   let now: Int64
 
   var body: some View {
-    let caption = ScheduleCaption(row.schedule, session: row.session, now: now)
+    let caption = row.caption(now: now)
     let history = row.schedule.history
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 6) {

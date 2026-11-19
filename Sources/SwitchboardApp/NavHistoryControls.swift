@@ -60,12 +60,9 @@ private struct RecentPlacesList: View {
   }
 
   @ViewBuilder private func icon(_ place: NavLocation) -> some View {
-    switch place.place {
-    case .inbox: Image(systemName: MainView.inbox.symbol)
-    case .board: Image(systemName: MainView.board.symbol)
-    case .issues: Image(systemName: MainView.issues.symbol)
-    case .loops: Image(systemName: MainView.loops.symbol)
-    case .session(let id):
+    if let view = place.place.mainView {
+      Image(systemName: view.symbol)
+    } else if case .session(let id) = place.place {
       Circle().fill(model.summary(id)?.state.color ?? .gray).frame(width: 8, height: 8)
     }
   }

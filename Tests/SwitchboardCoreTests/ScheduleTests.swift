@@ -589,6 +589,68 @@ extension ScheduleTests {
     func theFirstHeldConditionNamesTheReason(_ done: Bool, _ paused: Bool, _ removing: Bool, _ reason: String?) {
       #expect(Schedule.hold(done: done, paused: paused, removing: removing) == reason)
     }
+
+    /// sbd reads the hold from the session and the app from its summary, so the two must agree.
+    @Test(
+      arguments: [
+        (false, false, nil, nil),
+        (true, false, nil, "the session is marked done"),
+        (false, true, nil, "the session is paused"),
+        (true, true, nil, "the session is marked done"),
+        (false, false, .queued, "the session is being removed"),
+        (false, false, .running, "the session is being removed"),
+        (false, false, .failed, nil),
+      ] as [(Bool, Bool, Removal.State?, String?)])
+    func aSessionAndItsSummaryGiveTheSameHold(
+      _ done: Bool, _ paused: Bool, _ removal: Removal.State?, _ hold: String?
+    ) {
+      var session = Session(id: "s1", name: "manager", cwd: "/tmp/a", claudeSessionId: "u1", created: 5)
+      session.done = done
+      session.pause = paused ? Pause(by: .you, since: 0) : nil
+      session.removal = removal.map { state in
+        var r = Removal(requested: 0, notBefore: 0, worktree: true, branch: true, remoteBranch: false, resolve: [])
+        r.state = state
+        return r
+      }
+      // The facts that `Service.summary` copies from the session.
+      var summary = SessionSummary(
+        id: session.id, name: session.name, cwd: session.cwd, repo: nil, branch: nil,
+        claudeSessionId: session.claudeSessionId, state: .working, reason: "", since: 0, lastActivity: 0, live: true,
+        claudePid: nil, attached: false, lastReply: nil, waits: [], notes: [], markedDone: session.done)
+      summary.pause = session.pause
+      summary.removal = session.removal
+
+      #expect(session.scheduleHold == hold)
+      #expect(summary.scheduleHold == hold)
+    }
+  }
+
+  /// Run Now refuses a paused schedule first, then a schedule whose session is held.
+  @Suite struct RunBlocker {
+    @Test func anActiveScheduleOnAFreeSessionCanRun() {
+      #expect(due(at: now + hour).runBlocker(hold: nil) == nil)
+    }
+
+    @Test func aPausedScheduleIsBlockedAsPaused() {
+      #expect(due(at: now + hour, paused: true).runBlocker(hold: nil) == .paused)
+    }
+
+    /// A hold refuses a schedule that isn't due, whose status is `active`.
+    @Test(arguments: holds)
+    func aScheduleOnAHeldSessionIsBlockedByTheHold(_ hold: String) {
+      #expect(due(at: now + hour).runBlocker(hold: hold) == .held(hold))
+      #expect(due(at: now - hour).runBlocker(hold: hold) == .held(hold))
+    }
+
+    @Test(arguments: holds)
+    func aPausedScheduleOnAHeldSessionIsBlockedAsPaused(_ hold: String) {
+      #expect(due(at: now + hour, paused: true).runBlocker(hold: hold) == .paused)
+    }
+
+    /// Only `paused == true` pauses a schedule.
+    @Test func pausedFalseIsNotPaused() {
+      #expect(due(at: now + hour, paused: false).runBlocker(hold: nil) == nil)
+    }
   }
 }
 
@@ -814,6 +876,13 @@ extension ScheduleTests {
 
       #expect(s.text.contains("failed 5m ago: the folder /tmp/a is gone"), "\(s.text)")
       #expect(s.text.contains("next in 25m"), "\(s.text)")
+    }
+
+    /// The status shows the run's outcome without its skipped count, then the timing.
+    @Test func theFailedTextIsTheRunsOutcomeThenTheTiming() {
+      let s = status(ahead: 25 * minute, last: run(now - 5 * minute, .failed, skipped: 2, error: "gone"))
+
+      #expect(s.text == "failed 5m ago: gone · next in 25m")
     }
 
     @Test func aFailedLastRunThatIsDueAgainIsFailed() {
@@ -1047,6 +1116,11 @@ extension ScheduleTests {
       row("rab", session: "s2", ahead: 5 * minute, paused: true, failed: true),
     ]
 
+    /// `ScheduleStatus.attentionOrder` on two rows. Every fixture row has a status.
+    static func order(_ a: ScheduleRow, _ b: ScheduleRow) -> Bool {
+      ScheduleStatus.attentionOrder((a.status!, a.schedule), (b.status!, b.schedule))
+    }
+
     @Test func theFixtureHasEveryStateInOrder() {
       let states = AttentionOrder.sorted.compactMap(\.status?.state)
 
@@ -1059,7 +1133,7 @@ extension ScheduleTests {
     }
 
     @Test func reversedRowsSortIntoTheAttentionOrder() {
-      let ids = AttentionOrder.sorted.reversed().sorted(by: ScheduleRow.attentionOrder).map(\.schedule.id)
+      let ids = AttentionOrder.sorted.reversed().sorted(by: AttentionOrder.order).map(\.schedule.id)
 
       #expect(ids == AttentionOrder.sorted.map(\.schedule.id))
     }
@@ -1069,7 +1143,7 @@ extension ScheduleTests {
       var rng = SeededGenerator(seed: UInt64(seed + 1))
       let shuffled = AttentionOrder.sorted.shuffled(using: &rng)
 
-      let ids = shuffled.sorted(by: ScheduleRow.attentionOrder).map(\.schedule.id)
+      let ids = shuffled.sorted(by: AttentionOrder.order).map(\.schedule.id)
 
       #expect(ids == AttentionOrder.sorted.map(\.schedule.id))
     }
@@ -1077,7 +1151,7 @@ extension ScheduleTests {
     /// A strict order: no row comes before itself.
     @Test func noRowComesBeforeItself() {
       for r in AttentionOrder.sorted {
-        #expect(!ScheduleRow.attentionOrder(r, r), "\(r.schedule.id)")
+        #expect(!AttentionOrder.order(r, r), "\(r.schedule.id)")
       }
     }
 
@@ -1086,8 +1160,8 @@ extension ScheduleTests {
       let failed = row("rz", session: "s1", ahead: 20 * minute, failed: true)
       let overdue = row("ra", session: "s1", ahead: -2 * hour)
 
-      #expect(ScheduleRow.attentionOrder(failed, overdue))
-      #expect(!ScheduleRow.attentionOrder(overdue, failed))
+      #expect(AttentionOrder.order(failed, overdue))
+      #expect(!AttentionOrder.order(overdue, failed))
     }
   }
 }

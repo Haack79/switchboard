@@ -12,27 +12,30 @@ struct ScheduleCaption {
   /// Such as `last: pasted 5m ago · 2 skipped`, `last: failed 2m ago: <error>`, or `never ran`.
   let result: String
   let toggleTitle: String
-  /// Why Run Now can't run the schedule, in the order that sbd's `run-schedule` refuses, or nil when it can. A held
-  /// session refuses even a schedule that isn't due, whose status is `active`.
+  /// Why Run Now can't run the schedule, as sbd's `run-schedule` refuses it, or nil when it can.
   let runNowBlocker: String?
   let deleteQuestion: String
 
   init(_ schedule: Schedule, session: SessionSummary, now: Int64) {
     let hold = session.scheduleHold
+    self.init(schedule, status: ScheduleStatus(schedule, hold: hold, now: now), hold: hold, now: now)
+  }
+
+  /// `status` and `hold` are the schedule's `ScheduleStatus` and its session's `scheduleHold`.
+  init(_ schedule: Schedule, status: ScheduleStatus, hold: String?, now: Int64) {
     prompt = schedule.prompt
-    status = ScheduleStatus(schedule, hold: hold, now: now)
+    self.status = status
     timing = schedule.timingText(status.text)
     result = schedule.lastText(now: now)
     toggleTitle = schedule.paused == true ? "Resume" : "Pause"
-    if schedule.paused == true {
-      runNowBlocker = "The loop is paused. Resume it first."
-    } else {
-      runNowBlocker = hold.map { "The loop can't run, because \($0)." }
-    }
-    deleteQuestion = "Delete this loop? \(schedule.prompt.prefix { !$0.isNewline })"
+    runNowBlocker =
+      switch schedule.runBlocker(hold: hold) {
+      case .paused: "The loop is paused. Resume it first."
+      case .held(let hold): "The loop can't run, because \(hold)."
+      case nil: nil
+      }
+    deleteQuestion = "Delete this loop? \(oneLine(schedule.prompt))"
   }
-
-  var needsAttention: Bool { status.needsAttention }
 }
 
 /// A session's schedules, each with its status and actions.
@@ -74,7 +77,7 @@ struct ScheduleTiming: View {
   var body: some View {
     Text(caption.timing)
       .font(.caption)
-      .foregroundStyle(caption.needsAttention ? AttentionState.needsYou.color : .secondary)
+      .foregroundStyle(caption.status.needsAttention ? AttentionState.needsYou.color : .secondary)
       .fixedSize(horizontal: false, vertical: true)
   }
 }

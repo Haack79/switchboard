@@ -38,11 +38,20 @@ public struct Schedule: Codable, Equatable, Sendable {
 
     /// Such as `pasted 5m ago · 2 skipped` or `failed 2m ago: <error>`.
     public func text(now: Int64 = nowMs()) -> String {
-      var text = "\(outcome.rawValue) \(ago(t, now: now)) ago"
-      if let error { text += ": \(error)" }
-      if skipped > 0 { text += " · \(skipped) skipped" }
-      return text
+      skipped > 0 ? "\(outcomeText(now: now)) · \(skipped) skipped" : outcomeText(now: now)
     }
+
+    /// Such as `pasted 5m ago` or `failed 2m ago: <error>`.
+    public func outcomeText(now: Int64) -> String {
+      "\(outcome.rawValue) \(ago(t, now: now)) ago\(error.map { ": \($0)" } ?? "")"
+    }
+  }
+
+  /// Why sbd's `run-schedule` refuses the schedule.
+  public enum RunBlocker: Equatable, Sendable {
+    case paused
+    /// The session's `hold`.
+    case held(String)
   }
 
   public static let maxPerSession = 10
@@ -200,6 +209,14 @@ public struct Schedule: Codable, Equatable, Sendable {
     return nil
   }
 
+  /// Why Run Now can't run the schedule, or nil when it can. `hold` is
+  /// `Schedule.hold` for the schedule's session. The schedule's pause comes
+  /// first, and a hold refuses even a schedule that isn't due.
+  public func runBlocker(hold: String?) -> RunBlocker? {
+    if paused == true { return .paused }
+    return hold.map(RunBlocker.held)
+  }
+
   /// The next run after a run at `now`, and the due times that the run
   /// drops. The next run counts from `now`, not from the old due time.
   public func fired(at now: Int64) -> (next: Int64, skipped: Int) {
@@ -224,6 +241,13 @@ public struct Schedule: Codable, Equatable, Sendable {
   public func lastText(now: Int64 = nowMs()) -> String {
     guard let last else { return "never ran" }
     return "last: \(last.text(now: now))"
+  }
+}
+
+extension Session {
+  /// Why sbd's tick runs none of the session's schedules, or nil.
+  public var scheduleHold: String? {
+    Schedule.hold(done: done, paused: Pause.blocker(self) != nil, removing: removal?.holdsSession == true)
   }
 }
 
@@ -279,13 +303,6 @@ public struct ScheduleRow: Codable, Equatable, Sendable {
     self.schedule = schedule
     self.status = status
   }
-
-  /// The Loops tab's order: failed, overdue, due, active, held, then paused,
-  /// then by the next run, then by id. A row without a status comes last.
-  public static func attentionOrder(_ a: ScheduleRow, _ b: ScheduleRow) -> Bool {
-    func key(_ r: ScheduleRow) -> (Int, Int64, String) { (r.status?.state.rank ?? 6, r.schedule.next, r.schedule.id) }
-    return key(a) < key(b)
-  }
 }
 
 /// Whether a schedule runs, waits, or needs the user, with a line that says so.
@@ -326,7 +343,7 @@ public struct ScheduleStatus: Codable, Equatable, Sendable {
     let (state, text) = ScheduleStatus.timing(schedule, hold: hold, now: now)
     if let last = schedule.last, last.outcome == .failed {
       self.state = .failed
-      self.text = "failed \(ago(last.t, now: now)) ago\(last.error.map { ": \($0)" } ?? "") · \(text)"
+      self.text = "\(last.outcomeText(now: now)) · \(text)"
     } else {
       self.state = state
       self.text = text
@@ -334,6 +351,14 @@ public struct ScheduleStatus: Codable, Equatable, Sendable {
   }
 
   public var needsAttention: Bool { state == .failed || state == .overdue }
+
+  /// The Loops tab's order: failed, overdue, due, active, held, then paused,
+  /// then by the next run, then by id.
+  public static func attentionOrder(
+    _ a: (status: ScheduleStatus, schedule: Schedule), _ b: (status: ScheduleStatus, schedule: Schedule)
+  ) -> Bool {
+    (a.status.state.rank, a.schedule.next, a.schedule.id) < (b.status.state.rank, b.schedule.next, b.schedule.id)
+  }
 
   /// The state and text of an active schedule from its next run alone.
   private static func timing(_ schedule: Schedule, hold: String?, now: Int64) -> (State, String) {

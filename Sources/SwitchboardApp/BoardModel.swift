@@ -312,7 +312,7 @@ final class BoardModel: ObservableObject {
   @Published var loopFocus: String?
   /// Counts moves in the Loops view. Each one scrolls to the current loop.
   @Published var loopJumps = 0
-  /// The installed app saves it.
+  /// The Loops view's order. The installed app saves it in its view settings.
   @Published var loopSort: LoopSort {
     didSet { if loopSort != oldValue { viewSettingsStore?.set(loopSort.rawValue, forKey: Self.loopSortKey) } }
   }

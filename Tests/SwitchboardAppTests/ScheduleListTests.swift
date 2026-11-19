@@ -276,14 +276,14 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
       let caption = caption(ScheduleListTests.overdue, shape.session)
 
       #expect(caption.status.state == .held)
-      #expect(!caption.needsAttention)
+      #expect(!caption.status.needsAttention)
     }
 
     @Test func aFailedRemovalDoesNotHoldTheSchedule() {
       let caption = caption(ScheduleListTests.overdue, scheduledSession(nil, removal: .failed))
 
       #expect(caption.status.state == .overdue)
-      #expect(caption.needsAttention)
+      #expect(caption.status.needsAttention)
     }
 
     @Test func aFailedRunNeedsAttention() {
@@ -291,7 +291,7 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
 
       #expect(caption.status.state == .failed)
       #expect(caption.status.text == "failed 2m ago: the folder /work/gone is missing · next in 12m")
-      #expect(caption.needsAttention)
+      #expect(caption.status.needsAttention)
     }
 
     @Test(arguments: ScheduleListTests.heldShapes)
@@ -301,7 +301,7 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
       let caption = caption(schedule, shape.session)
 
       #expect(caption.status.state == .failed)
-      #expect(caption.needsAttention)
+      #expect(caption.status.needsAttention)
     }
 
     @Test func anOverdueLoopNeedsAttention() {
@@ -309,7 +309,7 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
 
       #expect(caption.status.state == .overdue)
       #expect(caption.status.text == "overdue by 2h, runs when the session is free")
-      #expect(caption.needsAttention)
+      #expect(caption.status.needsAttention)
     }
 
     /// A 30m loop's grace is 30 minutes.
@@ -317,14 +317,14 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
       let caption = caption(scheduleFixture("r1", next: scheduleNow - 30 * minuteMs))
 
       #expect(caption.status.state == .overdue)
-      #expect(caption.needsAttention)
+      #expect(caption.status.needsAttention)
     }
 
     @Test func aLoopOneMillisecondInsideItsGraceIsDueAndNeedsNoAttention() {
       let caption = caption(scheduleFixture("r1", next: scheduleNow - 30 * minuteMs + 1))
 
       #expect(caption.status.state == .due)
-      #expect(!caption.needsAttention)
+      #expect(!caption.status.needsAttention)
     }
 
     @Test func anActiveLoopNeedsNoAttention() {
@@ -332,7 +332,7 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
 
       #expect(caption.status.state == .active)
       #expect(caption.status.text == "next in 12m")
-      #expect(!caption.needsAttention)
+      #expect(!caption.status.needsAttention)
     }
 
     /// The user stopped the loop, so neither its failed run nor its session's hold makes it need attention.
@@ -344,16 +344,7 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
       let caption = caption(schedule, shape.session)
 
       #expect(caption.status.state == .paused)
-      #expect(!caption.needsAttention)
-    }
-
-    @Test(arguments: [
-      ScheduleListTests.active, ScheduleListTests.due, ScheduleListTests.overdue, ScheduleListTests.failed,
-    ])
-    func needsAttentionIsTheStatussNeedsAttention(_ schedule: Schedule) {
-      let caption = caption(schedule)
-
-      #expect(caption.needsAttention == caption.status.needsAttention)
+      #expect(!caption.status.needsAttention)
     }
   }
 
@@ -405,12 +396,20 @@ enum SessionShape: CaseIterable, CustomTestStringConvertible {
 
   /// Delete asks first, because the loop's prompt is lost.
   @Suite struct DeleteConfirmation {
-    @Test func theQuestionNamesTheFirstLineOfThePrompt() {
+    @Test func theQuestionNamesTheLinesOfThePromptOnOneLine() {
       let schedule = scheduleFixture("r1", "Run the Waiting audit.\nThen list the sessions that need me.")
 
       let caption = ScheduleCaption(schedule, session: freeSession, now: scheduleNow)
 
-      #expect(caption.deleteQuestion == "Delete this loop? Run the Waiting audit.")
+      #expect(caption.deleteQuestion == "Delete this loop? Run the Waiting audit. Then list the sessions that need me.")
+    }
+
+    @Test func aLongPromptIsCutWithAnEllipsis() {
+      let prompt = String(repeating: "Run the Waiting audit. ", count: 5)
+
+      let caption = ScheduleCaption(scheduleFixture("r1", prompt), session: freeSession, now: scheduleNow)
+
+      #expect(caption.deleteQuestion == "Delete this loop? \(String(prompt.prefix(69)))…")
     }
 
     @Test func aOneLinePromptIsNamedWhole() {

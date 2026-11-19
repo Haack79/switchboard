@@ -41,18 +41,15 @@ struct LoopEditor: View {
     }
 
     private var trimmedInterval: String { interval.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var intervalMs: Int64? { try? Schedule.parseInterval(trimmedInterval) }
+    private var parsedInterval: Result<Int64, any Error> { Result { try Schedule.parseInterval(trimmedInterval) } }
+    private var intervalMs: Int64? { try? parsedInterval.get() }
+    /// The prompt that sbd stores, or nil when sbd refuses it.
+    private var cleanPrompt: String? { try? Schedule.cleanPrompt(prompt) }
 
     /// Why the interval can't be read, or nil while it is readable or empty.
     var intervalError: String? {
-      guard !trimmedInterval.isEmpty else { return nil }
-      do {
-        _ = try Schedule.parseInterval(trimmedInterval)
-        return nil
-      } catch {
-        return "\(error)"
-      }
+      guard !trimmedInterval.isEmpty, case .failure(let error) = parsedInterval else { return nil }
+      return "\(error)"
     }
 
     /// The trimmed interval to send, or nil when it doesn't parse or has the edited loop's length.
@@ -61,15 +58,14 @@ struct LoopEditor: View {
       return trimmedInterval
     }
 
-    /// The trimmed prompt to send, or nil when it is empty or the edited loop's prompt. sbd trims the prompt too.
+    /// The clean prompt to send, or nil when sbd refuses it or it is the edited loop's prompt.
     var changedPrompt: String? {
-      let text = trimmedPrompt
-      guard !text.isEmpty, text != original?.prompt else { return nil }
+      guard let text = cleanPrompt, text != original?.prompt else { return nil }
       return text
     }
 
     var canSave: Bool {
-      guard intervalMs != nil, !trimmedPrompt.isEmpty else { return false }
+      guard intervalMs != nil, cleanPrompt != nil else { return false }
       if original == nil { return session != nil }
       return changedInterval != nil || changedPrompt != nil
     }
@@ -101,10 +97,10 @@ struct LoopEditor: View {
 
   @EnvironmentObject var model: BoardModel
   private let editing: Bool
-  /// State, so that a newer `ls` answer can't take away the picked session's choice while the sheet is open.
+  /// The choices are fixed when the sheet opens, so a newer `ls` answer can't take away the picked session.
   @State private var choices: [Choice]
   @State private var form: Form
-  /// Save was pressed, so an `actionError` that shows now is sbd's answer to it.
+  /// True once Save is pressed. An `actionError` that shows after that is sbd's answer to the save.
   @State private var saved = false
 
   /// `schedule` is the loop that an edit opens with. It is nil for a new loop, and for an edit whose loop is gone.

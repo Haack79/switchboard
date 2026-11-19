@@ -91,7 +91,7 @@ extension Service {
     let schedule = try found.edited(every: request.every, prompt: request.prompt, now: nowMs())
     guard schedule != found else { return try JSON(encoding: scheduleRow(id, found)) }
     try changeSchedule(id, schedule.id) { $0 = schedule }
-    record(id, "schedule-edited", ["schedule": try JSON(encoding: schedule), "before": try JSON(encoding: found)])
+    record(id, "schedule-edited", ["schedule": try eventJSON(schedule), "before": try eventJSON(found)])
     return try JSON(encoding: scheduleRow(id, schedule))
   }
 
@@ -100,14 +100,17 @@ extension Service {
   /// free. It refuses a paused schedule and a session that the tick skips.
   private func runSchedule(_ args: JSON) throws -> JSON {
     let (id, found) = try ownedSchedule(args)
-    guard found.paused != true else { throw APIError("schedule \(found.id) is paused. Resume it first") }
-    if let hold = scheduleHold(entries[id]!.session) { throw APIError("\(found.id) can't run, because \(hold)") }
+    switch found.runBlocker(hold: entries[id]!.session.scheduleHold) {
+    case .paused: throw APIError("schedule \(found.id) is paused. Resume it first")
+    case .held(let hold): throw APIError("\(found.id) can't run, because \(hold)")
+    case nil: break
+    }
     let now = nowMs()
     guard found.next > now else { return try JSON(encoding: scheduleRow(id, found)) }
     var schedule = found
     schedule.next = now
     try changeSchedule(id, schedule.id) { $0.next = now }
-    record(id, "schedule-run-requested", ["schedule": try JSON(encoding: schedule)])
+    record(id, "schedule-run-requested", ["schedule": try eventJSON(schedule)])
     return try JSON(encoding: scheduleRow(id, schedule))
   }
 
@@ -121,7 +124,7 @@ extension Service {
   /// stay due, so Undo lets them run.
   func fireDueSchedules(now: Int64) {
     let ids = entries.compactMap { id, e in
-      scheduleHold(e.session) == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
+      e.session.scheduleHold == nil && e.session.schedules?.contains { $0.isDue(now: now) } == true ? id : nil
     }
     for id in ids.sorted() {
       guard let session = entries[id]?.session else { continue }
@@ -171,6 +174,13 @@ extension Service {
     record(id, "schedule-ran", .object(data))
   }
 
+  /// The schedule without its run history, which neither an edit nor a Run Now request changes.
+  private func eventJSON(_ schedule: Schedule) throws -> JSON {
+    var schedule = schedule
+    schedule.runs = nil
+    return try JSON(encoding: schedule)
+  }
+
   /// Changes one schedule of the session and saves the session's row.
   private func changeSchedule(_ id: String, _ scheduleId: String, _ change: (inout Schedule) -> Void) throws {
     try update(id) { s in
@@ -182,19 +192,11 @@ extension Service {
     }
   }
 
-  /// Why the tick runs none of the session's schedules, or nil. The status
-  /// of each returned row reads it too, so a row says `held` exactly when the
-  /// tick skips its session.
-  private func scheduleHold(_ session: Session) -> String? {
-    Schedule.hold(
-      done: session.done, paused: Pause.blocker(session) != nil, removing: session.removal?.holdsSession == true)
-  }
-
   private func scheduleRow(_ id: String, _ schedule: Schedule) -> ScheduleRow {
     let session = entries[id]!.session
     return ScheduleRow(
       session: id, name: session.name, schedule: schedule,
-      status: ScheduleStatus(schedule, hold: scheduleHold(session), now: nowMs()))
+      status: ScheduleStatus(schedule, hold: session.scheduleHold, now: nowMs()))
   }
 
   /// The schedule that the request's `schedule` names, with its session. It

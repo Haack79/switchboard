@@ -25,11 +25,11 @@ struct LoopRow: Identifiable {
   var id: String { schedule.id }
 
   static func attentionOrder(_ a: LoopRow, _ b: LoopRow) -> Bool {
-    ScheduleRow.attentionOrder(a.scheduleRow, b.scheduleRow)
+    ScheduleStatus.attentionOrder((a.status, a.schedule), (b.status, b.schedule))
   }
 
-  private var scheduleRow: ScheduleRow {
-    ScheduleRow(session: session.id, name: session.name, schedule: schedule, status: status)
+  func caption(now: Int64) -> ScheduleCaption {
+    ScheduleCaption(schedule, status: status, hold: session.scheduleHold, now: now)
   }
 }
 
