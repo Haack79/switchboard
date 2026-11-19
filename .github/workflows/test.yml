@@ -71,7 +71,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
-    timeout-minutes: 45
+    # The build alone takes up to 17 minutes on a loaded runner, and part 1's tests take up to 30.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
