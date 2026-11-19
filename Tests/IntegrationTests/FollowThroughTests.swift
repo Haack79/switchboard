@@ -20,6 +20,8 @@ struct LiveGitHub {
   /// The base tip's rollup: SUCCESS, FAILURE, or PENDING.
   var baseChecks = "SUCCESS"
   var files = ["docs/runbooks/cdp-dead-letter.md"]
+  /// The `mergeCommit` that `gh pr view` prints for the PR. nil leaves the field out.
+  var mergeCommit: String?
 
   /// The answers for PR `number` as `github` records it, so the live head is the poller's head.
   init(_ github: FakeGitHub, number: Int = MergeTests.number) {
@@ -44,13 +46,15 @@ struct LiveGitHub {
     let rest = "api/repos/\(repo)"
     let lower = baseChecks.lowercased()
     let completed = baseChecks != "PENDING"
+    var pr: [String: JSON] = [
+      "number": .number(Double(number)), "url": .string("https://github.com/\(repo)/pull/\(number)"),
+      "headRefOid": .string(head), "state": .string(state), "isDraft": .bool(draft),
+      "mergeable": .string(mergeable), "baseRefName": .string(base),
+      "statusCheckRollup": [LiveGitHub.checkRun(checks)],
+    ]
+    if let mergeCommit { pr["mergeCommit"] = ["oid": .string(mergeCommit)] }
     var answers: [String: JSON] = [
-      "pr/\(repo)/\(number)": [
-        "number": .number(Double(number)), "url": .string("https://github.com/\(repo)/pull/\(number)"),
-        "headRefOid": .string(head), "state": .string(state), "isDraft": .bool(draft),
-        "mergeable": .string(mergeable), "baseRefName": .string(base),
-        "statusCheckRollup": [LiveGitHub.checkRun(checks)],
-      ],
+      "pr/\(repo)/\(number)": .object(pr),
       "\(rest)/compare/\(base)...\(head)": [
         "status": .string(behindBy == 0 ? "ahead" : "diverged"), "ahead_by": 1, "behind_by": .number(Double(behindBy)),
         "base_commit": ["sha": .string(baseTip)], "merge_base_commit": ["sha": .string(FakeGitHub.sha(9000))],
@@ -412,7 +416,7 @@ extension FollowThroughTests {
     try sbd.waitFor("the wait to go", timeout: 30) { try operatorsWait(sbd, wait) == nil }
     let resolved = try #require(try resolvedEvent(sbd, wait))
     #expect(resolved.data["action"]?["kind"]?.string == "merge", Comment(rawValue: resolved.data.text))
-    #expect(resolved.data["action"]?["result"] != nil, Comment(rawValue: resolved.data.text))
+    #expect(resolved.data["action"]?["result"]?.string == "merged", Comment(rawValue: resolved.data.text))
     let report = try #require(try reportEvents(sbd).last)
     #expect(report.data["needsYou"]?.bool != true, Comment(rawValue: report.data.text))
     #expect(report.data["text"]?.string?.contains("#\(Self.number)") == true, Comment(rawValue: report.data.text))
@@ -650,6 +654,36 @@ extension FollowThroughTests {
     try waitForStatus(sbd, wait, .held)
     let asked = try operatorMessages(sbd)
     #expect(asked.allSatisfy { !$0.contains(wait) }, "\(asked)")
+    #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
+  }
+
+  /// sbd stores the merge commit of its own merge. After the merged session is removed, a pending base on another
+  /// commit doesn't hold an overlapping merge.
+  @Test func aPendingBaseOnAnotherCommitDoesNotHoldAnOverlappingMergeAfterSbdsMergedSessionIsRemoved() throws {
+    let github = try FakeGitHub()
+    github.addPR(
+      copying: Self.number, number: Self.secondNumber, branch: Self.secondBranch, head: FakeGitHub.sha(18_304))
+    let sbd = try instance(github)
+    var firstLive = LiveGitHub(github)
+    firstLive.mergeCommit = FakeGitHub.sha(9100)
+    let (s, first) = try askedMerge(github, sbd, live: firstLive)
+    let r = try approve(sbd, first)
+    try #require(r.status == 0, Comment(rawValue: r.stderr))
+    try sbd.waitFor("the first wait to go", timeout: 30) { try operatorsWait(sbd, first) == nil }
+    let resolved = try #require(try resolvedEvent(sbd, first))
+    #expect(resolved.data["action"]?["commit"]?.string == FakeGitHub.sha(9100), Comment(rawValue: resolved.data.text))
+    try sbd.waitFor(s.id, "the reply to the post-merge message") { $0.lastReply?.hasPrefix("Done: PR #") == true }
+    try sbd.sb("rm", s.id)
+    var live = LiveGitHub(github, number: Self.secondNumber)
+    live.baseChecks = "PENDING"
+    try sbd.serve(live)
+    let second = try sbd.session(in: Self.charts, branch: Self.secondBranch, folder: "charts-2", name: "second")
+    try sbd.poll()
+    try sbd.waitFor(second.id, "Ready to merge") { $0.state == .readyToMerge }
+
+    let wait = try arm(sbd, arming.mergeArgs(second))
+
+    try judgment(sbd, about: wait)
     #expect(sbd.ghMerges().count == 1, "\(sbd.ghCalls())")
   }
 }
@@ -1036,7 +1070,8 @@ extension FollowThroughTests {
     mergeOnGitHub(github, head: try sbd.git(s.cwd, "rev-parse", "HEAD"))
     try sbd.poll(all: true)
 
-    try operatorMessage(sbd, holding: "uncommitted")
+    let text = try operatorMessage(sbd, holding: "uncommitted")
+    #expect(text.contains("sbd could not remove"), Comment(rawValue: text))
     #expect(try sessionIds(sbd).contains(s.id))
     #expect(FileManager.default.fileExists(atPath: "\(s.cwd)/notes.txt"))
   }

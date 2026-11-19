@@ -128,9 +128,9 @@ public final class Service {
   var merging: Set<String> = []
   /// Runs wait actions, one at a time, off the state queue.
   let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
-  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name, with its
-  /// session and its changed files. `loadSbdMerges` rebuilds it at startup.
-  var lastSbdMerges: [String: (subject: String, number: Int, files: Set<String>?)] = [:]
+  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
+  /// `loadSbdMerges` rebuilds it at startup.
+  var lastSbdMerges: [String: SbdMergeRecord] = [:]
   /// The changed files that a merge action read for each PR, keyed by the lowercased owner/name and the number, with
   /// the head they were read at. Only `followThroughQueue` reads and writes it.
   var changedFilesRead: [String: (head: String, files: Set<String>)] = [:]

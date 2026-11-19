@@ -32,11 +32,14 @@ extension Service {
     followThroughQueue.async { [self] in runAction(holder, wait.id) }
   }
 
-  /// A PR that a merge action merged, with its changed files, or nil files when sbd did not read them.
+  /// A PR of `subject` that a merge action merged, with its changed files and its merge commit. A nil field is one
+  /// that sbd did not read.
   struct SbdMergeRecord {
+    var subject: String
     var repo: String
     var number: Int
     var files: Set<String>?
+    var commit: String?
   }
 
   /// Rebuilds `lastSbdMerges` from the newest `wait-resolved` events of merge actions that merged, so a restart
@@ -50,7 +53,8 @@ extension Service {
         let number = action?["pr"]?.int, let subject = event.data["wait"]?["session"]?["id"]?.string
       else { continue }
       let files = action?["files"]?.array.map { Set($0.compactMap(\.string)) }
-      lastSbdMerges[repo.lowercased()] = (subject, number, files)
+      lastSbdMerges[repo.lowercased()] = SbdMergeRecord(
+        subject: subject, repo: repo, number: number, files: files, commit: action?["commit"]?.string)
     }
   }
 
@@ -118,7 +122,8 @@ extension Service {
           data["repo"] = .string(merged.repo)
           data["pr"] = .number(Double(merged.number))
           data["files"] = merged.files.map { .array($0.sorted().map(JSON.string)) } ?? .null
-          if let subject { lastSbdMerges[merged.repo.lowercased()] = (subject, merged.number, merged.files) }
+          data["commit"] = merged.commit.map(JSON.string) ?? .null
+          lastSbdMerges[merged.repo.lowercased()] = merged
         }
         try closeWait(holder, wait, extra: ["outcome": .string(detail), "action": .object(data)])
         if let subject, entries[subject] != nil {
@@ -265,7 +270,7 @@ extension Service {
     let mergeRepos = home.loadConfig().operator.mergeRepos
     let read = queue.sync { mergeFacts(subject, wait) }
     let facts = read.facts
-    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, read.name) }
+    if let pr = facts.pr, pr.state == .merged { return alreadyMerged(pr, subject, read.name) }
     if read.busy, let pr = facts.pr { return .hold(reason: "\(read.name) is merging #\(pr.number) or being deleted") }
     if let verdict = MergeGuard.checkFacts(mergeRepos: mergeRepos, verdict: read.verdict, facts: facts) {
       return outcome(of: verdict, input: nil)
@@ -274,7 +279,7 @@ extension Service {
     var input = MergeGuard.Input(
       mergeRepos: mergeRepos, verdict: read.verdict, facts: facts, live: livePR(pr), behindBy: nil, baseTip: nil,
       baseRollup: nil, files: nil, earlierFiles: [], lastSbdMerge: read.lastSbdMerge, approval: read.approval)
-    if input.live?.state == .merged { return alreadyMerged(pr, read.name) }
+    if input.live?.state == .merged { return alreadyMerged(pr, subject, read.name) }
     if let verdict = MergeGuard.checkLive(input) { return outcome(of: verdict, input: input) }
     let live = input.live!
     let compared = compare(pr.repo, base: live.base, head: live.head)
@@ -286,7 +291,7 @@ extension Service {
       input.files = changedFiles(pr.repo, pr.number, head: pr.headSha)
       input.earlierFiles = read.earlier.map { changedFiles(pr.repo, $0.number, head: $0.head) }
     }
-    let verdict = MergeGuard.checkFiles(input) ?? MergeGuard.checkReply(input)
+    let verdict = MergeGuard.check(input)
     guard verdict == .act, let approval = read.approval else { return outcome(of: verdict, input: input) }
     if let changed = queue.sync(execute: { takeForMerge(holder, wait.id, subject, pr, approval) }) { return changed }
     defer { queue.sync { _ = merging.remove(subject) } }
@@ -304,7 +309,8 @@ extension Service {
     changedFilesRead[filesKey(pr.repo, pr.number)] = nil
     return .done(
       result: attempt.result.rawValue, detail: landed, reports: true,
-      merged: SbdMergeRecord(repo: pr.repo, number: pr.number, files: files))
+      merged: SbdMergeRecord(
+        subject: subject, repo: pr.repo, number: pr.number, files: files, commit: mergeCommit(of: pr)))
   }
 
   /// Puts the subject in `merging` when nothing changed during the live reads, or returns the outcome that replaces
@@ -328,8 +334,8 @@ extension Service {
     let digest = MergeGuard.replyDigest(e.facts.lastReply)
     guard digest == approval.replyDigest else {
       return .judgment(
-        question: "\(e.session.name) replied again while sbd checked #\(pr.number) at \(pr.headSha.prefix(7)). Does "
-          + "the new reply ask the user a question, leave a decision for the user, or say that /go did not finish?",
+        question: MergeGuard.replyQuestion(
+          "\(e.session.name) replied again while sbd checked #\(pr.number) at \(pr.headSha.prefix(7))."),
         approval: MergeGuard.Approval(head: pr.headSha, replyDigest: digest), reply: e.facts.lastReply)
     }
     merging.insert(subject)
@@ -359,8 +365,10 @@ extension Service {
         }
       }
       if let merged = lastSbdMerges[repo.lowercased()] {
+        // Removing the subject also removes its facts and their merge commit from `entries`.
         let pr = entries[merged.subject]?.facts.pr
-        last = MergeGuard.SbdMerge(commit: pr?.number == merged.number ? pr?.mergeCommit : nil, files: merged.files)
+        let commit = merged.commit ?? (pr?.number == merged.number ? pr?.mergeCommit : nil)
+        last = MergeGuard.SbdMerge(commit: commit, files: merged.files)
       }
     }
     return MergeFacts(
@@ -369,12 +377,15 @@ extension Service {
   }
 
   /// The outcome for a PR that merged before this run, such as a merge that landed before a restart. It counts as
-  /// sbd's last merge in the repository with unknown files, so a pending base after it holds an overlapping merge.
-  private func alreadyMerged(_ pr: PullRequest, _ name: String) -> ActionOutcome {
+  /// sbd's last merge in the repository, with unknown files. sbd holds the next merge while the base's checks run on
+  /// its merge commit. A merge commit that sbd can't read matches any base tip.
+  private func alreadyMerged(_ pr: PullRequest, _ subject: String, _ name: String) -> ActionOutcome {
     changedFilesRead[filesKey(pr.repo, pr.number)] = nil
     return .done(
       result: MergeAttempt.Result.merged.rawValue, detail: "#\(pr.number) of \(name) is merged", reports: true,
-      merged: SbdMergeRecord(repo: pr.repo, number: pr.number, files: nil))
+      merged: SbdMergeRecord(
+        subject: subject, repo: pr.repo, number: pr.number, files: nil,
+        commit: pr.mergeCommit ?? mergeCommit(of: pr)))
   }
 
   /// The action's outcome for a verdict that does not act. A hold's message goes once per head and base tip. A
@@ -412,7 +423,13 @@ extension Service {
     else { return nil }
     return MergeGuard.LivePR(
       head: head, state: state, draft: draft, mergeable: json["mergeable"]?.string.flatMap(Mergeable.init(rawValue:)),
-      base: base, rollup: Service.rollup(json["statusCheckRollup"]?.array ?? []))
+      base: base, rollup: ChecksRollup(contexts: json["statusCheckRollup"]?.array ?? []))
+  }
+
+  /// The merge commit of a merged PR, or nil when gh failed or GitHub has none yet.
+  private func mergeCommit(of pr: PullRequest) -> String? {
+    ghJSON(["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "mergeCommit"])?["mergeCommit"]?["oid"]?
+      .string
   }
 
   /// How many commits the head lacks from the base branch, and the base branch's tip.
@@ -431,7 +448,7 @@ extension Service {
     else { return nil }
     // GitHub's combined state is pending for a commit without statuses.
     let statuses = (status["total_count"]?.int ?? 0) > 0 ? [JSON.object(["state": status["state"] ?? .null])] : []
-    return Service.rollup(list + statuses)
+    return ChecksRollup(contexts: list + statuses)
   }
 
   /// The PR's changed files at `head`, or nil when a page failed or the PR has more files than 30 pages hold.
@@ -454,28 +471,6 @@ extension Service {
   }
 
   private func filesKey(_ repo: String, _ number: Int) -> String { "\(repo.lowercased())#\(number)" }
-
-  /// One state for a list of check runs and statuses: failed when any failed or has a state that `ChecksRollup`
-  /// does not know, running when any still runs, and passed when all passed. A check run carries `status` and
-  /// `conclusion`, and a status carries `state`. An empty list has no state.
-  static func rollup(_ contexts: [JSON]) -> ChecksRollup? {
-    guard !contexts.isEmpty else { return nil }
-    var running = false
-    for c in contexts {
-      if let state = c["state"]?.string?.uppercased() {
-        switch ChecksRollup(state) {
-        case .passed?: continue
-        case .running?: running = true
-        case .failed?, nil: return .failed
-        }
-      } else if c["status"]?.string?.uppercased() != "COMPLETED" {
-        running = true
-      } else if !["SUCCESS", "NEUTRAL", "SKIPPED"].contains(c["conclusion"]?.string?.uppercased() ?? "") {
-        return .failed
-      }
-    }
-    return running ? .running : .passed
-  }
 
   // MARK: Removal and report
 

@@ -277,7 +277,7 @@ import Testing
     let r = try sbInPane(sbd, of: s, ["wait", "--json", c.id] + mergeArgs(s))
 
     #expect(r.status != 0, Comment(rawValue: r.stdout))
-    #expect(r.stderr.contains(Self.refusal) || r.stderr.contains("itself"), Comment(rawValue: r.stderr))
+    #expect(r.stderr.contains("a session can't arm merge on itself"), Comment(rawValue: r.stderr))
     #expect(try noWaits(sbd))
   }
 

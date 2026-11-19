@@ -331,12 +331,16 @@ public enum MergeGuard {
     guard let pr = input.facts.pr, let live = input.live else { return hold("sbd has not read the PR live") }
     let digest = replyDigest(input.facts.lastReply)
     guard let approval = input.approval, approval.head == live.head, approval.replyDigest == digest else {
-      return .judgment(
-        question:
-          "Every check passed for #\(pr.number) at \(short(live.head)). Does the session's last reply ask the user a "
-          + "question, leave a decision for the user, or say that /go did not finish?")
+      return .judgment(question: replyQuestion("Every check passed for #\(pr.number) at \(short(live.head))."))
     }
     return .act
+  }
+
+  /// The question about the session's last reply, after `lead`, which says why sbd asks. The operator's role prompt
+  /// tells the operator how to answer it.
+  public static func replyQuestion(_ lead: String) -> String {
+    "\(lead) Does the session's last reply ask the user a question, leave a decision for the user, or say that /go "
+      + "did not finish?"
   }
 
   private static func hold(_ reason: String, _ message: String? = nil) -> Verdict {
@@ -358,6 +362,33 @@ public enum MergeGuard {
   }
 
   static func short(_ sha: String) -> String { String(sha.prefix(7)) }
+}
+
+extension ChecksRollup {
+  /// One state for a list of check runs and statuses: failed when any failed or has a state that `ChecksRollup`
+  /// does not know, running when any still runs, and passed when all passed. A check run carries `status` and
+  /// `conclusion`, and a status carries `state`. An empty list has no state.
+  public init?(contexts: [JSON]) {
+    guard !contexts.isEmpty else { return nil }
+    var running = false
+    for c in contexts {
+      if let state = c["state"]?.string?.uppercased() {
+        switch ChecksRollup(state) {
+        case .passed?: continue
+        case .running?: running = true
+        case .failed?, nil:
+          self = .failed
+          return
+        }
+      } else if c["status"]?.string?.uppercased() != "COMPLETED" {
+        running = true
+      } else if !["SUCCESS", "NEUTRAL", "SKIPPED"].contains(c["conclusion"]?.string?.uppercased() ?? "") {
+        self = .failed
+        return
+      }
+    }
+    self = running ? .running : .passed
+  }
 }
 
 /// Decides whether sbd removes the subject of an `rm` or `rm-worktree` action now. A worktree goes only after the

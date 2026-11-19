@@ -260,7 +260,7 @@ extension MergeGuardTests {
         $0.approval = MergeGuard.Approval(head: "newer", replyDigest: MergeGuard.replyDigest(MergeGuardTests.reply))
       }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     /// The rollup counts on the commit that GitHub merges, which is the live head, not on the poller's read.
@@ -268,7 +268,7 @@ extension MergeGuardTests {
     func aLiveRollupThatIsNotSuccessDoesNotMerge(_ rollup: ChecksRollup?) throws {
       let verdict = try MergeGuardTests.check { $0.live?.rollup = rollup }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     @Test(arguments: [Mergeable.unknown, nil] as [Mergeable?])
@@ -281,33 +281,33 @@ extension MergeGuardTests {
     @Test func aConflictingPRDoesNotMerge() throws {
       let verdict = try MergeGuardTests.check { $0.live?.mergeable = .conflicting }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     @Test func aDraftDoesNotMerge() throws {
       let verdict = try MergeGuardTests.check { $0.live?.draft = true }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     @Test func aClosedPRDoesNotMerge() throws {
       let verdict = try MergeGuardTests.check { $0.live?.state = .closed }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     @Test(arguments: ["release", "develop", "haacked/stack-base"])
     func aPRThatTargetsAnotherBranchThanTheDefaultDoesNotMerge(_ base: String) throws {
       let verdict = try MergeGuardTests.check { $0.live?.base = base }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.asksForJudgment, "\(verdict)")
     }
 
     /// The default branch is what the base must be. When the poller never read it, the base is unknown.
     @Test func aPRWhoseDefaultBranchIsUnknownDoesNotMerge() throws {
       let verdict = try MergeGuardTests.check { $0.facts.pr?.defaultBranch = nil }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
   }
 }
@@ -386,7 +386,7 @@ extension MergeGuardTests {
         $0.baseRollup = nil
       }
 
-      #expect(!verdict.acts, "\(verdict)")
+      #expect(verdict.holds, "\(verdict)")
     }
 
     /// The base tip is sbd's own merge, that PR shared a file with this one, and its CI still runs.
@@ -597,5 +597,58 @@ extension MergeGuardTests {
 
       #expect(verdict.asksForJudgment, "\(verdict)")
     }
+  }
+}
+
+// MARK: The rollup of a live read
+
+/// `ChecksRollup(contexts:)` reads the live head's `statusCheckRollup` and the base tip's check runs and combined
+/// status. GitHub's GraphQL answers in upper case and its REST API in lower case.
+@Suite struct LiveRollupTests {
+  static func run(_ status: String, _ conclusion: String? = nil) -> JSON {
+    ["status": .string(status), "conclusion": conclusion.map(JSON.string) ?? .null]
+  }
+
+  static func status(_ state: String) -> JSON { ["state": .string(state)] }
+
+  @Test func anEmptyListHasNoState() {
+    #expect(ChecksRollup(contexts: []) == nil)
+  }
+
+  @Test(arguments: ["SUCCESS", "NEUTRAL", "SKIPPED", "success", "neutral", "skipped"])
+  func aCompletedRunThatSucceededPasses(_ conclusion: String) {
+    #expect(ChecksRollup(contexts: [Self.run("COMPLETED", conclusion)]) == .passed)
+  }
+
+  @Test(arguments: [
+    "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure", "timed_out", "",
+  ])
+  func aCompletedRunThatDidNotSucceedFails(_ conclusion: String) {
+    #expect(ChecksRollup(contexts: [Self.run("COMPLETED", conclusion)]) == .failed)
+  }
+
+  @Test(arguments: ["IN_PROGRESS", "QUEUED", "in_progress", "queued"])
+  func anUnfinishedRunRuns(_ status: String) {
+    #expect(ChecksRollup(contexts: [Self.run(status)]) == .running)
+  }
+
+  @Test(arguments: ["error", "failure", "ERROR", "FAILURE", "something-new"])
+  func aStatusThatFailedOrIsUnknownFails(_ state: String) {
+    #expect(ChecksRollup(contexts: [Self.status(state)]) == .failed)
+  }
+
+  @Test(arguments: ["pending", "PENDING", "expected"])
+  func aPendingStatusRuns(_ state: String) {
+    #expect(ChecksRollup(contexts: [Self.status(state)]) == .running)
+  }
+
+  @Test func oneFailureFailsAListThatAlsoRuns() {
+    let contexts = [Self.run("IN_PROGRESS"), Self.run("COMPLETED", "SUCCESS"), Self.status("failure")]
+    #expect(ChecksRollup(contexts: contexts) == .failed)
+  }
+
+  @Test func oneRunningCheckRunsAListThatOtherwisePasses() {
+    let contexts = [Self.run("COMPLETED", "SUCCESS"), Self.status("pending")]
+    #expect(ChecksRollup(contexts: contexts) == .running)
   }
 }
