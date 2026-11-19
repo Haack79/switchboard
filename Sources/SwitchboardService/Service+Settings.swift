@@ -8,6 +8,22 @@ extension Service {
     try updateSettings { $0[key] = value }
   }
 
+  /// Writes one setting into a top-level object of config.json, such as `manager`, and keeps every other setting,
+  /// including the object's other keys. It refuses to replace a value of `section` that isn't an object.
+  func saveSetting(section: String, _ key: String, _ value: JSON) throws {
+    try updateSettings { settings in
+      var object: [String: JSON] = [:]
+      if let existing = settings[section] {
+        guard let existing = existing.object else {
+          throw APIError("config.json's \(section) isn't a JSON object, so sbd can't save \(key) there")
+        }
+        object = existing
+      }
+      object[key] = value
+      settings[section] = .object(object)
+    }
+  }
+
   /// Reads config.json's top-level settings, lets `change` edit them, and writes them back. It refuses to rewrite a
   /// file that it can't read as a JSON object.
   func updateSettings(_ change: (inout [String: JSON]) throws -> Void) throws {

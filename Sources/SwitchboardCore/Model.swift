@@ -338,6 +338,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var plans: [PlanSummary]?
   /// The artifacts that the session published, in first-publish order, or nil when there are none.
   public var artifacts: [SessionArtifact]?
+  /// When sbd last started a fresh conversation for the operator, or nil before the first one and for other kinds.
+  public var conversationStarted: Int64?
   /// The review that a docket row tracks, or nil for any other session.
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.

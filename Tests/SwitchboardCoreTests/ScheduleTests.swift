@@ -1297,6 +1297,16 @@ extension ScheduleTests {
       #expect(after.prompt == "look at the flags")
     }
 
+    @Test func anEditKeepsTheRunHistory() throws {
+      var before = hourly()
+      before.record(Schedule.Run(t: now - minute, outcome: .failed, skipped: 0, error: "no folder"))
+
+      let after = try before.edited(every: "10m", prompt: "look at the flags", now: now)
+
+      #expect(after.runs == before.runs)
+      #expect(after.last == before.last)
+    }
+
     @Test func theAuthorDoesNotChange() throws {
       #expect(try hourly().edited(every: "10m", prompt: "new words", now: now).by == .claude)
     }

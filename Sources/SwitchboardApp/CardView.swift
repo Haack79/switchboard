@@ -65,7 +65,9 @@ struct CardView: View {
       if let description = card.input["description"]?.string {
         InlineText(plain: description).foregroundStyle(.secondary)
       }
-      if !compact { Self.textBox(card.details, maxHeight: 160) }
+      if !compact {
+        ToolInputBox(text: card.details, markdown: card.markdown, maxHeight: 160)
+      }
       HStack {
         Button("Allow") { model.answer(card, behavior: "allow") }
           .buttonStyle(.borderedProminent)
@@ -292,18 +294,29 @@ struct CardList: View {
   }
 }
 
-/// The text verbatim, in a box that scrolls past `maxHeight`. In the Inbox's detail pane, which scrolls, the box takes
-/// the text's full height.
+/// The text verbatim, in a box that scrolls past `maxHeight`.
 private struct TextBox: View {
-  @Environment(\.detailScroll) private var detailScroll
   let text: String
   let maxHeight: CGFloat
 
   var body: some View {
-    let content = Text(verbatim: text)
-      .font(.body.monospaced())
-      .textSelection(.enabled)
-      .frame(maxWidth: .infinity, alignment: .leading)
+    ScrollBox(maxHeight: maxHeight) {
+      Text(verbatim: text)
+        .font(.body.monospaced())
+        .textSelection(.enabled)
+    }
+  }
+}
+
+/// A box that scrolls past `maxHeight`. In the Inbox's detail pane, which scrolls, the box takes the content's full
+/// height.
+private struct ScrollBox<Content: View>: View {
+  @Environment(\.detailScroll) private var detailScroll
+  let maxHeight: CGFloat
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    let content = content.frame(maxWidth: .infinity, alignment: .leading)
     Group {
       if detailScroll == nil {
         ScrollView { content }
@@ -315,5 +328,30 @@ private struct TextBox: View {
     }
     .padding(8)
     .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
+  }
+}
+
+/// A tool call's input. The part that `Card.markdown(tool:input:)` names draws as Markdown. A button
+/// switches to the whole input verbatim. An input without that part shows verbatim.
+struct ToolInputBox: View {
+  let text: String
+  let markdown: String?
+  let maxHeight: CGFloat
+  @State private var showsRaw = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if markdown != nil {
+        Button(showsRaw ? "Show formatted" : "Show raw input") { showsRaw.toggle() }
+          .buttonStyle(.link)
+          .accessibilityHint(
+            showsRaw ? "Draws the call's text as formatted Markdown" : "Shows the call's whole input as JSON")
+      }
+      if let markdown, !showsRaw {
+        ScrollBox(maxHeight: maxHeight) { MarkdownView(text: markdown) }
+      } else {
+        TextBox(text: text, maxHeight: maxHeight)
+      }
+    }
   }
 }

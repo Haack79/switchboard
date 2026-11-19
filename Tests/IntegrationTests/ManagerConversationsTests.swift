@@ -791,15 +791,13 @@ import Testing
     #expect(try compactWindows(sbd, c, count: 1) == [""])
   }
 
-  @Test func workSessionsAndTheOperatorGetNoAutoCompactWindow() throws {
+  /// The operator's window comes from `operator.autoCompactWindow`, which OperatorResetTests covers.
+  @Test func workSessionsGetNoAutoCompactWindow() throws {
     let sbd = try Instance()
 
     let work = try sbd.idleSession()
-    let op = try decode(SessionSummary.self, sbd.sb("operator", "--json"))
-    try sbd.waitFor(op.id, "the operator's claude") { $0.live }
 
     #expect(try compactWindows(sbd, work, count: 1) == [""])
-    #expect(try compactWindows(sbd, op, count: 1) == [""])
   }
 
   // MARK: Inside Claude Code
