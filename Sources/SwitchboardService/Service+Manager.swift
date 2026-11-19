@@ -38,15 +38,20 @@ extension Service {
   }
 
   /// A new conversation, or the operator with `isOperator`, loads only the
-  /// switchboard MCP server. Without a name, it takes the first line of
-  /// `prompt`, or `Manager.untitled` until its first prompt names it.
-  private func createManager(name: String?, prompt: String?, isOperator: Bool = false) throws -> SessionSummary {
+  /// switchboard MCP server, unless `mcp` names more, or is nil for the full setup. Without a name, it takes the
+  /// first line of `prompt`, or `Manager.untitled` until its first prompt names it. `account` is a Claude config
+  /// folder, kept as it is, so it need not be one that `sb account` knows. Without it, the conversation runs under
+  /// the active account.
+  func createManager(
+    name: String?, prompt: String?, isOperator: Bool = false, account: String? = nil, mcp: [String]? = []
+  ) throws -> SessionSummary {
     let folder = home.managerFolder
     let named = name ?? prompt.map(Manager.name(fromPrompt:)) ?? Manager.untitled
     return try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
       $0.manager = true
+      $0.claudeConfigDir = account
       if isOperator { $0.isOperator = true }
-      $0.mcp = []
+      $0.mcp = mcp
       $0.mcpScoped = true
     }
   }

@@ -79,7 +79,7 @@ extension Service {
 
   /// The operator's id and the waits on it that the conversation `id` handed
   /// off, or nil when no operator exists.
-  private func handedOff(from id: String) -> (holder: String, waits: [Wait])? {
+  func handedOff(from id: String) -> (holder: String, waits: [Wait])? {
     guard let op = operatorID(), op != id else { return nil }
     return (op, (entries[op]?.session.waits ?? []).filter { $0.handedFrom?.id == id })
   }

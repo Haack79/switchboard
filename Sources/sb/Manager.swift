@@ -1,7 +1,8 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | pin <conv> | unpin <conv> | <conv> [text] [--log | --read]]`.
+/// `sb manager [ls | new [--name N] [text] | mcp <conv> … | pin <conv> | unpin <conv> |
+/// end <conv> [--drop <id>]… [--new [--name N]] | <conv> [text] [--log | --read]]`.
 /// Without a conversation it opens the most recent one.
 func manager(_ a: Args) {
   var words = a.positional[...]
@@ -28,6 +29,9 @@ func manager(_ a: Args) {
     if a.json { return printJSON(result) }
     let s = summary(result)
     return print("\(s.name): \(s.pinned == true ? "pinned" : "not pinned")".printable)
+  case "end":
+    words.removeFirst()
+    return managerEnd(a, Array(words))
   case "new":
     words.removeFirst()
     var args: [String: JSON] = ["new": true]
@@ -46,6 +50,41 @@ func manager(_ a: Args) {
   let text = words.joined(separator: " ")
   if !text.isEmpty { args["text"] = .string(text) }
   printOpenOrSend(a, call("manager", args, timeout: 300))
+}
+
+/// `sb manager end <conv> [--drop <id>]… [--new [--name N]]`. Only the user ends a conversation, so it refuses
+/// inside Claude Code, and sbd refuses a session caller.
+private func managerEnd(_ a: Args, _ words: [String]) {
+  refuseInsideClaudeCode(
+    "only the user ends a Manager conversation, so sb manager end doesn't run inside Claude Code. Run it from a terminal"
+  )
+  guard let ref = words.first else { die("manager end needs a conversation") }
+  var args = callerArg
+  args["session"] = .string(ref)
+  args["drop"] = .array((a.allValues["--drop"] ?? []).map(JSON.string))
+  if a.switches.contains("--new") {
+    args["new"] = true
+    if let name = a.values["--name"] { args["name"] = .string(name) }
+  }
+  let result = call("manager-end", args, timeout: 300)
+  if a.json { return printJSON(result) }
+  let name = result["name"]?.string ?? ref
+  if let transcript = result["transcript"]?.string {
+    print("Ended \(name). Its transcript is at \(transcript).".printable)
+  } else {
+    print(
+      "Ended \(name). sbd found no transcript of its Claude session \(result["claudeSessionId"]?.string ?? "")."
+        .printable)
+  }
+  let handed = result["handed"]?.array?.compactMap(\.string) ?? []
+  if !handed.isEmpty {
+    let waits = handed.count == 1 ? "1 wait" : "\(handed.count) waits"
+    print("The operator still follows \(waits) it handed off: \(handed.joined(separator: ", ")).")
+  }
+  if let started = result["started"] {
+    let s = summary(started)
+    print("Started \(s.name) (\(s.id))".printable)
+  }
 }
 
 /// `sb manager mcp <conv> [add <server>… | rm <server>… | --all | --none]`.

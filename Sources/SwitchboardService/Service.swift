@@ -32,6 +32,8 @@ public final class Service {
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
     var inFlight: Int64?
+    /// Whether a message is queued for the session, or sbd pasted or launched one that claude has not confirmed.
+    var hasMessageOnItsWay: Bool { !pending.isEmpty || inFlight != nil }
     /// The text of the last message that a draft in claude's prompt box
     /// held. The log names each held message once.
     var heldText: String?
@@ -121,6 +123,9 @@ public final class Service {
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
+  /// The wait and schedule ids that `manager-end` lets the removal of each conversation drop, as
+  /// `refuseConversationRemoval` reads them.
+  var endingDrops: [String: Set<String>] = [:]
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
   /// The drafts whose reply target a gh read is resolving, or whose unknown
@@ -442,6 +447,8 @@ public final class Service {
       return .success(try slashCommands(request.args))
     case "rm":
       return .success(try remove(request.args, caller: caller))
+    case "manager-end":
+      return .success(try managerEnd(request.args, caller: caller))
     case "cleanup":
       return .success(try cleanup(request.args, caller: caller))
     case "rm-done":
@@ -1234,9 +1241,10 @@ public final class Service {
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
       try site(for: session).requireReady()
     } else {
-      // After `configure`, which sets a chat's group.
+      // After `configure`, which sets a chat's group. `configure` may also set an account folder that no name resolves.
       session.claudeConfigDir =
-        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount.folder
+        try accountForNew(named: args.account, parent: session.parent, for: session) ?? session.claudeConfigDir
+        ?? activeAccount.folder
     }
     entries[id] = Entry(session: session)
     try store.save(session)
@@ -1836,6 +1844,7 @@ public final class Service {
         scope: scope)
       return try release(check, stopped, scope.site)
     }
+    waitAtGate("hold-removal-forget")
     let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
     try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
     return released
@@ -1883,6 +1892,7 @@ public final class Service {
       if let refusal = busyRefusal(id) { throw refusal }
       // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
       try refuseOperatorRemoval(id)
+      try refuseConversationRemoval(id)
       try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
       return RemovalSubject(
         session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),

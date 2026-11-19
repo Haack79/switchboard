@@ -235,7 +235,7 @@ extension Service {
     case .running where listsRunningAsMovable: break
     default: return "its claude is running. Stop it first"
     }
-    if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
+    if e.hasMessageOnItsWay { return "a message is on its way to it" }
     if let source = transcriptFile(e.session) {
       let dest = transcriptDestination(source, id: e.session.claudeSessionId, to: target)
       if let conflict = transcriptConflict(source, dest) { return conflict }

@@ -68,7 +68,8 @@ enum PlannedScope {
   static let refused: [String] = [
     "rm", "cleanup", "rm-done", "send-group", "send-pending", "group-ls", "group-add", "group-rm", "group-move",
     "group-note", "group-describe", "group-account", "group-suggest", "manager", "manager-ls", "manager-mcp", "chat",
-    "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
+    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-end", "item-context", "manager-mcp-request",
+    "operator",
     "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
     "parent", "schedule",
     "schedules", "remove-schedule", "pause-schedule", "rm-plan", "rm-queue", "rm-cancel", "rm-keep", "rm-retry",
@@ -227,6 +228,12 @@ private func refuses(_ text: String?, _ body: () throws -> Request) -> (Bool, St
 
   @Test func noOpIsBothAdmittedAndRefused() {
     #expect(Set(HostScope.rules.keys).isDisjoint(with: HostScope.refused.keys))
+  }
+
+  /// `manager-end` stops the conversation's claude, so a host's client could be inside the session it stops.
+  @Test func managerEndIsRefusedForTheReasonThatRmIs() {
+    #expect(HostScope.refused["manager-end"] != nil)
+    #expect(HostScope.refused["manager-end"] == HostScope.refused["rm"])
   }
 
   // MARK: The keys
