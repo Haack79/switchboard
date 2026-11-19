@@ -20,11 +20,7 @@ import Testing
 
   /// The bullet goes in `## Commands`, which #252 leaves alone, and not in `## What changed`.
   @Test func theManagerGuideTeachesSchedulesInItsCommands() throws {
-    let guide = Manager.guide
-    let start = try #require(guide.range(of: "## Commands"))
-    let end = try #require(guide.range(of: "## What changed", range: start.upperBound..<guide.endIndex))
-
-    let commands = guide[start.upperBound..<end.lowerBound]
+    let commands = try Self.guideSection("## Commands")
 
     #expect(commands.contains("`sb schedule "))
     #expect(commands.contains("add_schedule"))
@@ -51,6 +47,7 @@ import Testing
   @Test func theManagerGuideLeavesBranchTestingToASession() throws {
     let section = try Self.guideSection("## Testing branches together")
     #expect(section.contains("reply with the result in one line"), "\(section)")
+    #expect(section.contains("`here: true`"), "\(section)")
   }
 
   @Test func theOperatorPromptSaysThatTheCostRulesApply() {
@@ -90,7 +87,7 @@ import Testing
   }
 
   @Test func theOperatorPromptSaysThatTheAskFirstRulesApply() {
-    #expect(Manager.operatorPrompt.contains("CLAUDE.md"), "\(Manager.operatorPrompt)")
+    #expect(Manager.operatorPrompt.contains("ask-first rules in CLAUDE.md"), "\(Manager.operatorPrompt)")
   }
 
   // MARK: Asking for an MCP server

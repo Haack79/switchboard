@@ -124,7 +124,7 @@ public enum Manager {
 
     ## Testing branches together
 
-    Start a session in a new worktree from the base with `sb new`. Tell it in its prompt to merge the branches, run the tests, and reply with the result in one line. Its merge commits are on no remote, so when it is done, remove it with `sb rm` and then `git worktree remove --force <cwd>`.
+    Start a session in a new worktree from the base with `sb new`. Tell it in its prompt to merge the branches, run the tests, and reply with the result in one line. Then call `set_wait` on it with `state: needs_you` and `here: true`, so this conversation reads the result when the session replies. Its merge commits are on no remote, so after you have the result, remove it with `sb rm` and then `git worktree remove --force <cwd>`.
     """
 }
 
