@@ -520,8 +520,8 @@ private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", t
 
   /// A plan drawn as Markdown grows in Details the same way.
   @Test func detailsGrowsWithThePlansMarkdown() {
-    let short = planInput(listItems(100))
-    let long = planInput(listItems(200))
+    let short = planInput(listItems(10))
+    let long = planInput(listItems(20))
 
     #expect(detailsHeight(steps: 1, toolInput: long) > detailsHeight(steps: 1, toolInput: short))
   }
@@ -545,9 +545,9 @@ private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", t
 
   /// A plan drawn as Markdown on a permission card stops at the same kind of maximum height.
   @Test func aPlanBoxOutsideTheDetailPaneStopsAtItsMaximumHeight() {
-    let long = fittingHeight(ToolInputBox(text: "{}", markdown: listItems(200), maxHeight: 160))
+    let long = fittingHeight(ToolInputBox(text: "{}", markdown: listItems(40), maxHeight: 160))
 
-    #expect(long == fittingHeight(ToolInputBox(text: "{}", markdown: listItems(100), maxHeight: 160)))
+    #expect(long == fittingHeight(ToolInputBox(text: "{}", markdown: listItems(20), maxHeight: 160)))
     #expect(long > 160 && long < 240)
   }
 
