@@ -783,25 +783,6 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
 
   // MARK: Performance
 
-  /// 2,000 distinct ids of each form in the session id alphabet.
-  private static let manyIds: [String] = ["s", "swb_"].flatMap { prefix in
-    let alphabet = Array("abcdefghijkmnpqrstuvwxyz23456789")
-    return (0..<2_000).map { i in
-      var n = i
-      var id = prefix
-      for _ in 0..<5 {
-        id.append(alphabet[n % alphabet.count])
-        n /= alphabet.count
-      }
-      return id
-    }
-  }
-
-  private static func manyNames() -> SessionNames {
-    SessionNames(
-      live: Dictionary(uniqueKeysWithValues: manyIds.enumerated().map { ($1, "session-\($0)") }), removed: [:])
-  }
-
   /// One reference of each form in turn.
   private static func referenceText(_ i: Int) -> String {
     switch i % 4 {
@@ -816,37 +797,35 @@ private let unstyledInputs: [String] = plainRows.map(\.0).filter { input in
   private static let filler =
     " to rebase, then check café ☕ build 1.2#3 for the stream, see https://example.com/a,#4 and step 12:30 on main; "
 
-  /// A linear scan takes well under a second, even on a loaded CI runner. A quadratic scan of 200 KB takes
-  /// minutes, so this bound still catches one.
-  private static let linearBound = Duration.seconds(5)
-
-  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachInOneRunIsFast() {
-    let string = Self.manyIds.enumerated().map { "Ask \($1) about \(Self.referenceText($0))\(Self.filler)" }.joined()
-    let text = MarkdownText(stringLiteral: string)
-    let mentions = InlineMentions(names: Self.manyNames(), repo: contextRepo)
-    var pieces: [Piece] = []
-
-    let elapsed = ContinuousClock().measure { pieces = mentions.pieces(text) }
-
-    #expect(string.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.manyIds.count)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.manyIds.count)
-    #expect(elapsed < Self.linearBound)
-  }
-
-  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachAcrossManyRunsIsFast() {
-    let runs = Self.manyIds.enumerated().flatMap { i, id in
-      [Run("Ask "), Run(id, .emphasis), Run(" about "), Run(Self.referenceText(i), .strong), Run(Self.filler)]
+  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachInOneRunGrowsLinearly() {
+    let ((text, _), pieces) = expectLinearGrowth { count in
+      let ids = ManySessions.ids(count)
+      let string = ids.enumerated().map { "Ask \($1) about \(Self.referenceText($0))\(Self.filler)" }.joined()
+      return (MarkdownText(stringLiteral: string), InlineMentions(names: ManySessions.names(ids), repo: contextRepo))
+    } _: { text, mentions in
+      mentions.pieces(text)
     }
-    let text = MarkdownText(runs)
-    let mentions = InlineMentions(names: Self.manyNames(), repo: contextRepo)
-    var pieces: [Piece] = []
-
-    let elapsed = ContinuousClock().measure { pieces = mentions.pieces(text) }
 
     #expect(text.plain.utf8.count >= 200_000)
-    #expect(pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == Self.manyIds.count)
-    #expect(pieces.count(where: { referenced($0.mention) != nil }) == Self.manyIds.count)
-    #expect(elapsed < Self.linearBound)
+    #expect(
+      pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == ManySessions.largeIdCount)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == ManySessions.largeIdCount)
+  }
+
+  @Test func findingTwoThousandIdsOfEachFormAndAReferenceForEachAcrossManyRunsGrowsLinearly() {
+    let ((text, _), pieces) = expectLinearGrowth { count in
+      let ids = ManySessions.ids(count)
+      let runs = ids.enumerated().flatMap { i, id in
+        [Run("Ask "), Run(id, .emphasis), Run(" about "), Run(Self.referenceText(i), .strong), Run(Self.filler)]
+      }
+      return (MarkdownText(runs), InlineMentions(names: ManySessions.names(ids), repo: contextRepo))
+    } _: { text, mentions in
+      mentions.pieces(text)
+    }
+
+    #expect(text.plain.utf8.count >= 200_000)
+    #expect(
+      pieces.count(where: { if case .session? = $0.mention { true } else { false } }) == ManySessions.largeIdCount)
+    #expect(pieces.count(where: { referenced($0.mention) != nil }) == ManySessions.largeIdCount)
   }
 }
