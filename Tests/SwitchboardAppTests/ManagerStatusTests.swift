@@ -3,6 +3,16 @@ import Testing
 
 @testable import SwitchboardApp
 
+/// One end hint of each reason, as sbd sends them.
+let endHints = [
+  EndHint(
+    reason: .done, key: "done:2", text: "Every session this conversation started is done. End it to start fresh."),
+  EndHint(
+    reason: .context, key: "context:1",
+    text: "This conversation's context is 130k tokens, and each turn re-reads it. End it to start fresh.",
+    tokens: 130_000),
+]
+
 @MainActor
 @Suite struct ManagerStatusTests {
   static let conversation = needsItem("m", manager: true)
@@ -268,6 +278,23 @@ import Testing
     let model = model([child("a", since: 150)], log: [user(nil), assistant(120), user(nil)])
 
     #expect(changed(model) == nil)
+  }
+
+  // MARK: The end hint
+
+  @Test(arguments: endHints)
+  func theHintRowShowsTheConversationsEndHint(_ hint: EndHint) {
+    var conversation = Self.conversation
+    conversation.endHint = hint
+    let model = appliedModel([conversation])
+
+    #expect(model.managerStatus(for: conversation).endHint == hint)
+  }
+
+  @Test func theHintRowHidesWhenTheConversationHasNoEndHint() {
+    let model = appliedModel([Self.conversation])
+
+    #expect(model.managerStatus(for: Self.conversation).endHint == nil)
   }
 
   // MARK: Links

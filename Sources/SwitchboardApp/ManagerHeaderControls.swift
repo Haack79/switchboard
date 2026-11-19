@@ -10,5 +10,82 @@ struct ManagerHeaderControls: View {
     Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
       .help("Start a session that this conversation follows")
       .fixedSize()
+    // The name gives up its width before the button drops to its icon.
+    EndConversationButton(session: session)
+      .layoutPriority(1)
+  }
+}
+
+/// End Conversation…, which asks first and then ends the conversation and opens a new one in its place.
+struct EndConversationButton: View {
+  @EnvironmentObject var model: BoardModel
+  let session: SessionSummary
+  /// The confirmation as it was when the user pressed the button. The end drops only the ids that it lists, so a
+  /// wait that lands while the dialog is open makes sbd refuse the end instead of dropping the wait unseen.
+  @State private var ending: EndConversationText?
+
+  private static let title = "End Conversation…"
+  private static let icon = "stop.circle"
+
+  private var isConfirming: Binding<Bool> {
+    Binding(get: { ending != nil }, set: { if !$0 { ending = nil } })
+  }
+
+  var body: some View {
+    Button {
+      ending = EndConversationText(session)
+    } label: {
+      // A header too narrow for the title, as at CI's 1024 pt window, shows only the icon.
+      ViewThatFits(in: .horizontal) {
+        Label(Self.title, systemImage: Self.icon)
+        Label(Self.title, systemImage: Self.icon).labelStyle(.iconOnly)
+      }
+    }
+    .help("Remove this conversation and open a new one in its place")
+    .confirmationDialog(
+      ending?.title ?? "", isPresented: isConfirming, titleVisibility: .visible, presenting: ending
+    ) { text in
+      Button(text.button, role: .destructive) { model.endConversation(session, drop: text.drop) }
+    } message: { text in
+      Text(text.message)
+    }
+  }
+}
+
+/// The confirmation that End Conversation shows for a conversation's summary.
+struct EndConversationText: Equatable {
+  var title: String
+  var message: String
+  var button: String
+  /// The ids of the conversation's own waits, its pause condition, and its schedules, in the order that the message
+  /// lists them. sbd refuses the end while the conversation holds one of these that the request does not name.
+  var drop: [String]
+
+  init(_ s: SessionSummary) {
+    var dropped = s.waits.map { (id: $0.id, line: $0.line) }
+    if let pause = s.pause, let until = pause.until {
+      dropped.append((until.id, pause.line + (pause.message.map { ". The resume would send: \(oneLine($0))" } ?? "")))
+    }
+    dropped += (s.schedules ?? []).map { ($0.id, "Loop: \(oneLine($0.prompt))") }
+
+    var parts = [
+      "A new conversation opens in its place with the same account, MCP servers, and pin. "
+        + "The transcript stays on disk."
+    ]
+    if !dropped.isEmpty {
+      parts.append("Ending drops:\n" + dropped.map { "• \($0.line)" }.joined(separator: "\n"))
+    }
+    if let handed = s.handedWaits, !handed.isEmpty {
+      let waits = handed.count == 1 ? "1 wait" : "\(handed.count) waits"
+      parts.append("The \(Manager.operatorName) keeps following \(waits) that this conversation handed it.")
+    }
+    if !s.cards.isEmpty {
+      parts.append(s.cards.count == 1 ? "1 open request closes." : "\(s.cards.count) open requests close.")
+    }
+
+    title = "End \(s.name)?"
+    message = parts.joined(separator: "\n\n")
+    button = "End Conversation"
+    drop = dropped.map(\.id)
   }
 }
