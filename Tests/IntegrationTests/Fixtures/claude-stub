@@ -72,7 +72,8 @@
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
 #   anything else    replies "Done: <prompt>"
 # `claude -p ...` is the summary call. It reads the prompt on stdin and prints
-# the JSON that claude prints with --output-format json: a decision with two
+# the JSON that claude prints with --output-format json, with 100 input, 20
+# output, 300 cache read, and 40 cache write tokens under the --model it got: a decision with two
 # options for a reply that holds "Postgres or SQLite", an approval with one for
 # "Want me to", and info otherwise. $SB_HOME/summary-answer.json, a fixture
 # that the test writes, replaces that answer. A reply that holds FAIL-SUMMARY
@@ -98,7 +99,9 @@
 # line per call to $SB_HOME/quick-ask-calls.log, keeps the last prompt in
 # $SB_HOME/quick-ask-input.txt, and writes its pid to
 # $SB_HOME/quick-ask.pid. A prompt that holds FAIL-ASK makes it exit 1, and
-# SLOW-ASK makes it exec sleep 30, which keeps the pid. Otherwise it prints
+# SLOW-ASK makes it exec sleep 30, which keeps the pid. A prompt that holds
+# ERROR-ASK makes it print an error envelope with the same token counts and
+# exit 1, as claude does when the turn fails. Otherwise it prints
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
 # {"answer":"Nothing needs you."} when the file is missing, in the same
 # envelope.
@@ -127,8 +130,9 @@
 # folder. See trust_dialog.
 # With STUB_HOOKS=off it runs no hooks, as when every hook fails.
 # Each run appends one record to $SB_HOME/stub-calls.log in one write:
-# CLAUDE_CONFIG_DIR, SSH_AUTH_SOCK and the arguments, split by tabs. A NUL
-# ends the record, because a prompt can hold a newline.
+# CLAUDE_CONFIG_DIR, SSH_AUTH_SOCK, CLAUDE_CODE_AUTO_COMPACT_WINDOW and the
+# arguments, split by tabs. A NUL ends the record, because a prompt can hold
+# a newline.
 # What the hooks print goes to $SB_HOME/hook-output.log. See answer.
 # Each decision that a PermissionRequest hook answers with goes to
 # $SB_HOME/permission-answers.log. See answered.
@@ -136,6 +140,16 @@
 # arrived, with the paste markers.
 
 args=("$@")
+# Prints the JSON that claude -p --output-format json prints for the structured output $1, with fixed token counts
+# under the model that --model named, as claude reports them.
+envelope() {
+  local model=haiku i
+  for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --model ] && model=${args[i + 1]}; done
+  jq -nc --argjson o "$1" --arg m "$model" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson),
+    structured_output: $o, usage: {input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 300,
+    cache_creation_input_tokens: 40}, modelUsage: {($m): {inputTokens: 100, outputTokens: 20,
+    cacheReadInputTokens: 300, cacheCreationInputTokens: 40}}}'
+}
 if [ "${1-}" = -p ]; then
   input=$(cat)
   # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
@@ -147,17 +161,22 @@ if [ "${1-}" = -p ]; then
     echo "$$" >"$SB_HOME/quick-ask.pid"
     case $input in
     *FAIL-ASK*) echo "ask failed" >&2 && exit 1 ;;
+    *ERROR-ASK*)
+      envelope '{}' | jq -c '.subtype = "error_during_execution" | .is_error = true | .result = "ask failed"
+        | del(.structured_output)'
+      exit 1
+      ;;
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<rows>"* ]]; then
     printf '%s\0' "${args[*]}" >>"$SB_HOME/plan-calls.log"
     printf '%s' "$input" >"$SB_HOME/plan-input.txt"
     out=$(cat "$SB_HOME/plan-answer.json" 2>/dev/null) || out='{"rows":[]}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<pr-body>"* ]]; then
@@ -165,7 +184,7 @@ if [ "${1-}" = -p ]; then
     printf '%s' "$input" >"$SB_HOME/pr-brief-input.txt"
     [[ $input == *FAIL-BRIEF* ]] && echo "brief failed" >&2 && exit 1
     out=$(cat "$SB_HOME/pr-brief-answer.json" 2>/dev/null) || out='{"summary":"It changes the code."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   printf '%s\0' "${args[*]}" >>"$SB_HOME/summary-calls.log"
@@ -186,10 +205,11 @@ if [ "${1-}" = -p ]; then
   *) out='{"title":"Read the reply","kind":"info","summary":"It finished.","options":[]}' ;;
   esac
   [ -f "$SB_HOME/summary-answer.json" ] && out=$(cat "$SB_HOME/summary-answer.json")
-  jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+  envelope "$out"
   exit 0
 fi
-printf '%s\t%s\t%s\0' "${CLAUDE_CONFIG_DIR-}" "${SSH_AUTH_SOCK-}" "${args[*]}" >>"$SB_HOME/stub-calls.log"
+printf '%s\t%s\t%s\t%s\0' "${CLAUDE_CONFIG_DIR-}" "${SSH_AUTH_SOCK-}" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW-}" "${args[*]}" \
+  >>"$SB_HOME/stub-calls.log"
 if [ "${1-}" = agents ]; then
   listed=$(cat "${CLAUDE_CONFIG_DIR-}/agents.json" 2>/dev/null || echo '[]')
   rows=("${CLAUDE_CONFIG_DIR:-$SB_HOME/claude}"/status/*)

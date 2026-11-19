@@ -143,7 +143,7 @@ extension Instance {
 
   /// The session's newest event.
   func lastEvent(_ id: String) throws -> Event? {
-    try client.call("events", ["session": .string(id), "limit": 1], as: [Event].self).last
+    try client.call("events", ["session": .string(id), "limit": 1, "full": true], as: [Event].self).last
   }
 
   /// The id of the newest event, which marks where a step starts.

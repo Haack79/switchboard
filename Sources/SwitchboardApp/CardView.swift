@@ -121,19 +121,7 @@ struct CardView: View {
     }
   }
 
-  /// The text verbatim, in a box that scrolls past `maxHeight`.
-  static func textBox(_ text: String, maxHeight: CGFloat) -> some View {
-    ScrollView {
-      Text(verbatim: text)
-        .font(.body.monospaced())
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .frame(maxHeight: maxHeight)
-    .fixedSize(horizontal: false, vertical: true)
-    .padding(8)
-    .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
-  }
+  static func textBox(_ text: String, maxHeight: CGFloat) -> some View { TextBox(text: text, maxHeight: maxHeight) }
 
   /// Whether Return in the deny message denies. A blank message does not, because a deny without a
   /// message stops Claude's turn.
@@ -301,5 +289,31 @@ struct CardList: View {
       .fixedSize(horizontal: false, vertical: true)
       Divider()
     }
+  }
+}
+
+/// The text verbatim, in a box that scrolls past `maxHeight`. In the Inbox's detail pane, which scrolls, the box takes
+/// the text's full height.
+private struct TextBox: View {
+  @Environment(\.detailScroll) private var detailScroll
+  let text: String
+  let maxHeight: CGFloat
+
+  var body: some View {
+    let content = Text(verbatim: text)
+      .font(.body.monospaced())
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    Group {
+      if detailScroll == nil {
+        ScrollView { content }
+          .frame(maxHeight: maxHeight)
+          .fixedSize(horizontal: false, vertical: true)
+      } else {
+        content
+      }
+    }
+    .padding(8)
+    .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
   }
 }

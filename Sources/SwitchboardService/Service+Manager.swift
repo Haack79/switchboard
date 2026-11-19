@@ -161,7 +161,7 @@ extension Service {
   func operatorReports(_ args: JSON) throws -> JSON {
     guard let id = operatorID() else { return [] }
     let limit = args["all"]?.bool == true ? Int.max : Event.defaultLimit
-    let events = try store.events(session: id, kind: OperatorReport.event, limit: limit, newest: true)
+    let events = try store.events(session: id, kinds: [OperatorReport.event], limit: limit, newest: true)
     return .array(try events.compactMap(OperatorReport.init).map { try reportRow($0, of: id) })
   }
 
@@ -239,13 +239,20 @@ extension Service {
     return args
   }
 
-  /// The servers that a conversation can add, by name: sbd's shared servers
-  /// on their current ports, then the user-scope servers in the
-  /// conversation account's Claude config. A shared server wins a name that
-  /// both hold. The name `switchboard` is never available.
+  /// The servers that a conversation can add, by name, on the account it runs under.
   func availableMCPServers(_ id: String) -> [String: JSON] {
+    if case .local(let account) = claudeAccount(of: id) { return availableMCPServers(account: account) }
+    return availableMCPServers(account: nil)
+  }
+
+  /// The servers that a conversation on `account` can add, by name: sbd's
+  /// shared servers on their current ports, then the user-scope servers in
+  /// the account's Claude config. A shared server wins a name that both hold.
+  /// The name `switchboard` is never available. A nil account offers only
+  /// the shared servers.
+  func availableMCPServers(account: ClaudeAccount?) -> [String: JSON] {
     var out: [String: JSON] = [:]
-    if case .local(let account) = claudeAccount(of: id),
+    if let account,
       let data = FileManager.default.contents(atPath: account.configFile),
       let text = String(data: data, encoding: .utf8),
       let user = JSON.parse(text)?["mcpServers"]?.object

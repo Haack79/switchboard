@@ -377,6 +377,7 @@ struct SectionTitle: View {
 /// call that the Summary shows in part.
 struct CardDetails: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.sessionNames) private var names
   let session: SessionSummary
   /// The item's ref. Steps read for another item don't show.
   let ref: String
@@ -387,6 +388,9 @@ struct CardDetails: View {
   @State private var latestStepsOpen = false
   /// How many steps before the item to read.
   @State private var steps = ItemContext.defaultSteps
+  /// Set when the user opens Details, so the pane scrolls to the newest step once the steps show.
+  @State private var scrollsToNewestStep = false
+  @Environment(\.detailScroll) private var detailScroll
   /// A debug setting with no menu item: `defaults write <bundle id> showsRecentEvents -bool true`.
   @AppStorage("showsRecentEvents") private var showsRecentEvents = false
 
@@ -483,7 +487,7 @@ struct CardDetails: View {
               }
             }
           case .waits:
-            section("Waits") { ForEach(session.waits, id: \.id) { InlineText(plain: $0.line) } }
+            section("Waits") { ForEach(session.waits, id: \.id) { InlineText($0.lineText(names: names)) } }
           case .lastReply:
             if let text = Self.lastReply(context: context, reply: reply) { LastReplySection(text: text) }
           case .recentEvents:
@@ -500,12 +504,32 @@ struct CardDetails: View {
       SectionTitle(text: "Details")
     }
     .onAppear { if open { load() } }
-    .onChange(of: open) { if open { load() } }
+    .onChange(of: open) {
+      guard open else { return }
+      scrollsToNewestStep = true
+      // Steps loaded earlier can show before this runs, and then their onAppear has already passed.
+      if Self.context(for: ref, in: model.itemContexts[session.id])?.steps.isEmpty == false {
+        scrollToNewestStepIfAsked()
+      }
+      load()
+    }
   }
 
   private func load() {
     model.loadItemContext(session.id, steps: steps)
     if showsRecentEvents { model.loadEvents(session.id) }
+  }
+
+  /// The id of the steps' box in the Inbox's detail pane. Its bottom is the newest step.
+  private static let stepsBoxID = "CardDetails.steps"
+
+  /// Scrolls the pane to the newest step after the user opens Details. A Details that starts open leaves the pane
+  /// at the Summary.
+  private func scrollToNewestStepIfAsked() {
+    guard scrollsToNewestStep else { return }
+    scrollsToNewestStep = false
+    // The steps have no layout in the pane until the next run loop pass.
+    DispatchQueue.main.async { detailScroll?.scrollTo(Self.stepsBoxID, anchor: .bottom) }
   }
 
   /// The steps scroll in a box that starts at the bottom, so the item's own step shows first.
@@ -521,30 +545,24 @@ struct CardDetails: View {
       if let caption = context.caption {
         Text(caption).font(.caption).foregroundStyle(.secondary)
       }
-      ScrollViewReader { proxy in
-        ScrollView {
-          VStack(alignment: .leading, spacing: 8) {
-            if context.more && steps < ItemContext.maxSteps {
-              Button("Show more") {
-                steps = Self.nextSteps(after: steps)
-                model.loadItemContext(session.id, steps: steps)
-              }
-              .buttonStyle(.link).font(.caption)
-            }
-            ForEach(Array(context.steps.enumerated()), id: \.offset) { index, step in
-              StepRow(step: step, isAnchor: index == context.anchorIndex).id(index)
-            }
+      VStack(alignment: .leading, spacing: 8) {
+        if context.more && steps < ItemContext.maxSteps {
+          Button("Show more") {
+            steps = Self.nextSteps(after: steps)
+            model.loadItemContext(session.id, steps: steps)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .buttonStyle(.link).font(.caption)
         }
-        // Below a tool call box the steps get less room, so Allow and Deny stay in view in a 700 pt window.
-        .frame(maxHeight: details.toolInput == nil ? 260 : 160)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
-        .onAppear { proxy.scrollTo(context.steps.count - 1, anchor: .bottom) }
+        ForEach(Array(context.steps.enumerated()), id: \.offset) { index, step in
+          StepRow(step: step, isAnchor: index == context.anchorIndex)
+        }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(8)
+      .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
+      .id(Self.stepsBoxID)
     }
+    .onAppear(perform: scrollToNewestStepIfAsked)
   }
 
   private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
@@ -592,6 +610,18 @@ struct ReplyDisclosure: View {
         .accessibilityHint(open ? "Hides the session's last reply" : "Shows the session's last reply here")
       if open { MarkdownView(text: text) }
     }
+  }
+}
+
+private struct DetailScrollKey: EnvironmentKey {
+  static let defaultValue: ScrollViewProxy? = nil
+}
+
+extension EnvironmentValues {
+  /// The Inbox's detail pane, which scrolls the whole card. A text box in it drops its own height cap.
+  var detailScroll: ScrollViewProxy? {
+    get { self[DetailScrollKey.self] }
+    set { self[DetailScrollKey.self] = newValue }
   }
 }
 

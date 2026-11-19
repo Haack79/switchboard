@@ -27,12 +27,14 @@ final class GitHubPoller {
     var restPausedUntil: Int64 = 0
   }
   private let http = OSAllocatedUnfairLock(initialState: HTTPState())
+  /// The requests and points since sbd started. `send` and `request` can run off `queue`, so the counts sit
+  /// behind a lock.
+  private let usage = OSAllocatedUnfairLock(initialState: GitHubUsage(since: nowMs()))
 
   var graphQLPausedUntil: Int64 { http.withLock { $0.graphQLPausedUntil } }
   var tracked: [String: Tracked] = [:]
-  /// The PRs that this sbd has read, by node id, with their comments from
-  /// `GitHub.bodyAuthors`.
-  var prs: [String: (pr: PullRequest, comments: [PRComment], polled: Int64)] = [:]
+  /// The PRs that this sbd has read, by node id. `store` writes each entry.
+  var prs: [String: CachedPR] = [:]
   /// Comment bodies by comment id. A comment whose edit time changed is read again.
   private var bodies: [String: PRComment] = [:]
   /// The Depot run that the event log held for each PR, by node id, until the
@@ -53,14 +55,20 @@ final class GitHubPoller {
   /// when a later read shows the same head commit and outcome. `outcome` is
   /// "failed" for any failure.
   var confirming: [String: (sha: String, outcome: String, polled: Int64)] = [:]
+  /// How long after the poll that records a read in `confirming` the confirming read comes, in ms. With nil, the
+  /// PR's next due poll reads it.
+  var confirmReadAfter: Int64?
   /// The `queue` waits whose PR a read showed in GitHub's merge queue.
   /// GitHub reports no removal state, so a later read that shows the open PR
   /// outside the queue means the queue dropped it.
   var queuedWaits: Set<String> = []
   var deploys = Deploys()
-  /// The PRs of edges that left a session's list before the poller read
-  /// their PR again. The next poll reads them whether or not they are due.
-  var recheck: Set<String> = []
+  /// The PRs that a poll reads whether or not they are due. `requestRead` adds reads at a set time. The PRs of
+  /// edges that left a session's list before the poller read their PR again are read at the next poll.
+  var readRequests = ReadRequests()
+  private var readTimer: DispatchSourceTimer?
+  /// Schedules `readWake` at a time in ms, in place of the one scheduled before. Tests replace it.
+  lazy var scheduleWake: (Int64) -> Void = { [unowned self] at in armReadTimer(at: at) }
   /// What the poller knows about each plan document, by plan id.
   var trackedPlans: [String: TrackedPlan] = [:]
   var codeOwners = CodeOwnerReads()
@@ -69,6 +77,27 @@ final class GitHubPoller {
   var mergeDetails: [String: (head: String, read: Int64, details: MergeDetails)] = [:]
   /// When the last issues poll started, in ms.
   var issuesReadAt: Int64?
+
+  /// A PR that the poller read, with its comments from `GitHub.bodyAuthors`.
+  struct CachedPR {
+    var pr: PullRequest
+    var comments: [PRComment]
+    /// When the poller last read the PR from GitHub, in ms.
+    var polled: Int64
+    /// When sbd last applied a fact about the PR that came without a GitHub read, in ms. Nothing sets it yet.
+    var factAt: Int64?
+  }
+
+  /// Caches a status read of a PR. The status query reads neither the merged base nor the Depot run. The PR
+  /// therefore keeps the cached merged base while its base branch stays the same. It also keeps the cached Depot
+  /// run, or else the one that the event log held.
+  func store(_ pr: PullRequest, comments: [PRComment], polled: Int64) {
+    var pr = pr
+    let last = prs[pr.id]
+    if let last, last.pr.base == pr.base { pr.mergedBase = last.pr.mergedBase }
+    pr.depot = last?.pr.depot ?? recordedDepot.removeValue(forKey: pr.id)
+    prs[pr.id] = CachedPR(pr: pr, comments: comments, polled: polled, factAt: last?.factAt)
+  }
 
   /// What the poller knows about one session.
   struct Tracked {
@@ -196,6 +225,34 @@ final class GitHubPoller {
     timer = t
   }
 
+  /// Reads the PRs, whether or not they are due, at a poll `after` ms from now or later. The requests that come
+  /// before that poll share it. A PR that no session, wait, or merge trigger names is not read. It runs on `queue`.
+  func requestRead(_ ids: some Sequence<String>, after: Int64) {
+    dispatchPrecondition(condition: .onQueue(queue))
+    if let at = readRequests.request(ids, at: nowMs() + after) { scheduleWake(at) }
+  }
+
+  /// Runs the poll that a request scheduled, unless an earlier poll read every due request. Then it schedules a
+  /// wake for the requests that remain.
+  func readWake() {
+    dispatchPrecondition(condition: .onQueue(queue))
+    if readRequests.fire(now: nowMs()) { _ = cycle(all: false) }
+    if let at = readRequests.rearm() { scheduleWake(at) }
+  }
+
+  private func armReadTimer(at: Int64) {
+    let t =
+      readTimer
+      ?? {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.setEventHandler { [weak self] in self?.readWake() }
+        t.resume()
+        readTimer = t
+        return t
+      }()
+    t.schedule(deadline: .now() + .milliseconds(Int(max(0, at - nowMs()))))
+  }
+
   /// Sends one HTTP request and returns the status, the headers, and the body. Tests replace it.
   var transport: (URLRequest) throws -> (Int, [String: String], Data) = httpRequest
 
@@ -217,6 +274,11 @@ final class GitHubPoller {
     queue.sync { cycle(all: all) }
   }
 
+  /// The GitHub requests and points since sbd started, without polling.
+  func usageReport() -> JSON {
+    (try? JSON(encoding: usage.withLock { $0 }.report(now: nowMs()))) ?? [:]
+  }
+
   private func cycle(all: Bool) -> JSON {
     var stats = Stats()
     var failure: String?
@@ -229,6 +291,7 @@ final class GitHubPoller {
       }
     }
     let now = nowMs()
+    let requested = readRequests.take(now: now)
     let ids = Set(sessions.map(\.id))
     tracked = tracked.filter { ids.contains($0.key) }
     var shared = Shared()
@@ -240,9 +303,9 @@ final class GitHubPoller {
     targets = targets.filter { interest.keys.contains($0.key) }
     do {
       try lookUp(all: all, now: now, interest: interest, stats: &stats)
-      // An edge that `recordDependencies` kept reads its PR at once, as a new wait does.
+      // A requested PR, such as an edge that `recordDependencies` kept, is read at once, as a new wait's PR is.
       var waited = waitedOn(interest)
-      for id in recheck { waited.created[id] = max(waited.created[id] ?? 0, now) }
+      for id in requested { waited.created[id] = max(waited.created[id] ?? 0, now) }
       // A request's hold ends `readMs` after a turn ends. The PR reads once after each such turn, so the hold sees
       // a push that the turn made even when the PR polls at the idle rate.
       // The PR also reads once after an acknowledgment expires, so the item that returns to the Inbox shows what
@@ -525,28 +588,42 @@ final class GitHubPoller {
     // A PR in `waited.pending` or in Trunk's queue polls at the pending rate. A
     // PR with any open wait also polls at once when the wait is newer than the
     // last read. That read can't show what happened after the wait was set.
-    let ids = Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)).sorted().filter {
-      all || (waited.created[$0] ?? 0) > (prs[$0]?.polled ?? 0)
-        || GitHub.isDue(
-          prs[$0]?.pr, lastPolled: prs[$0]?.polled, now: now, pendingMs: settings.pendingMs,
-          idleMs: waited.pending.contains($0) || queued.contains($0) ? settings.pendingMs : settings.idleMs)
+    var candidates: [String: ReadCandidate] = [:]
+    for id in Set(tracked.values.flatMap(\.readIds)).union(targets.values.compactMap(\.prId)) {
+      candidates[id] = ReadCandidate(
+        pr: prs[id]?.pr, lastPolled: prs[id]?.polled, waitedAt: waited.created[id],
+        pendingRate: waited.pending.contains(id) || queued.contains(id))
+    }
+    let triggers = GitHub.dueReads(candidates, all: all, now: now, policy: settings.pollPolicy)
+    let ids = triggers.keys.sorted()
+    // A request's cost goes to its PRs after the request returns, because a PR's repo is known only after its first read.
+    func count(_ prIds: [String], from before: Stats, to after: Stats, countsReads: Bool) {
+      let served = prIds.map { id in
+        GitHubUsage.Read(
+          trigger: triggers[id] ?? .retry,
+          owner: prs[id].map { GitHub.ownerAndName($0.pr.repo).owner.lowercased() } ?? "unknown")
+      }
+      let requests = after.requests - before.requests
+      let points = after.points - before.points
+      usage.withLock { $0.share(requests: requests, points: points, among: served, countsReads: countsReads) }
     }
     var stacked: [String] = []
     var gone: Set<String> = []
     for chunk in GitHub.chunks(ids) {
+      let before = stats
+      var parsed = false
+      // A request that throws still cost what `send` counted, so the split keeps it.
+      defer { count(chunk, from: before, to: stats, countsReads: parsed) }
       let (read, notFound) = GitHub.parseStatus(
         try request(GitHub.statusQuery, idsVariable(chunk), stats: &stats), chunk)
       gone.formUnion(notFound)
-      for (parsed, comments) in read {
-        var pr = parsed
-        // Only the base query reads the merged base. A PR whose base query
-        // fails keeps the merged base that the poller last read.
-        if let last = prs[pr.id]?.pr, last.base == pr.base { pr.mergedBase = last.mergedBase }
-        pr.depot = prs[pr.id]?.pr.depot ?? recordedDepot.removeValue(forKey: pr.id)
-        prs[pr.id] = (pr, comments.filter { GitHub.bodyAuthors.contains($0.author) }, now)
+      for (pr, comments) in read {
+        // A PR whose base query fails keeps the merged base that `store` carried over.
+        store(pr, comments: comments.filter { GitHub.bodyAuthors.contains($0.author) }, polled: now)
         if pr.base != pr.defaultBranch { stacked.append(pr.id) }
       }
       stats.polled += read.count
+      parsed = true
     }
     for (id, var t) in tracked {
       if let prId = t.branch.prId, gone.contains(prId) {
@@ -583,6 +660,8 @@ final class GitHubPoller {
       if let prId = target.prId, gone.contains(prId) { targets[key] = Target(prId: nil, lookedUp: now) }
     }
     for chunk in GitHub.chunks(stacked) {
+      let before = stats
+      defer { count(chunk, from: before, to: stats, countsReads: false) }
       let response = try request(GitHub.baseQuery, idsVariable(chunk), stats: &stats)
       for (id, base) in (response["data"]?["nodes"]?.array ?? []).compactMap(GitHub.parseMergedBase) {
         prs[id]?.pr.mergedBase = base
@@ -594,13 +673,16 @@ final class GitHubPoller {
     // poller reads either again only when a status response shows a newer
     // edit time. A body that failed in another way is read again at the next
     // poll.
-    let stale = prs.values.flatMap(\.comments).filter { c in
-      bodies[c.id].map { ($0.editedAt ?? "") < (c.editedAt ?? "") } ?? true
+    let stale = prs.flatMap { id, read in read.comments.map { (prId: id, comment: $0) } }.filter { s in
+      bodies[s.comment.id].map { ($0.editedAt ?? "") < (s.comment.editedAt ?? "") } ?? true
     }
-    for chunk in GitHub.chunks(stale.map(\.id), size: GitHub.lightChunkSize) {
-      let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(chunk), stats: &stats), chunk)
+    for chunk in GitHub.chunks(stale, size: GitHub.lightChunkSize) {
+      let before = stats
+      defer { count(Array(Set(chunk.map(\.prId))), from: before, to: stats, countsReads: false) }
+      let ids = chunk.map(\.comment.id)
+      let (read, gone) = GitHub.parseBodies(try request(GitHub.bodyQuery, idsVariable(ids), stats: &stats), ids)
       for comment in read { bodies[comment.id] = comment }
-      for comment in stale where gone.contains(comment.id) { bodies[comment.id] = comment }
+      for s in chunk where gone.contains(s.comment.id) { bodies[s.comment.id] = s.comment }
     }
   }
 
@@ -632,7 +714,9 @@ final class GitHubPoller {
       throw APIError("GitHub answered \(status) \(GitHub.message(json))")
     }
     if json["errors"] != nil { logLine("github: \(GitHub.message(json))") }
-    stats.points += data["rateLimit"]?["cost"]?.int ?? 0
+    let cost = data["rateLimit"]?["cost"]?.int ?? 0
+    stats.points += cost
+    usage.withLock { $0.points += cost }
     return json
   }
 
@@ -660,6 +744,7 @@ final class GitHubPoller {
       var req = request
       req.setValue("bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
       stats.requests += 1
+      usage.withLock { $0.requests += 1 }
       return try transport(req)
     }
     var (status, headers, body) = try attempt()

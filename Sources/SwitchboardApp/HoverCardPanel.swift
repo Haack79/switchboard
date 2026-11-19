@@ -226,8 +226,39 @@ extension BoardModel {
       self.map { AnyView(HoverCardView(model: $0, id: id)) } ?? AnyView(EmptyView())
     }
     referenceCard = HoverCard<ReferenceCardID>.panel(clickable: true) { [weak self] id in
-      self.map { AnyView(ReferenceCardView(model: $0, ref: id.ref).inlineLinks($0)) } ?? AnyView(EmptyView())
+      guard let self else { return AnyView(EmptyView()) }
+      switch id.referent {
+      case .github(let ref): return AnyView(ReferenceCardView(model: self, ref: ref).inlineLinks(self))
+      case .session(let target): return AnyView(SessionLinkCardView(model: self, target: target))
+      }
     }
+  }
+}
+
+/// The card of a session link in text. It reads every listed session and
+/// follow-up, whatever the org filter shows. For a link that names no listed
+/// session, it shows the name or id that the link holds and the error banner
+/// that a click on the link would set.
+private struct SessionLinkCardView: View {
+  @ObservedObject var model: BoardModel
+  let target: SessionLink.Target
+
+  var body: some View {
+    let outcome = model.linkOutcome(target)
+    if case .reveal(let s) = outcome {
+      HoverCardBody(content: .link(s, activeAccount: model.activeAccountFolder, names: model.sessionNames))
+    } else if let message = outcome.error(for: target) {
+      unresolved(message)
+    }
+  }
+
+  private func unresolved(_ message: String) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      // `shown` leaves an id as it is, because an id holds no format character.
+      Text(verbatim: BoardModel.shown(target.text)).font(.headline).lineLimit(2)
+      Text(verbatim: message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+    .hoverCardFrame()
   }
 }
 
@@ -251,6 +282,12 @@ struct HoverCardBody: View {
     VStack(alignment: .leading, spacing: 8) {
       VStack(alignment: .leading, spacing: 2) {
         Text(verbatim: content.title).font(.headline).lineLimit(2)
+        if content.state != nil || content.id != nil {
+          HStack(spacing: 6) {
+            if let state = content.state { StateBadge(state: state) }
+            if let id = content.id { Text(verbatim: id).font(.caption.monospaced()).foregroundStyle(.secondary) }
+          }
+        }
         ForEach(Array(content.details.enumerated()), id: \.offset) { _, line in
           Text(verbatim: line).lineLimit(1).truncationMode(.middle)
         }

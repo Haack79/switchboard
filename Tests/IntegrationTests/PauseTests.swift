@@ -42,6 +42,18 @@ extension Instance {
     try events(id, after: mark).filter { ["started", "resumed"].contains($0.kind) }
   }
 
+  func unpausedEvents(_ id: String, after mark: Int64) throws -> [Event] {
+    try events(id, after: mark).filter { $0.kind == "unpaused" }
+  }
+
+  /// Checks that the session stays paused after `mark`: no `unpaused` event, no launch, and no live claude.
+  func expectStillPaused(_ id: String, after mark: Int64) throws {
+    #expect(try pauseField(id) != nil)
+    #expect(try unpausedEvents(id, after: mark).isEmpty)
+    #expect(try launchEvents(id, after: mark).isEmpty)
+    #expect(try !get(id).live)
+  }
+
   /// The prompts that the session's claude reported after the mark, oldest first.
   func promptsSince(_ id: String, after mark: Int64) throws -> [String] {
     try events(id, after: mark).filter { $0.kind == "UserPromptSubmit" }.compactMap { $0.data["prompt"]?.string }
@@ -291,7 +303,7 @@ extension Instance {
     #expect(out.contains("held until t resumes (Paused by you)"), "\(out)")
   }
 
-  @Test func aSessionThatIsNotPausedHasNoHeldMessagesField() throws {
+  @Test func aSessionThatIsNotPausedWithAnEmptyQueueHasNoHeldMessagesField() throws {
     let sbd = try Instance()
     let s = try sbd.liveIdle()
 

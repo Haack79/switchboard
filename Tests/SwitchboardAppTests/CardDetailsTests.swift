@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SwitchboardCore
 import Testing
 
@@ -433,5 +434,123 @@ private func startedFollowup(_ id: String) -> SessionSummary {
     #expect(model.selection == nil)
     #expect(!model.showingTerminal)
     #expect(model.terminalFocus == nil)
+  }
+}
+
+/// `count` text steps of one short paragraph each.
+private func textSteps(_ count: Int) -> [TranscriptStep] {
+  (0..<count).map {
+    TranscriptStep(kind: .text, text: "Step \($0): I read the file. Then I ran the tests and they passed.")
+  }
+}
+
+/// `count` numbered lines.
+private func lines(_ count: Int) -> String {
+  (1...count).map { "line \($0)" }.joined(separator: "\n")
+}
+
+/// The height that `view` takes at `width`, hosted in a window that is never shown. The window is tall, so its
+/// height can't be what stops a view from growing.
+@MainActor
+private func fittingHeight<V: View>(_ view: V, width: CGFloat = 500) -> CGFloat {
+  _ = NSApplication.shared
+  let host = NSHostingView(
+    rootView: view.frame(width: width, alignment: .topLeading).fixedSize(horizontal: false, vertical: true))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: width, height: 10_000), styleMask: [.titled], backing: .buffered,
+    defer: false)
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  host.layoutSubtreeIfNeeded()
+  return withExtendedLifetime(window) { host.fittingSize.height }
+}
+
+/// `view` as the Inbox's detail pane holds it, with the pane's scroll proxy in the environment.
+private func inDetailPane(_ view: some View) -> some View {
+  ScrollViewReader { view.environment(\.detailScroll, $0) }
+}
+
+private let toolInputs: [TriageDetails.ToolInput?] = [nil, .init(tool: "Bash", text: "touch x")]
+
+/// Details takes the height its content needs, so the Inbox's own scroll view is the only one on the card.
+@MainActor
+@Suite struct CardDetailsHeightTests {
+  private let ref = "card:1"
+
+  /// The height of an open Details whose loaded context has `count` steps.
+  private func detailsHeight(steps count: Int, toolInput: TriageDetails.ToolInput? = nil) -> CGFloat {
+    let model = offlineModel()
+    // The load that Details starts on appear fails. A failed read leaves the context below in place.
+    model.send = { _, _ in throw Refusal(description: "unknown op item-context") }
+    let session = needsItem("s1")
+    model.itemContexts[session.id] = itemContext(ref: ref, steps: textSteps(count))
+    let details = TriageDetails(openByDefault: true, toolInput: toolInput)
+    return fittingHeight(
+      inDetailPane(CardDetails(session: session, ref: ref, details: details)).environmentObject(model))
+  }
+
+  /// The steps list has no height cap. A cap of 260 pt without a tool input, or 160 pt under one, held 40 and 80
+  /// steps to one height. 1 against 40 is the control: when it fails, Details did not open or the steps did not show.
+  @Test(arguments: toolInputs)
+  func detailsGrowsWithEveryStep(_ toolInput: TriageDetails.ToolInput?) {
+    let heights = [1, 40, 80].map { detailsHeight(steps: $0, toolInput: toolInput) }
+
+    #expect(heights[0] < heights[1])
+    #expect(heights[1] < heights[2])
+  }
+
+  /// The tool call box in Details has no height cap either. It scrolled past 200 pt.
+  @Test func detailsGrowsWithTheToolInputsText() {
+    let short = TriageDetails.ToolInput(tool: "Bash", text: lines(100))
+    let long = TriageDetails.ToolInput(tool: "Bash", text: lines(200))
+
+    #expect(detailsHeight(steps: 1, toolInput: long) > detailsHeight(steps: 1, toolInput: short))
+  }
+
+  // MARK: Text box
+
+  /// In the Inbox's detail pane a box grows with its text instead of scrolling.
+  @Test func aTextBoxInTheDetailPaneGrowsWithItsText() {
+    #expect(
+      fittingHeight(inDetailPane(CardView.textBox(lines(200), maxHeight: 200)))
+        > fittingHeight(inDetailPane(CardView.textBox(lines(100), maxHeight: 200))))
+  }
+
+  /// Outside the pane, as in a session's card list, a box stops at its maximum height and scrolls the rest.
+  @Test func aTextBoxOutsideTheDetailPaneStopsAtItsMaximumHeight() {
+    let long = fittingHeight(CardView.textBox(lines(200), maxHeight: 200))
+
+    #expect(long == fittingHeight(CardView.textBox(lines(100), maxHeight: 200)))
+    #expect(long > 200 && long < 240)
+  }
+
+  // MARK: Pane
+
+  /// The pane that TriageDetail draws puts its scroll proxy in the environment, which drops the caps above. Outside
+  /// it is the control: when it fails, the probe was never drawn.
+  @Test func theDetailPaneGivesItsContentTheScrollProxy() {
+    let inside = DetailScrollProbe.Seen()
+    let outside = DetailScrollProbe.Seen()
+    _ = fittingHeight(DetailPane { DetailScrollProbe(seen: inside) })
+    _ = fittingHeight(DetailScrollProbe(seen: outside))
+
+    #expect(inside.proxy == true)
+    #expect(outside.proxy == false)
+  }
+}
+
+/// Records whether the environment held the detail pane's scroll proxy when SwiftUI drew the probe.
+private struct DetailScrollProbe: View {
+  final class Seen {
+    /// Nil until SwiftUI draws the probe.
+    var proxy: Bool?
+  }
+
+  @Environment(\.detailScroll) private var detailScroll
+  let seen: Seen
+
+  var body: some View {
+    seen.proxy = detailScroll != nil
+    return Color.clear.frame(height: 1)
   }
 }

@@ -95,7 +95,7 @@ struct ContentView: View {
         if let error = model.actionError {
           WarningBanner(error) { Button("Dismiss") { model.actionError = nil } }
         }
-        if model.showsMultiSelection {
+        if model.showsMultiSelectionPane {
           MultiSelectionView()
         } else if let s = model.selected, let f = s.followup, f.started == nil {
           FollowupView(session: s, followup: f).id(s.id)
@@ -136,7 +136,7 @@ struct ContentView: View {
         .labelsHidden()
         .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
       }
-      ToolbarItem(placement: .navigation) { OrgFilterMenu() }
+      ToolbarItem(placement: .navigation) { SessionFilterMenu() }
       ToolbarItem { ManagerButton() }
       ToolbarItem { AccountMenu() }
       ToolbarItem {
@@ -161,7 +161,7 @@ struct ContentView: View {
       "Delete \(model.confirmingDelete?.name ?? "this session")?", isPresented: isConfirmingDelete,
       presenting: model.confirmingDelete.map { ($0, TodoDeletion($0)) }
     ) { session, todos in
-      Button(todos.button("Delete"), role: .destructive) { model.deleteDone(session, resolve: todos.ids) }
+      Button(todos.button("Delete"), role: .destructive) { model.deleteSession(session, resolve: todos.ids) }
     } message: { session, todos in
       Text(model.sessionNames.replacingIDs(in: todos.message(before: BoardModel.deletePlan(session).message)))
     }
@@ -225,10 +225,12 @@ struct Sidebar: View {
     let repos = model.repoLabels
     let activeAccount = model.activeAccountFolder
     let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
+    let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       OperatorRow(activeAccount: activeAccount)
-      ForEach(model.sidebarGroups) { group in
+      if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
+      ForEach(groups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
           ForEach(group.rows) { row in
@@ -243,26 +245,7 @@ struct Sidebar: View {
             }
             .highlightRing(row.session.isHighlighted, cornerRadius: 4, outset: 2)
             .padding(.leading, CGFloat(row.depth) * 14).tag(row.id)
-            .contextMenu {
-              HighlightMenuItem(session: row.session)
-              SnoozeMenuItems(session: row.session)
-              DeleteSelectedMenuItem(id: row.id, count: removableSelection)
-              PauseMenuItem(model: model, session: row.session)
-              if row.session.queued == true {
-                Button("Start Now") { model.startNow(row.id) }
-                  .disabled(model.startingNow.contains(row.id))
-                  .help(BoardModel.startNowHelp)
-              }
-              if CleanupOffer.canCleanUp(row.session) {
-                Button("Clean Up: Delete the Worktree and Branch…") { model.confirmingCleanup = row.id }
-                  .disabled(model.cleaningUp.contains(row.id))
-              }
-              if row.session.isRemovableDone {
-                Button("Delete \(BoardModel.deletePlan(row.session).summary)…", role: .destructive) {
-                  model.confirmingDelete = row.session
-                }
-              }
-            }
+            .contextMenu { SessionMenuItems(session: row.session, removableSelection: removableSelection) }
           }
         } header: {
           HStack {
@@ -306,6 +289,15 @@ struct Sidebar: View {
     } message: { change in
       Text(accountSwitchMessage(change))
     }
+    .confirmationDialog(
+      model.confirmingAccountMove?.title ?? "", isPresented: isConfirmingAccountMove,
+      presenting: model.confirmingAccountMove
+    ) { move in
+      Button(move.button) { model.confirmAccountMove(move) }
+      Button("Cancel", role: .cancel) {}
+    } message: { move in
+      Text(move.message)
+    }
     // A sixth toolbar item pushes New Session into the overflow menu at the minimum window width, so search
     // sits here. It looks like a search field, and the panel holds the real one.
     .safeAreaInset(edge: .top) {
@@ -333,7 +325,7 @@ struct Sidebar: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
-        OrgFilterBar()
+        FilterBar()
         Button {
           model.startNewGroup()
         } label: {
@@ -356,6 +348,10 @@ struct Sidebar: View {
         }
       }
     }
+  }
+
+  private var isConfirmingAccountMove: Binding<Bool> {
+    Binding(get: { model.confirmingAccountMove != nil }, set: { if !$0 { model.confirmingAccountMove = nil } })
   }
 
   private var isSwitchingAccount: Binding<Bool> {
@@ -381,24 +377,6 @@ struct Sidebar: View {
     Binding(
       get: { !model.collapsed.contains(state) },
       set: { if $0 { model.collapsed.remove(state) } else { model.collapsed.insert(state) } })
-  }
-}
-
-/// Delete N Sessions… in the context menu of a multi-selected row. Other rows show nothing. `count` is
-/// `removableSelectionCount`, which the sidebar reads once for every row.
-struct DeleteSelectedMenuItem: View {
-  @EnvironmentObject var model: BoardModel
-  let id: String
-  let count: Int
-
-  var body: some View {
-    if model.showsMultiSelection, model.multiSelection.contains(id) {
-      Button(DoneRemovalText.deleteSessions(count), role: .destructive) {
-        model.checkSelectionRemoval()
-      }
-      .disabled(count == 0 || model.showingDoneRemoval)
-      Divider()
-    }
   }
 }
 
@@ -542,6 +520,7 @@ struct SessionRow: View {
           subtitle
         }
         CleanupNote(session: session)
+        BranchSwitchNote(session: session)
       }
     }
     .padding(.vertical, 2)
@@ -595,6 +574,8 @@ struct BoardView: View {
   @EnvironmentObject var model: BoardModel
   @AppStorage(BoardLanes.storageKey) private var laneKind = BoardLanes.repo
   @FocusState private var focused: Bool
+  @State private var boardGeometry = BoardGeometry()
+  static let contentSpace = "board-content"
   static let labelWidth: CGFloat = 140
   static let columnWidth: CGFloat = 200
   static let minColumnWidth: CGFloat = 165
@@ -616,14 +597,17 @@ struct BoardView: View {
 
   /// Makes the same moves as a drag, because keyboard and VoiceOver users
   /// can't start a drag. It also offers Ungrouped when the Board hides the
-  /// Ungrouped lane.
-  private func moveMenu(_ id: String, from current: String?) -> some View {
-    Menu("Move to Group") {
+  /// Ungrouped lane. On a selected card it moves the whole selection.
+  /// `laneGroups` maps each card to the group of its lane.
+  private func moveMenu(_ id: String, laneGroups: [String: String?]) -> some View {
+    let ids = model.boardActionIDs(for: id)
+    let allIn = { (group: String?) in ids.allSatisfy { laneGroups[$0] == .some(group) } }
+    return Menu(ids.count > 1 ? "Move \(ids.count) Sessions to Group" : "Move to Group") {
       ForEach(model.groups, id: \.id) { g in
-        Button(g.name) { model.moveToGroup(id, g.id) }.disabled(g.id == current)
+        Button(g.name) { model.moveToGroup(ids, g.id) }.disabled(allIn(g.id))
       }
       Divider()
-      Button(BoardRows.ungroupedTitle) { model.moveToGroup(id, nil) }.disabled(current == nil)
+      Button(BoardRows.ungroupedTitle) { model.moveToGroup(ids, nil) }.disabled(allIn(nil))
     }
   }
 
@@ -631,15 +615,29 @@ struct BoardView: View {
     // The arrow keys' grid and the drawn cards both come from this one value, so they always agree.
     let layout = model.boardLayout(lanes: laneKind)
     cards(layout)
-      .onChange(of: layout.grid, initial: true) { model.boardGrid = layout.grid }
+      .onChange(of: layout.grid, initial: true) {
+        model.boardGrid = layout.grid
+        boardGeometry.keepFrames(Set((layout.cards + layout.done).map(\.id)))
+      }
   }
 
   @ViewBuilder
   private func cards(_ layout: BoardLayout) -> some View {
     let ring = focused ? model.currentBoardCard : nil
+    let removableSelection = model.showsMultiSelection ? model.removableSelectionCount : 0
     // A repo lane has no group, like the Ungrouped lane, so a drop there would ungroup the card.
     let drops = laneKind == .group
-    if layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group) {
+    let laneGroups: [String: String?] =
+      drops
+      ? Dictionary(
+        layout.lanes.flatMap { lane in lane.cells.joined().map { ($0.id, lane.group?.id) } },
+        uniquingKeysWith: { first, _ in first })
+      : [:]
+    // The new group's name field is in the lanes header, so naming a group keeps the header up.
+    let empty = layout.lanes.isEmpty && layout.done.isEmpty && !(model.namingGroup && laneKind == .group)
+    if empty && model.filterHidesAllWork {
+      FilterHidesAll().frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if empty {
       VStack(spacing: 12) {
         Image(systemName: "square.grid.3x3").font(.system(size: 40)).foregroundStyle(.secondary)
         Text("Start a session to see it here").foregroundStyle(.secondary)
@@ -662,18 +660,18 @@ struct BoardView: View {
                     ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
                       VStack(spacing: 8) {
                         ForEach(stack) { s in
-                          Group {
-                            if drops {
-                              BoardCard(session: s, keyboardFocused: s.id == ring).draggable(s.id)
-                            } else {
-                              BoardCard(session: s, keyboardFocused: s.id == ring)
-                            }
+                          BoardCard(session: s, keyboardFocused: s.id == ring, boardActive: focused) {
+                            focused = true
                           }
+                          .modifier(CardDrag(id: s.id, enabled: drops))
                           .contextMenu {
-                            HighlightMenuItem(session: s)
-                            SnoozeMenuItems(session: s)
-                            PauseMenuItem(model: model, session: s)
-                            if drops { moveMenu(s.id, from: lane.group?.id) }
+                            if drops {
+                              SessionMenuItems(session: s, removableSelection: removableSelection) {
+                                moveMenu(s.id, laneGroups: laneGroups)
+                              }
+                            } else {
+                              SessionMenuItems(session: s, removableSelection: removableSelection)
+                            }
                           }
                           .id(s.id)
                         }
@@ -686,7 +684,7 @@ struct BoardView: View {
                   .accessibilityLabel(lane.title)
                   .accessibilityIdentifier("board-row-\(lane.id)")
                 }
-                DoneFooter(sessions: layout.done)
+                DoneFooter(sessions: layout.done, boardActive: focused) { focused = true }
               } header: {
                 HStack(alignment: .center, spacing: Self.columnSpacing) {
                   VStack(alignment: .leading, spacing: 4) {
@@ -711,9 +709,28 @@ struct BoardView: View {
                 }
                 .padding(.vertical, 4)
                 .background(.background)
+                .onGeometryChange(for: CGRect.self) {
+                  $0.frame(in: .named(Self.contentSpace))
+                } action: {
+                  boardGeometry.header = $0
+                }
               }
             }
             .padding(Self.boardPadding)
+            // Empty space under and right of the lanes takes clicks and drags too.
+            .frame(
+              minWidth: geometry.size.width - Self.legacyScrollerWidth, minHeight: geometry.size.height,
+              alignment: .topLeading
+            )
+            .contentShape(Rectangle())
+            .background {
+              // SwiftUI sends a click on a platform view to that view, not to the Board's gestures. The anchor
+              // covers all empty space, so without this no click or drag there would reach a gesture.
+              BoardScrollAnchor(geometry: boardGeometry).allowsHitTesting(false)
+            }
+            .modifier(BoardMarqueeSelection(geometry: boardGeometry) { focused = true })
+            .coordinateSpace(name: Self.contentSpace)
+            .environment(\.boardGeometry, boardGeometry)
           }
           // macOS hides overlay scrollers until a scroll, so nothing would show that more columns sit to the right.
           .scrollIndicators(.visible)
@@ -721,11 +738,14 @@ struct BoardView: View {
           .focusable()
           .focused($focused)
           .focusEffectDisabled()
-          .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return], phases: [.down, .repeat]) {
-            press in
+          .onKeyPress(
+            keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return, .escape, .space, .delete],
+            phases: [.down, .repeat]
+          ) { press in
             // SwiftUI offers a key to this handler before a text field inside the Board. The new group's name
-            // field and a lane's description field keep their own arrows and Return.
+            // field and a lane's description field keep their own arrows, Return, Escape, and Space.
             if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
+            if let handled = selectionKey(press, removable: removableSelection) { return handled }
             switch NavKey.action(press.key, modifiers: press.modifiers) {
             case .move(let direction): model.moveBoardFocus(direction)
             case .open:
@@ -738,7 +758,7 @@ struct BoardView: View {
           .takesListFocus(.board, $focused, model: model)
           // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
           .onAppear { if !model.namingGroup { focused = true } }
-          .onChange(of: model.boardFocus) {
+          .onChange(of: model.boardJumps, initial: true) {
             if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
           }
         }
@@ -771,7 +791,7 @@ private struct LaneDrop: ViewModifier {
           }
         }
         .dropDestination(for: String.self) { ids, _ in
-          ids.map { model.moveToGroup($0, group) }.contains(true)
+          model.dropBoardCards(ids, on: group)
         } isTargeted: {
           targeted = $0
         }
@@ -836,6 +856,10 @@ private struct LaneLabel: View {
 /// The Done sessions and the sessions whose PR merged, collapsed to one line.
 private struct DoneFooter: View {
   let sessions: [SessionSummary]
+  /// The Board has keyboard focus.
+  let boardActive: Bool
+  /// Gives the Board keyboard focus.
+  let activate: () -> Void
   @State private var expanded = false
 
   private static let grid = [GridItem(.adaptive(minimum: BoardView.columnWidth), alignment: .top)]
@@ -849,7 +873,7 @@ private struct DoneFooter: View {
       Divider()
       if !inInbox.isEmpty {
         LazyVGrid(columns: Self.grid, spacing: 8) {
-          ForEach(inInbox) { s in BoardCard(session: s) }
+          ForEach(inInbox) { s in BoardCard(session: s, boardActive: boardActive, activate: activate) }
         }
       }
       // Every Done session is outside the Inbox states, so Delete All has
@@ -857,7 +881,7 @@ private struct DoneFooter: View {
       if !collapsed.isEmpty {
         DisclosureGroup(isExpanded: $expanded) {
           LazyVGrid(columns: Self.grid, spacing: 8) {
-            ForEach(collapsed) { s in BoardCard(session: s) }
+            ForEach(collapsed) { s in BoardCard(session: s, boardActive: boardActive, activate: activate) }
           }
           .padding(.top, 8)
         } label: {
@@ -1084,9 +1108,16 @@ struct HolderBadge: View {
 
 struct BoardCard: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.boardGeometry) private var boardGeometry
+  /// The last frame this view wrote to `boardGeometry`.
+  @State private var recordedFrame: CGRect?
   let session: SessionSummary
   /// The Board has keyboard focus on this card, so it draws a ring.
   var keyboardFocused = false
+  /// The Board has keyboard focus, so a selected card draws the emphasized selection color.
+  var boardActive = false
+  /// Gives the Board keyboard focus, so Escape, Return, and Space reach it after a click.
+  var activate: () -> Void = {}
 
   /// A card without a placement shows its state's time instead.
   private var statusLine: String {
@@ -1101,9 +1132,12 @@ struct BoardCard: View {
 
   var body: some View {
     let s = session
+    let selected = model.multiSelection.contains(s.id)
+    let emphasized = selected && boardActive
     ZStack(alignment: .bottomTrailing) {
       Button {
-        model.openFromBoard(s.id)
+        activate()
+        model.clickBoardCard(s.id, BoardClick.current)
       } label: {
         VStack(alignment: .leading, spacing: 4) {
           HStack {
@@ -1135,6 +1169,7 @@ struct BoardCard: View {
             InlineText(plain: note, links: false).font(.caption2).foregroundStyle(.orange).lineLimit(2)
           }
           CleanupNote(session: s)
+          BranchSwitchNote(session: s)
           MergeNote(session: s)
           // A Board column is too narrow for the badge beside the PR number.
           HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1148,7 +1183,16 @@ struct BoardCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(s.state.color.opacity(0.08)))
+        .background(
+          RoundedRectangle(cornerRadius: 8)
+            .fill(
+              !selected
+                ? s.state.color.opacity(0.08)
+                : Color(
+                  nsColor: emphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor)
+            )
+        )
+        .environment(\.backgroundProminence, emphasized ? .increased : .standard)
         .overlay {
           RoundedRectangle(cornerRadius: 8)
             .stroke(
@@ -1167,7 +1211,10 @@ struct BoardCard: View {
       )
       .accessibilityValue(s.state.title)
       .highlightAccessibility(s.isHighlighted)
-      .accessibilityAddTraits(keyboardFocused ? .isSelected : [])
+      .accessibilityAddTraits(selected ? .isSelected : [])
+      // VoiceOver's press is not a click, and opens the card as a double click does.
+      .accessibilityAction { model.openFromBoard(s.id) }
+      .clickAnchor("board-card-\(s.id)")
       .overlayPreferenceValue(PRLinkBounds.self) { bounds in
         if let bounds, let pr = s.pr, let url = pr.link {
           GeometryReader { proxy in
@@ -1197,6 +1244,13 @@ struct BoardCard: View {
         .padding(6)
       }
     }
+    .onGeometryChange(for: CGRect.self) {
+      $0.frame(in: .named(BoardView.contentSpace))
+    } action: {
+      recordedFrame = $0
+      boardGeometry?.record(s.id, $0)
+    }
+    .onDisappear { boardGeometry?.dropFrame(s.id, ifStill: recordedFrame) }
     // The ring draws 5 pt outside the card. The column's 8 pt spacing alone would let two rings overlap.
     .padding(.vertical, s.isHighlighted ? 2 : 0)
   }

@@ -50,7 +50,7 @@ struct TriageDetail: View {
       if Self.pane(for: session, showingTerminal: model.showingTerminal) == .terminal {
         SessionView(session: session)
       } else {
-        ScrollView {
+        DetailPane {
           VStack(alignment: .leading, spacing: 14) {
             if session.removal?.state == .failed {
               FailedRemovalActions(session: session)
@@ -143,6 +143,19 @@ struct TriageDetail: View {
   private var reply: some View {
     if let text = model.reply(for: session), !text.isEmpty {
       LastReplySection(text: text).padding(.top, 4)
+    }
+  }
+}
+
+/// The Inbox's detail pane, which scrolls the whole card. It puts its scroll proxy in the environment, so text boxes
+/// in it drop their own height caps.
+struct DetailPane<Content: View>: View {
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    ScrollViewReader { proxy in
+      ScrollView { content }
+        .environment(\.detailScroll, proxy)
     }
   }
 }

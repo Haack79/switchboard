@@ -26,7 +26,7 @@ struct GroupAccountMenu: View {
             if row.account.folder == group.account {
               Label(row.account.name, systemImage: "checkmark")
             } else {
-              Text(row.signedOut ? "\(row.account.name) (not signed in)" : row.account.name)
+              Text(row.choiceTitle)
             }
           }
           .disabled(row.signedOut || row.account.folder == group.account)

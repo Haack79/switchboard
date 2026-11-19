@@ -8,6 +8,16 @@ import Testing
 @MainActor
 private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].map { needsItem($0) }) }
 
+/// The four sessions and `w`, a working session with no Inbox item. The Board's grid holds all five cards.
+@MainActor
+private func boardSessions() -> BoardModel {
+  var outside = needsItem("w", state: .working)
+  outside.triage = nil
+  let model = appliedModel(["a", "b", "c", "d"].map { needsItem($0) } + [outside])
+  model.boardGrid = BoardGrid(lanes: [[["a", "b"], ["c"]], [["d"], ["w"]]])
+  return model
+}
+
 /// The sidebar's `List(selection:)` binding. It shows `multiSelection` while that holds two or more ids, and the
 /// set of `selection` otherwise.
 @MainActor
@@ -145,6 +155,240 @@ private func fourSessions() -> BoardModel { appliedModel(["a", "b", "c", "d"].ma
     source.run(model)
 
     #expect(model.multiSelection.isEmpty, "\(source.rawValue)")
+  }
+
+  /// The paths off the Board. A Board selection must not outlive the Board, because the sidebar would highlight
+  /// rows that the detail pane does not show.
+  enum BoardSource: String, CaseIterable, Sendable {
+    case inbox, issues, board, inboxCard, sessionCard, search, notification, back, forward, recentPlace,
+      nextNeedingYou, sidebarRow, plainSelection, createdSession
+
+    /// Shows the Board with `ids` selected on it and history to go back or forward to session `c`.
+    @MainActor func arrange(_ model: BoardModel, selecting ids: Set<String>) {
+      if self == .back { model.selection = "c" }
+      model.show(.board)
+      if self == .forward {
+        model.selection = "c"
+        model.goBack()
+      }
+      model.multiSelection = ids
+    }
+
+    @MainActor func leave(_ model: BoardModel) {
+      switch self {
+      case .inbox: model.show(.inbox)
+      case .issues: model.show(.issues)
+      case .board: model.show(.board)
+      case .inboxCard: model.openFromBoard("c")
+      case .sessionCard: model.openFromBoard("w")
+      case .search: model.openFromSearch("c")
+      case .notification: model.reveal("c")
+      case .back: model.goBack()
+      case .forward: model.goForward()
+      case .recentPlace: model.go(to: NavLocation(place: .session("c"), terminal: false))
+      case .nextNeedingYou: model.selectNextNeedingYou()
+      case .sidebarRow: model.sidebarSelection.wrappedValue = ["c"]
+      case .plainSelection: model.selection = "c"
+      case .createdSession: model.selectUnlisted("new")
+      }
+    }
+  }
+
+  @Test(arguments: BoardSource.allCases, [["a"], ["a", "b"]] as [Set<String>])
+  func aPathOffTheBoardClearsTheBoardSelection(_ source: BoardSource, _ ids: Set<String>) throws {
+    let model = boardSessions()
+    source.arrange(model, selecting: ids)
+    try #require(model.visibleView == .board)
+    try #require(model.multiSelection == ids)
+
+    source.leave(model)
+
+    #expect(model.multiSelection.isEmpty, "\(source.rawValue)")
+  }
+
+  /// Next and Previous Session move the Board's focus ring and stay on the Board.
+  @Test(arguments: [1, -1], [["a"], ["a", "b"]] as [Set<String>])
+  func aKeyboardStepOnTheBoardMovesTheFocusRingAndKeepsTheSelection(_ step: Int, _ ids: Set<String>) {
+    let model = boardSessions()
+    model.show(.board)
+    model.multiSelection = ids
+    let jumps = model.boardJumps
+
+    model.selectAdjacentSession(by: step)
+
+    #expect(model.visibleView == .board)
+    #expect(model.multiSelection == ids)
+    // The reading order is a, b, c, d, w, and the ring starts on a.
+    #expect(model.boardFocus == (step == 1 ? "b" : "w"))
+    #expect(model.boardJumps == jumps + 1)
+  }
+}
+
+/// A Board selection is `multiSelection` while the Board shows with no session selected. It can hold one id,
+/// and the Board shows it in place of the multi-selection pane.
+@MainActor
+@Suite struct MultiSelectionOnBoard {
+  /// The four sessions with `view` showing, `selection` selected, and `multi` multi-selected.
+  func model(_ view: MainView, selection: String?, multi: Set<String>) -> BoardModel {
+    let model = appliedModel(["a", "b", "c", "d"].map { removalSession($0, nil) })
+    model.show(view)
+    if let selection { model.selection = selection }
+    model.multiSelection = multi
+    return model
+  }
+
+  @Test func theBindingShowsABoardSelectionOfTwoCards() {
+    let model = model(.board, selection: nil, multi: ["a", "b"])
+
+    #expect(model.sidebarSelection.wrappedValue == ["a", "b"])
+  }
+
+  /// A sidebar row that already showed as the only selected one would not open on a click.
+  @Test func theBindingLeavesABoardSelectionOfOneCardOut() {
+    let model = model(.board, selection: nil, multi: ["a"])
+
+    #expect(model.sidebarSelection.wrappedValue.isEmpty)
+  }
+
+  // MARK: The detail pane
+
+  struct PaneShape: Sendable, CustomTestStringConvertible {
+    var testDescription: String
+    var view: MainView
+    var selection: String?
+    var multi: Set<String>
+    var pane: Bool
+  }
+
+  nonisolated static let paneShapes = [
+    PaneShape(testDescription: "a session and two ids", view: .inbox, selection: "a", multi: ["a", "b"], pane: true),
+    PaneShape(
+      testDescription: "a session opened from the Board and two ids", view: .board, selection: "a",
+      multi: ["a", "b"], pane: true),
+    PaneShape(testDescription: "the Inbox and two ids", view: .inbox, selection: nil, multi: ["a", "b"], pane: true),
+    PaneShape(testDescription: "Issues and two ids", view: .issues, selection: nil, multi: ["a", "b"], pane: true),
+    PaneShape(testDescription: "a session and no ids", view: .inbox, selection: "a", multi: [], pane: false),
+    PaneShape(testDescription: "the Inbox and no ids", view: .inbox, selection: nil, multi: [], pane: false),
+    PaneShape(testDescription: "the Board and one id", view: .board, selection: nil, multi: ["a"], pane: false),
+    PaneShape(testDescription: "the Board and two ids", view: .board, selection: nil, multi: ["a", "b"], pane: false),
+  ]
+
+  @Test(arguments: paneShapes)
+  func theDetailPaneShowsTheMultiSelectionOnlyOffTheBoard(_ shape: PaneShape) {
+    let model = model(shape.view, selection: shape.selection, multi: shape.multi)
+
+    #expect(model.showsMultiSelectionPane == shape.pane)
+  }
+
+  /// Off the Board, the pane switch must not change what the detail pane shows.
+  @Test(arguments: paneShapes.filter { $0.view != .board || $0.selection != nil })
+  func offTheBoardThePaneShowsWhenTheMultiSelectionDoes(_ shape: PaneShape) throws {
+    let model = model(shape.view, selection: shape.selection, multi: shape.multi)
+    try #require(model.visibleView != .board)
+
+    #expect(model.showsMultiSelectionPane == model.showsMultiSelection)
+  }
+
+  /// Delete N Sessions…, ⌘⌫, and the Session menu read `showsMultiSelection`.
+  @Test(arguments: [(["a"], false), (["a", "b"], true)] as [(Set<String>, Bool)])
+  func aBoardSelectionOfTwoOrMoreCardsCountsAsAMultiSelection(_ ids: Set<String>, _ expected: Bool) {
+    let model = model(.board, selection: nil, multi: ids)
+
+    #expect(model.showsMultiSelection == expected)
+  }
+
+  // MARK: Refreshes
+
+  struct Outcome: Equatable, Sendable, CustomStringConvertible {
+    var selection: String?
+    var multi: Set<String>
+    var view: MainView?
+    var description: String {
+      "selection \(selection ?? "nil"), multi \(multi.sorted()), view \(view.map { "\($0)" } ?? "nil")"
+    }
+  }
+
+  struct RefreshShape: Sendable, CustomTestStringConvertible {
+    var testDescription: String
+    var view: MainView
+    var selection: String?
+    var multi: Set<String>
+    /// The sessions that the refresh lists with a queued removal, which hides them.
+    var held: Set<String>
+    var after: Outcome
+  }
+
+  nonisolated static let refreshShapes = [
+    RefreshShape(
+      testDescription: "one card, all listed", view: .board, selection: nil, multi: ["a"], held: [],
+      after: Outcome(selection: nil, multi: ["a"], view: .board)),
+    RefreshShape(
+      testDescription: "two cards, all listed", view: .board, selection: nil, multi: ["a", "b"], held: [],
+      after: Outcome(selection: nil, multi: ["a", "b"], view: .board)),
+    RefreshShape(
+      testDescription: "two cards, an unselected session held", view: .board, selection: nil, multi: ["a", "b"],
+      held: ["c"], after: Outcome(selection: nil, multi: ["a", "b"], view: .board)),
+    RefreshShape(
+      testDescription: "two cards, one held", view: .board, selection: nil, multi: ["a", "b"], held: ["b"],
+      after: Outcome(selection: nil, multi: ["a"], view: .board)),
+    RefreshShape(
+      testDescription: "two cards, both held", view: .board, selection: nil, multi: ["a", "b"], held: ["a", "b"],
+      after: Outcome(selection: nil, multi: [], view: .board)),
+    RefreshShape(
+      testDescription: "one card, held by the removal job", view: .board, selection: nil, multi: ["a"],
+      held: ["a"], after: Outcome(selection: nil, multi: [], view: .board)),
+    // Clearing the hidden selection shows the Board. The refresh must still treat the selection as the
+    // sidebar's: a new session is selected and the pane keeps the rest.
+    RefreshShape(
+      testDescription: "a session opened from the Board, held, with a sidebar multi-selection", view: .board,
+      selection: "a", multi: ["a", "b", "c"], held: ["a"], after: Outcome(selection: "b", multi: ["b", "c"], view: nil)
+    ),
+    RefreshShape(
+      testDescription: "a session opened from the Board, its one partner held", view: .board, selection: "a",
+      multi: ["a", "b"], held: ["b"], after: Outcome(selection: "a", multi: [], view: nil)),
+    RefreshShape(
+      testDescription: "a session over the Inbox, with a sidebar multi-selection", view: .inbox, selection: "a",
+      multi: ["a", "b", "c"], held: ["b"], after: Outcome(selection: "a", multi: ["a", "c"], view: nil)),
+    RefreshShape(
+      testDescription: "a session over Issues, held, with a sidebar multi-selection", view: .issues, selection: "a",
+      multi: ["a", "b", "c"], held: ["a"], after: Outcome(selection: "b", multi: ["b", "c"], view: nil)),
+    RefreshShape(
+      testDescription: "the Inbox with a sidebar multi-selection and no session", view: .inbox, selection: nil,
+      multi: ["a", "b", "c"], held: ["c"], after: Outcome(selection: "a", multi: ["a", "b"], view: nil)),
+  ]
+
+  @Test(arguments: refreshShapes)
+  func aRefreshKeepsABoardSelectionOnTheBoardAndASidebarSelectionAsBefore(_ shape: RefreshShape) {
+    let model = model(shape.view, selection: shape.selection, multi: shape.multi)
+
+    model.apply(
+      .success(["a", "b", "c", "d"].map { removalSession($0, shape.held.contains($0) ? .queued : nil) }),
+      followups: nil)
+
+    #expect(Outcome(selection: model.selection, multi: model.multiSelection, view: model.visibleView) == shape.after)
+  }
+
+  @Test(
+    arguments: [
+      (["ph1"], ["ph1"]),
+      (["ph1", "hk"], ["ph1"]),
+      (["hk"], []),
+    ] as [(Set<String>, Set<String>)])
+  func aFilterChangeKeepsTheShownPartOfABoardSelectionOnTheBoard(_ ids: Set<String>, _ kept: Set<String>) {
+    let model = orgFilterModel(OrgFilter())
+    model.apply(
+      .success([
+        orgSession("ph1", "PostHog/posthog"), orgSession("hk", "haacked/switchboard"),
+        orgSession("ph2", "PostHog/posthog-js"),
+      ]), followups: nil)
+    model.show(.board)
+    model.multiSelection = ids
+
+    model.orgFilter = posthogOnly
+
+    #expect(
+      Outcome(selection: model.selection, multi: model.multiSelection, view: model.visibleView)
+        == Outcome(selection: nil, multi: kept, view: .board))
   }
 }
 

@@ -26,6 +26,10 @@ public struct MCPToolServer: Sendable {
   /// client stops waiting on a tool call long before an unbounded wait ends.
   static let maxPendingWait = 120
 
+  /// The number of events that the `events` tool lists when it names no `limit`. Its answer stays in the
+  /// conversation, so the default is far below sbd's `Event.defaultLimit`.
+  static let defaultEventLimit = 20
+
   /// The `timeout` argument, clamped to 0 through `maxPendingWait` seconds. Default 30.
   static func pendingWait(_ timeout: JSON?) -> TimeInterval {
     TimeInterval(min(max(timeout?.int ?? 30, 0), maxPendingWait))
@@ -151,9 +155,9 @@ public struct MCPToolServer: Sendable {
     }
     switch name {
     case "list_sessions":
-      return try inScope(client.call("ls"), scoped)
+      return try brief(inScope(client.call("ls"), scoped), args)
     case "get_session":
-      return try session(sessionRef(args), scoped)
+      return try brief(session(sessionRef(args), scoped), args)
     case "read_reply":
       return try client.call("reply", ["session": try sessionID(args, scoped)])
     case "triage":
@@ -223,6 +227,13 @@ public struct MCPToolServer: Sendable {
       if let caller { request["caller"] = .string(caller) }
       if let scoped { request["scope"] = .string(scoped.group.id) }
       return try client.call("highlight", request)
+    case "set_parent":
+      var request: [String: JSON] = ["session": try sessionID(args, scoped), "by": MCPToolServer.byClaude]
+      if args["clear"]?.bool == true { request["clear"] = true }
+      if let parent = args["parent"]?.string { request["parent"] = try sessionID(parent, scoped) }
+      if let caller { request["caller"] = .string(caller) }
+      if let scoped { request["scope"] = .string(scoped.group.id) }
+      return try client.call("parent", request)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)
@@ -319,6 +330,11 @@ public struct MCPToolServer: Sendable {
     return ["plan": args["plan"] ?? .null, "kind": args["kind"] ?? .null, "ok": true]
   }
 
+  /// The sessions in `full` in their brief form, unless `args` asks for every field.
+  private func brief(_ full: JSON, _ args: JSON) throws -> JSON {
+    args["full"]?.bool == true ? full : try SessionBrief.json(full)
+  }
+
   /// The items of `list` whose `id` is a session in the group.
   private func inScope(_ list: JSON, _ scoped: Scoped?) -> JSON {
     guard let scoped else { return list }
@@ -327,7 +343,8 @@ public struct MCPToolServer: Sendable {
 
   /// A scoped server without a session asks for its members' events.
   private func events(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
-    var request = pick(args, ["since", "limit"])
+    var request = pick(args, ["since", "limit", "kinds", "full"])
+    request["limit"] = request["limit"] ?? .number(Double(MCPToolServer.defaultEventLimit))
     if args["session"] != nil {
       request["session"] = try sessionID(args, scoped)
     } else if let scoped {

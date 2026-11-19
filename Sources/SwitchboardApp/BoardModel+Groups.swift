@@ -22,9 +22,10 @@ extension BoardModel {
   func createGroup(_ name: String) {
     perform(
       "group-add", ["name": .string(name)],
-      then: { _ in
+      then: { result in
         self.actionError = nil
         self.namingGroup = false
+        self.showAnsweredGroup(result)
       },
       failed: { error in
         self.actionError = "\(error)"

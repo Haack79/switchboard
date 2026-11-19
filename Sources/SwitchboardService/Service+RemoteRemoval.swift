@@ -181,17 +181,11 @@ extension RemoteSite {
     """#
 
   /// Removes the session's launcher folder on the host with `rm -rf`. It refuses, and removes nothing, unless
-  /// `id` is `s` followed by lowercase letters and digits, `path` is `<home>/.sb/sessions/<id>` of the current
-  /// connection, and `.sb` and `.sb/sessions` are folders and not links. A folder that is already gone is no
-  /// error.
+  /// `id` has the shape of a session id, `path` is `<home>/.sb/sessions/<id>` of the current connection, and `.sb`
+  /// and `.sb/sessions` are folders and not links. A folder that is already gone is no error.
   func removeSessionFolder(_ path: String, of id: String) throws {
     let host = hostName ?? "the host"
-    let tail = id.utf8.dropFirst()
-    guard id.utf8.first == UInt8(ascii: "s"), !tail.isEmpty,
-      tail.allSatisfy({
-        (UInt8(ascii: "a")...UInt8(ascii: "z")).contains($0) || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0)
-      })
-    else {
+    guard SessionID.isValid(id) else {
       throw APIError("\"\(id)\" is not a session id, so sbd removed no folder on \(host)")
     }
     try confirmed("the removal of \(path)") { machine in

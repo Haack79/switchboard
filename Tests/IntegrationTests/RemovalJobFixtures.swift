@@ -73,6 +73,13 @@ struct MergedPRRepo {
 /// The ids in an `rm-queue` result's `queued`.
 func queued(_ result: JSON) -> [String] { result["queued"]?.array?.compactMap(\.string) ?? [] }
 
+/// The ids in an `rm-cancel` result's `cancelled`.
+func cancelled(_ result: JSON) -> [String] { result["cancelled"]?.array?.compactMap(\.string) ?? [] }
+
+/// An sbd whose undo window lasts a day, longer than any clock advance in a test, so the removal job holds a queued
+/// session without starting its removal.
+func longUndoInstance() throws -> Instance { try Instance(config: ["removalDelaySeconds": 86_400]) }
+
 /// The lock reason that Supacode writes.
 let supacodeLock = #"{"build":"1792934673","createdAt":1793889333,"owner":"supacode","version":"0.11.6"}"#
 
@@ -88,6 +95,17 @@ extension Instance {
     ]
     if let resolve { args["resolve"] = .array(resolve.map(JSON.string)) }
     return try client.call("rm-queue", args)
+  }
+
+  /// The `rm-cancel` op with every id in one request. It is the app's Undo.
+  func cancelRemoval(_ ids: [String]) throws -> JSON {
+    try client.call("rm-cancel", ["sessions": .array(ids.map(JSON.string))])
+  }
+
+  /// Queues the session's removal and keeps its worktree, so the removal job holds the session. Sessions that share
+  /// one folder can each be held this way.
+  func holdForRemoval(_ id: String) throws {
+    #expect(queued(try queueRemoval([id], scope: "work", worktree: false)) == [id])
   }
 
   /// Marks the session Done and waits until its state is Done.

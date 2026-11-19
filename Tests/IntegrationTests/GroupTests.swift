@@ -248,7 +248,7 @@ import Testing
   func name(_ m: SessionSummary, _ how: ManagerName) -> String {
     switch how {
     case .id: m.id
-    case .idPrefix: String(m.id.prefix(4))
+    case .idPrefix: String(m.id.prefix(m.id.count - 1))
     case .name: m.name
     }
   }

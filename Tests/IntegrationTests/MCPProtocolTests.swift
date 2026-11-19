@@ -18,13 +18,13 @@ import Testing
   }
 
   /// A server with no calling session leaves out the tools that only a Manager conversation gets.
-  @Test func toolsListHasTheTwentyFiveToolsByTheirExactNames() throws {
+  @Test func toolsListHasTheTwentySixToolsByTheirExactNames() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 25)
+    #expect(names.count == 26)
     #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly))
   }
 
@@ -162,7 +162,7 @@ import Testing
     let s = try sbd.new(name: "alpha")
     let mcp = try MCPClient(server: try #require(try managerConfig(sbd)["mcpServers"]?["switchboard"]))
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
 
     #expect(listed.contains { $0.id == s.id })
   }

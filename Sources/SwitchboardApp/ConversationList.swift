@@ -18,7 +18,7 @@ struct ConversationsSection: View {
           DisclosureGroup(isExpanded: $model.showingArchive) {
             ForEach(c.archived) { row($0) }
           } label: {
-            Text("Archive (\(c.archived.count))").foregroundStyle(.secondary)
+            CountedTitle(title: "Archive", count: c.archived.count).foregroundStyle(.secondary)
           }
           .help("Conversations idle for \(Conversations.archiveAfterMs / 86_400_000) days that need nothing")
         }
@@ -44,8 +44,9 @@ struct ConversationsSection: View {
       .clickAnchor(s.id)
       .tag(s.id)
       .contextMenu {
-        DeleteSelectedMenuItem(id: s.id, count: removableSelection)
-        Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
+        SessionMenuItems(session: s, removableSelection: removableSelection) {
+          Button(s.pinned == true ? "Unpin" : "Pin") { model.setPinned(s.id, s.pinned != true) }
+        }
       }
   }
 }

@@ -230,7 +230,7 @@ extension Instance {
     switch how {
     case .name: ref = "bravo"
     case .id: ref = g.b.id
-    case .idPrefix: ref = String(g.b.id.prefix(4))
+    case .idPrefix: ref = String(g.b.id.prefix(g.b.id.count - 1))
     case .nameWithState: ref = "bravo=needs_you"
     }
 
@@ -331,6 +331,38 @@ extension Instance {
     #expect(try sbd.launchEvents(gone.id, after: marks.gone).isEmpty)
   }
 
+  /// The removal job holds one member, so the group resume fails it with the refusal and leaves its pause and message
+  /// as they were. The other member resumes. Nothing replays the group resume, so after Undo a second group resume
+  /// resumes the member with its own message.
+  @Test func aGroupResumeKeepsThePauseOfAMemberTheRemovalJobHoldsAndResumesItAfterUndo() throws {
+    let sbd = try longUndoInstance()
+    let deleting = try sbd.pausedStopped("deleting", ["--message", "deleting's own message"])
+    let kept = try sbd.pausedStopped("kept")
+    _ = try sbd.addGroup("Flags", [deleting.id, kept.id])
+    try sbd.holdForRemoval(deleting.id)
+    let heldBefore = try sbd.heldCount(deleting.id)
+    let marks = (deleting: try sbd.lastEventId(deleting.id), kept: try sbd.lastEventId(kept.id))
+
+    let report = try sbd.resumeJSON(["Flags"])
+
+    #expect(sbd.results(report) == [deleting.id: "failed", kept.id: "resumed"])
+    #expect(sbd.row(report, deleting.id)?["error"]?.string?.contains("is being deleted") == true, "\(report)")
+    #expect(try sbd.waitForPrompts(kept.id, after: marks.kept, count: 1) == [defaultResume])
+    try sbd.tickThrice()
+    try sbd.expectStillPaused(deleting.id, after: marks.deleting)
+    #expect(try sbd.pauseField(deleting.id)?["message"] == "deleting's own message")
+    #expect(try sbd.heldCount(deleting.id) == heldBefore)
+    #expect(try sbd.removalState(deleting.id) == "queued")
+
+    #expect(cancelled(try sbd.cancelRemoval([deleting.id])) == [deleting.id])
+    let again = try sbd.resumeJSON(["Flags"])
+
+    #expect(sbd.results(again) == [deleting.id: "resumed", kept.id: "skipped"])
+    #expect(try sbd.waitForPrompts(deleting.id, after: marks.deleting, count: 1) == ["deleting's own message"])
+    #expect(try sbd.pauseField(deleting.id) == nil)
+    #expect(try sbd.unpausedEvents(deleting.id, after: marks.deleting).count == 1)
+  }
+
   // MARK: A ref that names a session and a group
 
   /// How the session's ref collides with the group: the session has the group's name, or the group's name is a
@@ -350,7 +382,7 @@ extension Instance {
       return ("Flags", session, member)
     case .sessionIdPrefix:
       let session = try sbd.liveIdle("x")
-      let ref = String(session.id.prefix(4))
+      let ref = String(session.id.prefix(session.id.count - 1))
       _ = try sbd.addGroup(ref, [member.id])
       return (ref, session, member)
     }

@@ -49,7 +49,7 @@ import Testing
     func text(for s: SessionSummary) -> String {
       switch self {
       case .id: s.id
-      case .prefix: String(s.id.prefix(3))
+      case .prefix: String(s.id.prefix(s.id.count - 1))
       case .name: s.name
       }
     }
@@ -69,7 +69,7 @@ import Testing
     #expect(open.calls() == [[SessionLink.url(for: s.id).absoluteString]])
   }
 
-  /// The app parses the URL with `SessionLink.id(from:)`, so the URL that sb opens must parse back to the id.
+  /// The app parses the URL with `SessionLink.target(from:)`, so the URL that sb opens must parse back to the id.
   @Test func theURLThatFocusOpensParsesBackToTheSessionsId() throws {
     let sbd = try Instance()
     let open = try FakeOpen(in: sbd)
@@ -79,7 +79,7 @@ import Testing
 
     let opened = try #require(open.calls().first?.last)
     let url = try #require(URL(string: opened))
-    #expect(SessionLink.id(from: url) == s.id)
+    #expect(SessionLink.target(from: url) == .id(s.id))
   }
 
   // MARK: Output

@@ -22,12 +22,7 @@ private func activityStatus(_ a: Args, _ result: JSON) {
 }
 
 private func activityReport(_ a: Args) {
-  var args: [String: JSON] = [:]
-  if let since = a.values["--since"] {
-    guard let ms = Wait.durationMs(since) else { die("--since takes a duration such as 1w, 3d, or 12h") }
-    args["durationMs"] = .number(Double(ms))
-  }
-  let result = call("activity-report", args)
+  let result = call("activity-report", sinceArgs(a.values["--since"]))
   if a.json { return printJSON(result) }
   let report = decode(result, as: ActivityReport.self)
   let window =
@@ -46,3 +41,10 @@ private func activityReport(_ a: Args) {
 }
 
 private func seconds(_ ms: Int64) -> String { String(format: "%.1f s", Double(ms) / 1000) }
+
+/// The `durationMs` of a report request for a `--since` duration such as 3d, or none without one.
+func sinceArgs(_ since: String?) -> [String: JSON] {
+  guard let since else { return [:] }
+  guard let ms = Wait.durationMs(since) else { die("--since takes a duration such as 1w, 3d, or 12h") }
+  return ["durationMs": .number(Double(ms))]
+}

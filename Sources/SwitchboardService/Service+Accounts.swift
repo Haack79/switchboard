@@ -139,13 +139,16 @@ extension Service {
   /// stays in `blocked`, including one already on the account. `stop` needs
   /// `sessions`. Before a move with `stop` runs, sbd stops the claudes that
   /// `sessionsToStopForMove` picks. A dry run with `stop` lists a running
-  /// named session as one that would move.
+  /// named session as one that would move. `mcpDropped` names the MCP
+  /// servers that each moved session's server list loses on the account.
   func moveSessions(_ args: JSON) throws -> AccountMove {
     let target = try moveTarget(args)
     let dryRun = args["dryRun"]?.bool ?? false
     let named = try namedForMove(args)
     let listsRunningAsMovable = dryRun && args["stop"]?.bool == true
     var result = AccountMove(account: target.folder)
+    var dropped: [String: [String]] = [:]
+    var available: [String: JSON]?
     for id in named ?? entries.keys.sorted() {
       guard let session = entries[id]?.session else { continue }
       let block = { (reason: String) in result.blocked.append(.init(session: id, name: session.name, reason: reason)) }
@@ -160,10 +163,17 @@ extension Service {
       do {
         if !dryRun { try move(id, to: target) }
         result.moved.append(id)
+        if let names = session.mcp {
+          let servers = available ?? availableMCPServers(account: target)
+          available = servers
+          let missing = names.filter { servers[$0] == nil }.sorted()
+          if !missing.isEmpty { dropped[id] = missing }
+        }
       } catch {
         block("\(error)")
       }
     }
+    if !dropped.isEmpty { result.mcpDropped = dropped }
     if !dryRun && !result.moved.isEmpty {
       logLine("moved \(result.moved.count) sessions to the account \(target.folder)")
     }
@@ -221,11 +231,12 @@ extension Service {
     if starting.contains(id) { return "it is starting" }
     if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
     switch claudeState(id) {
+    // A stopped claude's queue moves with the session, and its next launch reads the moved transcript.
     case .stopped: break
-    case .running where listsRunningAsMovable: break
+    case .running where listsRunningAsMovable:
+      if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
     default: return "its claude is running. Stop it first"
     }
-    if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
     if let source = transcriptFile(e.session) {
       let dest = transcriptDestination(source, id: e.session.claudeSessionId, to: target)
       if let conflict = transcriptConflict(source, dest) { return conflict }

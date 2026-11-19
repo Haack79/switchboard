@@ -24,11 +24,12 @@ extension Service {
         throw APIError("resolve-wait needs an outcome that says what happened")
       }
       let waitId = args["wait"]?.string
+      let changedAt = args["changedAt"]?.int.map(Int64.init)
       if let until = pauseCondition(id, waitId) {
-        try resolve(id, until, outcome: outcome)
+        try resolve(id, until, outcome: outcome, changedAt: changedAt)
       } else {
         let (holder, wait) = try openWait(id, waitId)
-        try resolve(holder, wait, outcome: outcome)
+        try resolve(holder, wait, outcome: outcome, changedAt: changedAt)
       }
     default:
       throw APIError("unknown request \(op)")
@@ -124,10 +125,12 @@ extension Service {
 
   /// Resolves an open wait and runs its `then`, through the `resolve-wait`
   /// request. `outcome` says what happened in words, such as "the checks
-  /// passed". A poller calls it from its own queue.
-  func resolveWait(session: String, wait: String, outcome: String) throws -> SessionSummary {
-    let args: JSON = ["session": .string(session), "wait": .string(wait), "outcome": .string(outcome)]
-    let response = handle(Request(op: "resolve-wait", args: args))
+  /// passed". `changedAt` is when that happened on GitHub or Trunk, in ms,
+  /// when the poller knows it. A poller calls it from its own queue.
+  func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?) throws -> SessionSummary {
+    var args: [String: JSON] = ["session": .string(session), "wait": .string(wait), "outcome": .string(outcome)]
+    if let changedAt { args["changedAt"] = .number(Double(changedAt)) }
+    let response = handle(Request(op: "resolve-wait", args: .object(args)))
     guard response.ok, let result = response.result else { throw APIError(response.error ?? "resolve-wait failed") }
     return try JSONCoding.convert(result, to: SessionSummary.self)
   }
@@ -147,11 +150,13 @@ extension Service {
 
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
-  private func resolve(_ id: String, _ wait: Wait, outcome: String) throws {
+  private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil) throws {
     if try resumeOnCondition(id, wait, outcome: outcome) { return }
     if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), by: .sbd, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
-    record(id, "wait-resolved", try waitEventData(wait, ["outcome": .string(outcome)]))
+    var extra: [String: JSON] = ["outcome": .string(outcome)]
+    if let changedAt { extra["changedAt"] = .number(Double(changedAt)) }
+    record(id, "wait-resolved", try waitEventData(wait, extra))
   }
 
   /// The session that holds the wait, and the wait: the one with this id, or

@@ -433,7 +433,7 @@ private func workSession(_ id: String) -> SessionSummary {
     model.ask = AskStub().call
     model.openQuickAsk()
 
-    model.focus("s1")
+    model.focus(.id("s1"))
 
     #expect(model.quickAsk == nil)
   }
@@ -448,7 +448,7 @@ private func workSession(_ id: String) -> SessionSummary {
     await settle { stub.tokens.count == 1 }
     let token = try #require(stub.tokens.first)
 
-    model.focus("s1")
+    model.focus(.id("s1"))
 
     #expect(token.isCancelled)
   }

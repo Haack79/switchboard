@@ -226,6 +226,7 @@ struct SessionView: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(session.name).font(.title3.bold())
+            .contextMenu { CopyLinkMenuItem(session: session) }
           StateBadge(state: session.state)
           Text(session.live ? "claude running" : "claude stopped")
             .font(.caption)
@@ -245,12 +246,18 @@ struct SessionView: View {
         }
         IssueBadge(session: session)
         CleanupNote(session: session)
-        Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .textSelection(.enabled)
+        BranchSwitchNote(session: session)
+        // The title row wraps the session's name at 1024 pt when the account sits in it.
+        HStack(spacing: 8) {
+          // ChatHeader shows the account above a chat's terminal view, which nests this view.
+          if !session.kind.showsAsChat { SessionAccountControl(session: session) }
+          Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+        }
       }
       Spacer()
       HStack {
@@ -259,9 +266,7 @@ struct SessionView: View {
             .help(PauseBanner.resumeHelp)
         } else if session.live {
           Button("Stop") { model.stop(session.id) }
-            .help(
-              "Stop claude now. It resumes when you click or type in its terminal, send it a message, or open the session again."
-            )
+            .help(BoardModel.stopHelp)
         } else if session.queued == true {
           Button("Start Now") { model.startNow(session.id) }
             .disabled(model.startingNow.contains(session.id))

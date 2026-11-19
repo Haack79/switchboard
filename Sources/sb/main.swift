@@ -5,8 +5,13 @@ let usage = """
   Usage: sb <command> [arguments] [--json]
 
   Sessions:
-    ls [--org O1,O2] [--local]    list sessions by state, or only those in the
-                                  GitHub orgs O1 and O2, or with no GitHub remote
+    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped] [--brief]
+                                  list sessions by state, or only those in the
+                                  GitHub orgs O1 and O2, or with no GitHub
+                                  remote, and in the groups G1 and G2, or in no
+                                  group. --brief prints one line per session:
+                                  its id, name, state, reason, PR, open waits,
+                                  and url
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -57,6 +62,8 @@ let usage = """
                                   session's claude first
     usage                         show each account's use of its 5-hour and
                                   weekly limits, and when each resets
+    usage headless [--since 7d]   sum the tokens of sbd's own claude -p calls
+                                  per day and kind
     manager [<conv>] [<text>]     open a Manager conversation, a session that manages
                                   the others: the one named by id or name, else the
                                   most recent, starting one the first time. With
@@ -92,7 +99,8 @@ let usage = """
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
-    get <session>                 show one session
+    get <session> [--brief]       show one session. --brief shows only its id,
+                                  name, state, reason, PR, open waits, and url
     focus <session>               show the session in the Switchboard app, launching
                                   the app if it isn't running
     slash <session>               the commands that the session's claude takes
@@ -178,6 +186,12 @@ let usage = """
                                   shows: 123, #123, owner/name#123, or an issue
                                   URL. It replaces the issue that sbd finds in
                                   the PR body or the branch name
+    parent <session> [<parent> | --clear]
+                                  show the session's parent, move it to another
+                                  parent, or unlink it with --clear. The parent
+                                  stops hearing what changed in it. Its group,
+                                  account, host, and waits stay. Refuses the
+                                  session that runs it
     rm <session> [--worktree [--delete-branch [--delete-remote-branch]]] [--resolve <id>]...
                                   remove the session, and its worktree with --worktree, which refuses
                                   uncommitted files, unpushed commits, and a folder sbd didn't make.
@@ -241,8 +255,13 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--follow]
-                                  the newest events, or those after an id
+    events [--session S] [--since ID] [--kind K]... [--limit N] [--full]
+        [--follow]
+                                  the newest events, or those after an id,
+                                  \(Event.defaultLimit) at a time. --kind, which
+                                  repeats, shows only those kinds. --json
+                                  leaves out tool output and cuts long
+                                  strings unless --full
 
   What needs you:
     triage                        the sessions that need you or that Claude can
@@ -356,9 +375,12 @@ let usage = """
     plan reject <proposal>        drop it. A declined row stays declined
 
   Issues, open GitHub issues from the sources you pick:
-    issues [--mine]               list them by bucket: assigned to you, the team's
+    issues [--mine] [--no-backlog]
+                                  list them by bucket: assigned to you, the team's
                                   unassigned, the team's assigned to others, other,
-                                  and being worked on by a session
+                                  and being worked on by a session. Issues with a
+                                  backlog label come last, and --no-backlog leaves
+                                  them out. --json marks each with "backlog"
     issues start <owner/name#N> [--preset P] [--group G] [--path FOLDER]
                                   start a session on the issue in a worktree on
                                   <branchPrefix><N>-<slug>, with the preset's prompt
@@ -366,8 +388,9 @@ let usage = """
                                   add or remove a source. An org needs a label or
                                   a person
     issues source ls              list the sources
-    issues team [--label L]... [--person P]...
-                                  show or set the labels and logins of your team
+    issues team [--label L]... [--person P]... [--backlog L]...
+                                  show or set the labels and logins of your team,
+                                  and its backlog labels. --backlog '' clears them
     ref <owner/name#N | URL | #N> [--repo owner/name]
                                   show an issue or PR: its kind, state, title,
                                   author, and labels, and a PR's checks, review,
@@ -399,6 +422,9 @@ let usage = """
   Service:
     poll [--all]                  ask GitHub and Depot about the sessions' PRs
                                   now; --all reads every PR, not only those due
+    poll --stats                  show the GitHub requests and points since sbd
+                                  started, by why each PR was read, without
+                                  polling
     snapshots [--write]           show how the last start built each session,
                                   from a snapshot or a full replay; --write
                                   first saves a snapshot of every session
@@ -479,7 +505,7 @@ struct Args {
       "--group", "--to", "--note", "--accept", "--decline", "--undecline", "--existing", "--send", "--pending",
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
-      "--preset", "--label", "--person", "--steps", "--for",
+      "--preset", "--label", "--person", "--backlog", "--steps", "--for",
       "--reason", "--message",
     ]).union(waitFlags.keys)
     var rest = argv
@@ -545,9 +571,15 @@ func decode<T: Decodable>(_ value: JSON, as type: T.Type) -> T {
 
 func summary(_ value: JSON) -> SessionSummary { decode(value, as: SessionSummary.self) }
 
+func briefJSON(_ value: JSON) -> JSON {
+  do { return try SessionBrief.json(value) } catch { die("can't read sbd's answer: \(error)") }
+}
+
+let noSessions = "No sessions. Start one with: sb new <folder>"
+
 func printTable(_ sessions: [SessionSummary]) {
   if sessions.isEmpty {
-    print("No sessions. Start one with: sb new <folder>")
+    print(noSessions)
     return
   }
   let idWidth = max(2, sessions.map(\.id.count).max() ?? 0)
@@ -562,7 +594,8 @@ func printTable(_ sessions: [SessionSummary]) {
     let live = s.live ? "●" : "○"
     let name = oneLine(s.name, max: nameWidth)
     let todos = s.openTodos.count
-    let marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    var marker = todos == 0 ? "" : "  [\(todos) to-do\(todos == 1 ? "" : "s")]"
+    if let start = s.startBranch { marker += "  [switched from \(start)]" }
     let lead = s.isHighlighted ? "* " : "  "
     print(
       "\(lead)\(live) \(s.id.padding(toLength: idWidth, withPad: " ", startingAt: 0))  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  \(ago(s.since).padding(toLength: 4, withPad: " ", startingAt: 0))  \(s.reasonLine)\(marker)"
@@ -597,7 +630,9 @@ func printSession(_ s: SessionSummary) {
   if let account = s.account { print("  account: \(ClaudeAccount(folder: account).name)") }
   if let mode = s.permissionMode { print("  mode:    \(PermissionMode.title(mode))".printable) }
   if let b = s.branch { print("  branch:  \(b)") }
+  if let note = s.branchSwitchNote { print("  warning: \(note)".printable) }
   if let pr = s.pr { print("  pr:      \(pr.line)  \(pr.url)") }
+  if let earlier = s.earlierPRs { print("  earlier PRs: " + earlier.map { "#\($0)" }.joined(separator: ", ")) }
   for issue in s.issues ?? [] {
     print(
       "  issue:   \(issue.label(from: s.pr?.repo)) (\(issue.via.title))\(issue.url.map { "  \($0)" } ?? "")".printable)
@@ -626,6 +661,7 @@ func printSession(_ s: SessionSummary) {
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
+  printQueue(s)
   printWaitsAndNotes(s)
   printSchedules(s)
 }
@@ -738,12 +774,18 @@ func watch(_ a: Args) -> Never {
 }
 
 /// Prints the newest events, or the events after --since, and with --follow
-/// keeps printing new ones.
+/// keeps printing new ones. --kind, which repeats, prints only those kinds.
 func events(_ a: Args) -> Never {
-  var cursor = EventCursor(since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"])
+  var cursor = EventCursor(
+    since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
+    full: a.switches.contains("--full"))
+  let limit = a.values["--limit"].map { value -> Int in
+    guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
+    return limit
+  }
   while true {
     let list: [Event]
-    do { list = try cursor.next() } catch { die("\(error)") }
+    do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
     for e in list {
       if a.json {
         printJSON((try? JSON(encoding: e)) ?? .null)
@@ -871,15 +913,32 @@ case "ls" where a.switches.contains("--removed"), "list" where a.switches.contai
   }
 case "ls", "list":
   let result = call("ls")
-  var filter = OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ","))
-  if a.switches.contains("--local") { filter.insert(OrgFilter.localKey) }
+  var filter = SessionFilter(org: OrgFilter(list: (a.allValues["--org"] ?? []).joined(separator: ",")))
+  if a.switches.contains("--local") { filter.org.insert(OrgFilter.localKey) }
+  let groupRefs = (a.allValues["--group"] ?? []).flatMap(splitList)
+  if !groupRefs.isEmpty || a.switches.contains("--ungrouped") {
+    let groups = decode(call("group-ls"), as: GroupList.self).groups
+    let items = groups.map { (id: $0.id, name: $0.name) }
+    do {
+      filter.group = GroupFilter(keys: try groupRefs.map { try resolveRef($0, "group", items) })
+    } catch {
+      die("\(error)")
+    }
+    if a.switches.contains("--ungrouped") { filter.group.insert(GroupFilter.ungroupedKey) }
+    filter.knownGroups = Set(groups.map(\.id))
+  }
+  let brief = a.switches.contains("--brief")
   if a.json && filter.isAll {
-    printJSON(result)
+    printJSON(brief ? briefJSON(result) : result)
   } else {
     let shown = decode(result, as: [SessionSummary].self).filter(filter.shows)
     if a.json {
       let ids = Set(shown.map(\.id))
-      printJSON(.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false }))
+      let list = JSON.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false })
+      printJSON(brief ? briefJSON(list) : list)
+    } else if brief {
+      if shown.isEmpty { print(noSessions) }
+      for s in shown { print(s.briefLine) }
     } else {
       printSessionList(shown, filter: filter)
     }
@@ -913,7 +972,12 @@ case "ask":
 case "operator":
   operatorCommand(a)
 case "get", "show":
-  sessionCommand("get", a)
+  if a.switches.contains("--brief") {
+    let result = call("get", ["session": .string(a.session("get"))])
+    if a.json { printJSON(briefJSON(result)) } else { print(summary(result).briefLine) }
+  } else {
+    sessionCommand("get", a)
+  }
 case "focus":
   focus(a)
 case "open":
@@ -949,6 +1013,8 @@ case "issue":
   let clear = a.switches.contains("--clear")
   guard a.positional.count == (clear ? 1 : 2) else { die("issue needs a session and an issue, or --clear") }
   sessionCommand("issue", a, extra: clear ? ["clear": .bool(true)] : ["issue": .string(a.positional[1])])
+case "parent":
+  parentCommand(a)
 case "send" where a.values["--pending"] != nil:
   awaitGroupMessage(a, id: a.values["--pending"]!)
 case "send" where a.values["--group"] != nil:
@@ -1067,6 +1133,9 @@ case "issues":
   issues(a)
 case "ref":
   refCommand(a)
+case "poll" where a.switches.contains("--stats"):
+  let result = call("poll", ["stats": true])
+  if a.json { printJSON(result) } else { printPollStats(result) }
 case "poll":
   let result = call("poll", ["all": .bool(a.switches.contains("--all"))], timeout: 300)
   if a.json {

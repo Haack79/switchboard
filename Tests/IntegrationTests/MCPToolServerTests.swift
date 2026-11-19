@@ -8,7 +8,7 @@ enum MCPToolServerTests {
     "list_sessions", "get_session", "read_reply", "triage", "events", "send", "send_group", "spawn", "set_wait",
     "clear_wait", "add_note", "list_groups", "add_group", "remove_group", "move_to_group", "add_group_note",
     "suggest_groups", "plan_artifact", "report", "add_schedule", "list_schedules", "remove_schedule",
-    "request_mcp_server", "pause", "resume", "highlight",
+    "request_mcp_server", "pause", "resume", "highlight", "set_parent",
   ]
   /// The tools that a scoped server leaves out.
   static let unscopedOnly: Set<String> = ["add_group", "remove_group", "suggest_groups"]
@@ -124,7 +124,7 @@ extension MCPToolServerSuite {
   func name(_ id: String, _ name: String, _ how: Naming) -> String {
     switch how {
     case .id: id
-    case .idPrefix: String(id.prefix(4))
+    case .idPrefix: String(id.prefix(id.count - 1))
     case .name: name
     }
   }

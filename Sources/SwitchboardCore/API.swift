@@ -153,21 +153,30 @@ public struct AccountMove: Codable, Equatable, Sendable {
   public var moved: [String]
   /// The sessions that stay on their account, and why.
   public var blocked: [Blocked]
+  /// For each moved session whose MCP server list names servers that the
+  /// account doesn't have, those servers' names, sorted. Nil when no session drops one.
+  public var mcpDropped: [String: [String]]?
 
-  public init(account: String, moved: [String] = [], blocked: [Blocked] = []) {
+  public init(
+    account: String, moved: [String] = [], blocked: [Blocked] = [], mcpDropped: [String: [String]]? = nil
+  ) {
     self.account = account
     self.moved = moved
     self.blocked = blocked
+    self.mcpDropped = mcpDropped
   }
 }
 
 extension AccountMove {
   /// What a move means for the sessions that move, for the prompt that offers it.
-  public static let consequences = """
+  public static let consequences =
+    resumeConsequences + " A session whose claude is running stays on its account until you stop it."
+
+  /// What a move means for a session that moves, without the note on running sessions.
+  public static let resumeConsequences = """
     A moved session resumes its conversation under the new account, with that account's settings, \
     MCP servers, and permissions. Its transcript is copied, and the old copy stays. Its next message \
-    may write the whole conversation to the prompt cache again, which uses quota. A session whose \
-    claude is running stays on its account until you stop it.
+    may write the whole conversation to the prompt cache again, which uses quota.
     """
 }
 
