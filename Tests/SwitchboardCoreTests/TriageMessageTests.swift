@@ -621,3 +621,120 @@ private func panelItem() throws -> TriageItem {
     #expect(try JSONCoding.convert(old, to: TriageItem.self).review == nil)
   }
 }
+
+/// Plans whose JSON text escapes or spells them in a way that a parser could
+/// read back wrong.
+private let trickyPlans = [
+  "# Plan\n\n- step one\n- step two", "Say \"hi\" to `sb`.", #"C:\path\to\file and \n literally"#,
+  "See https://example.com/a/b.", "Café, naïve, 日本語, 🚀", "null", "1", "true", "  padded  ", "tab\there",
+  #"{"plan": "nested"}"#, "line\u{2028}separator",
+]
+
+private func planInput(_ plan: String, _ extra: [String: JSON] = [:]) -> [String: JSON] {
+  extra.merging(["plan": .string(plan)]) { _, plan in plan }
+}
+
+private func planTurn(_ input: [String: JSON]) -> [Event] {
+  promptTurn(tool("ExitPlanMode", input, id: "p1"), tool("ExitPlanMode", input))
+}
+
+@Suite struct TriageToolInputMarkdown {
+  @Test(arguments: trickyPlans)
+  func exitPlanModeGivesItsPlanAsItIs(_ plan: String) {
+    #expect(TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: .object(planInput(plan))) == plan)
+  }
+
+  @Test(arguments: ["Write", "exitplanmode", "mcp__x__ExitPlanMode"])
+  func anotherToolWithAPlanGivesNoMarkdown(_ tool: String) {
+    #expect(TriageDetails.ToolInput.markdown(tool: tool, input: .object(planInput("# Plan"))) == nil)
+  }
+
+  @Test(arguments: [
+    JSON.object([:]), ["plans": "# Plan"], ["Plan": "# Plan"], ["plan": ""], ["plan": .null], ["plan": .number(1)],
+    ["plan": .bool(true)], ["plan": .array([.string("# Plan")])], ["plan": .object(["text": .string("# Plan")])],
+    .string("# Plan"), .array([.object(["plan": .string("# Plan")])]), .null, .number(1), .bool(true),
+  ])
+  func exitPlanModeWithoutAPlanStringGivesNoMarkdown(_ input: JSON) {
+    #expect(TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: input) == nil)
+  }
+
+  /// The Inbox reads the computed property and a card reads the static one,
+  /// so both read the same plan out of the same input.
+  @Test(arguments: trickyPlans, [true, false])
+  func theComputedMarkdownMatchesTheRuleForTheSameInput(_ plan: String, pretty: Bool) {
+    let input = JSON.object(planInput(plan, ["planFilePath": "/p/plan.md"]))
+    let text = pretty ? input.prettyText : input.text
+
+    let computed = TriageDetails.ToolInput(tool: "ExitPlanMode", text: text).markdown
+
+    #expect(computed == TriageDetails.ToolInput.markdown(tool: "ExitPlanMode", input: input))
+    #expect(computed == plan)
+  }
+
+  @Test(arguments: [
+    "", "touch x", "# Plan", "null", "1", "true", "\"# Plan\"", ##"[{"plan": "# Plan"}]"##, ##"{"plan": "# Plan""##,
+    ##"{plan: "# Plan"}"##,
+  ])
+  func textThatIsNotAJSONObjectGivesNoMarkdown(_ text: String) {
+    #expect(TriageDetails.ToolInput(tool: "ExitPlanMode", text: text).markdown == nil)
+  }
+
+  /// `sb --json` and the Manager read the tool input, so the computed Markdown adds no key to it.
+  @Test func anExitPlanModeMessageEncodesOnlyTheToolAndTextOfItsInput() throws {
+    let m = try #require(message(facts(planTurn(planInput("# Plan")))))
+
+    let toolInput = try #require(try JSON(encoding: m)["details"]?["toolInput"]?.object)
+
+    #expect(Set(toolInput.keys) == ["tool", "text"])
+  }
+
+  @Test func anExitPlanModeItemRoundTrips() throws {
+    let built = try #require(item(facts(planTurn(planInput("# Plan\n- a")))))
+
+    let decoded = try JSONCoding.convert(try JSON(encoding: built), to: TriageItem.self)
+
+    #expect(decoded == built)
+  }
+
+  @Test func anExitPlanModeCardGivesThePlanAsMarkdown() throws {
+    let plan = "# Plan\n\n- Add the view.\n- Test it."
+    let m = try #require(message(facts(planTurn(planInput(plan, ["planFilePath": "/p/plan.md"])))))
+
+    #expect(m.details.toolInput?.tool == "ExitPlanMode")
+    #expect(m.details.toolInput?.markdown == plan)
+  }
+
+  /// The raw JSON stays behind the toggle, so it keeps every field.
+  @Test(arguments: ["planFilePath", "description"])
+  func anExitPlanModeCardKeepsTheWholeInputAsPrettyJSON(_ field: String) throws {
+    let input = planInput("# Plan\n- a", [field: "second field value"])
+    let m = try #require(message(facts(planTurn(input))))
+
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+    #expect(m.details.toolInput?.text.contains("second field value") == true)
+  }
+
+  @Test func anExitPlanModeCardOpensDetails() throws {
+    let m = try #require(message(facts(planTurn(planInput("# Plan")))))
+
+    #expect(m.details.openByDefault)
+  }
+
+  @Test(arguments: [JSON.string(""), .null, .number(1)])
+  func anExitPlanModeCardWithoutAPlanStringKeepsItsJSONAndGivesNoMarkdown(_ plan: JSON) throws {
+    let input: [String: JSON] = ["plan": plan]
+    let m = try #require(message(facts(planTurn(input))))
+
+    #expect(m.details.toolInput?.markdown == nil)
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+  }
+
+  @Test func aWriteCardWithAPlanFieldGivesNoMarkdown() throws {
+    let input: [String: JSON] = ["file_path": "/a/plan.md", "plan": "# Plan", "content": "x"]
+    let m = try #require(message(facts(promptTurn(tool("Write", input, id: "w1"), tool("Write", input)))))
+
+    #expect(m.details.toolInput?.markdown == nil)
+    #expect(m.details.toolInput?.text == JSON.object(input).prettyText)
+  }
+
+}

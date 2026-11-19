@@ -177,6 +177,9 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
     return input.prettyText
   }
 
+  /// The part of the input that the app draws as Markdown, such as ExitPlanMode's plan.
+  public var markdown: String? { TriageDetails.ToolInput.markdown(tool: tool, input: input) }
+
   /// The card with the given id, or the session's only card. A session with
   /// several cards needs the id, so an answer never reaches the wrong one.
   public static func choose(_ number: Int?, from cards: [Card], session: String) throws -> Card {
