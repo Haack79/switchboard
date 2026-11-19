@@ -103,7 +103,7 @@ public final class Service {
       let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
       guard starting || now - sent < Service.inFlightMs else { return false }
     }
-    return claudeState(e.session.id) != .stopped || e.queuedSince != nil || Pause.blocker(e.session) != nil
+    return e.queuedSince != nil || Pause.blocker(e.session) != nil || claudeState(e.session.id) != .stopped
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.

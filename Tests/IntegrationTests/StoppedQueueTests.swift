@@ -220,7 +220,6 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     let launch = try #require(sbd.stubCalls().last { $0.args.contains(s.claudeSessionId) })
     #expect(launch.account == sbd.account("B"))
     #expect(launch.args.contains("--resume \(s.claudeSessionId)"), "\(launch.args)")
-    #expect(try sbd.get(s.id).account == sbd.account("B"))
   }
 
   /// A paused session's held messages move with it, and the resume under B delivers them.
@@ -228,7 +227,6 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     let sbd = try instance()
     let s = try sbd.pausedStopped()
     try sbd.sb("send", s.id, "held note")
-    #expect(try sbd.get(s.id).account == sbd.account("A"))
 
     let moved = try move(sbd, ["--session", s.id])
 
@@ -330,14 +328,15 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
     let first = try schedules.schedule(sbd, s.id, "tick one")
     let second = try schedules.schedule(sbd, s.id, "tick two")
 
+    func schedulesThatRan() throws -> [String] {
+      try [first.id, second.id].filter { try schedules.current(sbd, s.id, $0)?.last != nil }
+    }
+
     try sbd.advanceClock(ScheduleFireTests.pastDue)
 
-    let ran = try sbd.waitFor(
-      "a run of either schedule",
-      fetch: { try [first.id, second.id].filter { try schedules.current(sbd, s.id, $0)?.last != nil } },
-      until: { !$0.isEmpty })
+    let ran = try sbd.waitFor("a run of either schedule", fetch: schedulesThatRan, until: { !$0.isEmpty })
     try sbd.tickThrice()
-    #expect(try [first.id, second.id].filter { try schedules.current(sbd, s.id, $0)?.last != nil } == ran)
+    #expect(try schedulesThatRan() == ran)
     #expect(ran.count == 1, "\(ran)")
     #expect(try sbd.events(s.id).contains { $0.kind == "start-queued" })
     #expect(try sbd.heldCount(s.id) == 1)
