@@ -77,9 +77,8 @@ extension Service {
           ciReads.insert(read.key)
           ciReaderQueue.async { [self] in readCI(read) }
         case .reran:
-          // A failing state that began after the rerun is a second failure. A rerun that fails again before a PR read
-          // sees it running leaves the state as it was. So does a failed check that sbd did not rerun. So checks that
-          // still fail one idle poll and the window after the rerun count too.
+          // A rerun that fails again before a PR read sees it running leaves `stateSince` unchanged. So checks that
+          // still fail one idle poll plus the window after the rerun also count as a second failure.
           let since = e.facts.stateSince
           let failedAgain = since > check.since && now - since >= window
           let idlePoll = Int64(config.github.idlePollSeconds * 1000)
