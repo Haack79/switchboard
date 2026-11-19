@@ -331,6 +331,21 @@ final class FakeGitHub {
     }
   }
 
+  /// Adds PR `number` on `branch` with head `head`, a copy of PR `source` in the same repository otherwise, so a
+  /// test can have two PRs that the lookup, status, and merge details queries answer alike.
+  func addPR(copying source: Int, number: Int, branch: String, head: String) {
+    lock.withLock {
+      var pr = prs.values.first { $0["number"]?.int == source }!
+      let repo = pr["repository"]?["nameWithOwner"]?.string ?? ""
+      pr["id"] = .string("PR_copy_\(number)")
+      pr["number"] = .number(Double(number))
+      pr["url"] = .string("https://github.com/\(repo)/pull/\(number)")
+      pr["headRefName"] = .string(branch)
+      pr["headRefOid"] = .string(head)
+      prs["PR_copy_\(number)"] = pr
+    }
+  }
+
   /// Gives the PR one review thread for each value, resolved or not, and
   /// `totalCount` as GitHub's count when it differs. Each thread has one
   /// comment by another user.

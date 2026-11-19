@@ -241,3 +241,56 @@ func sampleVerdict(_ author: String, _ state: String, on commit: String? = nil) 
     #expect(PRSummary(pr).line == "#42 Approved, Trunk cancelled")
   }
 }
+
+// MARK: The rollup of a live read
+
+/// `ChecksRollup(contexts:)` reads the live head's `statusCheckRollup` and the base tip's check runs and combined
+/// status. GitHub's GraphQL answers in upper case and its REST API in lower case.
+@Suite struct LiveRollupTests {
+  static func run(_ status: String, _ conclusion: String? = nil) -> JSON {
+    ["status": .string(status), "conclusion": conclusion.map(JSON.string) ?? .null]
+  }
+
+  static func status(_ state: String) -> JSON { ["state": .string(state)] }
+
+  @Test func anEmptyListHasNoState() {
+    #expect(ChecksRollup(contexts: []) == nil)
+  }
+
+  @Test(arguments: ["SUCCESS", "NEUTRAL", "SKIPPED", "success", "neutral", "skipped"])
+  func aCompletedRunThatSucceededPasses(_ conclusion: String) {
+    #expect(ChecksRollup(contexts: [Self.run("COMPLETED", conclusion)]) == .passed)
+  }
+
+  @Test(arguments: [
+    "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure", "timed_out", "",
+  ])
+  func aCompletedRunThatDidNotSucceedFails(_ conclusion: String) {
+    #expect(ChecksRollup(contexts: [Self.run("COMPLETED", conclusion)]) == .failed)
+  }
+
+  @Test(arguments: ["IN_PROGRESS", "QUEUED", "in_progress", "queued"])
+  func anUnfinishedRunRuns(_ status: String) {
+    #expect(ChecksRollup(contexts: [Self.run(status)]) == .running)
+  }
+
+  @Test(arguments: ["error", "failure", "ERROR", "FAILURE", "something-new"])
+  func aStatusThatFailedOrIsUnknownFails(_ state: String) {
+    #expect(ChecksRollup(contexts: [Self.status(state)]) == .failed)
+  }
+
+  @Test(arguments: ["pending", "PENDING", "expected"])
+  func aPendingStatusRuns(_ state: String) {
+    #expect(ChecksRollup(contexts: [Self.status(state)]) == .running)
+  }
+
+  @Test func oneFailureFailsAListThatAlsoRuns() {
+    let contexts = [Self.run("IN_PROGRESS"), Self.run("COMPLETED", "SUCCESS"), Self.status("failure")]
+    #expect(ChecksRollup(contexts: contexts) == .failed)
+  }
+
+  @Test func oneRunningCheckRunsAListThatOtherwisePasses() {
+    let contexts = [Self.run("COMPLETED", "SUCCESS"), Self.status("pending")]
+    #expect(ChecksRollup(contexts: contexts) == .running)
+  }
+}

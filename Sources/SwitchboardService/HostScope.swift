@@ -29,7 +29,7 @@ enum HostScope {
   /// The fields of `WaitRequest`, and the keys that `waitRequest` reads for `clear-wait` and `resolve-wait`.
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
-    "wait", "outcome",
+    "needsYou", "wait", "outcome", "caller",
   ]
 
   /// The ops that a host may send, with the keys that each one reads.
@@ -92,7 +92,8 @@ enum HostScope {
     for op in [
       "import", "importable", "accounts", "account-use", "account-move", "usage", "mcp", "hosts", "host-connect",
       "slash-commands", "removed-ls", "manager-pin", "manager-model", "item-context", "manager-mcp-request", "operator",
-      "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
+      "operator-report", "operator-reports", "wait-approve", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
+      "highlight",
       "schedule",
       "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
       "rm-cancel", "rm-keep", "rm-retry",

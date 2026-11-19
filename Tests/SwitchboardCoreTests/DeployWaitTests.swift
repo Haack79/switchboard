@@ -50,6 +50,19 @@ import Testing
     #expect(deployed.changedAt == nil)
   }
 
+  /// Only a deploy that reached the named environments meets the wait. A close, a merge that sbd can't see
+  /// deploy, and a stuck service deploy do not.
+  @Test func aDeploySettlementIsMetOnlyWhenTheDeployReachedTheEnvironments() throws {
+    #expect(wait().deploySettlement(of: pr(), comments: [try comment("comment-deployed.md")])?.met == true)
+    #expect(wait().deploySettlement(of: pr(.closed), comments: [])?.met == false)
+    #expect(wait().deploySettlement(of: pr(repo: "PostHog/charts"), comments: [])?.met == false)
+    #expect(wait().deploySettlement(of: pr(repo: "PostHog/other"), comments: [])?.met == false)
+    let w = wait(service: "feature-flags")
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: each(.deployed))?.met == true)
+    #expect(w.serviceDeploySettlement(nil, pr: pr(), environments: [:])?.met == false)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: each(.failed))?.met == false)
+  }
+
   /// A deploy wait is usually set after its PR merged, so an earlier merge
   /// counts. An earlier PR of a reused branch that closed without merging
   /// still doesn't.
@@ -219,7 +232,7 @@ import Testing
   @Test func aServiceWithNoStateFileResolvesTheWait() {
     let w = wait(service: "feature-flag")
 
-    let outcome = w.serviceDeployResolution(nil, pr: pr(), environments: [:])
+    let outcome = w.serviceDeploySettlement(nil, pr: pr(), environments: [:])?.outcome
 
     #expect(outcome == "PostHog/charts has no state/feature-flag.yaml")
   }
@@ -229,7 +242,7 @@ import Testing
       ServiceDeployState.parse(service: "duckgres", yaml: try deployFixture("state-duckgres.yaml")))
     let w = wait(service: "duckgres")
 
-    let outcome = w.serviceDeployResolution(duckgres, pr: pr(), environments: [:])
+    let outcome = w.serviceDeploySettlement(duckgres, pr: pr(), environments: [:])?.outcome
 
     #expect(outcome == "duckgres deploys from PostHog/duckgres, not PostHog/posthog")
   }
@@ -239,8 +252,8 @@ import Testing
   @Test func anotherRepositoryWinsOverDeployedEnvironments() {
     let w = wait(service: "feature-flags")
 
-    let outcome = w.serviceDeployResolution(
-      service(repository: "PostHog/posthog-flags"), pr: pr(), environments: each(.deployed))
+    let outcome = w.serviceDeploySettlement(
+      service(repository: "PostHog/posthog-flags"), pr: pr(), environments: each(.deployed))?.outcome
 
     #expect(outcome == "feature-flags deploys from PostHog/posthog-flags, not PostHog/posthog")
   }
@@ -249,8 +262,8 @@ import Testing
   func theServiceRepositoryComparesWithoutCase(repository: String) {
     let w = wait(service: "feature-flags")
 
-    let outcome = w.serviceDeployResolution(
-      service(repository: repository), pr: pr(repo: "PostHog/posthog"), environments: each(.deployed))
+    let outcome = w.serviceDeploySettlement(
+      service(repository: repository), pr: pr(repo: "PostHog/posthog"), environments: each(.deployed))?.outcome
 
     #expect(outcome == "it deployed to prod-us and prod-eu")
   }
@@ -264,7 +277,7 @@ import Testing
   func everyNamedEnvironmentDeployedResolvesTheWait(environment: String, outcome: String) {
     let w = wait(environment, service: "feature-flags")
 
-    #expect(w.serviceDeployResolution(service(), pr: pr(), environments: each(.deployed)) == outcome)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: each(.deployed))?.outcome == outcome)
   }
 
   @Test(arguments: [DeployState.pending, .deploying, .unknown])
@@ -275,7 +288,7 @@ import Testing
       .prodEU: EnvironmentDeploy(state: state),
     ]
 
-    #expect(w.serviceDeployResolution(service(), pr: pr(), environments: environments) == nil)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: environments)?.outcome == nil)
   }
 
   @Test(arguments: [DeployEnvironment.prodUS, .prodEU])
@@ -284,13 +297,13 @@ import Testing
     var environments = each(.deployed)
     environments[missing] = nil
 
-    #expect(w.serviceDeployResolution(service(), pr: pr(), environments: environments) == nil)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: environments)?.outcome == nil)
   }
 
   @Test func noDecidedEnvironmentKeepsTheWaitOpen() {
     let w = wait("prod", service: "feature-flags")
 
-    #expect(w.serviceDeployResolution(service(), pr: pr(), environments: [:]) == nil)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: [:])?.outcome == nil)
   }
 
   @Test func aFailedEnvironmentResolvesWithItsRun() {
@@ -300,7 +313,7 @@ import Testing
       .prodEU: EnvironmentDeploy(state: .failed, run: DeployWaitTests.run),
     ]
 
-    let outcome = w.serviceDeployResolution(service(), pr: pr(), environments: environments)
+    let outcome = w.serviceDeploySettlement(service(), pr: pr(), environments: environments)?.outcome
 
     #expect(outcome == "the deploy to prod-eu failed: \(DeployWaitTests.run)")
   }
@@ -308,8 +321,8 @@ import Testing
   @Test func aFailedEnvironmentWithNoKnownRunResolvesWithoutOne() {
     let w = wait("prod-us", service: "feature-flags")
 
-    let outcome = w.serviceDeployResolution(
-      service(), pr: pr(), environments: [.prodUS: EnvironmentDeploy(state: .failed)])
+    let outcome = w.serviceDeploySettlement(
+      service(), pr: pr(), environments: [.prodUS: EnvironmentDeploy(state: .failed)])?.outcome
 
     #expect(outcome == "the deploy to prod-us failed")
   }
@@ -321,7 +334,7 @@ import Testing
       .prodUS: EnvironmentDeploy(state: other), .prodEU: EnvironmentDeploy(state: .failed, run: DeployWaitTests.run),
     ]
 
-    let outcome = w.serviceDeployResolution(service(), pr: pr(), environments: environments)
+    let outcome = w.serviceDeploySettlement(service(), pr: pr(), environments: environments)?.outcome
 
     #expect(outcome == "the deploy to prod-eu failed: \(DeployWaitTests.run)")
   }
@@ -330,7 +343,7 @@ import Testing
   func anOffBranchMergeResolvesWithTheBaseBranch(base: String) {
     let w = wait("prod", service: "feature-flags")
 
-    let outcome = w.serviceDeployResolution(service(), pr: pr(base: base), environments: each(.offBranch))
+    let outcome = w.serviceDeploySettlement(service(), pr: pr(base: base), environments: each(.offBranch))?.outcome
 
     #expect(outcome == "it merged into \(base), which feature-flags doesn't deploy from")
   }
@@ -341,7 +354,7 @@ import Testing
       .prodUS: EnvironmentDeploy(state: .deploying), .prodEU: EnvironmentDeploy(state: .offBranch),
     ]
 
-    let outcome = w.serviceDeployResolution(service(), pr: pr(), environments: environments)
+    let outcome = w.serviceDeploySettlement(service(), pr: pr(), environments: environments)?.outcome
 
     #expect(outcome == "it merged into master, which feature-flags doesn't deploy from")
   }
@@ -359,9 +372,10 @@ import Testing
     ]
 
     #expect(
-      prod.serviceDeployResolution(service(), pr: pr(), environments: failedDev) == "it deployed to prod-us and prod-eu"
+      prod.serviceDeploySettlement(service(), pr: pr(), environments: failedDev)?.outcome
+        == "it deployed to prod-us and prod-eu"
     )
-    #expect(dev.serviceDeployResolution(service(), pr: pr(), environments: failedProd) == nil)
+    #expect(dev.serviceDeploySettlement(service(), pr: pr(), environments: failedProd)?.outcome == nil)
   }
 
   // MARK: How often the PR polls
@@ -447,7 +461,8 @@ import Testing
     let envs = try environments(
       flags, app: "feature-flags", jobs: "jobs-feature-flags-deployed.json", ancestry: .contains)
 
-    #expect(w.serviceDeployResolution(flags, pr: pr(), environments: envs) == "it deployed to prod-us and prod-eu")
+    #expect(
+      w.serviceDeploySettlement(flags, pr: pr(), environments: envs)?.outcome == "it deployed to prod-us and prod-eu")
   }
 
   @Test func aRecordedRunWithProdUSSyncingKeepsAProdWaitOpen() throws {
@@ -455,9 +470,10 @@ import Testing
       ServiceDeployState.parse(service: "posthog", yaml: try deployFixture("state-posthog.yaml")))
     let envs = try environments(posthog, app: "posthog", jobs: "jobs-posthog-prod-us-running.json", ancestry: .contains)
 
-    #expect(wait("prod", service: "posthog").serviceDeployResolution(posthog, pr: pr(), environments: envs) == nil)
     #expect(
-      wait("prod-eu", service: "posthog").serviceDeployResolution(posthog, pr: pr(), environments: envs)
+      wait("prod", service: "posthog").serviceDeploySettlement(posthog, pr: pr(), environments: envs)?.outcome == nil)
+    #expect(
+      wait("prod-eu", service: "posthog").serviceDeploySettlement(posthog, pr: pr(), environments: envs)?.outcome
         == "it deployed to prod-eu")
   }
 
@@ -469,7 +485,7 @@ import Testing
       agent, app: "temporal-worker-tasks-agent", jobs: "jobs-prod-eu-sync-failed.json", ancestry: .contains)
 
     #expect(
-      w.serviceDeployResolution(agent, pr: pr(), environments: envs)
+      w.serviceDeploySettlement(agent, pr: pr(), environments: envs)?.outcome
         == "the deploy to prod-eu failed: \(DeployWaitTests.run)")
   }
 
@@ -482,7 +498,7 @@ import Testing
     let envs = try environments(duckgres, app: "duckgres", jobs: "jobs-cancelled.json", ancestry: .contains)
 
     #expect(
-      w.serviceDeployResolution(duckgres, pr: pr(repo: "PostHog/duckgres"), environments: envs)
+      w.serviceDeploySettlement(duckgres, pr: pr(repo: "PostHog/duckgres"), environments: envs)?.outcome
         == "it deployed to prod-us and prod-eu")
   }
 

@@ -382,7 +382,7 @@ private let otherDestination = "haacked@other.local"
     "manager-model", "manager-skills", "chat",
     "chat-log", "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
     "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze", "highlight",
-    "parent", "schedule",
+    "parent", "schedule", "wait-approve",
     "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
     "rm-cancel", "rm-keep", "rm-retry",
     "removal-notices", "removal-notice-dismiss", "import", "importable", "accounts",
@@ -451,6 +451,8 @@ private let otherDestination = "haacked@other.local"
     add("note", ["session": l, "text": text], scope)
     add("wait", ["session": s, "on": text], "on")
     add("wait", ["session": s, "kind": "session", "target": l, "state": "idle"], scope)
+    add(
+      "wait", ["session": s, "kind": "date", "until": "2h", "note": text, "then": "report"], "can't come from a host")
     add("issue", ["session": l, "issue": "1"], scope)
     taken("ls")
     add("ls", ["host": "other"], "host")

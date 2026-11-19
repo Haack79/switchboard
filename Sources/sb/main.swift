@@ -108,6 +108,10 @@ let usage = """
                                   --needs-you puts it in the Inbox until you
                                   answer the operator or acknowledge it. S is
                                   the session that it is about
+    operator approve <wait>       approve the merge that a "judgment needed"
+                                  message asks about, after reading the
+                                  session's last reply in it. Only the operator
+                                  runs it, in its own pane
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
@@ -161,14 +165,25 @@ let usage = """
     done <session>, undone <session>
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
-         [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
-         [--here]
+         [--state S] [--until WHEN] [--since WHEN] [--note N]
+         [--then resume|notify|merge|rm-worktree|rm|report] [--needs-you] [--here]
                                   wait on a PR, a deploy, another session, or a
                                   time. Inside a session, the session is optional.
                                   A wait that Claude sets in a Manager
                                   conversation and that resumes goes to the
                                   operator, unless it reads the conversation's
-                                  own PR. --here keeps it on the conversation
+                                  own PR. --here keeps it on the conversation.
+                                  --then merge, rm-worktree, rm, or report has
+                                  sbd run the action with its own checks when
+                                  the wait is met: merge lands the target's PR
+                                  (state ready_to_merge, in a repo that
+                                  operator.mergeRepos lists) once the operator
+                                  approves, rm-worktree removes the target and
+                                  its worktree after its PR merged (state done,
+                                  or --kind merge), rm removes the target (state
+                                  done), and report records --note as a report.
+                                  A wait that ends unmet runs nothing and
+                                  resumes the wait's holder
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -503,9 +518,15 @@ let usage = """
   --state (default done). date needs --until (2h, 2026-10-26, or
   2026-10-26T09:00). manual takes an optional --until that returns it to Needs
   you, a day later without one. --then notify moves the session to Needs you
-  instead of resuming it. review, bot-review, and queue take --since WHEN, a
-  past time after which a review or a change in Trunk's queue counts, instead
-  of the time the wait was set. A wait still open past its recheck time
+  instead of resuming it. --then merge (a session wait for ready_to_merge),
+  rm-worktree (a session wait for done, or a merge wait on owner/name#N), rm
+  (a session wait for done), and report (any kind but manual, with --note, and
+  --needs-you for an Inbox item) arm an action that sbd runs when the wait is
+  met. Only a Manager conversation, the Operator, or you in a terminal can arm
+  one, and merge needs the PR's repository in operator.mergeRepos in
+  config.json. review, bot-review, and queue take --since WHEN, a past time
+  after which a review or a change in Trunk's queue counts, instead of the
+  time the wait was set. A wait still open past its recheck time
   (recheckSeconds in config.json) moves the session to Needs you.
   """
 
