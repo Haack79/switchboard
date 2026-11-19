@@ -244,6 +244,9 @@ import Testing
     let refused = try refusedEnd(sbd, c, ["--drop", named])
 
     #expect(refused.stderr.contains(other), Comment(rawValue: refused.stderr))
+    // The command to run next names every own id, including the one that the user already named.
+    #expect(refused.stderr.contains("--drop \(named)"), Comment(rawValue: refused.stderr))
+    #expect(refused.stderr.contains("--drop \(other)"), Comment(rawValue: refused.stderr))
     try expectUnchanged(sbd, before)
   }
 
@@ -873,6 +876,23 @@ import Testing
     #expect(strings(answer["dropped"]) == [wait], "\(answer.text)")
     let fresh = try started(answer)
     #expect(try listed(sbd) == [fresh])
+  }
+
+  /// The app reads `drop` from sbd's summary, so the summary carries every id that sbd's guard refuses on.
+  @Test func theAppsDropFromSbdsSummaryEndsAConversationWithEveryKindOfOwnItem() throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd)
+    _ = try typedWait(sbd, c)
+    _ = try scheduleId(sbd, c)
+    _ = try paused(sbd, c, ["--until", "2h"])
+    let drop = try sbd.get(c.id).ownItems.map(\.id)
+    try #require(drop.count == 3, "\(drop)")
+
+    let answer = try sbd.client.call(
+      "manager-end", ["session": .string(c.id), "drop": .array(drop.map(JSON.string)), "new": true])
+
+    #expect(Set(strings(answer["dropped"])) == Set(drop), "\(answer.text)")
+    #expect(try !listed(sbd).contains(c.id))
   }
 
   // MARK: sb rm on a conversation (Decision 8)

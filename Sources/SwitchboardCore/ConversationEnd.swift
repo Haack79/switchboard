@@ -26,17 +26,18 @@ public struct EndHint: Codable, Equatable, Sendable {
 
   /// The hint that the conversation shows, or nil. `spawned` maps each session that the conversation spawned to its
   /// state, or to nil once sbd no longer holds it. The done hint needs at least one spawned session, each of them
-  /// Done or gone, and no waits or schedules of the conversation's own. The context hint needs `contextTokens` at
-  /// or above `threshold`, which 0 turns off. When both hold, the done hint shows. No hint shows while a turn runs,
-  /// while a message is on its way to the conversation, or while it needs the user. The hint that holds shows only
+  /// Done or gone, and no waits, pause condition, or schedules of the conversation's own. The context hint needs
+  /// `contextTokens` at or above `threshold`, which 0 turns off. When both hold, the done hint shows. No hint shows
+  /// while a turn or a background job runs, while a message is on its way to the conversation, or while it needs the
+  /// user. The hint that holds shows only
   /// when its key differs from `dismissed`.
   public static func evaluate(
-    spawned: [String: AttentionState?], ownWaits: Int, ownSchedules: Int, turnRunning: Bool, messageOnItsWay: Bool,
-    needsMe: Bool, contextTokens: Int?, threshold: Int, dismissed: String?
+    spawned: [String: AttentionState?], hasOwnItems: Bool, inTurnOrJob: Bool, messageOnItsWay: Bool, needsMe: Bool,
+    contextTokens: Int?, threshold: Int, dismissed: String?
   ) -> EndHint? {
-    guard !turnRunning, !messageOnItsWay, !needsMe else { return nil }
+    guard !inTurnOrJob, !messageOnItsWay, !needsMe else { return nil }
     let hint: EndHint
-    if !spawned.isEmpty, spawned.values.allSatisfy({ $0 == nil || $0 == .done }), ownWaits == 0, ownSchedules == 0 {
+    if !spawned.isEmpty, spawned.values.allSatisfy({ $0 == nil || $0 == .done }), !hasOwnItems {
       hint = EndHint(
         reason: .done, key: "done:\(spawned.count)",
         text: "Every session this conversation started is done. End it to start fresh.")

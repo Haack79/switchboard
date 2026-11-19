@@ -7,18 +7,22 @@ struct EndConversationHint: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
   let hint: EndHint
+  /// The parent shows the confirmation. This row leaves the screen once sbd stops sending the hint.
+  @Binding var ending: EndConversationText?
 
   var body: some View {
     HStack(spacing: 8) {
       Image(systemName: "lightbulb")
+        .accessibilityHidden(true)
       Text(hint.text)
         .lineLimit(2)
         .frame(maxWidth: .infinity, alignment: .leading)
-      EndConversationButton(session: session)
+      EndConversationButton(session: session, ending: $ending)
         .labelStyle(.titleOnly)
         .fixedSize()
       Button("Dismiss", systemImage: "xmark") { model.dismissEndHint(session.id) }
         .labelStyle(.iconOnly)
+        .accessibilityLabel("Dismiss the end suggestion")
         .help("Hide this suggestion until another spawned session is done or the context grows further")
     }
   }

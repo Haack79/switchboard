@@ -409,12 +409,26 @@ private func refusal(_ body: () throws -> Void) -> String? {
     }
   }
 
+  /// A built-in command's paste stops counting as a message on its way once it lands. A skill or a custom command
+  /// sends a prompt, so its UserPromptSubmit clears the paste instead.
+  @Test(arguments: [
+    ("/compact", true), ("/compact keep the plan", true), ("/model\nopus", true), ("/code-review", false),
+    ("/compactly", false), ("compact", false), ("the /compact command", false),
+  ])
+  func aBuiltInCommandIsMatchedByItsName(_ text: String, _ expected: Bool) {
+    #expect(Service.isBuiltInCommand(text) == expected)
+  }
+
   // MARK: A launch prompt across a restart of sbd (Risk 1)
 
   /// What the log holds after a send launched the stopped conversation with its message as the prompt.
   enum AfterLaunch: String, CaseIterable, Sendable, CustomTestStringConvertible {
     case nothing
     case sessionStart
+    /// A launch with no prompt, as `sb open` and `sb manager end --new` make.
+    case launchWithoutPrompt
+    /// The prompt launch's claude exited before it submitted, and a launch with no prompt started claude again.
+    case relaunchedWithoutPrompt
     /// Claude submitted the prompt, and its turn ended.
     case promptSubmitted
     /// Claude exited at the trust dialog, so `trust_closed` moved the prompt to the queue.
@@ -428,6 +442,14 @@ private func refusal(_ body: () throws -> Void) -> String? {
       switch self {
       case .nothing: return [launch]
       case .sessionStart: return [launch, start]
+      case .launchWithoutPrompt:
+        return [Event(session: conversation, t: created, kind: "resumed", data: ["prompt": .null]), start]
+      case .relaunchedWithoutPrompt:
+        return [
+          launch, start,
+          Event(session: conversation, t: created + 5_000, kind: "resumed", data: ["prompt": .null]),
+          Event(session: conversation, t: created + 6_000, kind: "SessionStart"),
+        ]
       case .promptSubmitted:
         return [
           launch, start,
@@ -447,8 +469,8 @@ private func refusal(_ body: () throws -> Void) -> String? {
   }
 
   /// A restarted sbd reads the conversation from the log. A launch prompt that claude has not submitted is still on
-  /// its way, so both check points refuse the removal. A submitted prompt lets it through. A prompt that
-  /// `trust_closed` queued counts once, by its text.
+  /// its way, so both check points refuse the removal. A submitted prompt, or a later launch with no prompt, lets it
+  /// through. A prompt that `trust_closed` queued counts once, by its text.
   @Test(arguments: AfterLaunch.allCases)
   func aRestartKeepsALaunchPromptThatClaudeHasNotSubmittedOnItsWay(_ after: AfterLaunch) throws {
     try withService { service, home in
@@ -472,7 +494,7 @@ private func refusal(_ body: () throws -> Void) -> String? {
         #expect(text.contains("sb open \(conversation)"), Comment(rawValue: text))
         #expect(atForget == atEntry)
         #expect(restarted.queue.sync { restarted.entries[conversation] } != nil)
-      case .promptSubmitted:
+      case .promptSubmitted, .launchWithoutPrompt, .relaunchedWithoutPrompt:
         #expect(atEntry == nil)
         #expect(atForget == nil)
         #expect(restarted.queue.sync { restarted.entries[conversation] } == nil)
@@ -546,8 +568,8 @@ private func refusal(_ body: () throws -> Void) -> String? {
     }
   }
 
-  /// The user may run `sb manager end` from a session's shell pane.
-  @Test(arguments: [conversation, work]) func aCallerBelowOnlyAShellPaneGetsPastTheCheck(_ owner: String) throws {
+  /// A session's Claude can type into its own shell pane with `tmux send-keys`, so a shell pane counts too.
+  @Test(arguments: [conversation, work]) func aCallerBelowAShellPaneIsRefused(_ owner: String) throws {
     try withBusyConversation { service in
       setPanes(
         service, of: owner, claude: PaneRow(pid: unrelatedPane, dead: false, clients: 0),
@@ -555,7 +577,41 @@ private func refusal(_ body: () throws -> Void) -> String? {
 
       let error = end(service, caller: me)
 
-      #expect(error?.contains("sb stop") == true, "\(error ?? "nil")")
+      let text = try #require(error)
+      #expect(!text.contains("sb stop"), Comment(rawValue: text))
+      #expect(service.queue.sync { service.entries[conversation] } != nil)
+    }
+  }
+
+  /// A session that runs `tmux new-window` starts a program below sbd's tmux server and outside every pane. The
+  /// server is this process's parent here, and the new pane's pid is not in this process's ancestry.
+  @Test func aCallerBelowTheTmuxServerOutsideEveryPaneIsRefused() throws {
+    try withBusyConversation { service in
+      service.queue.sync {
+        service.mac.snapshot.taken = .max
+        service.mac.snapshot.panes["opened-by-a-session"] = PaneRow(
+          pid: unrelatedPane, dead: false, clients: 0, server: Int(getppid()))
+      }
+
+      let error = end(service, caller: me)
+
+      let text = try #require(error)
+      #expect(text.contains("tmux server"), Comment(rawValue: text))
+      #expect(service.queue.sync { service.entries[conversation] } != nil)
+    }
+  }
+
+  @Test func aCallerInAShellPaneBelowTheTmuxServerIsRefused() throws {
+    try withBusyConversation { service in
+      setPanes(
+        service, of: work, claude: PaneRow(pid: unrelatedPane, dead: false, clients: 0, server: Int(getppid())),
+        shell: PaneRow(pid: myPid, dead: false, clients: 0, server: Int(getppid())))
+
+      let error = end(service, caller: me)
+
+      let text = try #require(error)
+      #expect(!text.contains("sb stop"), Comment(rawValue: text))
+      #expect(service.queue.sync { service.entries[conversation] } != nil)
     }
   }
 

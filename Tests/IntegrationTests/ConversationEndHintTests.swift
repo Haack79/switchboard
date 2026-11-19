@@ -139,6 +139,17 @@ import Testing
     try expectNoHint(sbd, c.id)
   }
 
+  /// End refuses while a background job runs, so the hint hides then too.
+  @Test func aBackgroundJobHidesTheDoneHint() throws {
+    let sbd = try Instance()
+    let (c, _) = try doneConversation(sbd)
+
+    try sbd.sb("send", c.id, "background 100 held")
+    try sbd.waitFor(c.id, "the turn that starts the job") { $0.lastReply == "Started a job of 100 s." }
+
+    try expectNoHint(sbd, c.id)
+  }
+
   /// `sb parent --clear` takes the child out of the conversation's spawned sessions.
   @Test func unlinkingTheOnlyUnfinishedChildBringsTheDoneHintBack() throws {
     let sbd = try Instance()
@@ -369,6 +380,8 @@ import Testing
 
     try chatRead.restart(sbd, snapshot: snapshot, checking: [c.id])
 
+    // The context survived the restart, so the dismissal is what hides the hint.
+    #expect(try context.listed(sbd, c.id).contextTokens == 250_000)
     try expectNoHint(sbd, c.id)
   }
 

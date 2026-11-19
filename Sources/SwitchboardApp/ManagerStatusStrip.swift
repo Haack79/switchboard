@@ -7,6 +7,7 @@ import SwitchboardCore
 struct ManagerStatusStrip: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
+  @State private var ending: EndConversationText?
 
   var body: some View {
     let status = model.managerStatus(for: session)
@@ -30,8 +31,9 @@ struct ManagerStatusStrip: View {
         }
         Spacer()
       }
-      if let hint = session.endHint { EndConversationHint(session: session, hint: hint) }
+      if let hint = session.endHint { EndConversationHint(session: session, hint: hint, ending: $ending) }
     }
+    .endConversationDialog($ending, session: session)
     .buttonStyle(.borderless)
     .font(.caption)
     .foregroundStyle(.secondary)

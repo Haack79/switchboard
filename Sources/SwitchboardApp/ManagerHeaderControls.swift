@@ -5,44 +5,62 @@ import SwitchboardCore
 struct ManagerHeaderControls: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
+  @State private var ending: EndConversationText?
 
   var body: some View {
     Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
       .help("Start a session that this conversation follows")
       .fixedSize()
     // The name shrinks before the button drops to its icon.
-    EndConversationButton(session: session)
+    EndConversationButton(session: session, ending: $ending)
       .layoutPriority(1)
+      .endConversationDialog($ending, session: session)
   }
 }
 
-/// End Conversation…, which asks first and then ends the conversation and opens a new one in its place.
+/// End Conversation…, which sets the confirmation that `endConversationDialog` shows.
 struct EndConversationButton: View {
-  @EnvironmentObject var model: BoardModel
   let session: SessionSummary
   /// The confirmation as it was when the user pressed the button. The end drops only the ids that it lists, so a
   /// wait that lands while the dialog is open makes sbd refuse the end instead of dropping the wait unseen.
-  @State private var ending: EndConversationText?
+  @Binding var ending: EndConversationText?
 
   private static let title = "End Conversation…"
   private static let icon = "stop.circle"
-
-  private var isConfirming: Binding<Bool> {
-    Binding(get: { ending != nil }, set: { if !$0 { ending = nil } })
-  }
 
   var body: some View {
     Button {
       ending = EndConversationText(session)
     } label: {
-      // A header too narrow for the title, as at CI's 1024 pt window, shows only the icon.
+      // A header too narrow for the title shows only the icon.
       ViewThatFits(in: .horizontal) {
         Label(Self.title, systemImage: Self.icon)
         Label(Self.title, systemImage: Self.icon).labelStyle(.iconOnly)
       }
     }
     .help("Remove this conversation and open a new one in its place")
-    .confirmationDialog(
+  }
+}
+
+extension View {
+  /// The confirmation that ends the conversation and opens a new one in its place. SwiftUI closes a dialog whose
+  /// view leaves the screen. So attach it to a view that stays on screen while the dialog is open.
+  func endConversationDialog(_ ending: Binding<EndConversationText?>, session: SessionSummary) -> some View {
+    modifier(EndConversationDialog(ending: ending, session: session))
+  }
+}
+
+private struct EndConversationDialog: ViewModifier {
+  @EnvironmentObject var model: BoardModel
+  @Binding var ending: EndConversationText?
+  let session: SessionSummary
+
+  private var isConfirming: Binding<Bool> {
+    Binding(get: { ending != nil }, set: { if !$0 { ending = nil } })
+  }
+
+  func body(content: Content) -> some View {
+    content.confirmationDialog(
       ending?.title ?? "", isPresented: isConfirming, titleVisibility: .visible, presenting: ending
     ) { text in
       Button(EndConversationText.button, role: .destructive) { model.endConversation(session, drop: text.drop) }

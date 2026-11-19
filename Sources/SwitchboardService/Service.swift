@@ -32,6 +32,7 @@ public final class Service {
     /// When sbd last pasted a message or launched claude with a prompt. Until
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
+    /// A built-in command such as `/compact` sends no UserPromptSubmit. Its paste clears this once it lands.
     /// `load` sets it for a launch prompt that the log shows claude has not submitted, at the launch's time or its
     /// SessionStart's time. The replay keeps a paste's message in `pending`, or `load` records whether it reached
     /// claude, so `load` sets nothing for a paste.
@@ -1725,7 +1726,8 @@ public final class Service {
     let text = message.text
     let name = paneName(id, .claude)
     let parts = Attachments.split(text, folder: home.attachmentsFolder(id))
-    entries[id]?.inFlight = nowMs()
+    let pastedAt = nowMs()
+    entries[id]?.inFlight = pastedAt
     let site = try? site(of: id)
     let terminals = try? site?.terminals()
     pasteQueue.async { [self] in
@@ -1745,7 +1747,11 @@ public final class Service {
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
         waitAtGate("hold-delivered")
-        queue.async { self.record(id, "delivered", ["text": .string(text)]) }
+        queue.async {
+          self.record(id, "delivered", ["text": .string(text)])
+          // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
+          if Service.isBuiltInCommand(text), self.entries[id]?.inFlight == pastedAt { self.entries[id]?.inFlight = nil }
+        }
       } catch {
         logLine("can't paste into \(id): \(error)")
         queue.async {
@@ -1754,6 +1760,14 @@ public final class Service {
         }
       }
     }
+  }
+
+  /// Whether `text` is one of Claude Code's built-in commands, such as `/compact`, with or without arguments.
+  /// A skill or a custom command does not count, because it sends a prompt.
+  static func isBuiltInCommand(_ text: String) -> Bool {
+    guard text.hasPrefix("/") else { return false }
+    let name = text.dropFirst().prefix { !$0.isWhitespace }
+    return SlashCommand.builtIns.contains { $0.name == name }
   }
 
   /// Puts the message back at the front of the session's queue and tries again after `delay` seconds.

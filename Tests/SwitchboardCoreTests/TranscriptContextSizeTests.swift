@@ -232,6 +232,17 @@ enum ContextParityShape: String, CaseIterable, CustomTestStringConvertible {
     #expect(contextTokens(lines) == 90_000)
   }
 
+  /// A sum that `Int` can't hold exactly gives its line no value, so the read takes the earlier line.
+  @Test(arguments: [1e20, 2.5])
+  func aUsageThatIntCantHoldIsSkipped(_ input: Double) {
+    let lines = [
+      assistant(context(90_000)),
+      assistant(["input_tokens": .number(input), "output_tokens": 5], messageId: "msg_2"),
+    ]
+
+    #expect(contextTokens(lines) == 90_000)
+  }
+
   /// The stub's reply line and the line before a usage arrives carry no usage.
   @Test(arguments: [nil, JSON.null] as [JSON?])
   func anAssistantLineWithoutAUsageIsSkipped(_ missing: JSON?) {

@@ -58,7 +58,7 @@ extension Service {
     out.pinned = s.pinned
     out.contextTokens = facts.contextTokens
     out.endHint = endHint(e, facts)
-    let handed = handedOff(from: s.id)?.waits ?? []
+    let handed = handedOff(from: s.id, quiet: true)?.waits ?? []
     out.handedWaits = handed.isEmpty ? nil : handed
     // Last, because the archive rule reads the rest of the summary.
     if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }

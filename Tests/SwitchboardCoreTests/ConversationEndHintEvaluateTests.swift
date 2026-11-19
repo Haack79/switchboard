@@ -4,23 +4,23 @@ import Testing
 @testable import SwitchboardCore
 
 /// `EndHint.evaluate` decides whether a Manager conversation's header suggests ending it. The done hint shows when
-/// the conversation spawned at least one session, each of them is Done or gone, and the conversation has no waits
-/// or schedules of its own. The context hint shows when the context reached the threshold, which 0 turns off. No
-/// hint shows while a turn runs, while a message is on its way, or while the conversation needs the user. When
-/// both rules hold, the done hint shows. A dismissed key hides the hint until the key changes.
+/// the conversation spawned at least one session, each of them is Done or gone, and the conversation has no waits,
+/// pause condition, or schedules of its own. The context hint shows when the context reached the threshold, which 0
+/// turns off. No hint shows while a turn or a background job runs, while a message is on its way, or while the
+/// conversation needs the user. When both rules hold, the done hint shows. A dismissed key hides the hint until the
+/// key changes.
 @Suite struct ConversationEndHintEvaluateTests {
   static let threshold = 120_000
   static let doneText = "Every session this conversation started is done. End it to start fresh."
 
   func evaluate(
-    spawned: [String: AttentionState?] = [:], ownWaits: Int = 0, ownSchedules: Int = 0, turnRunning: Bool = false,
+    spawned: [String: AttentionState?] = [:], hasOwnItems: Bool = false, inTurnOrJob: Bool = false,
     messageOnItsWay: Bool = false, needsMe: Bool = false, contextTokens: Int? = nil, threshold: Int = threshold,
     dismissed: String? = nil
   ) -> EndHint? {
     EndHint.evaluate(
-      spawned: spawned, ownWaits: ownWaits, ownSchedules: ownSchedules, turnRunning: turnRunning,
-      messageOnItsWay: messageOnItsWay, needsMe: needsMe, contextTokens: contextTokens, threshold: threshold,
-      dismissed: dismissed)
+      spawned: spawned, hasOwnItems: hasOwnItems, inTurnOrJob: inTurnOrJob, messageOnItsWay: messageOnItsWay,
+      needsMe: needsMe, contextTokens: contextTokens, threshold: threshold, dismissed: dismissed)
   }
 
   /// The hint's `reason` as its JSON carries it, which is what `sb --json` and the app read.
@@ -74,12 +74,9 @@ import Testing
     #expect(evaluate(spawned: ["k1": state]) == nil)
   }
 
-  @Test func anOwnWaitBlocksTheDoneHint() {
-    #expect(evaluate(spawned: ["k1": .done], ownWaits: 1) == nil)
-  }
-
-  @Test func anOwnScheduleBlocksTheDoneHint() {
-    #expect(evaluate(spawned: ["k1": .done], ownSchedules: 1) == nil)
+  /// An own wait, pause condition, or schedule.
+  @Test func anOwnItemBlocksTheDoneHint() {
+    #expect(evaluate(spawned: ["k1": .done], hasOwnItems: true) == nil)
   }
 
   // MARK: The context rule
@@ -126,7 +123,7 @@ import Testing
 
   /// The End flow asks about the conversation's own waits and schedules, so they do not hide the context hint.
   @Test func ownWaitsAndSchedulesLeaveTheContextHint() throws {
-    let hint = evaluate(ownWaits: 2, ownSchedules: 1, contextTokens: 250_000)
+    let hint = evaluate(hasOwnItems: true, contextTokens: 250_000)
 
     #expect(try reason(hint) == "context")
   }
@@ -141,7 +138,7 @@ import Testing
   }
 
   @Test func anOwnWaitWithAFullContextGivesTheContextHint() throws {
-    let hint = evaluate(spawned: ["k1": .done], ownWaits: 1, contextTokens: 250_000)
+    let hint = evaluate(spawned: ["k1": .done], hasOwnItems: true, contextTokens: 250_000)
 
     #expect(try reason(hint) == "context")
   }
@@ -165,8 +162,8 @@ import Testing
   }
 
   @Test(arguments: Eligible.allCases)
-  func aRunningTurnHidesTheHint(_ input: Eligible) {
-    #expect(evaluate(spawned: input.spawned, turnRunning: true, contextTokens: input.contextTokens) == nil)
+  func aRunningTurnOrJobHidesTheHint(_ input: Eligible) {
+    #expect(evaluate(spawned: input.spawned, inTurnOrJob: true, contextTokens: input.contextTokens) == nil)
   }
 
   /// Ending the conversation would refuse while a message is queued for it or claude has not confirmed one.
