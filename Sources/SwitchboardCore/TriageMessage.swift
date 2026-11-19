@@ -13,6 +13,14 @@ public struct TriageDetails: Codable, Equatable, Sendable {
       self.tool = tool
       self.text = text
     }
+
+    /// The part of the call that the app draws as Markdown, from `text`. It is
+    /// computed, so the JSON that `sb` and the Manager read stays the same.
+    /// Only a tool with a Markdown field parses `text`, which can be a large file's contents.
+    public var markdown: String? {
+      guard Card.markdownField(tool) != nil else { return nil }
+      return JSON.parse(text).flatMap { Card.markdown(tool: tool, input: $0) }
+    }
   }
 
   public struct PR: Codable, Equatable, Sendable {

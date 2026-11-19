@@ -288,6 +288,8 @@ public final class Service {
   var liveCap: Int
   /// The `operator` settings that the tick last read, with config.json's modification time then.
   var cachedOperatorSettings: (modified: Date?, settings: OperatorSettings)?
+  /// The model of a Manager conversation without its own. `sb manager model` changes it.
+  var managerModel: String
   /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
@@ -341,6 +343,7 @@ public final class Service {
     self.hostCLIRunner = HostCLIRunner(program: sbPath)
     self.keeper = SnapshotKeeper(path: home.database, every: config.snapshotEvery)
     self.liveCap = config.liveCap
+    self.managerModel = config.manager.model
     self.issueSettings = config.issues
     let links = Service.makeHostLinks(config: config, home: home)
     self.hostLinks = links
@@ -775,6 +778,8 @@ public final class Service {
       return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
+    case "manager-model":
+      return try managerModelRequest(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
@@ -1301,7 +1306,7 @@ public final class Service {
     let id = newSessionID()
     var session = Session(
       id: id, name: args.name ?? args.branch ?? (folder.cwd as NSString).lastPathComponent, cwd: folder.cwd,
-      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model ?? config.model,
+      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model,
       created: nowMs())
     session.repo = folder.repo
     session.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1314,6 +1319,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
+    if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
@@ -1437,7 +1444,9 @@ public final class Service {
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
-    if let model = session.model { args += ["--model", model] }
+    if let model = Manager.launchModel(for: session.kind, stored: session.model, managerModel: managerModel) {
+      args += ["--model", model]
+    }
     if local { args += config.claudeArgs }
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)

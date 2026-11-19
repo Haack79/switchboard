@@ -92,7 +92,7 @@ enum HostScope {
     }
     for op in [
       "import", "importable", "accounts", "account-use", "account-move", "usage", "mcp", "hosts", "host-connect",
-      "slash-commands", "removed-ls", "manager-pin", "item-context", "manager-mcp-request", "operator",
+      "slash-commands", "removed-ls", "manager-pin", "manager-model", "item-context", "manager-mcp-request", "operator",
       "operator-report", "operator-reports", "wait-approve", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
       "highlight",
       "schedule",
