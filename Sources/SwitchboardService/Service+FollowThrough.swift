@@ -108,7 +108,108 @@ extension Service {
     } catch {
       outcome = .judgment(question: "sbd could not \(action.kind.skipped): \(error)")
     }
+    if case .judgment(let question, let approval?, let reply?) = outcome {
+      return gateReply(holder, waitId, question: question, approval: approval, reply: reply)
+    }
     queue.sync { finish(holder, waitId, outcome) }
+  }
+
+  /// Sends a question about the subject's last reply to the reply gate judge before the holder.
+  ///
+  /// `merge` starts the action again with the approval, so `takeForMerge` checks the head and the reply again. `ask`
+  /// records a needs-you report with the judge's question and parks the action until the subject's state changes.
+  /// Anything else asks the holder. The judge runs once per head and reply digest: a later question about the pair
+  /// that the judge asked about parks again, and one about a pair that it was unsure of or failed on asks the holder.
+  /// A reply longer than `OperatorJudge.maxReply` skips the judge. It runs on `followThroughQueue`.
+  private func gateReply(
+    _ holder: String, _ waitId: String, question: String, approval: MergeGuard.Approval, reply: String
+  ) {
+    let toHolder = ActionOutcome.judgment(question: question, approval: approval, reply: reply)
+    let call: (input: String, subject: String, since: Int64?)? = queue.sync {
+      guard let wait = storedWait(holder, waitId), let status = wait.actionStatus, status.kind == .running,
+        let subject = wait.actionSubject?.id, let e = entries[subject], let pr = e.facts.pr
+      else {
+        finish(holder, waitId, toHolder)
+        return nil
+      }
+      // A reply after the run's read brings a state that a park would store, so the park would never retry.
+      guard MergeGuard.replyDigest(e.facts.lastReply) == approval.replyDigest else {
+        do { try startAction(holder, wait) } catch { finish(holder, waitId, toHolder) }
+        return nil
+      }
+      if status.judged == approval {
+        if status.subjectSince == nil {
+          finish(holder, waitId, toHolder)
+        } else {
+          parkAsk(holder, waitId, status, approval, since: subjectSince(of: wait))
+        }
+        return nil
+      }
+      guard reply.count <= OperatorJudge.maxReply, MergeGuard.replyDigest(reply) == approval.replyDigest else {
+        finish(holder, waitId, toHolder)
+        return nil
+      }
+      let input = OperatorJudge.ReplyGate.input(
+        repo: pr.repo, number: pr.number, title: pr.title, session: e.session.name, reply: reply)
+      return (input, subject, subjectSince(of: wait))
+    }
+    guard let call else { return }
+    let result = judge(
+      .replyGate, session: call.subject, wait: waitId, head: approval.head, input: call.input,
+      arguments: OperatorJudge.ReplyGate.arguments(model:), parse: OperatorJudge.ReplyGate.parse,
+      answer: \.answer.rawValue)
+    queue.sync {
+      guard let result else { return finish(holder, waitId, toHolder) }
+      guard var wait = storedWait(holder, waitId), var status = wait.actionStatus, status.kind == .running else {
+        logLine("wait \(waitId) of \(holder) went while the judge read its reply")
+        return
+      }
+      status.judged = approval
+      wait.actionStatus = status
+      do {
+        switch result {
+        case .success(let answer) where answer.answer == .merge:
+          try startAction(holder, wait, approval: approval)
+        case .success(let answer) where answer.answer == .ask:
+          let about = entries[call.subject] == nil ? nil : call.subject
+          try recordReport(answer.question, needsYou: true, about: about, on: try ensureOperator(), wait: waitId)
+          status.reason = answer.question
+          parkAsk(holder, waitId, status, approval, since: call.since)
+        case .success(let answer):
+          try setActionStatus(holder, waitId, status)
+          let because = answer.reason.isEmpty ? "" : " sbd's reply judge was unsure: " + Wait.sentence(answer.reason)
+          finish(
+            holder, waitId, .judgment(question: Wait.sentence(question) + because, approval: approval, reply: reply))
+        case .failure:
+          try setActionStatus(holder, waitId, status)
+          finish(holder, waitId, toHolder)
+        }
+      } catch {
+        logLine("can't record the judge's answer for wait \(waitId) of \(holder): \(error)")
+        finish(holder, waitId, toHolder)
+      }
+    }
+  }
+
+  /// Parks the action after the judge's `ask` for `approval`, with no message to the holder. `since` is the
+  /// subject's state when the judge read the reply, so the next change of state runs the checks again. It runs on
+  /// the state queue.
+  private func parkAsk(
+    _ holder: String, _ waitId: String, _ status: ActionStatus, _ approval: MergeGuard.Approval, since: Int64?
+  ) {
+    var status = status
+    status.kind = .awaitingJudgment
+    status.since = nowMs()
+    status.retryAt = nil
+    status.asked = approval
+    status.judged = approval
+    status.subjectSince = since
+    do {
+      try setActionStatus(holder, waitId, status)
+    } catch {
+      logLine("can't park wait \(waitId) of \(holder) after the judge asked: \(error)")
+      holdAfterFailure(holder, waitId, "sbd could not record the judge's question")
+    }
   }
 
   /// Records how the action ended.
@@ -183,6 +284,7 @@ extension Service {
         status.reason = question
         status.retryAt = nil
         status.asked = approval
+        status.subjectSince = nil
         try setActionStatus(holder, waitId, status)
         do {
           let session = entries[holder]!.session
@@ -203,11 +305,15 @@ extension Service {
 
   /// Holds the action of a wait that `finish` could not move on, so the tick or the poller checks it again and the
   /// wait never stays running or asks nobody. It does nothing when the wait is gone.
+  ///
+  /// It forgets the pair that the judge answered. Otherwise a later hold would store the subject's state, and the
+  /// next question about that pair would park as if the judge's `ask` had reached the user.
   private func holdAfterFailure(_ holder: String, _ waitId: String, _ reason: String) {
     guard var status = storedWait(holder, waitId)?.actionStatus, status.kind != .held else { return }
     let now = nowMs()
     hold(&status, reason, now: now)
     status.since = now
+    status.judged = nil
     try? setActionStatus(holder, waitId, status)
   }
 

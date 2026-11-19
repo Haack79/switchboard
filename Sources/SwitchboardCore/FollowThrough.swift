@@ -76,7 +76,8 @@ public struct ActionStatus: Codable, Equatable, Sendable {
     case running
     /// sbd checks again at `retryAt`, or sooner when the subject's state changes.
     case held
-    /// The holder got `reason` as a question. Only an approval, a clear, or an unmet outcome moves it on.
+    /// The holder got `reason` as a question, or the reply gate judge asked the user. Only an approval, a clear, an
+    /// unmet outcome, or, after the judge asked, a change of the subject's state moves it on.
     case awaitingJudgment = "awaiting-judgment"
   }
 
@@ -93,17 +94,26 @@ public struct ActionStatus: Codable, Equatable, Sendable {
   public var approval: MergeGuard.Approval?
   /// The hold message that sbd last sent the subject, keyed by what it was about, such as the head and the base tip.
   public var messageKey: String?
+  /// The PR head and the reply digest that the reply gate judge last answered. sbd calls the judge once per pair.
+  public var judged: MergeGuard.Approval?
 
   public init(kind: Kind, since: Int64) {
     self.kind = kind
     self.since = since
   }
 
-  /// Whether a met outcome starts the action again. Only a hold whose retry time came, or whose subject's state
-  /// changed since, does.
+  /// Whether a met outcome starts the action again. A hold whose retry time came, or whose subject's state changed
+  /// since, does. A question does only when it stored the subject's state, as the judge's `ask` does, and that
+  /// state changed since. A question to the holder stores none.
   public func retries(now: Int64, subjectSince: Int64?) -> Bool {
-    guard kind == .held else { return false }
-    return (retryAt ?? 0) <= now || (subjectSince != nil && subjectSince != self.subjectSince)
+    let changed = subjectSince != nil && subjectSince != self.subjectSince
+    switch kind {
+    case .running: return false
+    case .held: return (retryAt ?? 0) <= now || changed
+    // A question stored before the judge existed can keep the `subjectSince` of an earlier hold, and it has no
+    // `judged`, so it never retries.
+    case .awaitingJudgment: return judged != nil && self.subjectSince != nil && changed
+    }
   }
 }
 

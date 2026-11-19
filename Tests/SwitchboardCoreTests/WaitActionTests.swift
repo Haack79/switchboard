@@ -345,6 +345,7 @@ extension WaitActionTests {
       status.subjectSince = 4
       status.asked = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.approval = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
+      status.judged = MergeGuard.Approval(head: samplePRHead, replyDigest: MergeGuard.replyDigest("Done."))
       status.messageKey = "a@b"
       let wait = WaitActionTests.storedWait(action: WaitAction(kind: .merge), status: status)
 
