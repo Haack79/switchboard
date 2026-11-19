@@ -343,19 +343,23 @@ public final class Store {
   /// Events with an id above `since`, oldest first, for one session or for
   /// all. It returns at most `limit` events: the oldest ones, or with
   /// `newest`, the newest ones.
-  /// `sessions` limits the events to those sessions. `session` limits them to one. `kind` limits them to one kind.
+  /// `sessions` limits the events to those sessions. `session` limits them to one. `kinds` limits them to those kinds.
+  /// An empty `sessions` or `kinds` matches no events.
   public func events(
-    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, kind: String? = nil, limit: Int = Int.max,
+    since: Int64 = 0, session: String? = nil, sessions: [String]? = nil, kinds: [String]? = nil, limit: Int = Int.max,
     newest: Bool = false
   ) throws -> [Event] {
     let ids = sessions ?? session.map { [$0] }
-    if ids?.isEmpty == true { return [] }
-    var filter = ids.map { " AND session IN (\(Array(repeating: "?", count: $0.count).joined(separator: ",")))" } ?? ""
+    if ids?.isEmpty == true || kinds?.isEmpty == true { return [] }
+    func among(_ column: String, _ values: [String]) -> String {
+      " AND \(column) IN (\(Array(repeating: "?", count: values.count).joined(separator: ",")))"
+    }
+    var filter = ids.map { among("session", $0) } ?? ""
     var args: [Any] = [since]
     args += ids ?? []
-    if let kind {
-      filter += " AND kind = ?"
-      args.append(kind)
+    if let kinds {
+      filter += among("kind", kinds)
+      args += kinds
     }
     args.append(limit)
     let order = newest ? "DESC" : "ASC"
