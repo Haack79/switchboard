@@ -36,6 +36,7 @@ extension MCPToolServer {
   }
 
   static let session = string("A session: an id, a unique id prefix, or a unique name.")
+  static let schedule = string("The id of the schedule.")
   static let interval = string("The interval: one number and one unit, s, m, h, d, or w, such as 30m. The shortest is 1m.")
   static let group = string("A group: an id, a unique id prefix, or a unique name.")
   static let full = boolean("True returns every field. False, the default, returns the brief form.")
@@ -191,20 +192,20 @@ extension MCPToolServer {
       ["session": session]),
     Tool(
       "remove_schedule", "Removes a schedule. Get its id from list_schedules or from add_schedule's result.",
-      ["schedule": string("The id of the schedule.")],
+      ["schedule": schedule],
       required: ["schedule"]),
     Tool(
       "edit_schedule",
       "Changes a schedule's interval, its prompt, or both. The schedule keeps its id and run history, so edit a schedule instead of removing it and adding a new one. A new interval brings the next run to one interval from now when that is sooner. It sends nothing.",
       [
-        "schedule": string("The id of the schedule."),
+        "schedule": schedule,
         "every": interval,
         "prompt": string("The new prompt to send on each run."),
       ], required: ["schedule"]),
     Tool(
       "run_schedule",
       "Makes a schedule due now. It does not send the prompt itself. Switchboard sends it on its next check, or once the session is free when the session is busy. It refuses a paused schedule and a session whose schedules can't run.",
-      ["schedule": string("The id of the schedule.")], required: ["schedule"]),
+      ["schedule": schedule], required: ["schedule"]),
     Tool(
       "request_mcp_server",
       "Asks the user to add MCP servers to this Manager conversation. It changes nothing itself. Switchboard shows the user an Allow/Deny card. Allow restarts claude with the servers and resumes this conversation. Deny leaves the servers as they are. Call it when a task needs a tool that no loaded server provides, and do not work around the missing tool. End your turn right after the call. A name that no config holds is refused with the names that exist. A claude.ai connector such as Slack needs `all`. It works only in a Manager conversation.",
