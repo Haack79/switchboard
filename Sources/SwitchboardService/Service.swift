@@ -948,9 +948,8 @@ public final class Service {
       // This claude takes the queued resume message, so the tick launches no other claude for the resume.
       entries[id]?.resumeLaunch = nil
       refreshSoon()
-      // A message that arrived while claude was starting waits until claude
-      // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
-      deliverPending(id, after: 1.5)
+      // A message that arrived while claude was starting waits until claude has drawn its prompt.
+      deliverPending(id, after: config.pasteSettleSeconds)
       if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
@@ -1549,7 +1548,7 @@ public final class Service {
   }
 
   /// Whether claude sits at its prompt, ready for a paste: this launch's
-  /// claude reported SessionStart at least 1.5 s ago, no turn runs, and no
+  /// claude reported SessionStart at least `pasteSettleSeconds` ago, no turn runs, and no
   /// message is on its way. A claude that shows a dialog at startup, such as
   /// the workspace trust dialog, has not reported SessionStart. A paused session takes no paste.
   private func readyForPaste(_ id: String, now: Int64) -> Bool {
@@ -1558,8 +1557,10 @@ public final class Service {
     else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
     if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
-    return now - start >= 1500
+    return now - start >= pasteSettleMs
   }
+
+  private var pasteSettleMs: Int64 { Int64(config.pasteSettleSeconds * 1000) }
 
   /// `by` is who wrote the message, which the `sent` event records. With `launchesWithPrompt` false, a stopped
   /// claude starts without a prompt and gets the message as a paste, which
@@ -1630,7 +1631,7 @@ public final class Service {
   }
 
   /// Pastes the oldest queued message after `delay`, if claude is ready for
-  /// it. When claude is idle but its SessionStart is under 1.5 s old, or a
+  /// it. When claude is idle but its SessionStart is under `pasteSettleSeconds` old, or a
   /// message is still in flight, this tries again when that wait ends.
   /// Otherwise the next SessionStart or end of a turn tries again.
   func deliverPending(_ id: String, after delay: Double) {
@@ -1646,7 +1647,7 @@ public final class Service {
       let now = nowMs()
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
-          let startWait = max(0, 1500 - (now - start))
+          let startWait = max(0, pasteSettleMs - (now - start))
           let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0)) } ?? 0
           let wait = max(startWait, flightWait)
           if wait > 0 { deliverPending(id, after: Double(wait) / 1000 + 0.1) }

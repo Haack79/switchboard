@@ -125,6 +125,9 @@ public struct Config: Codable, Equatable, Sendable {
   public var machineLog = false
   /// How long a request that needs a remote host waits for the host's link. Only tests change it.
   public var hostWaitSeconds: Double = 15
+  /// How long after claude's SessionStart sbd waits before it pastes a message. 1.5 s covers the redraws of
+  /// claude's prompt that Phase 0 measured. Only tests change it.
+  public var pasteSettleSeconds: Double = 1.5
   /// How long a stop waits for claude to exit after SIGTERM, and how long a pane stop then waits for the session's
   /// processes. Only tests change it.
   public var stopWaitSeconds: Double = 5
@@ -187,7 +190,7 @@ public struct Config: Codable, Equatable, Sendable {
   enum CodingKeys: String, CodingKey {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
-    case testClock, machineLog, hostWaitSeconds, stopWaitSeconds, reviewTimeoutSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
+    case testClock, machineLog, hostWaitSeconds, pasteSettleSeconds, stopWaitSeconds, reviewTimeoutSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk, managerSkills
@@ -218,6 +221,7 @@ public struct Config: Codable, Equatable, Sendable {
     testClock = try c.decodeIfPresent(Bool.self, forKey: .testClock) ?? d.testClock
     machineLog = try c.decodeIfPresent(Bool.self, forKey: .machineLog) ?? d.machineLog
     hostWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .hostWaitSeconds) ?? d.hostWaitSeconds
+    pasteSettleSeconds = try c.decodeIfPresent(Double.self, forKey: .pasteSettleSeconds) ?? d.pasteSettleSeconds
     stopWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .stopWaitSeconds) ?? d.stopWaitSeconds
     reviewTimeoutSeconds =
       try c.decodeIfPresent(Double.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds

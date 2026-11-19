@@ -125,6 +125,8 @@ final class Instance {
       // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the
       // undo window. A test that checks the undo window sets it.
       "removalDelaySeconds": 0,
+      // The stub draws no prompt, so a message that waits for claude's SessionStart does not wait out 1.5 s.
+      "pasteSettleSeconds": .number(Instance.pasteSettleSeconds),
     ]
     try JSON.object(config.merging(extra) { $1 }).text.write(toFile: home.config, atomically: true, encoding: .utf8)
     FileManager.default.createFile(atPath: home.log, contents: nil)
@@ -466,6 +468,10 @@ final class Instance {
     }
     return last!
   }
+
+  /// How long after SessionStart the sbd of a test waits before it pastes a message.
+  static let pasteSettleSeconds = 0.2
+  static var pasteSettleMs: Int64 { Int64(pasteSettleSeconds * 1000) }
 
   /// The config.json key that makes a stop wait 2 s, in place of 5 s, for claude to exit and then for the session's
   /// processes. A test that waits out the stop sets it. A stub claude that must outlast the first wait and exit

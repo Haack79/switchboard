@@ -45,6 +45,8 @@ final class ClaudeInstance {
       config: [
         "claude": .string(claude), "model": "haiku",
         "claudeArgs": ["--strict-mcp-config", "--permission-mode", "manual"],
+        // A real claude redraws its prompt after SessionStart, which the production wait covers.
+        "pasteSettleSeconds": 1.5,
       ])
     guard let real = realpath(sbd.work, nil) else { throw TestError(description: "can't resolve \(sbd.work)") }
     cwd = String(cString: real)

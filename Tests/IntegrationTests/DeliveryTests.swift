@@ -275,10 +275,10 @@ enum ResendRefusal: String, CaseIterable, CustomStringConvertible {
     func session(_ sbd: Instance) throws -> SessionSummary {
       switch self {
       case .direct:
-        // sbd pastes at once only 1.5 s after SessionStart.
+        // sbd pastes at once only `pasteSettleSeconds` after SessionStart.
         let s = try sbd.endedSession()
         let start = try #require(try sbd.events(s.id).last { $0.kind == "SessionStart" }?.t)
-        try sbd.waitFor("claude's prompt to settle") { try sbd.now() - start >= 1600 }
+        try sbd.waitFor("claude's prompt to settle") { try sbd.now() - start >= Instance.pasteSettleMs + 100 }
         return s
       case .queued:
         let s = try sbd.new(prompt: "slow 4")
