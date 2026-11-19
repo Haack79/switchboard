@@ -10,7 +10,7 @@ extension BoardModel {
     perform("run-schedule", ["schedule": .string(id)])
   }
 
-  /// The loop editor closes when sbd adds the loop. A refusal leaves it open, with the reason in `actionError`.
+  /// The loop editor closes when sbd adds the loop. A refusal leaves it open, with the reason in `loopEditorError`.
   /// `session` is a session id, or `Manager.operatorName`, for which sbd creates the operator when it has none.
   func addSchedule(session: String, every: String, prompt: String) {
     saveLoop(
@@ -33,8 +33,11 @@ extension BoardModel {
     guard !savingLoop else { return }
     let opening = loopEditorOpening
     savingLoop = true
+    loopEditorError = nil
     perform(
-      op, args, then: { _ in if self.loopEditorOpening == opening { self.loopEditor = nil } },
+      op, args,
+      then: { _ in if self.loopEditorOpening == opening { self.loopEditor = nil } },
+      failed: { error in if self.loopEditorOpening == opening { self.loopEditorError = "\(error)" } },
       finally: { self.savingLoop = false })
   }
 

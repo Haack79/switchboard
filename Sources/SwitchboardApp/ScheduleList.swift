@@ -101,7 +101,7 @@ struct ScheduleActions: View {
       Button("Run Now") { model.runSchedule(schedule.id) }
         .disabled(caption.runNowBlocker != nil)
         .help(caption.runNowBlocker ?? "Run the loop now, or once its session is free.")
-        .accessibilityLabel("Run loop now: \(caption.prompt)")
+        .accessibilityLabel("Run Now: \(caption.prompt)")
         .accessibilityHint(caption.runNowBlocker ?? "")
       Button("Edit…") { model.loopEditor = .edit(schedule.id) }
         .help("Change the loop's interval or prompt")

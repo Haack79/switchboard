@@ -132,7 +132,14 @@ final class BoardModel: ObservableObject {
   /// The quick-ask panel's state, or nil while it is closed.
   @Published var quickAsk: QuickAskState?
   /// The New Loop… or Edit… sheet's opening, or nil while it is closed. A save closes it once sbd accepts the loop.
-  @Published var loopEditor: LoopEditorRequest? { didSet { loopEditorOpening += 1 } }
+  @Published var loopEditor: LoopEditorRequest? {
+    didSet {
+      loopEditorOpening += 1
+      loopEditorError = nil
+    }
+  }
+  /// sbd's refusal of the open loop editor's last save.
+  @Published var loopEditorError: String?
   /// Changes on every open and close of the loop editor, so a late save answer can tell a reopened editor from its own.
   private(set) var loopEditorOpening = 0
   /// A loop editor's save is on its way to sbd, so a second Save would add a second loop.
@@ -628,6 +635,16 @@ final class BoardModel: ObservableObject {
   }
 
   var triage: [SessionSummary] { Triage.order(sessions) }
+
+  /// The count that the view picker shows next to `view`'s title.
+  func viewCount(_ view: MainView, now: Int64) -> Int {
+    switch view {
+    case .inbox: triage.count
+    case .board: 0
+    case .issues: issueCount
+    case .loops: loopAttentionCount(now: now)
+    }
+  }
 
   /// The repo label of each session in the sidebar. The Inbox uses the same
   /// labels. A session therefore shows the same repo in both lists.

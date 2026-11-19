@@ -89,6 +89,15 @@ private let loop = scheduleFixture("r1")
     #expect(choices.contains { $0.session == "f1" })
   }
 
+  @Test func aHostSessionsChoiceNamesItsHost() {
+    var s = work("w1", "fix")
+    s.host = "mini"
+
+    let choices = LoopEditor.sessionChoices([s], operatorID: nil)
+
+    #expect(choices.last?.name == "fix · mini")
+  }
+
   @Test func aNewLoopDefaultsToTheExistingOperator() {
     let choices = LoopEditor.sessionChoices([work("w1", "aaa"), operatorNamed("op")], operatorID: "op")
 

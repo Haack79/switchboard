@@ -189,6 +189,19 @@ private func rowIds(_ model: BoardModel, now: Int64 = scheduleNow) -> [String] {
     #expect(model.loopAttentionCount(now: scheduleNow) == 1)
   }
 
+  @Test func theHiddenLoopCountCountsTheLoopsOfTheSessionsTheFilterHides() {
+    let model = loopModel(
+      [
+        looped(orgSession("ph", "PostHog/posthog"), [activeLoop("r1")]),
+        looped(orgSession("hk", "haacked/switchboard"), [failedLoop("r2"), activeLoop("r3")]),
+        beingRemoved(looped(orgSession("hk2", "haacked/switchboard"), [activeLoop("r4")]), .queued),
+      ], org: posthogOnly)
+
+    #expect(model.hiddenLoopCount == 2)
+    model.showAll()
+    #expect(model.hiddenLoopCount == 0)
+  }
+
   @Test func withNoSchedulesThereAreNoRows() {
     let model = loopModel([loopSession("a", nil), loopSession("b", [])])
 
@@ -218,8 +231,10 @@ private func rowIds(_ model: BoardModel, now: Int64 = scheduleNow) -> [String] {
 
   /// The ids sort the other way from the names, so a sort by id or by status alone fails.
   static let threeNamedSessions = [
-    loopSession("s1", name: "Charlie", [overdueLoop("rc-overdue"), pausedLoop("rc-paused")]),
-    loopSession("s2", name: "Alpha", [activeLoop("ra-2", inMinutes: 20), activeLoop("ra-1", inMinutes: 5)]),
+    loopSession("s1", name: "Charlie", [pausedLoop("rc-paused")]),
+    loopSession(
+      "s2", name: "Alpha",
+      [activeLoop("ra-2", inMinutes: 20), activeLoop("ra-1", inMinutes: 5), overdueLoop("ra-overdue")]),
     loopSession("s3", name: "Bravo", [activeLoop("rb-active"), failedLoop("rb-failed")]),
   ]
 
@@ -228,7 +243,7 @@ private func rowIds(_ model: BoardModel, now: Int64 = scheduleNow) -> [String] {
 
     model.loopSort = .session
 
-    #expect(rowIds(model) == ["rb-failed", "rc-overdue", "ra-1", "ra-2", "rb-active", "rc-paused"])
+    #expect(rowIds(model) == ["ra-overdue", "rb-failed", "ra-1", "ra-2", "rb-active", "rc-paused"])
   }
 
   @Test func theSortIsSavedAndReadByTheNextModel() throws {
@@ -357,6 +372,35 @@ private func rowIds(_ model: BoardModel, now: Int64 = scheduleNow) -> [String] {
 
   @Test func theCurrentLoopIsTheFocusedRow() {
     #expect(loopsView(focus: "r2").currentLoop?.id == "r2")
+  }
+
+  @Test func upAndDownStopAtTheEnds() {
+    let model = loopsView(focus: "r3")
+    let jumps = model.loopJumps
+
+    model.moveLoop(by: 1, wrap: false)
+    #expect(model.currentLoop?.id == "r3")
+
+    model.moveLoop(by: -1, wrap: false)
+    #expect(model.currentLoop?.id == "r2")
+    #expect(model.loopJumps == jumps + 2)
+  }
+
+  /// Edit… reads every listed session, so it finds a loop on a session that the filter hides.
+  @Test func anEditFindsItsLoopEvenOnAHiddenSession() throws {
+    let model = loopModel([looped(orgSession("hk", "haacked/switchboard"), [activeLoop("r-hk")])], org: posthogOnly)
+    try #require(rowIds(model).isEmpty)
+
+    #expect(model.editedSchedule(.edit("r-hk"))?.id == "r-hk")
+    #expect(model.editedSchedule(.edit("gone")) == nil)
+    #expect(model.editedSchedule(.new) == nil)
+  }
+
+  @Test func theLoopsViewCountIsTheAttentionCount() {
+    let model = loopModel(Self.everyState)
+
+    #expect(model.viewCount(.loops, now: scheduleNow) == 2)
+    #expect(loopModel([]).viewCount(.loops, now: scheduleNow) == 0)
   }
 
   @Test func theCurrentLoopIsNilWithNoLoops() {

@@ -771,15 +771,18 @@ extension ScheduleTests {
     #expect(try sbd.get(s.id).schedules == [r.schedule])
   }
 
-  /// `by` records who created the loop, so Claude's edit keeps it.
-  @Test func anEditInsideClaudeKeepsTheAuthor() throws {
+  /// `by` records who created the loop, so an edit keeps it even when the request names another author.
+  @Test func anEditKeepsTheAuthor() throws {
     let sbd = try Instance()
     let s = try sbd.new()
-    let r = try schedule(sbd, s.id)
+    let r = try schedule(sbd, s.id, env: ["CLAUDECODE": "1", "SB_SESSION_ID": s.id])
+    try #require(r.schedule.by == .claude)
 
-    let changed = try edit(sbd, r.schedule.id, ["--every", "1h"], env: ["CLAUDECODE": "1", "SB_SESSION_ID": s.id])
+    let changed = try sbd.client.call(
+      "edit-schedule", ["schedule": .string(r.schedule.id), "every": "1h", "by": "you"], as: ScheduleRow.self)
 
-    #expect(changed.schedule.by == .you)
+    #expect(changed.schedule.every == 3_600_000)
+    #expect(changed.schedule.by == .claude)
   }
 
   @Test func editWithNeitherAnIntervalNorAPromptFails() throws {

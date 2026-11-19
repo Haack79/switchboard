@@ -11,11 +11,17 @@ struct LoopsView: View {
       let now = nowMs()
       let rows = model.loopRows(now: now)
       if rows.isEmpty {
+        let hidden = model.hiddenLoopCount
         ContentUnavailableView {
           Label("No loops", systemImage: MainView.loops.symbol)
         } description: {
-          Text("A loop sends a prompt to a session on an interval. New Loop… or `sb schedule` adds one.")
+          if hidden > 0 {
+            Text("The filter hides \(hidden) loop\(hidden == 1 ? "" : "s"). They keep running.")
+          } else {
+            Text("A loop sends a prompt to a session on an interval. New Loop… or `sb schedule` adds one.")
+          }
         } actions: {
+          if hidden > 0 { Button("Show All") { model.showAll() } }
           NewLoopButton()
         }
       } else {
@@ -27,7 +33,9 @@ struct LoopsView: View {
           }
         } detail: {
           if let row = model.currentLoop(in: rows) {
+            // The pane focuses the loop it shows. A pause that moves the loop in the order then keeps it here.
             LoopDetail(row: row, now: now).id(row.id)
+              .onAppear { if model.loopFocus != row.id { model.loopFocus = row.id } }
           }
         }
       }
@@ -138,7 +146,7 @@ private struct LoopSessionLink: View {
       .font(.caption)
       .lineLimit(1)
       .help("Open \(row.session.name)")
-      .accessibilityLabel("Open session \(row.session.nameWithHost) of loop: \(row.schedule.prompt)")
+      .accessibilityLabel("\(row.session.nameWithHost), session of loop: \(oneLine(row.schedule.prompt))")
   }
 }
 

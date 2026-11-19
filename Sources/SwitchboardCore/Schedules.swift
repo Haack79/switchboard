@@ -125,16 +125,22 @@ public struct Schedule: Codable, Equatable, Sendable {
     }
     var edited = self
     if let every {
-      do {
-        edited.every = try Schedule.parseInterval(every)
-        let soonest = try Schedule.next(after: now, every: edited.every)
-        if paused != true { edited.next = min(next, soonest) }
-      } catch {
-        throw APIError("every \(every): \(error)")
-      }
+      let (ms, soonest) = try Schedule.interval(every, after: now)
+      edited.every = ms
+      if paused != true { edited.next = min(next, soonest) }
     }
     if let prompt { edited.prompt = try Schedule.cleanPrompt(prompt) }
     return edited
+  }
+
+  /// The interval that `every` names, in ms, and the run one interval after `now`. Each error names `every`.
+  static func interval(_ every: String, after now: Int64) throws -> (every: Int64, next: Int64) {
+    do {
+      let ms = try parseInterval(every)
+      return (ms, try next(after: now, every: ms))
+    } catch {
+      throw APIError("every \(every): \(error)")
+    }
   }
 
   /// Reads one whole number and one unit, `s`, `m`, `h`, `d`, or `w`, such as
@@ -275,14 +281,7 @@ public struct ScheduleRequest: Codable, Equatable, Sendable {
   /// Checks the arguments and builds a schedule whose first run is one interval after `now`.
   public func makeSchedule(id: String, now: Int64) throws -> Schedule {
     guard let every else { throw APIError("a schedule needs every, an interval such as 30m") }
-    let ms: Int64
-    let next: Int64
-    do {
-      ms = try Schedule.parseInterval(every)
-      next = try Schedule.next(after: now, every: ms)
-    } catch {
-      throw APIError("every \(every): \(error)")
-    }
+    let (ms, next) = try Schedule.interval(every, after: now)
     return Schedule(
       id: id, prompt: try Schedule.cleanPrompt(prompt), every: ms, next: next, by: try Author(parsing: by), created: now
     )
@@ -360,7 +359,7 @@ public struct ScheduleStatus: Codable, Equatable, Sendable {
     (a.status.state.rank, a.schedule.next, a.schedule.id) < (b.status.state.rank, b.schedule.next, b.schedule.id)
   }
 
-  /// The state and text of an active schedule from its next run alone.
+  /// The state and text of a schedule that isn't paused, from its next run and its session's hold.
   private static func timing(_ schedule: Schedule, hold: String?, now: Int64) -> (State, String) {
     if schedule.next > now { return (.active, "next \(fromNow(schedule.next, now: now))") }
     if let hold { return (.held, "held: \(hold)") }

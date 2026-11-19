@@ -100,8 +100,6 @@ struct LoopEditor: View {
   /// The choices are fixed when the sheet opens, so a newer `ls` answer can't take away the picked session.
   @State private var choices: [Choice]
   @State private var form: Form
-  /// True once Save is pressed. An `actionError` that shows after that is sbd's answer to the save.
-  @State private var saved = false
 
   /// `schedule` is the loop that an edit opens with. It is nil for a new loop, and for an edit whose loop is gone.
   init(request: LoopEditorRequest, schedule: Schedule?, choices: [Choice]) {
@@ -121,7 +119,7 @@ struct LoopEditor: View {
       } else {
         fields
       }
-      if saved, !model.savingLoop, let error = model.actionError {
+      if let error = model.loopEditorError {
         Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -138,6 +136,7 @@ struct LoopEditor: View {
     }
     .padding(20)
     .frame(width: 480)
+    .announcesRefusal(model.loopEditorError)
   }
 
   private var fields: some View {
@@ -167,7 +166,6 @@ struct LoopEditor: View {
   }
 
   private func save() {
-    saved = true
     if let original = form.original {
       model.editSchedule(original.id, every: form.changedInterval, prompt: form.changedPrompt)
     } else if let session = form.session, let every = form.changedInterval, let prompt = form.changedPrompt {

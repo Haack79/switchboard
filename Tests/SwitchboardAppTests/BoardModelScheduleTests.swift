@@ -112,9 +112,10 @@ private func rowAnsweringModel() -> (BoardModel, SentRequests) {
     model.loopEditor = .new
 
     model.addSchedule(session: "s1", every: "30m", prompt: "check the queue")
-    await settle { model.actionError != nil }
+    await settle { model.loopEditorError != nil }
 
-    #expect(model.actionError?.contains("s1 has 10 schedules") == true, "\(model.actionError ?? "nil")")
+    #expect(model.loopEditorError?.contains("s1 has 10 schedules") == true, "\(model.loopEditorError ?? "nil")")
+    #expect(model.actionError == nil)
     #expect(model.loopEditor == .new)
   }
 
@@ -133,10 +134,22 @@ private func rowAnsweringModel() -> (BoardModel, SentRequests) {
     model.loopEditor = .edit("r1")
 
     model.editSchedule("r1", every: "1h", prompt: nil)
-    await settle { model.actionError != nil }
+    await settle { model.loopEditorError != nil }
 
-    #expect(model.actionError?.contains("no schedule r1") == true, "\(model.actionError ?? "nil")")
+    #expect(model.loopEditorError?.contains("no schedule r1") == true, "\(model.loopEditorError ?? "nil")")
+    #expect(model.actionError == nil)
     #expect(model.loopEditor == .edit("r1"))
+  }
+
+  @Test func closingTheEditorClearsItsRefusal() async {
+    let (model, _) = recordingModel { op, _ in op == "edit-schedule" ? "no schedule r1" : nil }
+    model.loopEditor = .edit("r1")
+    model.editSchedule("r1", every: "1h", prompt: nil)
+    await settle { model.loopEditorError != nil }
+
+    model.loopEditor = nil
+
+    #expect(model.loopEditorError == nil)
   }
 
   /// An answer to the first editor's save must not close an editor that the user opened after cancelling it.

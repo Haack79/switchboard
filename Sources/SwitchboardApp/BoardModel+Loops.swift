@@ -66,6 +66,13 @@ extension BoardModel {
     }
   }
 
+  /// The loops of the sessions that the filter hides. The Loops view's empty state names them.
+  var hiddenLoopCount: Int {
+    let filter = filter
+    return allSessions.filter { !$0.isBeingRemoved && !filter.shows($0) }
+      .reduce(0) { $0 + ($1.schedules?.count ?? 0) }
+  }
+
   /// The loops of every shown session that need attention. The tab's session filter does not change it.
   func loopAttentionCount(now: Int64) -> Int {
     allLoopRows(now: now).filter(\.status.needsAttention).count

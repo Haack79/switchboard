@@ -11,14 +11,6 @@ import Testing
     #expect(ContentView.viewLabel("Issues", 0) == "Issues")
   }
 
-  @Test func loopsWithNoLoopThatNeedsAttentionShowsNoCount() {
-    #expect(ContentView.viewLabel("Loops", 0) == "Loops")
-  }
-
-  @Test func loopsShowsHowManyLoopsNeedAttention() {
-    #expect(ContentView.viewLabel("Loops", 2) == "Loops 2")
-  }
-
   /// The toolbar picker and the Session menu's Show items read these titles.
   @Test func mainViewTitlesKeepThePickerAndMenuOrder() {
     #expect(MainView.allCases.map(\.title) == ["Inbox", "Board", "Issues", "Loops"])

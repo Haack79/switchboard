@@ -53,15 +53,6 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
-  private func count(for view: MainView, now: Int64) -> Int {
-    switch view {
-    case .inbox: model.triage.count
-    case .board: 0
-    case .issues: model.issueCount
-    case .loops: model.loopAttentionCount(now: now)
-    }
-  }
-
   private var viewChoice: Binding<MainView?> {
     Binding(
       get: { model.selected == nil ? model.mainView : nil },
@@ -146,7 +137,7 @@ struct ContentView: View {
           // No segment is selected while a session shows.
           Picker("View", selection: viewChoice) {
             ForEach(MainView.allCases, id: \.self) { view in
-              Text(Self.viewLabel(view.title, count(for: view, now: now))).tag(MainView?.some(view))
+              Text(Self.viewLabel(view.title, model.viewCount(view, now: now))).tag(MainView?.some(view))
             }
           }
           .pickerStyle(.segmented)
