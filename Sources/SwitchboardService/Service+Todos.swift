@@ -126,6 +126,7 @@ extension Service {
     slashListings[id] = nil
     hostEvents[id] = nil
     pruneDeclinedSuggestions()
+    syncOperatorItems()
   }
 
   /// Resolves an open to-do as the user, and records it in `resolved_todos`.

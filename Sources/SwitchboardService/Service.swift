@@ -386,6 +386,7 @@ public final class Service {
     migrateReadState()
     try? refreshManagerGuide()
     try? refreshChatGuides()
+    syncOperatorItems()
     // A summary that was running when sbd stopped never finished.
     for (id, e) in entries {
       afterTrack(id, Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState))
@@ -717,7 +718,10 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
+      // Only the user's message closes the operator's reports, so `reports` from a Claude Code is dropped.
+      var extra: [String: JSON] = [:]
+      if let reports = args["reports"]?.array, author == .you, id == operatorID() { extra["reports"] = .array(reports) }
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere, extra: extra)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -997,6 +1001,8 @@ public final class Service {
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
       dropStaleFailedRemoval(id, event: event)
+      // `recordReport` syncs after it routes the report, so the ask never shows on a fallback owner first.
+      if e.session.kind == .operator, event.kind != OperatorReport.event { syncOperatorItems() }
     }
     releaseCards(id)
     return event
@@ -1336,6 +1342,8 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+    // The operator's waits decide which sessions show its held items.
+    if session.kind == .operator { syncOperatorItems() }
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
@@ -1544,13 +1552,15 @@ public final class Service {
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
+  /// `extra` adds fields to the `sent` event.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> Delivery {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
-    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
+    var extra = extra
+    if runHere { extra["runHere"] = true }
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
@@ -2592,6 +2602,8 @@ public final class Service {
       superviseHosts(now: now)
       superviseSites(now: now)
       closeExitedShells()
+      // Pauses, removals, and conversations' activity change the owners of the operator's items without an event.
+      syncOperatorItems()
       for id in entries.keys.sorted() {
         let live = entries[id]?.facts.live ?? false
         switch claudeState(id) {

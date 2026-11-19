@@ -979,11 +979,15 @@ case "ls", "list":
       let ids = Set(shown.map(\.id))
       let list = JSON.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false })
       printJSON(brief ? briefJSON(list) : list)
-    } else if brief {
-      if shown.isEmpty { print(noSessions) }
-      for s in shown { print(s.briefLine) }
     } else {
-      printSessionList(shown, filter: filter)
+      // The operator has no row in the app, so the text lists leave it out. The JSON keeps it for scripts.
+      let listed = shown.filter { $0.kind != .operator }
+      if brief {
+        if listed.isEmpty { print(noSessions) }
+        for s in listed { print(s.briefLine) }
+      } else {
+        printSessionList(listed, filter: filter)
+      }
     }
   }
 case "new":

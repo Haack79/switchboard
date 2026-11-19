@@ -252,7 +252,10 @@ extension Service {
         return
       }
     }
-    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome, met: met), by: .sbd, trigger: .wait) }
+    if wait.then == .resume {
+      _ = try send(
+        id, wait.message(outcome: outcome, met: met), by: .sbd, trigger: .wait, extra: handedFromData(id, wait))
+    }
     var extra: [String: JSON] = ["outcome": .string(outcome)]
     if let changedAt { extra["changedAt"] = .number(Double(changedAt)) }
     try closeWait(id, wait, extra: extra)

@@ -37,6 +37,8 @@ extension SessionFacts {
   public static let reportRoutedEvent = "report-routed"
   /// The kind of the event that closes the operator's reports that its `reports` key names.
   public static let reportClosedEvent = "report-closed"
+  /// The kind of the event that sbd records on the session that a report is routed to. Nothing folds it.
+  public static let operatorAskEvent = "operator-ask"
 
   /// Whether an `ack` now would close open reports: an unrouted report is open, and no prompt blocks the session.
   public var ackClosesReports: Bool {
