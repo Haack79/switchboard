@@ -110,11 +110,14 @@ public struct ActionStatus: Codable, Equatable, Sendable {
     switch kind {
     case .running: return false
     case .held: return (retryAt ?? 0) <= now || changed
-    // A question stored before the judge existed can keep the `subjectSince` of an earlier hold, and it has no
-    // `judged`, so it never retries.
-    case .awaitingJudgment: return judged != nil && self.subjectSince != nil && changed
+    case .awaitingJudgment: return parkedByJudge && changed
     }
   }
+
+  /// Whether the judge's `ask` parked the action, so the holder's conversation never saw a question. A question to
+  /// the holder stores no `subjectSince`. A question stored before the judge existed can keep the `subjectSince` of
+  /// an earlier hold, but it has no `judged`.
+  public var parkedByJudge: Bool { kind == .awaitingJudgment && judged != nil && subjectSince != nil }
 }
 
 /// Decides whether sbd merges the subject's PR for a `merge` action. It acts only when it can show that the commit

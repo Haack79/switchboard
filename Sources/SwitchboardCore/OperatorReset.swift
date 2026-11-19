@@ -19,11 +19,13 @@ public enum OperatorReset {
   }
 
   /// Why the current conversation must stay, or nil when nothing needs it. A wait whose action awaits judgment
-  /// asked its question in this conversation. An open `needsYou` report asked the user, and the user's answer
+  /// asked its question in this conversation, unless the judge parked it. An open `needsYou` report asked the user, and the user's answer
   /// arrives as a message without the question. An open card, such as a deferred question, also waits for an
   /// answer that only this conversation can act on.
   public static func blocker(waits: [Wait], facts: SessionFacts) -> String? {
-    if waits.contains(where: { $0.actionStatus?.kind == .awaitingJudgment }) { return "a wait awaits its judgment" }
+    if waits.contains(where: { $0.actionStatus.map { $0.kind == .awaitingJudgment && !$0.parkedByJudge } ?? false }) {
+      return "a wait awaits its judgment"
+    }
     if !facts.openReports.isEmpty { return "a report waits for the user's answer" }
     if !facts.cards.isEmpty { return "a card waits for the user's answer" }
     return nil

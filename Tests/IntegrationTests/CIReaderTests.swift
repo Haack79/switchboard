@@ -58,6 +58,8 @@ extension Instance {
   static let holdRetrySeconds = 60
   /// Past `holdRetrySeconds`.
   static let pastHoldRetry: Int64 = 61_000
+  /// Past the default `github.idlePollSeconds` (300) plus `holdRetrySeconds`.
+  static let pastIdlePollAndHoldRetry: Int64 = 361_000
   static let message = "parsesTitles() fails on a nil title in TitleParser.swift."
   /// The id of the failed run that the default setup serves.
   static let failed = 501
@@ -123,7 +125,7 @@ extension Instance {
     if let runs {
       try sbd.serveRuns(runs, head: head(github))
       if let log {
-        for run in runs where run["conclusion"]?.string == "failure" {
+        for run in runs where ["failure", "timed_out"].contains(run["conclusion"]?.string ?? "") {
           try sbd.serveFailedLog(log, run: try #require(run["databaseId"]?.int))
         }
       }
@@ -526,6 +528,41 @@ extension CIReaderTests {
     #expect(sbd.ciJudgeCalls().count == 1, "\(sbd.ciJudgeCalls())")
     #expect(try ciCheck(sbd, wait)?.step == .judged)
   }
+
+  /// A run that hit its time limit counts as failed, so the reader reads its log and the session gets the summary.
+  @Test func aTimedOutRunReachesTheReader() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    try sbd.answerCIJudge("timeout")
+    let (s, wait) = try armedFailure(github, sbd, runs: [Self.run(Self.failed, "timed_out")])
+
+    try failTwice(sbd, wait, head: head(github))
+
+    let text = try ciMessage(sbd, s)
+    #expect(text.contains(Self.reader + Self.message + Self.nextStep), Comment(rawValue: text))
+    #expect(sbd.ciJudgeInput().contains(Self.failingLine), Comment(rawValue: sbd.ciJudgeInput()))
+  }
+
+  /// A read in flight keeps the ticks during it from starting another read of the wait, so the wait gets one judge
+  /// call.
+  @Test func ticksDuringAReadStartNoSecondRead() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (s, wait) = try armedFailure(github, sbd)
+    let gate = try StubGate("\(sbd.home.path)/gh-live/run/\(Self.charts)/commit/\(head(github)).gate")
+    defer { gate.remove() }
+    try failTwice(sbd, wait, head: head(github))
+    try sbd.waitFor("the held run list", timeout: 30) { !sbd.ghCalls("run list ").isEmpty }
+
+    try follow.tick(sbd, 3)
+    try gate.pass()
+    gate.remove()
+
+    try ciMessage(sbd, s)
+    try follow.tick(sbd, 2)
+    #expect(sbd.ghCalls("run list ").count == 1, "\(sbd.ghCalls("run list "))")
+    #expect(sbd.ciJudgeCalls().count == 1, "\(sbd.ciJudgeCalls())")
+  }
 }
 
 // MARK: flake
@@ -543,8 +580,11 @@ extension CIReaderTests {
     try sbd.waitFor("rerun \(count)", timeout: 30) { sbd.ghCalls(Self.reruns).count >= count }
   }
 
-  /// `armedFlake`, the reruns, then the checks running again and failing again at the same head.
-  func rerunThenFailAgain(_ github: FakeGitHub, _ sbd: Instance) throws -> (s: SessionSummary, wait: String) {
+  /// `armedFlake`, the reruns, then the checks running again and failing again at the same head. With `pastWindow`,
+  /// the clock then moves past `holdRetrySeconds`.
+  func rerunThenFailAgain(_ github: FakeGitHub, _ sbd: Instance, pastWindow: Bool = true) throws -> (
+    s: SessionSummary, wait: String
+  ) {
     let (s, wait) = try armedFlake(github, sbd)
     try failTwice(sbd, wait, head: head(github))
     try waitForReruns(sbd, 2)
@@ -556,7 +596,7 @@ extension CIReaderTests {
     try sbd.poll(all: true)
     try sbd.waitFor(s.id, "the rerun's checks failing") { $0.state == .needsYou }
     try follow.tick(sbd)
-    try sbd.advanceClock(Self.pastHoldRetry)
+    if pastWindow { try sbd.advanceClock(Self.pastHoldRetry) }
     return (s, wait)
   }
 
@@ -595,6 +635,43 @@ extension CIReaderTests {
     #expect(judgments.count == 1, "\(judgments)")
     #expect(sbd.ghCalls(Self.reruns).count == 2, "\(sbd.ghCalls(Self.reruns))")
     #expect(sbd.ciJudgeCalls().count == 1, "\(sbd.ciJudgeCalls())")
+    let messages = try ciMessages(sbd, s)
+    #expect(messages.isEmpty, "\(messages)")
+    #expect(try ciCheck(sbd, wait)?.step == .judged)
+  }
+
+  /// A second failure after the rerun waits `holdRetrySeconds`, so the session's own CI monitor gets that long to act.
+  @Test func aSecondFailureAfterTheRerunWaitsHoldRetrySecondsBeforeTheJudgment() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (_, wait) = try rerunThenFailAgain(github, sbd, pastWindow: false)
+
+    try follow.tick(sbd, 2)
+    #expect(try ciJudgments(sbd, wait).isEmpty)
+
+    try sbd.advanceClock(Self.pastHoldRetry)
+    try ciJudgment(sbd, wait)
+  }
+
+  /// A rerun that fails again before a PR read sees it running leaves the session's state as it was. sbd asks the
+  /// Operator once the checks still fail one idle poll and `holdRetrySeconds` after the rerun.
+  @Test func aRerunThatFailsAgainBeforeAReadRaisesOneOperatorJudgmentAfterAnIdlePoll() throws {
+    let github = try FakeGitHub()
+    let sbd = try instance(github)
+    let (s, wait) = try armedFlake(github, sbd)
+    try failTwice(sbd, wait, head: head(github))
+    try waitForReruns(sbd, 2)
+    try sbd.waitFor("the reran step", timeout: 30) { try ciCheck(sbd, wait)?.step == .reran }
+
+    try passMoreTicks(sbd)
+    #expect(try ciJudgments(sbd, wait).isEmpty)
+
+    try sbd.advanceClock(Self.pastIdlePollAndHoldRetry)
+    try ciJudgment(sbd, wait)
+    try passMoreTicks(sbd)
+    let judgments = try ciJudgments(sbd, wait)
+    #expect(judgments.count == 1, "\(judgments)")
+    #expect(sbd.ghCalls(Self.reruns).count == 2, "\(sbd.ghCalls(Self.reruns))")
     let messages = try ciMessages(sbd, s)
     #expect(messages.isEmpty, "\(messages)")
     #expect(try ciCheck(sbd, wait)?.step == .judged)
@@ -680,6 +757,34 @@ extension CIReaderTests {
     #expect(messages.isEmpty, "\(messages)")
     #expect(sbd.ciJudgeCalls().count == undecided.judgeCalls, "\(sbd.ciJudgeCalls())")
     #expect(try ciCheck(sbd, wait)?.step == .judged)
+  }
+
+  /// Decision 38: no quota left on the judge's account raises one judgment message with no judge call. The case has
+  /// its own sbd, because `triage.account` and the usage reader are set when sbd starts.
+  @Test func noQuotaOnTheJudgesAccountRaisesOneOperatorJudgmentWithoutAJudgeCall() throws {
+    let fake = try FakeUsage()
+    // The limit resets in 2099, so it stays spent for the whole test.
+    fake.reply(#"{"limits":[{"kind":"weekly_all","percent":100,"resets_at":"2099-01-01T00:00:00+00:00"}]}"#)
+    let github = try FakeGitHub()
+    let sbd = try Instance.withMergeStub(
+      github, accounts: ["A"],
+      config: [
+        "operator": Self.operatorSettings([Self.charts]),
+        "usage": ["url": .string(fake.url), "pollSeconds": 0, "keychain": false],
+      ])
+    try sbd.restart(setting: "triage", to: ["systemPrompt": "", "account": .string(sbd.account("A"))])
+    try sbd.signIn("A", token: "token-a")
+    _ = try sbd.usage()
+    let (s, wait) = try armedFailure(github, sbd)
+
+    try failTwice(sbd, wait, head: head(github))
+
+    let text = try ciJudgment(sbd, wait)
+    #expect(text.contains("sbd's CI reader did not run"), Comment(rawValue: text))
+    #expect(sbd.ciJudgeCalls().isEmpty, "\(sbd.ciJudgeCalls())")
+    let messages = try ciMessages(sbd, s)
+    #expect(messages.isEmpty, "\(messages)")
+    withExtendedLifetime(fake) {}
   }
 
   /// Decision 44: the CI question names the PR and offers no approval, because no reply is being approved.

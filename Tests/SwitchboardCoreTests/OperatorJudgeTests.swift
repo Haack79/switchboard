@@ -16,7 +16,7 @@ private func reply(_ answer: String, question: String = "", reason: String = "It
 /// tests name its fields in one place.
 private func parsed(_ output: String) throws -> (answer: String, question: String, reason: String) {
   let a = try OperatorJudge.ReplyGate.parse(output)
-  return ("\(a.answer)", a.question, a.reason)
+  return ("\(a.word)", a.question, a.reason)
 }
 
 /// How many closing `tag` tags, such as `</session-reply>`, the model could read in `text`: in any case and with

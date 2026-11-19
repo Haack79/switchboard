@@ -35,7 +35,11 @@ extension Service {
       "kind": .string(kind.rawValue), "session": .string(session), "wait": .string(wait), "head": .string(head),
       "model": .string(model),
     ]
-    data.merge(call.reply?.eventFields ?? [:]) { $1 }
+    // `model` names the configured judge model on every event, so a call that printed no envelope groups with one
+    // that did. The model that claude reported goes in `resolvedModel`.
+    var reported = call.reply?.eventFields ?? [:]
+    reported["resolvedModel"] = reported.removeValue(forKey: "model")
+    data.merge(reported) { $1 }
     if let usage = call.reply?.usage {
       data["inputTokens"] = .number(Double(usage.input))
       data["outputTokens"] = .number(Double(usage.output))

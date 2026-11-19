@@ -45,13 +45,13 @@ public enum OperatorJudge {
   public enum ReplyGate: Spec {
     public static let kind = Kind.replyGate
 
-    /// What the judge answered. `question` is empty unless `answer` is `ask`.
+    /// What the judge answered. `question` is empty unless `word` is `ask`.
     public struct Answer: Equatable, Sendable {
       public enum Word: String, Sendable {
         case merge, ask, unsure
       }
 
-      public var answer: Word
+      public var word: Word
       public var question: String
       public var reason: String
     }
@@ -113,19 +113,19 @@ public enum OperatorJudge {
     /// schema, a missing field, and an `ask` with no question.
     public static func parse(_ output: String) throws -> Answer {
       let object = try Headless.answer(output)
-      guard let word = object["answer"]?.string else { throw APIError("the judge's answer has no answer word") }
-      guard let answer = Answer.Word(rawValue: word) else {
-        throw APIError("the judge answered \(oneLine(word, max: 40)), which is not merge, ask, or unsure")
+      guard let text = object["answer"]?.string else { throw APIError("the judge's answer has no answer word") }
+      guard let word = Answer.Word(rawValue: text) else {
+        throw APIError("the judge answered \(oneLine(text, max: 40)), which is not merge, ask, or unsure")
       }
       guard let question = object["question"]?.string, let reason = object["reason"]?.string else {
         throw APIError("the judge's answer lacks its question or its reason")
       }
       let line = oneLine(question, max: TriageCard.lineLength)
-      if answer == .ask, line.isEmpty { throw APIError("the judge answered ask with no question") }
-      return Answer(answer: answer, question: line, reason: oneLine(reason, max: TriageCard.lineLength))
+      if word == .ask, line.isEmpty { throw APIError("the judge answered ask with no question") }
+      return Answer(word: word, question: line, reason: oneLine(reason, max: TriageCard.lineLength))
     }
 
-    public static func word(_ answer: Answer) -> String { answer.answer.rawValue }
+    public static func word(_ answer: Answer) -> String { answer.word.rawValue }
   }
 
   /// What made a merge-armed session's checks fail at one head, from the failed jobs' logs.

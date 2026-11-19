@@ -77,13 +77,16 @@ extension Service {
           ciReads.insert(read.key)
           ciReaderQueue.async { [self] in readCI(read) }
         case .reran:
-          // The rerun's checks moved the subject out of its failing state, so a failing state that began after the
-          // rerun is a second failure.
+          // A failing state that began after the rerun is a second failure. A rerun that fails again before a PR read
+          // sees it running leaves the state as it was. So does a failed check that sbd did not rerun. So checks that
+          // still fail one idle poll and the window after the rerun count too.
           let since = e.facts.stateSince
-          guard since > check.since, now - since >= window else { continue }
+          let failedAgain = since > check.since && now - since >= window
+          let idlePoll = Int64(config.github.idlePollSeconds * 1000)
+          guard failedAgain || now - check.since >= idlePoll + window else { continue }
           askAboutCI(
             read,
-            "sbd's CI reader called the failure a flake, and sbd reran the failed jobs once. They failed again.")
+            "sbd's CI reader called the failure a flake, and sbd reran the failed jobs once. The checks still fail.")
         }
       }
     }
@@ -138,7 +141,7 @@ extension Service {
     do {
       let output = try runGh(
         [
-          "run", "list", "--repo", read.repo, "--commit", read.head, "--json",
+          "run", "list", "--repo", read.repo, "--commit", read.head, "--limit", "100", "--json",
           "databaseId,name,workflowName,conclusion,status",
         ], timeout: 30)
       guard let runs = JSON.parse(output)?.array else { return .ask("gh run list printed no list of runs") }
@@ -147,9 +150,8 @@ extension Service {
       return .ask("sbd could not list the runs: \(oneLine("\(error)", max: TriageCard.lineLength))")
     }
     let failed: [(id: Int, workflow: String)] = list.compactMap { run in
-      guard let conclusion = run["conclusion"]?.string, ["failure", "timed_out"].contains(conclusion),
-        let id = run["databaseId"]?.int
-      else { return nil }
+      // A run counts as failed exactly when it makes the PR's checks rollup fail.
+      guard ChecksRollup(contexts: [run]) == .failed, let id = run["databaseId"]?.int else { return nil }
       return (id, run["workflowName"]?.string ?? run["name"]?.string ?? "")
     }
     guard !failed.isEmpty else { return .ask("sbd found no failed GitHub Actions run at that head") }

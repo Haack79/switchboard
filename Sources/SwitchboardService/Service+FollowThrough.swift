@@ -137,7 +137,8 @@ extension Service {
         finish(holder, waitId, toHolder)
         return nil
       }
-      // A reply after the run's read brings a state that a park would store, so the park would never retry.
+      // The subject replied after the run read its facts, so its `stateSince` already reflects that reply. A park would
+      // store that value, and no later change of state would retry the park. So sbd runs the checks again.
       guard MergeGuard.replyDigest(e.facts.lastReply) == approval.replyDigest else {
         do { try startAction(holder, wait) } catch { finish(holder, waitId, toHolder) }
         return nil
@@ -171,9 +172,9 @@ extension Service {
       wait.actionStatus = status
       do {
         switch result {
-        case .success(let answer) where answer.answer == .merge:
+        case .success(let answer) where answer.word == .merge:
           try startAction(holder, wait, approval: approval)
-        case .success(let answer) where answer.answer == .ask:
+        case .success(let answer) where answer.word == .ask:
           let about = entries[call.subject] == nil ? nil : call.subject
           try recordReport(answer.question, needsYou: true, about: about, on: try ensureOperator(), wait: waitId)
           status.reason = answer.question
