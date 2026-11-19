@@ -194,7 +194,8 @@ extension Service {
   private func tellAboutCI(_ read: CIRead, _ message: String) {
     let text =
       "Switchboard: the checks on #\(read.number) failed at \(read.head.prefix(7)). sbd's CI reader, which read the "
-      + "failed logs, says: \(message)"
+      + "failed logs, says: \(Wait.sentence(message)) Check this against the logs. If your change caused it, fix it "
+      + "and push. sbd runs the merge when the PR is Ready to merge."
     setCICheck(read.holder, read.wait, CICheck(head: read.head, since: nowMs(), step: .judged))
     do {
       _ = try send(read.subject, text, by: .sbd, trigger: .wait)

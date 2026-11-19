@@ -250,6 +250,7 @@ extension OperatorJudgeTests {
       #expect(system.contains("data"), Comment(rawValue: system))
       #expect(system.contains("instruction"), Comment(rawValue: system))
       #expect(system.contains("approve"), Comment(rawValue: system))
+      #expect(system.contains("<session-reply> tags"), Comment(rawValue: system))
     }
 
     /// Step 1 of Stage 1: the merge rule of master Decision 13 names each of these.
@@ -725,6 +726,11 @@ extension OperatorJudgeTests {
     @Test(arguments: ["timeout", "flake", "real"])
     func systemPromptNamesEachCause(_ cause: String) {
       #expect(OperatorJudge.CIFailure.system.contains(cause), Comment(rawValue: OperatorJudge.CIFailure.system))
+    }
+
+    @Test func systemPromptCapsTheMessageAtTheLengthThatParseKeeps() {
+      let system = OperatorJudge.CIFailure.system
+      #expect(system.contains("\(OperatorJudge.CIFailure.maxMessage) characters"), Comment(rawValue: system))
     }
   }
 }

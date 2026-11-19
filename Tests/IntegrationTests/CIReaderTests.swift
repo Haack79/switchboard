@@ -77,6 +77,9 @@ extension Instance {
   /// The start of sbd's message to the session, before the short head.
   static let framing = "Switchboard: the checks on #\(number) failed at "
   static let reader = "sbd's CI reader, which read the failed logs, says: "
+  static let nextStep =
+    " Check this against the logs. If your change caused it, fix it and push. sbd runs the merge when the PR is Ready "
+    + "to merge."
   static let failingLine = "✘ Test parsesTitles() failed"
 
   /// One run as `gh run list --json databaseId,name,workflowName,conclusion,status` prints it.
@@ -251,7 +254,7 @@ extension CIReaderTests {
 
     let text = try ciMessage(sbd, s)
     #expect(text.hasPrefix(Self.framing + head(github).prefix(7)), Comment(rawValue: text))
-    #expect(text.contains(Self.reader + Self.message), Comment(rawValue: text))
+    #expect(text.contains(Self.reader + Self.message + Self.nextStep), Comment(rawValue: text))
   }
 
   /// Decision 42: nothing repeats for the same head across ticks.
