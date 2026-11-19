@@ -201,7 +201,7 @@ public struct MCPToolServer: Sendable {
       guard let scoped else { return try client.call("group-ls") }
       return try JSON(encoding: GroupList(groups: [scoped.group], ungrouped: []))
     case "add_group":
-      var request = pick(args, ["name", "sessions", "note"])
+      var request = pick(args, ["name", "sessions", "note", "description"])
       request["by"] = MCPToolServer.byClaude
       return try client.call("group-add", request)
     case "remove_group":

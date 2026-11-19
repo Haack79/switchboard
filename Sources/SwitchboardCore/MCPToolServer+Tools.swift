@@ -151,6 +151,8 @@ extension MCPToolServer {
       [
         "name": string("The group's name."), "sessions": strings("The sessions to move into it."),
         "note": string("A note."),
+        "description": string(
+          "One line on what the group is for, at most \(SessionGroup.descriptionLimit) characters."),
       ], required: ["name"]),
     Tool("remove_group", "Removes a group. Its sessions become ungrouped.", ["group": group], required: ["group"]),
     Tool(

@@ -54,10 +54,7 @@ extension Service {
     return Set(ids)
   }
 
-  /// Throws unless the user sent the request. A missing `by` means the user.
-  func refuseClaudeResolving(_ args: JSON) throws {
-    guard try Author(parsing: args["by"]?.string) == .you else { throw APIError("Only you can resolve a to-do.") }
-  }
+  func refuseClaudeResolving(_ args: JSON) throws { try requireUser(args, "Only you can resolve a to-do.") }
 
   /// Throws unless `resolving` names exactly the session's open to-dos.
   /// Returns the `resolved_todos` rows that a delete that resolves them
