@@ -42,6 +42,17 @@ extension Service {
       }
     }
     defer { queue.sync { _ = merging.remove(id) } }
+    _ = try landPR(id, pr: pr, method: method)
+    return try queue.sync { try JSON(encoding: summary(id)) }
+  }
+
+  /// Merges or enqueues the session's PR by `method` and records a `merge`
+  /// event with the attempt. After a merge it resumes the session with a
+  /// message. After an enqueue it sets a queue wait. A session marked done
+  /// gets neither. A failed command throws its error after the record. The
+  /// caller must not hold the state queue, because the gh command runs
+  /// outside it.
+  func landPR(_ id: String, pr: PullRequest, method: MergeMethod) throws -> MergeAttempt {
     let error = method == .trunk ? runTrunkEnqueue(pr) : runMerge(pr)
     return try queue.sync {
       let landed: MergeAttempt.Result = method.enqueues ? .enqueued : .merged
@@ -55,7 +66,7 @@ extension Service {
           _ = try send(id, "PR #\(pr.number) merged; finish the post-merge steps", by: .sbd, trigger: .merge)
         }
       }
-      return try JSON(encoding: summary(id))
+      return attempt
     }
   }
 

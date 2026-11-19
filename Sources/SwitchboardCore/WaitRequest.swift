@@ -89,6 +89,8 @@ public struct WaitRequest: Codable, Equatable, Sendable {
 /// resolution reads nothing of the waiter, and it is not a `session` wait on the operator, whose id is
 /// `operatorID`.
 public func handsOff(_ wait: Wait, namedSession: Session, here: Bool, operatorID: String?) -> Bool {
-  namedSession.kind == .manager && !here && wait.by == .claude && wait.then == .resume && !wait.readsWaiter
-    && (wait.session.map { $0.id != operatorID } ?? true)
+  let fromConversation = namedSession.kind == .manager && !here
+  let claudeResumeWait = wait.by == .claude && wait.then == .resume
+  let resolvesTheSameOnOperator = !wait.readsWaiter && (wait.session.map { $0.id != operatorID } ?? true)
+  return fromConversation && claudeResumeWait && resolvesTheSameOnOperator
 }

@@ -101,6 +101,22 @@ public struct Wait: Codable, Equatable, Sendable {
     }
   }
 
+  /// How a wait resolved.
+  public struct Settlement: Equatable, Sendable {
+    public var outcome: String
+    /// When the change that settled the wait happened on GitHub or Trunk, in ms, when the source gives it.
+    public var changedAt: Int64?
+    /// Whether the change the wait asked for happened. Outcomes such as a removed target, a PR that closed first,
+    /// or failed checks are not met.
+    public var met: Bool
+
+    public init(_ outcome: String, changedAt: Int64? = nil, met: Bool) {
+      self.outcome = outcome
+      self.changedAt = changedAt
+      self.met = met
+    }
+  }
+
   public var id: String
   public var kind: Kind
   /// The PR of a PR kind. Nil means the session's own PR.
@@ -266,17 +282,22 @@ public struct Wait: Codable, Equatable, Sendable {
   /// state on its own: the target was removed, it reached Done, or it went
   /// Stale, which is how sbd defines an abandoned session.
   public func resolution(now: Int64, stateOf: (String) -> AttentionState?) -> String? {
+    settlement(now: now, stateOf: stateOf)?.outcome
+  }
+
+  /// `resolution(now:stateOf:)` with whether the wait's condition was met. A due `date` or `manual` wait is met.
+  public func settlement(now: Int64, stateOf: (String) -> AttentionState?) -> Settlement? {
     switch kind {
     case .date, .manual:
       guard let until, until <= now else { return nil }
-      return kind == .date ? "the time came" : "time to recheck"
+      return Settlement(kind == .date ? "the time came" : "time to recheck", met: true)
     case .session:
       guard let target = session else { return nil }
-      guard let current = stateOf(target.id) else { return "it was removed" }
+      guard let current = stateOf(target.id) else { return Settlement("it was removed", met: false) }
       switch current {
-      case state ?? .done: return "it did"
-      case .done: return "it reached Done first"
-      case .stale: return "it went stale"
+      case state ?? .done: return Settlement("it did", met: true)
+      case .done: return Settlement("it reached Done first", met: false)
+      case .stale: return Settlement("it went stale", met: false)
       default: return nil
       }
     default:
@@ -308,8 +329,10 @@ public struct Wait: Codable, Equatable, Sendable {
   /// `resolution(of:)` with the time, in ms, of the change on GitHub or Trunk
   /// that settled the wait: the merge or close, the matching review, the
   /// approval, or Trunk's queue state. The time is nil when the PR doesn't
-  /// give one, as for a `ci` rollup.
-  public func settlement(of pr: SwitchboardCore.PullRequest) -> (outcome: String, changedAt: Int64?)? {
+  /// give one, as for a `ci` rollup. A matching review meets a `review` or
+  /// `bot-review` wait whatever its verdict, because the wait asks for a
+  /// review, not an approval.
+  public func settlement(of pr: SwitchboardCore.PullRequest) -> Settlement? {
     let endedOutcome: String? =
       switch (pr.state, kind) {
       case (.open, _): nil
@@ -319,14 +342,16 @@ public struct Wait: Codable, Equatable, Sendable {
       case (.closed, .merge), (.closed, .queue): "it closed without merging"
       case (.closed, _): "the PR closed first"
       }
-    let ended = endedOutcome.map { ($0, pr.endedAt) }
+    let ended = endedOutcome.map {
+      Settlement($0, changedAt: pr.endedAt, met: pr.state == .merged && (kind == .merge || kind == .queue))
+    }
     switch kind {
     case .merge:
       return ended
     case .ci:
-      if pr.checksPassed { return ("the checks passed", nil) }
-      if let depot = pr.depotFailure { return (depot.outcome, nil) }
-      return pr.checksFailed ? ("the checks failed", nil) : ended
+      if pr.checksPassed { return Settlement("the checks passed", met: true) }
+      if let depot = pr.depotFailure { return Settlement(depot.outcome, met: false) }
+      return pr.checksFailed ? Settlement("the checks failed", met: false) : ended
     case .review, .botReview:
       let verbs = ["APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed"]
       let newest = pr.reviews.last { r in
@@ -338,27 +363,32 @@ public struct Wait: Codable, Equatable, Sendable {
         return kind == .botReview && r.bot == true
       }
       return newest.flatMap { r in
-        verbs[r.state].map { ("\(r.author) \($0)", r.submittedAt.flatMap(Transcript.milliseconds)) }
+        verbs[r.state].map {
+          Settlement("\(r.author) \($0)", changedAt: r.submittedAt.flatMap(Transcript.milliseconds), met: true)
+        }
       } ?? ended
     case .approval:
       if let who {
         return pr.verdicts.first { $0.isApproval && Wait.sameLogin($0.author, who) }
-          .map { ("\($0.author) approved", $0.submittedAt.flatMap(Transcript.milliseconds)) } ?? ended
+          .map {
+            Settlement("\($0.author) approved", changedAt: $0.submittedAt.flatMap(Transcript.milliseconds), met: true)
+          } ?? ended
       }
       guard pr.isApproved else { return ended }
-      return (
+      return Settlement(
         pr.approvers.isEmpty ? "the PR is approved" : "approved by " + pr.approvers.joined(separator: ", "),
-        pr.approvedAt.flatMap(Transcript.milliseconds)
-      )
+        changedAt: pr.approvedAt.flatMap(Transcript.milliseconds), met: true)
     case .queue:
       if ended != nil { return ended }
       // A status from before the wait can describe an earlier run of the PR.
       guard let at = pr.queueAt, at > countsAfter else { return nil }
       switch pr.queue {
       case .removed?:
-        guard let label = pr.queueLabel, let text = pr.queueText else { return ("Trunk removed it from the queue", at) }
-        return ("Trunk removed it from the queue (\(label)): \(text)", at)
-      case .merged?: return ("Trunk merged it", at)
+        guard let label = pr.queueLabel, let text = pr.queueText else {
+          return Settlement("Trunk removed it from the queue", changedAt: at, met: false)
+        }
+        return Settlement("Trunk removed it from the queue (\(label)): \(text)", changedAt: at, met: false)
+      case .merged?: return Settlement("Trunk merged it", changedAt: at, met: true)
       default: return nil
       }
     case .deploy, .session, .date, .manual:

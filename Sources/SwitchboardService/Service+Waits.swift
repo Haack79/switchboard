@@ -25,11 +25,12 @@ extension Service {
       }
       let waitId = args["wait"]?.string
       let changedAt = args["changedAt"]?.int.map(Int64.init)
+      let met = args["met"]?.bool ?? false
       if let until = pauseCondition(id, waitId) {
-        try resolve(id, until, outcome: outcome, changedAt: changedAt)
+        try resolve(id, until, outcome: outcome, changedAt: changedAt, met: met)
       } else {
         let (holder, wait) = try openWait(id, waitId)
-        try resolve(holder, wait, outcome: outcome, changedAt: changedAt)
+        try resolve(holder, wait, outcome: outcome, changedAt: changedAt, met: met)
       }
     default:
       throw APIError("unknown request \(op)")
@@ -126,9 +127,14 @@ extension Service {
   /// Resolves an open wait and runs its `then`, through the `resolve-wait`
   /// request. `outcome` says what happened in words, such as "the checks
   /// passed". `changedAt` is when that happened on GitHub or Trunk, in ms,
-  /// when the poller knows it. A poller calls it from its own queue.
-  func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?) throws -> SessionSummary {
-    var args: [String: JSON] = ["session": .string(session), "wait": .string(wait), "outcome": .string(outcome)]
+  /// when the poller knows it. `met` says whether the change the wait asked
+  /// for happened. A poller calls it from its own queue.
+  func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?, met: Bool) throws
+    -> SessionSummary
+  {
+    var args: [String: JSON] = [
+      "session": .string(session), "wait": .string(wait), "outcome": .string(outcome), "met": .bool(met),
+    ]
     if let changedAt { args["changedAt"] = .number(Double(changedAt)) }
     let response = handle(Request(op: "resolve-wait", args: .object(args)))
     guard response.ok, let result = response.result else { throw APIError(response.error ?? "resolve-wait failed") }
@@ -139,9 +145,9 @@ extension Service {
   /// sessions' states. `tick` calls it after it records each session's state.
   func resolveDueWaits(now: Int64) {
     for (session, wait) in waitsToResolve() {
-      guard let outcome = wait.resolution(now: now, stateOf: lastState) else { continue }
+      guard let settlement = wait.settlement(now: now, stateOf: lastState) else { continue }
       do {
-        try resolve(session.id, wait, outcome: outcome)
+        try resolve(session.id, wait, outcome: settlement.outcome, met: settlement.met)
       } catch {
         logLine("can't resolve wait \(wait.id) of \(session.id): \(error)")
       }
@@ -150,7 +156,7 @@ extension Service {
 
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
-  private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil) throws {
+  private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil, met: Bool) throws {
     if try resumeOnCondition(id, wait, outcome: outcome) { return }
     if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), by: .sbd, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }

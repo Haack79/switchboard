@@ -72,13 +72,11 @@ extension Wait {
   }
 
   /// `deployResolution(of:comments:)` with the time, in ms, of the merge or close that settled the wait. The time
-  /// is nil when a deploy comment settled it.
-  public func deploySettlement(of pr: SwitchboardCore.PullRequest, comments: [PRComment]) -> (
-    outcome: String, changedAt: Int64?
-  )? {
+  /// is nil when a deploy comment settled it. A merge that sbd can't see deploy is not met.
+  public func deploySettlement(of pr: SwitchboardCore.PullRequest, comments: [PRComment]) -> Settlement? {
     switch pr.state {
     case .open: return nil
-    case .closed: return ("it closed without merging", pr.endedAt)
+    case .closed: return Settlement("it closed without merging", changedAt: pr.endedAt, met: false)
     case .merged: break
     }
     if service != nil { return nil }
@@ -86,12 +84,14 @@ extension Wait {
       let comment = comments.lazy.filter { $0.author == DeployComment.author }
         .compactMap { $0.body.flatMap(DeployComment.parse) }.last
       guard let comment, comment.deployed(to: deployEnvironments) else { return nil }
-      return (deployedOutcome, nil)
+      return Settlement(deployedOutcome, met: true)
     }
     if Dependencies.sameRepo(pr.repo, Wait.chartsRepository) {
-      return ("it merged, and Switchboard can't read ArgoCD to see it deploy", pr.endedAt)
+      return Settlement(
+        "it merged, and Switchboard can't read ArgoCD to see it deploy", changedAt: pr.endedAt, met: false)
     }
-    return ("it merged, and Switchboard has no deploy signal for \(pr.repo)", pr.endedAt)
+    return Settlement(
+      "it merged, and Switchboard has no deploy signal for \(pr.repo)", changedAt: pr.endedAt, met: false)
   }
 
   /// What happened, when a deploy wait that names a service can resolve, or
@@ -103,11 +103,19 @@ extension Wait {
     _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
     environments: [DeployEnvironment: EnvironmentDeploy]
   ) -> String? {
+    serviceDeploySettlement(state, pr: pr, environments: environments)?.outcome
+  }
+
+  /// `serviceDeployResolution(_:pr:environments:)` with whether the service deployed. A stuck deploy is not met.
+  public func serviceDeploySettlement(
+    _ state: ServiceDeployState?, pr: SwitchboardCore.PullRequest,
+    environments: [DeployEnvironment: EnvironmentDeploy]
+  ) -> Settlement? {
     switch ServiceDeployVerdict.of(
       service: service ?? "", state, pr: pr, environments: deployEnvironments, progress: environments)
     {
-    case .deployed?: deployedOutcome
-    case .stuck(let reason)?: reason
+    case .deployed?: Settlement(deployedOutcome, met: true)
+    case .stuck(let reason)?: Settlement(reason, met: false)
     case nil: nil
     }
   }

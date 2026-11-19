@@ -50,6 +50,19 @@ import Testing
     #expect(deployed.changedAt == nil)
   }
 
+  /// Only a deploy that reached the named environments meets the wait. A close, a merge that sbd can't see
+  /// deploy, and a stuck service deploy do not.
+  @Test func aDeploySettlementIsMetOnlyWhenTheDeployReachedTheEnvironments() throws {
+    #expect(wait().deploySettlement(of: pr(), comments: [try comment("comment-deployed.md")])?.met == true)
+    #expect(wait().deploySettlement(of: pr(.closed), comments: [])?.met == false)
+    #expect(wait().deploySettlement(of: pr(repo: "PostHog/charts"), comments: [])?.met == false)
+    #expect(wait().deploySettlement(of: pr(repo: "PostHog/other"), comments: [])?.met == false)
+    let w = wait(service: "feature-flags")
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: each(.deployed))?.met == true)
+    #expect(w.serviceDeploySettlement(nil, pr: pr(), environments: [:])?.met == false)
+    #expect(w.serviceDeploySettlement(service(), pr: pr(), environments: each(.failed))?.met == false)
+  }
+
   /// A deploy wait is usually set after its PR merged, so an earlier merge
   /// counts. An earlier PR of a reused branch that closed without merging
   /// still doesn't.

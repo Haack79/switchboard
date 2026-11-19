@@ -338,6 +338,14 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
     #expect(waitOn(kind, until: 1000).resolution(now: 999, stateOf: { _ in nil }) == nil)
   }
 
+  /// A due date or manual wait is met, so an action on it runs.
+  @Test(arguments: [Wait.Kind.date, .manual])
+  func aDueTimedWaitIsMet(_ kind: Wait.Kind) throws {
+    let settlement = try #require(waitOn(kind, until: 1000).settlement(now: 1000, stateOf: { _ in nil }))
+
+    #expect(settlement.met)
+  }
+
   @Test func manualWaitWithoutARecheckTimeStaysOpen() {
     #expect(waitOn(.manual, note: "ask Alex").resolution(now: farFuture, stateOf: { _ in .done }) == nil)
   }
@@ -940,6 +948,40 @@ extension WaitResolution {
     let wait = waitOn(.session, session: flagCache, state: .readyForReview)
 
     #expect(wait.resolution(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done }) == nil)
+  }
+}
+
+/// A target's state when sbd checks a `session` wait, and how the wait settles.
+struct SessionMetCase: CustomTestStringConvertible, Sendable {
+  var wanted: AttentionState
+  var target: AttentionState?
+  var outcome: String
+  var met: Bool
+
+  var testDescription: String { "wanting \(wanted.rawValue), target \(target?.rawValue ?? "removed"): \(outcome)" }
+}
+
+extension SessionWaitTargets {
+  /// Every outcome that `settlement(now:stateOf:)` gives a `session` wait. An
+  /// action runs only on an outcome that met the wait's condition.
+  static let metCases: [SessionMetCase] =
+    AttentionState.allCases.map { SessionMetCase(wanted: $0, target: $0, outcome: "it did", met: true) } + [
+      SessionMetCase(wanted: .readyToMerge, target: .done, outcome: "it reached Done first", met: false),
+      SessionMetCase(wanted: .readyForReview, target: .done, outcome: "it reached Done first", met: false),
+      SessionMetCase(wanted: .readyToMerge, target: .stale, outcome: "it went stale", met: false),
+      SessionMetCase(wanted: .done, target: .stale, outcome: "it went stale", met: false),
+      SessionMetCase(wanted: .readyToMerge, target: nil, outcome: "it was removed", met: false),
+      SessionMetCase(wanted: .done, target: nil, outcome: "it was removed", met: false),
+    ]
+
+  @Test(arguments: SessionWaitTargets.metCases)
+  func aSessionSettlementIsMetOnlyWhenTheTargetReachedTheState(_ c: SessionMetCase) throws {
+    let wait = waitOn(.session, session: flagCache, state: c.wanted)
+
+    let settlement = try #require(wait.settlement(now: 1, stateOf: { $0 == flagCache.id ? c.target : nil }))
+
+    #expect(settlement.outcome == c.outcome)
+    #expect(settlement.met == c.met)
   }
 }
 
