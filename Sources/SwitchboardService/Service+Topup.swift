@@ -67,6 +67,7 @@ extension Service {
     }
 
     var started: [(ref: String, session: SessionSummary)] = []
+    var startErrors: [String] = []
     var skips = built.skips + answer.skips
     for pick in answer.picks {
       let refusal = queue.sync {
@@ -81,10 +82,15 @@ extension Service {
         session = try startPick(pick.candidate, gate: gate)
       } catch {
         skips.append(Schedule.Gate.Skip(ref: pick.ref, reason: "can't start it: \(error)"))
+        startErrors.append("can't start \(pick.ref): \(error)")
         continue
       }
       started.append((pick.ref, session))
       queue.sync { recordTopupStart(id, scheduleID, session: session.id, holder: holder) }
+    }
+    // A pick that the re-check refused is not a start failure.
+    if let first = startErrors.first, startErrors.count == answer.picks.count {
+      return fallBack(id, scheduleID, gate: gate, status: status, skipped: skipped, failure: first, skips: skips)
     }
     queue.sync {
       finishTopup(
@@ -191,7 +197,7 @@ extension Service {
     _ candidate: TopupCandidates.Candidate, gate: Schedule.Gate, openPRs: [TopupCandidates.OpenPR], started: [String]
   ) -> String? {
     // A session that this top-up started may not count yet, because sbd reads its repository after it starts.
-    let rows = queueRows(gate, subjects: actionSubjects())
+    let rows = queueRows(subjects: actionSubjects())
     let active = Set(QueueStatus.compute(rows, gate: gate).counted.map(\.id)).union(started)
     if active.count >= gate.target { return "the group has its target of \(gate.target) active sessions" }
     guard case .issue(let issue) = candidate else { return nil }
@@ -252,15 +258,16 @@ extension Service {
   }
 
   /// Sends the schedule's fallback message with the failure on its first line, and records the run with a failed
-  /// check. It runs off the state queue.
+  /// check that lists `skips`. It runs off the state queue.
   private func fallBack(
-    _ id: String, _ scheduleID: String, gate: Schedule.Gate, status: QueueStatus, skipped: Int, failure: String
+    _ id: String, _ scheduleID: String, gate: Schedule.Gate, status: QueueStatus, skipped: Int, failure: String,
+    skips: [Schedule.Gate.Skip] = []
   ) {
     logLine("the top-up of schedule \(scheduleID) of \(id) failed: \(failure)")
     queue.sync {
       guard let schedule = entries[id]?.session.schedules?.first(where: { $0.id == scheduleID }) else { return }
       let now = nowMs()
-      let check = Schedule.Gate.Check(.failed, status: status, now: now, error: failure)
+      let check = Schedule.Gate.Check(.failed, status: status, now: now, skipped: skips, error: failure)
       let text = gate.fallbackMessage(status: status, prompt: schedule.prompt, failure: failure)
       sendAndRecord(id, schedule, text: text, skipped: skipped, check: check, now: now)
     }
@@ -270,7 +277,8 @@ extension Service {
 
   /// For each session that a top-up started and that sbd still has, arms the merge of its open PR once it is Ready
   /// to merge, held by the Operator, when `operator.mergeRepos` lists the PR's repository and no wait will merge it
-  /// yet. It drops from each gate's `started` the ids that sbd no longer has. The tick calls it on the state queue.
+  /// yet. It drops from each gate's `started` the ids that sbd no longer has and each id whose merge it armed, so it
+  /// arms each session's merge once. The tick calls it on the state queue.
   func armTopupMerges() {
     let owners = entries.filter { _, e in e.session.schedules?.contains { $0.gate?.started?.isEmpty == false } == true }
     guard !owners.isEmpty else { return }
@@ -302,6 +310,15 @@ extension Service {
         merging.insert(c.subject)
       } catch {
         logLine("can't arm the merge of \(c.subject) for schedule \(c.scheduleID): \(error)")
+        continue
+      }
+      do {
+        try changeSchedule(c.id, c.scheduleID) { s in
+          let rest = (s.gate?.started ?? []).filter { $0 != c.subject }
+          s.gate?.started = rest.isEmpty ? nil : rest
+        }
+      } catch {
+        logLine("can't drop \(c.subject) from the started sessions of schedule \(c.scheduleID): \(error)")
       }
     }
   }

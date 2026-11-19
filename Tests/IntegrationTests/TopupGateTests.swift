@@ -141,6 +141,23 @@ import Testing
     #expect(try fire.scheduleRan(sbd, op.id).isEmpty)
   }
 
+  /// Decision 35: only a repository that sbd hasn't read is unknown. A group session whose folder sbd has read and
+  /// found off GitHub can't be in the gate's repository, so it doesn't keep the gate open.
+  @Test func aGroupSessionOffGitHubDoesNotOpenTheGate() throws {
+    let sbd = try Instance()
+    let work = try waitingSession(sbd)
+    let plain = try sbd.new(prompt: "hello", name: "notes")
+    try sbd.waitFor(plain.id, "sbd's read of the folder") { $0.repositoryRead == true && $0.repository == nil }
+    _ = try addGroup(sbd, work.id, plain.id)
+    let op = try operatorHelpers.idleOperator(sbd)
+    let made = try addTopup(sbd, op.id, target: 1)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let gate = try waitForGated(sbd, op.id, made.id, count: 1)
+    #expect(gate.last?.active == 1, "\(gate)")
+  }
+
   @Test func aSecondGatedDueTimeCountsTwo() throws {
     let sbd = try Instance()
     let work = try waitingSession(sbd)
@@ -339,6 +356,27 @@ import Testing
     try #require(messages.count == 1, "\(messages)")
     #expect(messages[0].data["text"]?.string?.hasPrefix("Work queue: ") == true, "\(messages[0])")
     #expect(run.gated == 1, "\(run)")
+  }
+
+  /// A plain schedule that sorts first and waits on the busy Operator doesn't hold back the gated check after it.
+  @Test func aPlainScheduleWaitingOnABusyOperatorDoesNotHoldBackAGatedCheck() throws {
+    let github = try FakeGitHub()
+    defer { withExtendedLifetime(github) {} }
+    let sbd = try gitHubInstance(github)
+    let work = try waitingSession(sbd, in: Self.charts, folder: "charts-work")
+    _ = try addGroup(sbd, work.id)
+    let op = try operatorHelpers.idleOperator(sbd)
+    let plain = try ScheduleTests().schedule(sbd, op.id, every: "1m", "/audit-waiting")
+    try sbd.advanceClock(1000)
+    let made = try addTopup(sbd, op.id, repo: Self.charts, target: 1)
+    try #require(plain.schedule.next < made.next, "the plain schedule must sort first: \(plain.schedule) \(made)")
+    try sbd.sb("operator", "slow held")
+    try fire.waitForPrompt(sbd, op.id, "slow held")
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    try waitForGated(sbd, op.id, made.id, count: 1)
+    #expect(try fire.current(sbd, op.id, plain.schedule.id)?.last == nil)
   }
 
   // MARK: Storing the gate
@@ -650,12 +688,11 @@ import Testing
   }
 
   /// A group chat's MCP server sends `group`. sbd arms actions for a gated schedule, so a scoped request may not
-  /// add one, even on a member of its own group.
+  /// add one, even on a member of its own group. The request sends no `caller`, so the scope alone refuses it.
   @Test func aScopedScheduleRequestWithAGateIsRefused() throws {
     let sbd = try Instance()
     let member = try sbd.new(name: "member")
     let group = try addGroup(sbd, member.id)
-    let chat = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("chat", Self.groupName, "--json"))
     let gate: JSON = [
       "group": .string(group.id), "repo": .string(Self.repo), "target": 1, "template": .string(Self.template),
       "rubric": .string(Self.rubric),
@@ -665,10 +702,24 @@ import Testing
       sbd, "schedule",
       [
         "session": .string(member.id), "every": "30m", "prompt": .string(Self.prompt), "gate": gate,
-        "group": .string(group.id), "caller": .string(chat.id),
+        "group": .string(group.id),
       ])
 
-    #expect(error != "no error")
+    #expect(error.contains("a group chat can't add or edit a top-up"), Comment(rawValue: error))
     #expect(try sbd.get(member.id).schedules == nil)
+  }
+
+  /// Decision 38: sbd refuses a scoped `edit-schedule` of a gated schedule too, even on a member of the scope's group.
+  @Test func aScopedEditOfATopupIsRefused() throws {
+    let sbd = try Instance()
+    let member = try sbd.new(name: "member")
+    let group = try addGroup(sbd, member.id)
+    let made = try addTopup(sbd, member.id)
+
+    let error = failure(
+      sbd, "edit-schedule", ["schedule": .string(made.id), "every": "1h", "group": .string(group.id)])
+
+    #expect(error.contains("a group chat can't add or edit a top-up"), Comment(rawValue: error))
+    #expect(try fire.current(sbd, member.id, made.id)?.every == made.every)
   }
 }

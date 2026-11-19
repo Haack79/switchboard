@@ -233,6 +233,8 @@ if [ "${1-}" = -p ]; then
     printf '%s\0' "${args[*]}" >>"$SB_HOME/topup-calls.log"
     printf '%s' "$input" >"$SB_HOME/topup-input.txt"
     [[ $input == *SLOW-TOPUP* ]] && exec sleep 30
+    # A test holds the pick on this FIFO while it changes sbd's sessions.
+    if [ -p "$SB_HOME/topup-gate" ]; then read -r _ <"$SB_HOME/topup-gate"; fi
     out=$(cat "$SB_HOME/topup-answer.json" 2>/dev/null) || out='{"picks":[],"skips":[]}'
     envelope "$out"
     exit 0

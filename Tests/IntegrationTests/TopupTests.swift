@@ -94,7 +94,15 @@ final class TopupBench {
   /// Holds the next `gh issue list` on the stub's FIFO, and returns the function that lets it go. The FIFO goes with
   /// the release, so later reads run at once.
   func holdIssueList() throws -> () -> Void {
-    let gate = "\(sbd.home.path)/gh-live/\(TopupTests.issueListKey).gate"
+    try hold("\(sbd.home.path)/gh-live/\(TopupTests.issueListKey).gate")
+  }
+
+  /// Holds the next pick call on the claude stub's FIFO, and returns the function that lets it go.
+  func holdPick() throws -> () -> Void {
+    try hold("\(sbd.home.path)/topup-gate")
+  }
+
+  private func hold(_ gate: String) throws -> () -> Void {
     try FileManager.default.createDirectory(
       atPath: (gate as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     guard mkfifo(gate, 0o600) == 0 else { throw TestError(description: "mkfifo failed") }
@@ -311,6 +319,22 @@ final class TopupBench {
     }
   }
 
+  /// Decision 37: sbd drops from the gate's `started` the ids of the sessions that it no longer has.
+  @Test func aRemovedStartedSessionLeavesTheGatesStartedList() throws {
+    let run = try shortByTwo()
+    let started = try started(run.sbd, run.gate)
+    try #require(started.count == 2, "\(String(describing: run.gate.last))")
+
+    try run.sbd.sb("rm", started[0].id)
+    try run.sbd.waitFor("sbd to remove \(started[0].name)", timeout: 30) {
+      try run.sbd.client.sessions().allSatisfy { $0.id != started[0].id }
+    }
+    try run.sbd.advanceClock(1000)
+
+    let gate = try #require(try self.gate(run.sbd, run.armed))
+    #expect(gate.started == [started[1].id], "\(gate)")
+  }
+
   @Test func aTopupRecordsOneInfoReportAndOneTopupEventAndSendsTheOperatorNothing() throws {
     let run = try shortByTwo()
     let started = try started(run.sbd, run.gate)
@@ -512,6 +536,30 @@ final class TopupBench {
     #expect(try operatorsWaits(bench.sbd, armed, on: s.id, .merge).count == 1, "a later tick armed a second merge")
   }
 
+  /// sbd arms a started session's merge wait once, so it doesn't arm the wait again after the Operator clears it.
+  @Test func aMergeWaitThatTheOperatorClearsIsNotArmedAgain() throws {
+    let bench = try TopupBench(mergeRepos: [Self.repo])
+    let sbd = bench.sbd
+    let (armed, s) = try startedWithAPR(bench)
+
+    try sbd.advanceClock(1000)
+    let merge = try sbd.waitFor(
+      "the merge wait on \(s.name)", timeout: 30, fetch: { try operatorsWaits(sbd, armed, on: s.id, .merge).first },
+      until: { _ in true })
+    let gate = try #require(try self.gate(sbd, armed))
+    #expect(gate.started?.contains(s.id) != true, "\(gate)")
+
+    try sbd.sb("wait", armed.op.id, "--clear", "--id", merge.id)
+    try sbd.waitFor("the cleared merge wait to go", timeout: 30) {
+      try operatorsWaits(sbd, armed, on: s.id, .merge).isEmpty
+    }
+    for _ in 0..<3 { try sbd.advanceClock(1000) }
+    sleep(2)
+
+    #expect(try operatorsWaits(sbd, armed, on: s.id, .merge).isEmpty, "a later tick armed the merge again")
+    #expect(try operatorsWaits(sbd, armed, on: s.id, .rmWorktree).count == 1)
+  }
+
   /// With `operator.mergeRepos` empty, as on the live Mac today, sbd arms no merge. The Operator handles the session
   /// once it is Ready to merge, because the gate opens.
   @Test func withoutMergeReposAStartedSessionThatGetsAPRGetsNoMergeWait() throws {
@@ -589,11 +637,117 @@ final class TopupBench {
     if failure.readsFail { #expect(bench.judgeCalls() == 0) }
   }
 
+  /// A top-up whose every pick fails to start sends the fallback with the first start error, and records a failed
+  /// check that lists each start error as a skip.
+  @Test func aTopupWhoseEveryPickFailsToStartSendsTheFallback() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try FileManager.default.removeItem(atPath: "\(bench.repos.root)/\(Self.repo)")
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache"), Self.issue(15, "Inbox dupes", author: Self.teammate)])
+    try bench.answer(picks: ["#12", "#15"])
+    let armed = try arm(bench, target: 2)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let run = try fire.waitForRun(sbd, armed.op.id, armed.schedule.id, timeout: 60)
+    sleep(2)
+    let messages = try sbd.sbdMessages(armed.op.id, after: armed.mark)
+    try #require(messages.count == 1, "\(messages.map(\.data.text))")
+    let text = messages[0].data["text"]?.string ?? ""
+    let first = text.split(separator: "\n").first.map(String.init) ?? ""
+    #expect(first.hasPrefix("The top-up failed: can't start #12: \(Followup.missingCheckout)"), Comment(rawValue: text))
+    #expect(run.outcome == .pasted, "\(run)")
+    let gate = try #require(try self.gate(sbd, armed))
+    #expect(gate.last?.result == .failed, "\(String(describing: gate.last))")
+    #expect(gate.last?.skipped.map(\.ref) == ["#12", "#15"], "\(String(describing: gate.last))")
+    #expect((gate.started ?? []).isEmpty, "\(gate)")
+    #expect(bench.judgeCalls() == 1)
+    #expect(try sessions(sbd, onIssue: 12).isEmpty)
+    #expect(try sessions(sbd, onIssue: 15).isEmpty)
+    #expect(try reports(sbd).isEmpty)
+  }
+
+  // MARK: The re-check before each spawn (Decision 40)
+
+  /// A top-up whose every pick the re-check refuses records a started check with no sessions and sends nothing,
+  /// because a refused pick is not a start failure.
+  @Test func aTopupWhoseEveryPickIsRefusedSendsNothing() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache")])
+    try bench.answer(picks: ["#12"])
+    let armed = try arm(bench, target: 1)
+    let release = try bench.holdPick()
+    defer { release() }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("the held pick", timeout: 30) { bench.judgeCalls() == 1 }
+    _ = try sbd.session(
+      in: Self.repo, branch: "\(Self.branchPrefix)12-fix-the-cache", folder: "cache-fix", name: "cache-fix")
+    release()
+
+    let gate = try waitForCheck(sbd, armed, .started)
+    sleep(1)
+    #expect(gate.last?.started == [], "\(String(describing: gate.last))")
+    let skip = Schedule.Gate.Skip(ref: "#12", reason: "a session covers it now")
+    #expect(gate.last?.skipped.contains(skip) == true, "\(String(describing: gate.last))")
+    #expect(try gateTests.sent(sbd, armed.op.id, after: armed.mark).isEmpty)
+  }
+
+  /// A session that starts on a picked issue while the judge runs covers the issue, so the top-up skips the pick.
+  @Test func aPickThatASessionCoversDuringTheJudgeCallIsSkipped() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache"), Self.issue(15, "Inbox dupes", author: Self.teammate)])
+    try bench.answer(picks: ["#12", "#15"])
+    let armed = try arm(bench, target: 2)
+    let release = try bench.holdPick()
+    defer { release() }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("the held pick", timeout: 30) { bench.judgeCalls() == 1 }
+    let covering = try sbd.session(
+      in: Self.repo, branch: "\(Self.branchPrefix)12-fix-the-cache", folder: "cache-fix", name: "cache-fix")
+    release()
+
+    let gate = try waitForCheck(sbd, armed, .started)
+    let skip = Schedule.Gate.Skip(ref: "#12", reason: "a session covers it now")
+    #expect(gate.last?.skipped.contains(skip) == true, "\(String(describing: gate.last))")
+    #expect(try sessions(sbd, onIssue: 12).map(\.id) == [covering.id])
+    #expect(try sessions(sbd, onIssue: 15).count == 1)
+  }
+
+  /// A session that joins the group while sbd reads the issues counts toward the target, so the top-up skips the picks past the target.
+  @Test func aPickPastTheTargetIsSkipped() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache"), Self.issue(15, "Inbox dupes", author: Self.teammate)])
+    try bench.answer(picks: ["#12", "#15"])
+    let armed = try arm(bench, target: 2)
+    let release = try bench.holdIssueList()
+    defer { release() }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("the held issue read", timeout: 30) { !sbd.ghCalls("issue list").isEmpty }
+    let late = try gateTests.waitingSession(sbd, in: Self.repo, folder: "late-work")
+    try gateTests.move(sbd, late.id, into: armed.group)
+    release()
+
+    let gate = try waitForCheck(sbd, armed, .started)
+    let skip = Schedule.Gate.Skip(ref: "#15", reason: "the group has its target of 2 active sessions")
+    #expect(gate.last?.skipped.contains(skip) == true, "\(String(describing: gate.last))")
+    #expect(try sessions(sbd, onIssue: 12).count == 1)
+    #expect(try sessions(sbd, onIssue: 15).isEmpty)
+  }
+
   // MARK: One top-up at a time (Decision 42)
 
   /// Run Now while the schedule's top-up waits on its issue read leaves the schedule due and starts nothing. Once
-  /// the top-up ends, the due schedule checks again, and the coverage re-check finds the picks covered by the
-  /// sessions that the first top-up started. Each pick starts once.
+  /// the top-up ends, the due schedule checks again and saves a later next run. Each pick starts once.
   @Test func runNowDuringAnInFlightTopupStartsEachPickOnce() throws {
     let bench = try TopupBench()
     let sbd = bench.sbd
@@ -617,6 +771,8 @@ final class TopupBench {
     for _ in 0..<3 { try sbd.advanceClock(1000) }
     sleep(3)
 
+    let after = try #require(try fire.current(sbd, armed.op.id, armed.schedule.id))
+    #expect(after.next > (try sbd.now()), "the schedule stayed due after its top-up ended: \(after)")
     #expect(try sessions(sbd, onIssue: 12).count == 1)
     #expect(try sessions(sbd, onIssue: 15).count == 1)
     let members = try sbd.client.sessions().filter { $0.group == armed.group.id && $0.kind == .work }

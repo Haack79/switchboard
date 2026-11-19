@@ -11,16 +11,18 @@ private func gate(target: Int = 3, repo gateRepo: String = repo, group gateGroup
 }
 
 /// A started work session in the gate's group and repository that counts as active, unless an argument changes that.
+/// `repositoryRead` defaults to whether the row has a repository, so a nil repository means sbd hasn't read it.
 private func row(
   _ id: String = "s1", state: AttentionState = .working, kind: SessionKind = .work, group rowGroup: String? = group,
-  repository: String? = repo, markedDone: Bool = false, paused: Bool = false, removing: Bool = false,
-  unreadHost: Bool = false, prMerged: Bool = false, hasMergeAction: Bool = false, hasRemovalAction: Bool = false,
-  started: Bool = true
+  repository: String? = repo, repositoryRead: Bool? = nil, markedDone: Bool = false, paused: Bool = false,
+  removing: Bool = false, unreadHost: Bool = false, prMerged: Bool = false, hasMergeAction: Bool = false,
+  hasRemovalAction: Bool = false, started: Bool = true
 ) -> QueueStatus.Row {
   QueueStatus.Row(
-    id: id, name: "session \(id)", kind: kind, group: rowGroup, repository: repository, markedDone: markedDone,
-    paused: paused, removing: removing, state: state, unreadHost: unreadHost, prMerged: prMerged,
-    hasMergeAction: hasMergeAction, hasRemovalAction: hasRemovalAction, started: started)
+    id: id, name: "session \(id)", kind: kind, group: rowGroup, repository: repository,
+    repositoryRead: repositoryRead ?? (repository != nil), markedDone: markedDone, paused: paused, removing: removing,
+    state: state, unreadHost: unreadHost, prMerged: prMerged, hasMergeAction: hasMergeAction,
+    hasRemovalAction: hasRemovalAction, started: started)
 }
 
 private func queueStatus(_ rows: [QueueStatus.Row], target: Int = 3) -> QueueStatus {
@@ -194,6 +196,18 @@ extension QueueStatusTests {
 
     @Test func aRowWhoseRepositoryIsUnknownDoesNotCount() {
       #expect(queueStatus([row(repository: nil)]).counted.isEmpty)
+    }
+
+    @Test func aReadRowWithNoRepositoryIsUnknownOnlyUntilSbdReadsIt() {
+      #expect(queueStatus([row(repository: nil, repositoryRead: false)]).unknown.map(\.id) == ["s1"])
+      #expect(isIgnored(row(repository: nil, repositoryRead: true)))
+    }
+
+    /// A session whose checkout isn't on GitHub can't be in the gate's repository, so it doesn't hold the gate open.
+    @Test func aReadRowOffGitHubLeavesAFullQueueGated() {
+      let rows = [row("a"), row("b"), row("c"), row("d", repository: nil, repositoryRead: true)]
+
+      #expect(queueStatus(rows, target: 3).decision == .gated)
     }
 
     @Test(arguments: ["", "switchboard", "haacked/switchboard/extra"])
@@ -376,7 +390,7 @@ extension QueueStatusTests {
     @Test func theDecisionListsAReasonForEachUnknownAndNeedsAttentionRow() {
       let rows = [row("u", repository: nil), row("m", state: .readyToMerge), row("d", state: .done)]
 
-      #expect(reasons(queueStatus(rows).decision).count >= 3)
+      #expect(reasons(queueStatus(rows).decision).count == 3)
     }
   }
 }

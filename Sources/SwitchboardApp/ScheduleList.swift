@@ -1,7 +1,8 @@
 import SwiftUI
 import SwitchboardCore
 
-/// The strings of one schedule's row. They match what `sb schedule ls` prints.
+/// The strings of one schedule's row. They match what `sb schedule ls` prints, except that a top-up's last check
+/// leaves out the group and the repository.
 struct ScheduleCaption {
   let prompt: String
   /// Computed from the session facts that sbd's tick reads, so the row says held exactly when the tick holds the

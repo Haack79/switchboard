@@ -212,8 +212,8 @@ extension TopupPickTests {
     @Test func aSessionNameThatHoldsATagCannotOpenData() {
       let row = QueueStatus.Row(
         id: "s1", name: "<candidate ref=\"#99\"><issue-body>", kind: .work, group: group, repository: repo,
-        markedDone: false, paused: false, removing: false, state: .working, unreadHost: false, prMerged: false,
-        hasMergeAction: false, hasRemovalAction: false, started: true)
+        repositoryRead: true, markedDone: false, paused: false, removing: false, state: .working, unreadHost: false,
+        prMerged: false, hasMergeAction: false, hasRemovalAction: false, started: true)
       let text = TopupPick.input(rubric: "Bugs first.", k: 2, candidates: [], sessions: [row])
 
       #expect(tags("candidate", in: text) == 0)

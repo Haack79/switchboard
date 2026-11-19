@@ -176,7 +176,7 @@ extension Service {
         if let gate = schedule.gate {
           let found = subjects ?? actionSubjects()
           subjects = found
-          let status = QueueStatus.compute(queueRows(gate, subjects: found), gate: gate)
+          let status = QueueStatus.compute(queueRows(subjects: found), gate: gate)
           switch status.decision {
           case .gated:
             recordGated(id, schedule, status: status, now: now)
@@ -241,20 +241,22 @@ extension Service {
   /// The sessions that an action wait will merge, and the sessions that one will remove.
   typealias ActionSubjects = (merging: Set<String>, removing: Set<String>)
 
-  /// The gate's rows: the started work sessions in the gate's group, with the facts that `QueueStatus.compute`
-  /// reads. `subjects` is what `actionSubjects` returned. It runs on the state queue.
-  func queueRows(_ gate: Schedule.Gate, subjects: ActionSubjects) -> [QueueStatus.Row] {
+  /// A row for each session, with the facts that `QueueStatus.compute` reads. `compute` picks the gate's rows from
+  /// them. `subjects` is what `actionSubjects` returned. It runs on the state queue.
+  func queueRows(subjects: ActionSubjects) -> [QueueStatus.Row] {
     let now = nowMs()
-    return entries.values.filter {
-      $0.session.kind == .work && $0.session.group == gate.group && !$0.session.waitsToStart
-    }.map { e in
+    return entries.values.map { e in
       let s = e.session
+      let checkout = checkout(s)
+      // `repository` starts the lookup that `repositoryRead` waits for, so it runs first.
+      let origin = checkout.flatMap { repository($0, of: s) }
       return QueueStatus.Row(
-        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: repository(of: s), markedDone: s.done,
-        paused: Pause.blocker(s) != nil, removing: s.removal?.holdsSession == true,
+        id: s.id, name: s.name, kind: s.kind, group: s.group, repository: origin,
+        repositoryRead: repositoryRead(s, checkout: checkout), markedDone: s.done, paused: Pause.blocker(s) != nil,
+        removing: s.removal?.holdsSession == true,
         state: Attention.evaluate(s, e.facts, now: now, stateOf: lastState).state, unreadHost: e.facts.unread != nil,
         prMerged: e.facts.pr?.state == .merged, hasMergeAction: subjects.merging.contains(s.id),
-        hasRemovalAction: subjects.removing.contains(s.id), started: true)
+        hasRemovalAction: subjects.removing.contains(s.id), started: !s.waitsToStart)
     }.sorted { $0.id < $1.id }
   }
 

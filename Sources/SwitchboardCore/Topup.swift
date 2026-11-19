@@ -70,7 +70,8 @@ extension Schedule {
     public var template: String
     /// How to rank the candidates, for the pick.
     public var rubric: String
-    /// The ids of the sessions that the gate started and that sbd still has.
+    /// The ids of the sessions that the gate started, that sbd still has, and whose merge wait sbd hasn't armed. sbd
+    /// arms a session's merge wait once, so it doesn't arm the wait again after the Operator clears it.
     public var started: [String]?
     /// The due times that the gate closed since the schedule's last run.
     public var gated: Int?
@@ -141,8 +142,10 @@ public struct QueueStatus: Equatable, Sendable {
     public var name: String
     public var kind: SessionKind
     public var group: String?
-    /// owner/name, or nil when sbd hasn't read it.
+    /// owner/name, or nil when sbd hasn't read it or the checkout's origin isn't on GitHub.
     public var repository: String?
+    /// sbd has read the session's checkout and its origin. A nil `repository` with this set is a session off GitHub.
+    public var repositoryRead: Bool
     public var markedDone: Bool
     public var paused: Bool
     public var removing: Bool
@@ -158,15 +161,16 @@ public struct QueueStatus: Equatable, Sendable {
     public var started: Bool
 
     public init(
-      id: String, name: String, kind: SessionKind, group: String?, repository: String?, markedDone: Bool,
-      paused: Bool, removing: Bool, state: AttentionState, unreadHost: Bool, prMerged: Bool, hasMergeAction: Bool,
-      hasRemovalAction: Bool, started: Bool
+      id: String, name: String, kind: SessionKind, group: String?, repository: String?, repositoryRead: Bool,
+      markedDone: Bool, paused: Bool, removing: Bool, state: AttentionState, unreadHost: Bool, prMerged: Bool,
+      hasMergeAction: Bool, hasRemovalAction: Bool, started: Bool
     ) {
       self.id = id
       self.name = name
       self.kind = kind
       self.group = group
       self.repository = repository
+      self.repositoryRead = repositoryRead
       self.markedDone = markedDone
       self.paused = paused
       self.removing = removing
@@ -197,8 +201,8 @@ public struct QueueStatus: Equatable, Sendable {
   /// One per row of `unknown` and then of `needsAttention`.
   public var reasons: [String]
 
-  /// Sorts the rows for the gate. Only started work sessions in the gate's
-  /// group are rows. Any doubt about a row opens the gate, so the gate skips
+  /// Sorts the rows for the gate. It reads only the started work sessions in
+  /// the gate's group. Any doubt about a row opens the gate, so the gate skips
   /// a due time only when it can show that nothing needs doing.
   public static func compute(_ rows: [Row], gate: Schedule.Gate) -> QueueStatus {
     var status = QueueStatus(
@@ -225,7 +229,10 @@ public struct QueueStatus: Equatable, Sendable {
 
   private static func unknownReason(_ row: Row) -> String? {
     if row.unreadHost { return "its host is not connected, so sbd can't read its state" }
-    guard let repository = row.repository else { return "sbd hasn't read its repository yet" }
+    // A row that sbd has read and found off GitHub is outside the gate's repository, so `compute` skips it.
+    guard let repository = row.repository else {
+      return row.repositoryRead ? nil : "sbd hasn't read its repository yet"
+    }
     // A repository that isn't owner/name can't show that the row is outside the gate's repository.
     if !Issues.validRepo(repository) { return "sbd can't read its repository \(repository)" }
     return nil
@@ -307,9 +314,10 @@ public struct TopupCandidates: Equatable, Sendable {
   public var skips: [Schedule.Gate.Skip]
 
   /// The open issues of `repo` that no session or open PR covers, then the
-  /// follow-ups of `repo` and `group` that wait to start. An issue that
-  /// neither the viewer nor a teammate wrote is a skip, because the top-up
-  /// starts its sessions unattended. An unknown viewer trusts no one.
+  /// follow-ups of `repo` and `group` that wait to start, aren't marked done,
+  /// and whose trigger has fired or is manual. An issue that neither the
+  /// viewer nor a teammate wrote is a skip, because the top-up starts its
+  /// sessions unattended. An unknown viewer trusts no one.
   public static func build(
     repo: String, group: String, issues: [InboxIssue], openPRs: [OpenPR], sessions: [SessionRow],
     followups: [Session], viewer: String?, team: IssueTeam
@@ -338,9 +346,9 @@ public struct TopupCandidates: Equatable, Sendable {
         result.candidates.append(.issue(issue))
       }
     }
-    for session in followups where session.waitsToStart && session.group == group {
-      guard let followup = session.followup, let repository = followup.repository,
-        Dependencies.sameRepo(repository, repo)
+    for session in followups where session.waitsToStart && !session.done && session.group == group {
+      guard let followup = session.followup, followup.trigger.kind == .manual || followup.ready != nil,
+        let repository = followup.repository, Dependencies.sameRepo(repository, repo)
       else { continue }
       result.candidates.append(.followup(id: session.id, prompt: followup.prompt))
     }

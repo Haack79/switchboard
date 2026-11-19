@@ -30,15 +30,20 @@ private func openPR(_ number: Int, head: String = "haacked/some-change", closes:
 
 /// A follow-up that waits to start.
 private func waitingFollowup(
-  _ id: String, repository: String? = repo, group followupGroup: String? = group, started: Int64? = nil
+  _ id: String, repository: String? = repo, group followupGroup: String? = group, started: Int64? = nil,
+  trigger: Followup.Trigger = .manual, ready: Int64? = nil, done: Bool = false
 ) -> Session {
   var s = Session(id: id, name: "follow-up \(id)", cwd: "", claudeSessionId: "", created: 1)
-  var f = Followup(prompt: "Do the thing \(id)", repository: repository)
+  var f = Followup(prompt: "Do the thing \(id)", repository: repository, trigger: trigger)
   f.started = started
+  f.ready = ready
   s.followup = f
   s.group = followupGroup
+  s.done = done
   return s
 }
+
+private let mergeTrigger = Followup.Trigger.merge(Wait.PullRequest(repository: repo, number: 40))
 
 private func build(
   issues: [InboxIssue] = [], openPRs: [TopupCandidates.OpenPR] = [], sessions: [TopupCandidates.SessionRow] = [],
@@ -332,6 +337,30 @@ extension TopupCandidatesTests {
 
     @Test func aFollowupThatHasStartedIsLeftOut() {
       #expect(refs(build(followups: [waitingFollowup("f1", started: 5)])).isEmpty)
+    }
+
+    @Test func aFollowupWhoseDateHasNotFiredIsLeftOut() {
+      #expect(refs(build(followups: [waitingFollowup("f1", trigger: .date(5_000))])).isEmpty)
+    }
+
+    @Test func aFollowupWhoseMergeHasNotFiredIsLeftOut() {
+      #expect(refs(build(followups: [waitingFollowup("f1", trigger: mergeTrigger)])).isEmpty)
+    }
+
+    @Test func aFollowupWhoseDateFiredIsACandidate() {
+      #expect(refs(build(followups: [waitingFollowup("f1", trigger: .date(5_000), ready: 6_000)])) == ["followup:f1"])
+    }
+
+    @Test func aFollowupWhoseMergeFiredIsACandidate() {
+      #expect(refs(build(followups: [waitingFollowup("f1", trigger: mergeTrigger, ready: 6_000)])) == ["followup:f1"])
+    }
+
+    @Test func aManualFollowupMarkedDoneIsLeftOut() {
+      #expect(refs(build(followups: [waitingFollowup("f1", done: true)])).isEmpty)
+    }
+
+    @Test func aFiredFollowupMarkedDoneIsLeftOut() {
+      #expect(refs(build(followups: [waitingFollowup("f1", trigger: .date(5_000), ready: 6_000, done: true)])).isEmpty)
     }
 
     @Test func issuesAndFollowupsAreCandidatesTogether() {

@@ -27,7 +27,9 @@ import Testing
 
   /// The tools that act on one schedule by its id.
   enum ScheduleTool: String, CaseIterable {
-    case remove = "remove_schedule", edit = "edit_schedule", run = "run_schedule"
+    case remove = "remove_schedule"
+    case edit = "edit_schedule"
+    case run = "run_schedule"
 
     func call(_ mcp: MCPClient, _ row: ScheduleRow) throws -> ToolResult {
       var args: [String: JSON] = ["schedule": .string(row.schedule.id)]
