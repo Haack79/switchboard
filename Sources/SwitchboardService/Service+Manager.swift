@@ -84,12 +84,12 @@ extension Service {
   }
 
   /// The operator's id, or nil when none exists. When the store holds more
-  /// than one, it is the oldest. sbd logs the others and leaves them as they are.
-  func operatorID() -> String? {
+  /// than one, it is the oldest. sbd logs the others, unless `quiet`, and leaves them as they are.
+  func operatorID(quiet: Bool = false) -> String? {
     let operators = entries.values.map(\.session).filter { $0.kind == .operator }
       .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
     guard let oldest = operators.first else { return nil }
-    if operators.count > 1 {
+    if operators.count > 1, !quiet {
       let others = operators.dropFirst().map(\.id).joined(separator: ", ")
       logLine("found more than one operator. Using \(oldest.id), the oldest, and leaving \(others)")
     }

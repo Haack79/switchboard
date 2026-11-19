@@ -10,7 +10,7 @@ import Testing
   /// The environment that the config's Manager settings give a pane whose environment was `env`.
   func applied(_ configJSON: String, to env: [String: String] = [:]) throws -> [String: String] {
     var env = env
-    try JSONCoding.decode(Config.self, from: configJSON).manager.apply(to: &env)
+    AutoCompact.apply(window: try JSONCoding.decode(Config.self, from: configJSON).manager.autoCompactWindow, to: &env)
     return env
   }
 

@@ -51,7 +51,8 @@ enum HostScope {
     "clear-wait": Rule(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Rule(keys: waitKeys, refs: ["session"]),
     "events": Rule(
-      keys: ["session", "sessions", "since", "limit", "kinds", "full"], refs: ["session"], refLists: ["sessions"]),
+      keys: ["session", "sessions", "since", "limit", "all", "kinds", "full"], refs: ["session"], refLists: ["sessions"]
+    ),
     // No `images`, so the path that reads image files never runs.
     "send": Rule(keys: ["session", "text", "from"], refs: ["session", "from"]),
     "answer": Rule(
