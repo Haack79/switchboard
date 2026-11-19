@@ -166,6 +166,8 @@ final class Instance {
     env["CLAUDE_CONFIG_DIR"] = inheritedAccount
     // A fixed agent lets a test tell sbd's own SSH agent from a terminal's.
     env["SSH_AUTH_SOCK"] = sbdAgent
+    // A runner that exports its own window would otherwise reach every stub claude.
+    env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = nil
     env.merge(sbdEnvironment) { $1 }
     p.environment = env
     let log = FileHandle(forWritingAtPath: home.log)!
