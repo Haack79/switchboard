@@ -76,8 +76,10 @@ private func since(_ start: Date) -> Double { Date().timeIntervalSince(start) }
   @Test func aNonZeroExitThrowsWithTheStatusAndTheOutput() throws {
     let folder = try scratchFolder()
 
-    let error = #expect(throws: APIError.self) { try run("echo partial answer; exit 3", folder: folder) }
+    let error = #expect(throws: Headless.ExitError.self) { try run("echo partial answer; exit 3", folder: folder) }
 
+    #expect(error?.status == 3)
+    #expect(error?.output == "partial answer\n")
     #expect(error?.description.contains("status 3") == true, "\(String(describing: error))")
     #expect(error?.description.contains("partial answer") == true, "\(String(describing: error))")
   }

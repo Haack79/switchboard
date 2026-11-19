@@ -70,11 +70,18 @@ public enum Headless {
     case .exited, nil: break
     }
     guard p.terminationStatus == 0 else {
-      throw APIError(
-        "claude exited with status \(p.terminationStatus): \(oneLine(String(decoding: output, as: UTF8.self), max: 200))"
-      )
+      throw ExitError(status: p.terminationStatus, output: String(decoding: output, as: UTF8.self))
     }
     return String(decoding: output, as: UTF8.self)
+  }
+
+  /// What `run` throws when `claude` exits with a nonzero status. claude exits with status 1 after an error
+  /// envelope, which still reports the tokens that the call spent, so the error keeps what claude printed.
+  public struct ExitError: Error, CustomStringConvertible {
+    public let status: Int32
+    public let output: String
+
+    public var description: String { "claude exited with status \(status): \(oneLine(output, max: 200))" }
   }
 
   private enum RunEnd: Sendable { case exited, timedOut, cancelled }

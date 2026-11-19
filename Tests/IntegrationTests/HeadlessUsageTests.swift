@@ -3,17 +3,17 @@ import SwitchboardCore
 import Testing
 
 /// The counts that the stub's `claude -p` envelope reports for every call.
-private let stubUsage = HeadlessUsage(input: 100, output: 20, cacheRead: 300, cacheWrite: 40)
+let stubUsage = HeadlessUsage(input: 100, output: 20, cacheRead: 300, cacheWrite: 40)
 
 extension Instance {
   /// The rows of `sb usage headless --json`.
-  fileprivate func headlessUsageRows() throws -> [JSON] {
+  func headlessUsageRows() throws -> [JSON] {
     let report = try #require(JSON.parse(try sb("usage", "headless", "--json")))
     return report["rows"]?.array ?? []
   }
 
   /// The row of `sb usage headless --json` for the kind, once one exists.
-  fileprivate func waitForHeadlessUsageRow(_ kind: String, calls: Int) throws -> JSON {
+  func waitForHeadlessUsageRow(_ kind: String, calls: Int) throws -> JSON {
     var found: JSON?
     try waitFor("the \(kind) row of sb usage headless") {
       found = try headlessUsageRows().first { $0["kind"]?.string == kind && $0["calls"]?.int == calls }
@@ -23,7 +23,7 @@ extension Instance {
   }
 
   /// The session's events as `sb events --json` prints them, one JSON object a line.
-  fileprivate func eventsFromCLI(_ id: String) throws -> [Event] {
+  func eventsFromCLI(_ id: String) throws -> [Event] {
     try sb("events", "--json", "--session", id).split(separator: "\n").map {
       try JSONCoding.decode(Event.self, from: String($0))
     }
@@ -31,7 +31,7 @@ extension Instance {
 }
 
 /// The usage of a JSON value that encodes a `HeadlessUsage`, or nil.
-private func headlessUsage(_ json: JSON?) -> HeadlessUsage? {
+func headlessUsage(_ json: JSON?) -> HeadlessUsage? {
   json.flatMap { try? JSONCoding.decode(HeadlessUsage.self, from: $0.text) }
 }
 
@@ -66,9 +66,21 @@ private func headlessUsage(_ json: JSON?) -> HeadlessUsage? {
     #expect(row["models"]?.array?.compactMap(\.string) == ["sonnet"])
   }
 
+  /// claude exits 1 after an error envelope, which still reports the tokens that the call spent.
+  @Test func anAskThatEndsInAnErrorEnvelopeRecordsItsTokens() throws {
+    let sbd = try Instance(config: ["triage": ["systemPrompt": "", "enabled": false]])
+    _ = try sbd.run(["ask", "ERROR-ASK"])
+
+    let row = try sbd.waitForHeadlessUsageRow("quickAsk", calls: 1)
+
+    #expect(row["errors"]?.int == 1)
+    #expect(headlessUsage(row["usage"]) == stubUsage)
+    #expect(row["models"]?.array?.compactMap(\.string) == ["sonnet"])
+  }
+
   /// A question refused before launch starts no `claude`, so it records no call. Store writes run one at a time on
   /// the state queue, so a row for the refusal would be in place before the ask's row. The text form prints one
-  /// line for each day and kind. The line's numbers are compared whole, because the date holds "20" too.
+  /// line for each day and kind. The date's three numbers come first, and the counts follow in column order.
   @Test func usageHeadlessPrintsALineWithTheKindAndItsTokensAndSkipsARefusedAsk() throws {
     let sbd = try Instance(config: ["triage": ["systemPrompt": "", "enabled": false]])
     #expect(throws: APIError.self) { try sbd.client.call("quick-ask", ["question": ""]) }
@@ -83,7 +95,7 @@ private func headlessUsage(_ json: JSON?) -> HeadlessUsage? {
 
     #expect(row?["calls"]?.int == 1)
     let line = try #require(out.split(separator: "\n").first { $0.contains("quickAsk") })
-    let numbers = Set(line.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) })
-    #expect(numbers.isSuperset(of: [100, 20, 300, 40]), "\(line)")
+    let numbers = line.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+    #expect(Array(numbers.dropFirst(3).prefix(6)) == [1, 0, 100, 20, 300, 40], "\(line)")
   }
 }

@@ -99,7 +99,9 @@
 # line per call to $SB_HOME/quick-ask-calls.log, keeps the last prompt in
 # $SB_HOME/quick-ask-input.txt, and writes its pid to
 # $SB_HOME/quick-ask.pid. A prompt that holds FAIL-ASK makes it exit 1, and
-# SLOW-ASK makes it exec sleep 30, which keeps the pid. Otherwise it prints
+# SLOW-ASK makes it exec sleep 30, which keeps the pid. A prompt that holds
+# ERROR-ASK makes it print an error envelope with the same token counts and
+# exit 1, as claude does when the turn fails. Otherwise it prints
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
 # {"answer":"Nothing needs you."} when the file is missing, in the same
 # envelope.
@@ -159,6 +161,11 @@ if [ "${1-}" = -p ]; then
     echo "$$" >"$SB_HOME/quick-ask.pid"
     case $input in
     *FAIL-ASK*) echo "ask failed" >&2 && exit 1 ;;
+    *ERROR-ASK*)
+      envelope '{}' | jq -c '.subtype = "error_during_execution" | .is_error = true | .result = "ask failed"
+        | del(.structured_output)'
+      exit 1
+      ;;
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'

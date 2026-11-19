@@ -40,6 +40,8 @@ extension Service {
           claude: claude, arguments: arguments, input: input, env: env, folder: folder, timeout: timeout,
           cancelled: cancelled))
       outcome = HeadlessOutcome(reply: reply, result: Result { try parse(reply.output) })
+    } catch let exit as Headless.ExitError {
+      outcome = HeadlessOutcome(reply: Headless.reply(exit.output), result: .failure(exit))
     } catch {
       outcome = HeadlessOutcome(reply: nil, result: .failure(error))
     }
@@ -61,8 +63,8 @@ extension Service {
   }
 }
 
-/// What `headlessCall` returns: claude's reply, which is nil when claude
-/// printed no answer, and what `parse` made of it.
+/// What `headlessCall` returns: what claude printed, which is nil when claude
+/// did not run or did not exit by itself, and what `parse` made of it.
 struct HeadlessOutcome<T> {
   var reply: HeadlessReply?
   var result: Result<T, Error>

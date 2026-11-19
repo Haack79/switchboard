@@ -334,6 +334,10 @@ extension Instance {
     }
     #expect(try sbd.plan(id).settled != nil)
     #expect(try sbd.plan(id).proposal == nil)
+    // The answer that `parse` refused still records the tokens that claude spent on it.
+    let row = try sbd.waitForHeadlessUsageRow("planUpdate", calls: 1)
+    #expect(row["errors"]?.int == 1)
+    #expect(headlessUsage(row["usage"]) == stubUsage)
 
     try sbd.advanceClock(30 * 60_000)
     try sbd.poll(all: true)

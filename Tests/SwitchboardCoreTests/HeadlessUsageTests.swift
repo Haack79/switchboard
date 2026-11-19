@@ -217,13 +217,13 @@ private func envelope(isError: Bool = false, usage: JSON? = nil, modelUsage: [(S
   }
 
   /// The ids are 1, 2, and 3, far below every `t`, so a filter on the id instead of the time returns all three.
-  @Test func sinceReturnsOnlyTheCallsAfterThatTimeOldestFirst() throws {
+  @Test func sinceReturnsOnlyTheCallsAtOrAfterThatTimeOldestFirst() throws {
     let dir = try tempFolder()
     defer { try? FileManager.default.removeItem(atPath: dir) }
     let store = try Store(path: "\(dir)/sb.db")
     for t: Int64 in [1_000, 2_000, 3_000] { _ = try store.append(headlessCall: HeadlessCall(t: t, kind: "triage")) }
 
-    let calls = try store.headlessCalls(since: 1_500)
+    let calls = try store.headlessCalls(since: 2_000)
 
     #expect(calls.map(\.t) == [2_000, 3_000])
   }
