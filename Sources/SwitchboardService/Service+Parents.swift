@@ -169,6 +169,7 @@ extension Service {
   }
 
   func canTakeNotice(_ e: Entry, now: Int64) -> Bool {
-    Pause.blocker(e.session) == nil && !e.messageWaiting(now: now) && !e.facts.turnRunning && !mcpStarting(now: now)
+    Pause.blocker(e.session) == nil && !messageWaiting(e, now: now) && !e.facts.turnRunning
+      && !mcpStarting(now: now)
   }
 }
