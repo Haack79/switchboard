@@ -127,17 +127,21 @@ extension Service {
     let fresh = ancestry == nil ? nil : buildSnapshot()
     let ending = try queue.sync { () -> Ending in
       install(fresh)
-      if let ancestry, let pane = localPane(holding: ancestry) {
-        throw APIError(
-          "`\(Self.endCommand)` runs inside a pane of \(mention(pane)). "
-            + "Only the user ends a conversation. Run it from a terminal outside the session.")
-      }
-      // A program that a session starts with `tmux new-session` or `tmux new-window` runs below the server and
-      // outside every pane.
-      if let ancestry, case let place = callerPlace(ancestry), place.inside.isEmpty, place.inServer {
-        throw APIError(
-          "`\(Self.endCommand)` runs in sbd's tmux server, where the sessions run. "
-            + "Only the user ends a conversation. Run it from a terminal outside the sessions.")
+      if let ancestry {
+        // A shell pane counts, because a session's Claude can type into its own shell pane with `tmux send-keys`.
+        let place = callerPlace(ancestry)
+        if let pane = place.inside.first {
+          throw APIError(
+            "`\(Self.endCommand)` runs inside a pane of \(mention(pane)). "
+              + "Only the user ends a conversation. Run it from a terminal outside the session.")
+        }
+        // A program that a session starts with `tmux new-session` or `tmux new-window` runs below the server and
+        // outside every pane.
+        if place.inServer {
+          throw APIError(
+            "`\(Self.endCommand)` runs in sbd's tmux server, where the sessions run. "
+              + "Only the user ends a conversation. Run it from a terminal outside the sessions.")
+        }
       }
       let id = try managerConversation(ref)
       let e = entries[id]!
@@ -181,12 +185,6 @@ extension Service {
     var findTranscript: () -> String?
     /// The ids of the conversation's own waits, pause condition, and schedules that `drop` names.
     var dropped: [String]
-  }
-
-  /// A local session whose live Claude or shell pane's pid is in `ancestry`. A shell pane counts because a
-  /// session's Claude can type into its own shell pane with `tmux send-keys`. It runs on the state queue.
-  func localPane(holding ancestry: Set<Int>) -> String? {
-    entries.keys.sorted().first { isInside($0, ancestry) }
   }
 
   /// Starts an untitled conversation, or one named `name`, with the account, MCP servers, and pin of `ended`.

@@ -1765,8 +1765,7 @@ public final class Service {
   /// Whether `text` is one of Claude Code's built-in commands, such as `/compact`, with or without arguments.
   /// A skill or a custom command does not count, because it sends a prompt.
   static func isBuiltInCommand(_ text: String) -> Bool {
-    guard text.hasPrefix("/") else { return false }
-    let name = text.dropFirst().prefix { !$0.isWhitespace }
+    guard let name = SkillCommand.name(inPrompt: text) else { return false }
     return SlashCommand.builtIns.contains { $0.name == name }
   }
 
