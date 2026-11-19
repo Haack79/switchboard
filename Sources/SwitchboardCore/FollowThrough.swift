@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What sbd does when a wait's condition is met, in place of resuming the holder with the note. A wait holds one
@@ -12,6 +13,16 @@ public struct WaitAction: Codable, Equatable, Sendable {
     case rm
     /// Records the wait's note as a report.
     case report
+
+    /// What sbd did not do, after "sbd did not".
+    public var skipped: String {
+      switch self {
+      case .merge: "merge"
+      case .rmWorktree: "remove the session and its worktree"
+      case .rm: "remove the session"
+      case .report: "record the report"
+      }
+    }
 
     /// What `sb wait` prints after it arms the action.
     public var confirmation: String {
@@ -56,11 +67,312 @@ public struct WaitAction: Codable, Equatable, Sendable {
   }
 }
 
-/// Where an action stands after its wait's condition was met. A wait with no status waits for its condition.
-public enum ActionStatus: String, Codable, CaseIterable, Sendable {
-  case running
-  case held
-  case awaitingJudgment = "awaiting-judgment"
+/// Where an action stands after its wait's condition was met. A wait with no status waits for its condition. Each
+/// change keeps the approval and the message key of the status before it, so a hold or a run in between loses
+/// neither.
+public struct ActionStatus: Codable, Equatable, Sendable {
+  public enum Kind: String, Codable, CaseIterable, Sendable {
+    /// sbd runs the action now. Only `finish` moves it on.
+    case running
+    /// sbd checks again at `retryAt`, or sooner when the subject's state changes.
+    case held
+    /// The holder got `reason` as a question. Only an approval, a clear, or an unmet outcome moves it on.
+    case awaitingJudgment = "awaiting-judgment"
+  }
+
+  public var kind: Kind
+  /// When the status began. For a hold, when sbd first held the action for `reason`.
+  public var since: Int64
+  /// Why sbd holds the action, or the question that it asked.
+  public var reason: String?
+  public var retryAt: Int64?
+  /// The subject's `stateSince` when sbd held the action. A different value retries the hold.
+  public var subjectSince: Int64?
+  /// The PR head and the reply digest that a question about the last reply covers. An approval copies them.
+  public var head: String?
+  public var replyDigest: String?
+  public var approval: MergeGuard.Approval?
+  /// The hold message that sbd last sent the subject, keyed by what it was about, such as the head and the base tip.
+  public var messageKey: String?
+
+  public init(kind: Kind, since: Int64) {
+    self.kind = kind
+    self.since = since
+  }
+
+  /// Whether a met outcome starts the action again. Only a hold whose retry time came, or whose subject's state
+  /// changed since, does.
+  public func retries(now: Int64, subjectSince: Int64?) -> Bool {
+    guard kind == .held else { return false }
+    return (retryAt ?? 0) <= now || (subjectSince != nil && subjectSince != self.subjectSince)
+  }
+}
+
+/// Decides whether sbd merges the subject's PR for a `merge` action. It acts only when it can show that the commit
+/// GitHub merges is the head that sbd read live, that its checks passed, that it contains the base's tip, that the base
+/// is not red, that no earlier merge in the repository shares its files, and that the holder approved the last reply
+/// at that head. Anything unknown holds.
+public enum MergeGuard {
+  /// The PR as `gh pr view` read it just before the merge.
+  public struct LivePR: Equatable, Sendable {
+    public var head: String
+    public var state: PRState
+    public var draft: Bool
+    public var mergeable: Mergeable?
+    public var base: String
+    /// The head's check rollup: SUCCESS, FAILURE, PENDING, or nil without checks.
+    public var rollup: String?
+
+    public init(head: String, state: PRState, draft: Bool, mergeable: Mergeable?, base: String, rollup: String?) {
+      self.head = head
+      self.state = state
+      self.draft = draft
+      self.mergeable = mergeable
+      self.base = base
+      self.rollup = rollup
+    }
+  }
+
+  /// The holder's answer that the last reply leaves nothing for the user, bound to the head and the reply it saw.
+  public struct Approval: Codable, Equatable, Sendable {
+    public var head: String
+    public var replyDigest: String
+
+    public init(head: String, replyDigest: String) {
+      self.head = head
+      self.replyDigest = replyDigest
+    }
+  }
+
+  /// The last PR that sbd merged into the base. Nil fields are unknown.
+  public struct SbdMerge: Equatable, Sendable {
+    public var commit: String?
+    public var files: Set<String>?
+
+    public init(commit: String?, files: Set<String>?) {
+      self.commit = commit
+      self.files = files
+    }
+  }
+
+  /// What sbd read. Each optional read is nil when it failed.
+  public struct Input: Sendable {
+    public var mergeRepos: [String]
+    /// The subject's verdict, or nil when the subject is gone or being deleted.
+    public var verdict: SwitchboardCore.Verdict?
+    public var facts: SessionFacts
+    public var live: LivePR?
+    public var behindBy: Int?
+    public var baseTip: String?
+    public var baseRollup: String?
+    public var files: Set<String>?
+    /// The files of each earlier pending merge in the repository.
+    public var earlierFiles: [Set<String>?]
+    public var lastSbdMerge: SbdMerge?
+    public var approval: Approval?
+
+    public init(
+      mergeRepos: [String], verdict: SwitchboardCore.Verdict?, facts: SessionFacts, live: LivePR?, behindBy: Int?,
+      baseTip: String?, baseRollup: String?, files: Set<String>?, earlierFiles: [Set<String>?],
+      lastSbdMerge: SbdMerge?, approval: Approval?
+    ) {
+      self.mergeRepos = mergeRepos
+      self.verdict = verdict
+      self.facts = facts
+      self.live = live
+      self.behindBy = behindBy
+      self.baseTip = baseTip
+      self.baseRollup = baseRollup
+      self.files = files
+      self.earlierFiles = earlierFiles
+      self.lastSbdMerge = lastSbdMerge
+      self.approval = approval
+    }
+  }
+
+  public enum Verdict: Equatable, Sendable {
+    case act
+    /// Not yet. `message`, when set, goes to the subject.
+    case hold(reason: String, message: String?)
+    /// The subject is no longer Ready to merge, so the wait waits for its condition again.
+    case rearm(reason: String)
+    case judgment(question: String)
+  }
+
+  /// The checks that need no live read, in order: the allowlist, the subject, its Ready to merge verdict, the
+  /// merge method, and the review threads. It returns nil when they all pass.
+  public static func checkFacts(mergeRepos: [String], verdict: SwitchboardCore.Verdict?, facts: SessionFacts)
+    -> Verdict?
+  {
+    guard let pr = facts.pr else { return .hold(reason: "sbd has not read the session's PR", message: nil) }
+    guard mergeRepos.contains(where: { Dependencies.sameRepo($0, pr.repo) }) else {
+      return .judgment(
+        question: "operator.mergeRepos in config.json doesn't list \(pr.repo), so sbd won't merge #\(pr.number). "
+          + "The user merges it")
+    }
+    guard let verdict else { return .hold(reason: "the session is gone or being deleted", message: nil) }
+    guard verdict.state == .readyToMerge else {
+      return .rearm(reason: "the session is \(verdict.state.title), not Ready to merge")
+    }
+    guard facts.mergeMethod != .unknown else {
+      return .hold(reason: "sbd can't tell yet how \(pr.repo) merges", message: nil)
+    }
+    guard let details = pr.mergeDetails else {
+      return .hold(reason: "sbd has not read the review threads of #\(pr.number)", message: nil)
+    }
+    guard details.threadsRead >= details.threads else {
+      return .hold(reason: "sbd could not read every review thread of #\(pr.number)", message: nil)
+    }
+    guard details.openThreads == 0 else {
+      return .hold(reason: "#\(pr.number) has unresolved review threads", message: nil)
+    }
+    return nil
+  }
+
+  public static func check(_ input: Input) -> Verdict {
+    if let verdict = checkFacts(mergeRepos: input.mergeRepos, verdict: input.verdict, facts: input.facts) {
+      return verdict
+    }
+    let pr = input.facts.pr!
+    let n = "#\(pr.number)"
+    func hold(_ reason: String, _ message: String? = nil) -> Verdict { .hold(reason: reason, message: message) }
+    guard let live = input.live else { return hold("the live read of \(n) failed") }
+    guard !live.head.isEmpty, live.head == pr.headSha else {
+      return hold("the head of \(n) moved after the poller read it")
+    }
+    guard live.state == .open else { return hold("GitHub shows \(n) as \(live.state.rawValue.lowercased())") }
+    guard !live.draft else { return hold("GitHub shows \(n) as a draft") }
+    guard let mergeable = live.mergeable, mergeable != .unknown else {
+      return hold("GitHub has not computed whether \(n) merges cleanly")
+    }
+    guard mergeable == .mergeable else { return hold("\(n) conflicts with its base") }
+    guard let defaultBranch = pr.defaultBranch else { return hold("sbd has not read the default branch of \(pr.repo)") }
+    guard live.base == defaultBranch else {
+      return .judgment(question: "\(n) targets \(live.base), not \(defaultBranch), so sbd won't merge it")
+    }
+    guard live.rollup == "SUCCESS" else {
+      return hold("the checks of \(n) at \(short(live.head)) are \(live.rollup?.lowercased() ?? "missing")")
+    }
+    guard let behind = input.behindBy else { return hold("sbd could not read whether \(n) contains \(live.base)") }
+    guard behind == 0 else {
+      return hold(
+        "\(n) is behind \(live.base)",
+        "Merge origin/\(live.base) into your branch, resolve any conflicts, run the tests, and push.")
+    }
+    guard let baseTip = input.baseTip else { return hold("sbd could not read the tip of \(live.base)") }
+    let tip = "\(live.base) at \(short(baseTip))"
+    switch input.baseRollup {
+    case "SUCCESS":
+      break
+    case "FAILURE", "ERROR":
+      return .judgment(question: "\(tip) is red, so sbd won't merge \(n) onto it. Start a fix, or report it")
+    case "PENDING":
+      if let merged = input.lastSbdMerge, merged.commit == nil || merged.commit == baseTip {
+        guard let mine = input.files, let theirs = merged.files else {
+          return hold("CI runs on \(tip) after sbd's last merge, and sbd can't compare its files with \(n)")
+        }
+        if !mine.isDisjoint(with: theirs) {
+          return hold("CI runs on \(tip) after sbd's last merge, which shared files with \(n)")
+        }
+      }
+    default:
+      return hold("sbd could not read the checks of \(tip)")
+    }
+    if !input.earlierFiles.isEmpty {
+      guard let mine = input.files else { return hold("sbd could not read the files of \(n)") }
+      for theirs in input.earlierFiles {
+        guard let theirs else { return hold("sbd could not read the files of an earlier merge in \(pr.repo)") }
+        if !mine.isDisjoint(with: theirs) {
+          return hold("an earlier merge in \(pr.repo) shares files with \(n)")
+        }
+      }
+    }
+    let digest = replyDigest(input.facts.lastReply)
+    guard let approval = input.approval, approval.head == live.head, approval.replyDigest == digest else {
+      return .judgment(
+        question:
+          "Every check passed for \(n) at \(short(live.head)). Does the session's last reply ask the user a question, "
+          + "leave a decision for the user, or say that /go did not finish?")
+    }
+    return .act
+  }
+
+  /// The approval that would let `input` act, when the reply is all that it lacks, or nil.
+  public static func replyGate(_ input: Input) -> Approval? {
+    guard let live = input.live else { return nil }
+    var approved = input
+    approved.approval = Approval(head: live.head, replyDigest: replyDigest(input.facts.lastReply))
+    return check(approved) == .act ? approved.approval : nil
+  }
+
+  /// The SHA-256 of the reply in hex. No reply gives a word that no hex digest equals.
+  public static func replyDigest(_ reply: String?) -> String {
+    guard let reply else { return "no-reply" }
+    return SHA256.hash(data: Data(reply.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
+  static func short(_ sha: String) -> String { String(sha.prefix(7)) }
+}
+
+/// Decides whether sbd removes the subject of an `rm` or `rm-worktree` action now. A worktree goes only after the
+/// subject's PR merged. A running turn or a message on its way holds the removal, because `remove` would stop the
+/// turn. `remove` still runs its own checks after this one.
+public enum RemovalGuard {
+  /// What sbd read about the subject on the state queue.
+  public struct Input: Equatable, Sendable {
+    public var name: String
+    public var exists: Bool
+    /// The removal job holds the subject, `rm` is removing it, or a start or a merge runs on it.
+    public var busy: Bool
+    public var host: String?
+    public var worktree: Bool
+    public var pr: PullRequest?
+    public var turnRunning: Bool
+    public var messageWaiting: Bool
+
+    public init(
+      name: String, exists: Bool, busy: Bool, host: String?, worktree: Bool, pr: PullRequest?, turnRunning: Bool,
+      messageWaiting: Bool
+    ) {
+      self.name = name
+      self.exists = exists
+      self.busy = busy
+      self.host = host
+      self.worktree = worktree
+      self.pr = pr
+      self.turnRunning = turnRunning
+      self.messageWaiting = messageWaiting
+    }
+  }
+
+  public enum Verdict: Equatable, Sendable {
+    case remove
+    /// The subject is already gone.
+    case gone
+    case hold(reason: String)
+    case judgment(question: String)
+  }
+
+  public static func check(_ input: Input) -> Verdict {
+    let name = input.name
+    guard input.exists else { return .gone }
+    if input.busy { return .hold(reason: "\(name) is busy or being deleted") }
+    if let host = input.host {
+      return .judgment(question: "\(name) runs on \(host), and sbd removes only sessions on this Mac")
+    }
+    if input.worktree {
+      guard let pr = input.pr else {
+        return .judgment(question: "\(name) has no PR, so sbd won't remove its worktree")
+      }
+      guard pr.state == .merged else {
+        return .judgment(
+          question: "#\(pr.number) of \(name) is \(pr.state.rawValue.lowercased()), not merged, so sbd won't remove "
+            + "its worktree")
+      }
+    }
+    if input.turnRunning || input.messageWaiting { return .hold(reason: "the turn of \(name) runs") }
+    return .remove
+  }
 }
 
 /// The `operator` settings in config.json.

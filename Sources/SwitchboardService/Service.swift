@@ -116,8 +116,13 @@ public final class Service {
   var removedNames: [String: String] = [:]
   /// The follow-ups that `followup start` is starting.
   var starting: Set<String> = []
-  /// The sessions whose PR `merge` is merging.
+  /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// Runs wait actions, one at a time, off the state queue.
+  let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name, with its
+  /// session and its changed files. `loadSbdMerges` rebuilds it at startup.
+  var lastSbdMerges: [String: (subject: String, number: Int, files: Set<String>?)] = [:]
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
@@ -357,6 +362,8 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      loadSbdMerges()
+      resumeActions()
     }
   }
 
@@ -456,6 +463,14 @@ public final class Service {
       return .success(try reviewRequest(request.args))
     case "draft-post", "draft-check":
       return .success(try draftReplyRequest(request.op, request.args, caller: caller))
+    case "wait-approve":
+      // The check reads the client's panes, so it takes a new snapshot.
+      let fresh = buildSnapshot()
+      return try .success(
+        queue.sync {
+          install(fresh)
+          return try approveWait(request.args, caller: caller)
+        })
     case "wait", "clear-wait", "resolve-wait":
       // An action's check reads the client's panes, so it takes a new snapshot.
       let arms =

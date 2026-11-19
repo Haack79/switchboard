@@ -5,8 +5,8 @@ import Testing
 /// Wait actions (#410, Stage 1): `sb wait --then merge|rm-worktree|rm|report` and MCP `set_wait` store a checked,
 /// authorized action on the wait. sbd decides who may arm one from the client's process ancestry (Decision 8), so the
 /// tests that need a caller inside a session run sb from that session's Claude pane, as a tool call of the stub. A
-/// command that the test runner starts runs outside every pane, which counts as the user. Nothing runs the action
-/// yet: a met action wait resumes its holder as a resume wait does.
+/// command that the test runner starts runs outside every pane, which counts as the user. FollowThroughTests covers
+/// what sbd does when an action wait resolves.
 ///
 /// The tests read the new fields (`action`, `subject`) from the JSON that sb prints, so this file compiles before
 /// `Wait` has them.
@@ -112,13 +112,21 @@ import Testing
     return try runInPane(sbd, of: owner, name)
   }
 
-  /// Calls the MCP tool `set_wait` through an `sb mcp-server` that runs in `owner`'s Claude pane, as the owner's
-  /// claude starts it. `MCPClient` starts its server below the test runner, outside every pane, so it can't stand for
-  /// a session's server here. The script pipes three JSON-RPC lines to the server, which answers each in order and
-  /// exits at the end of its input. `env` overrides the pane's variables.
+  /// Calls the MCP tool `set_wait` through an `sb mcp-server` that runs in `owner`'s Claude pane.
   func setWaitInPane(
     _ sbd: Instance, of owner: SessionSummary, _ arguments: [String: JSON], env: [String: String] = [:],
     name: String = "mcp-arm"
+  ) throws -> ToolResult {
+    try toolInPane(sbd, of: owner, "set_wait", arguments, env: env, name: name)
+  }
+
+  /// Calls the MCP tool through an `sb mcp-server` that runs in `owner`'s Claude pane, as the owner's claude starts
+  /// it. `MCPClient` starts its server below the test runner, outside every pane, so it can't stand for a session's
+  /// server here. The script pipes three JSON-RPC lines to the server, which answers each in order and exits at the
+  /// end of its input. `env` overrides the pane's variables.
+  func toolInPane(
+    _ sbd: Instance, of owner: SessionSummary, _ tool: String, _ arguments: [String: JSON],
+    env: [String: String] = [:], name: String
   ) throws -> ToolResult {
     let lines: [JSON] = [
       [
@@ -131,7 +139,7 @@ import Testing
       ["jsonrpc": "2.0", "method": "notifications/initialized"],
       [
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": ["name": "set_wait", "arguments": .object(arguments)],
+        "params": ["name": .string(tool), "arguments": .object(arguments)],
       ],
     ]
     let vars = ["CLAUDECODE": "1"].merging(env) { $1 }.sorted { $0.key < $1.key }.map {
@@ -647,47 +655,19 @@ import Testing
     #expect(try sbd.client.sessions().map(\.id).contains(kid.id))
   }
 
-  // MARK: Nothing runs the action yet
-
-  /// A met merge wait resumes the operator with today's message, and sbd merges nothing.
-  @Test func aMetMergeWaitResumesTheOperatorAndMergesNothing() throws {
+  /// Only the operator approves a merge, so a merge wait that would stay on another session is refused.
+  @Test(arguments: [true, false])
+  func aMergeWaitThatWouldNotLandOnTheOperatorIsRefused(_ here: Bool) throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
-    let s = try readyTarget(sbd)
-    let c = try conversation(sbd)
+    let s = try notReadyTarget(github, sbd)
+    let holder = here ? try conversation(sbd) : try sbd.idleSession(name: "worker")
 
-    let r = try sbInPane(sbd, of: c, ["wait", "--json", "--note", Self.note] + mergeArgs(s))
+    let r = try sbd.run(["wait", "--json", holder.id] + mergeArgs(s) + (here ? ["--here"] : []))
 
-    #expect(r.status == 0, Comment(rawValue: r.stderr))
-    let op = try theOperator(sbd)
-    let resumed = try sbd.waitFor(op.id, "the operator's turn", timeout: 30) {
-      $0.lastReply?.hasPrefix("Done: Switchboard: \(Self.target) to reach Ready to merge: it did.") == true
-    }
-    #expect(resumed.waits.isEmpty)
-    let messages = try sbd.sbdMessages(op.id)
-    #expect(messages.count == 1)
-    let text = messages.first?.data["text"]?.string ?? ""
-    #expect(text.contains(#""\#(c.name)""#), Comment(rawValue: text))
-    #expect(text.hasSuffix("Your note: \(Self.note)."), Comment(rawValue: text))
-    #expect(sbd.ghMerges().isEmpty, "\(sbd.ghCalls())")
-    #expect(try sbd.client.sessions().map(\.id).contains(s.id))
-    #expect(try sbd.events(op.id).contains { $0.kind == "wait-resolved" })
-  }
-
-  /// A met rm wait resumes the operator, and the session stays.
-  @Test func aMetRmWaitResumesTheOperatorAndRemovesNothing() throws {
-    let sbd = try Instance()
-    let kid = try sbd.idleSession(name: "kid")
-    let c = try conversation(sbd)
-    try sbd.sb("wait", "--json", c.id, "--kind", "session", "--target", kid.id, "--state", "done", "--then", "rm")
-    let op = try theOperator(sbd)
-
-    try sbd.sb("done", kid.id)
-
-    try sbd.waitFor(op.id, "the operator's turn", timeout: 30) {
-      $0.lastReply?.hasPrefix("Done: Switchboard: kid to reach Done: it did.") == true
-    }
-    #expect(try sbd.client.sessions().map(\.id).contains(kid.id))
-    #expect(try sbd.get(op.id).waits.isEmpty)
+    #expect(r.status != 0, Comment(rawValue: r.stdout))
+    #expect(r.stderr.contains("only the operator approves the merge"), Comment(rawValue: r.stderr))
+    #expect(try sbd.get(holder.id).waits.isEmpty)
+    #expect(try handoff.operators(sbd).isEmpty)
   }
 }

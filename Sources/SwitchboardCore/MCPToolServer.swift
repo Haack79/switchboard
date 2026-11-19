@@ -256,6 +256,10 @@ public struct MCPToolServer: Sendable {
       var request = pick(args, ["text", "needsYou", "session"])
       if let caller { request["caller"] = .string(caller) }
       return try client.call("operator-report", request)
+    case "approve":
+      var request = pick(args, ["wait"])
+      if let caller { request["caller"] = .string(caller) }
+      return try client.call("wait-approve", request)
     default:
       throw APIError("no tool \(name)")
     }

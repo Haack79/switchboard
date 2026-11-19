@@ -9,8 +9,11 @@ extension Service {
   /// snapshot first, as for `send`. A `clear-wait` or `resolve-wait` that names
   /// a conversation also reaches the waits that it handed to the operator. The
   /// answer to `clear-wait` adds `cleared`, the ids of the waits it cleared. `caller` sent the request, which
-  /// decides whether a `wait` may arm an action.
-  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac, caller: Caller) throws -> JSON {
+  /// decides whether a `wait` may arm an action. `met` says whether a `resolve-wait`'s condition was met. Only
+  /// sbd's poller passes it, through `resolveWait`, so a client can't start an action by sending `met`.
+  func waitRequest(_ op: String, _ args: JSON, origin: RequestOrigin = .mac, caller: Caller, met: Bool = false)
+    throws -> JSON
+  {
     let id = try lookup(args)
     switch op {
     case "wait":
@@ -25,8 +28,8 @@ extension Service {
         throw APIError("resolve-wait needs an outcome that says what happened")
       }
       let waitId = args["wait"]?.string
+      guard args["met"] == nil else { throw APIError("only sbd says whether a wait's condition was met") }
       let changedAt = args["changedAt"]?.int.map(Int64.init)
-      let met = args["met"]?.bool ?? false
       if let until = pauseCondition(id, waitId) {
         try resolve(id, until, outcome: outcome, changedAt: changedAt, met: met)
       } else {
@@ -45,7 +48,8 @@ extension Service {
   /// `here` in `args` keeps the wait on `named`. It records the `wait` event
   /// on the session that holds the wait, with `from` for a handed-off wait,
   /// and returns the id of that session. The caller holds the state queue.
-  /// A wait from a host must pass `requireGitHubWait`. A wait with an action must pass `armAction`.
+  /// A wait from a host must pass `requireGitHubWait`. A wait with an action must pass `armAction`. A merge wait must
+  /// land on the operator, because only the operator approves a merge.
   func setWait(_ args: JSON, waiter named: String, from origin: RequestOrigin, caller: Caller) throws -> String {
     let session = entries[named]!.session
     try refuseNotStarted(session)
@@ -59,7 +63,13 @@ extension Service {
     }
     var waiter = named
     let op = operatorID()
-    if handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op) {
+    let hands = handsOff(wait, namedSession: session, here: args["here"]?.bool == true, operatorID: op)
+    if wait.action?.kind == .merge, !hands, session.kind != .operator {
+      throw APIError(
+        "then merge goes only on a wait that the operator holds, because only the operator approves the merge. Set it "
+          + "without --here, from a Manager conversation, or on \(Manager.operatorName)")
+    }
+    if hands {
       waiter = try op ?? ensureOperator()
       wait.handedFrom = Wait.SessionTarget(id: named, name: session.name)
     }
@@ -171,10 +181,10 @@ extension Service {
   }
 
   /// The open waits that may resolve. A session marked done keeps its waits,
-  /// and they don't resume it.
+  /// and they don't resume it. A wait whose action runs waits for the run to end, which resolves it.
   private func waitsToResolve() -> [(session: Session, wait: Wait)] {
     entries.keys.sorted().compactMap { entries[$0]?.session }.filter { !$0.done }.flatMap { s in
-      s.resolvableWaits.map { (session: s, wait: $0) }
+      s.resolvableWaits.filter { $0.actionStatus?.kind != .running }.map { (session: s, wait: $0) }
     }
   }
 
@@ -186,12 +196,12 @@ extension Service {
   func resolveWait(session: String, wait: String, outcome: String, changedAt: Int64?, met: Bool) throws
     -> SessionSummary
   {
-    var args: [String: JSON] = [
-      "session": .string(session), "wait": .string(wait), "outcome": .string(outcome), "met": .bool(met),
-    ]
+    var args: [String: JSON] = ["session": .string(session), "wait": .string(wait), "outcome": .string(outcome)]
     if let changedAt { args["changedAt"] = .number(Double(changedAt)) }
-    let response = handle(Request(op: "resolve-wait", args: .object(args)))
-    guard response.ok, let result = response.result else { throw APIError(response.error ?? "resolve-wait failed") }
+    let request = Request(op: "resolve-wait", args: .object(args))
+    let result = try prepared(request, origin: .mac) {
+      try waitRequest(request.op, request.args, caller: .inProcess, met: met)
+    }
     return try JSONCoding.convert(result, to: SessionSummary.self)
   }
 
@@ -210,9 +220,22 @@ extension Service {
 
   /// Sends the message of a `resume` wait, then removes the wait. A failed
   /// send leaves the wait open, so the next tick or the poller tries again.
+  /// A met action wait starts its action instead and stays, unless its action waits for an answer, for a hold's
+  /// retry, or for a run to end. An unmet outcome resolves a held or questioned action wait with a message that
+  /// says sbd did not run the action. A running action refuses both, because its run resolves the wait.
   private func resolve(_ id: String, _ wait: Wait, outcome: String, changedAt: Int64? = nil, met: Bool) throws {
     if try resumeOnCondition(id, wait, outcome: outcome) { return }
-    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome), by: .sbd, trigger: .wait) }
+    if let action = wait.action {
+      if wait.actionStatus?.kind == .running {
+        throw APIError("sbd is running the \(action.kind.rawValue) action of wait \(wait.id), which resolves it")
+      }
+      if met {
+        let subjectSince = (wait.subject ?? wait.session).flatMap { entries[$0.id]?.facts.stateSince }
+        if wait.actionStatus?.retries(now: nowMs(), subjectSince: subjectSince) ?? true { try startAction(id, wait) }
+        return
+      }
+    }
+    if wait.then == .resume { _ = try send(id, wait.message(outcome: outcome, met: met), by: .sbd, trigger: .wait) }
     try update(id) { $0.waits = ($0.waits ?? []).filter { $0.id != wait.id } }
     var extra: [String: JSON] = ["outcome": .string(outcome)]
     if let changedAt { extra["changedAt"] = .number(Double(changedAt)) }

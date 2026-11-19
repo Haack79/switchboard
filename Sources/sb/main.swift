@@ -92,6 +92,9 @@ let usage = """
                                   --needs-you puts it in the Inbox until you
                                   answer the operator or acknowledge it. S is
                                   the session that it is about
+    operator approve <wait>       approve the merge that a "judgment needed"
+                                  message asks about. Only the operator runs it,
+                                  in its own pane
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
@@ -146,7 +149,17 @@ let usage = """
                                   A wait that Claude sets in a Manager
                                   conversation and that resumes goes to the
                                   operator, unless it reads the conversation's
-                                  own PR. --here keeps it on the conversation
+                                  own PR. --here keeps it on the conversation.
+                                  --then merge, rm-worktree, rm, or report has
+                                  sbd run the action with its own checks when
+                                  the wait is met: merge lands the target's PR
+                                  (state ready_to_merge, in a repo that
+                                  operator.mergeRepos lists) once the operator
+                                  approves, rm-worktree removes the target and
+                                  its worktree after its PR merged (state done,
+                                  or --kind merge), rm removes the target (state
+                                  done), and report records --note as a report.
+                                  A wait that ends unmet resumes the operator
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0

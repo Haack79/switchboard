@@ -118,7 +118,7 @@ extension MCPToolServer {
         ),
         "note": string("What the wait is for."),
         "then": string(
-          "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you. Or an action that sbd runs when the wait is met, and the operator resumes when it isn't: merge (kind session, state ready_to_merge) lands the target's PR, only in a repository that operator.mergeRepos in config.json lists; rm-worktree (kind session, state done, or kind merge with an owner/name#N target) removes the session and its worktree; rm (kind session, state done) removes the session; report (any kind but manual, needs `note`) records the note as a report. Only a Manager conversation or the operator can arm an action."
+          "What happens when the wait ends: resume the session (the default), or notify, which moves it to Needs you. Or an action that sbd runs when the wait is met, and the operator resumes when it isn't: merge (kind session, state ready_to_merge, and not with `here`) lands the target's PR once every check passes and the operator approves the last reply, only in a repository that operator.mergeRepos in config.json lists; rm-worktree (kind session, state done, or kind merge with an owner/name#N target) removes the session and its worktree; rm (kind session, state done) removes the session; report (any kind but manual, needs `note`) records the note as a report. Only a Manager conversation or the operator can arm an action. sbd raises anything that needs a decision to the operator."
         ),
         "needsYou": boolean("For then report, makes the report an Inbox item that needs the user."),
         "here": boolean(
@@ -199,12 +199,16 @@ extension MCPToolServer {
       ], required: ["reason"]),
     Tool(
       "report",
-      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it.",
+      "Records a report from the operator, which `sb operator reports` lists. It works only in the operator. With `needsYou`, the report stays in the user's Inbox until the user answers the operator or acknowledges it. sbd records reports too, for a wait's report action and for each merge or removal that a wait's action made.",
       [
         "text": string("What happened, or the question for the user, in one line."),
         "needsYou": boolean("Puts the report in the Inbox, for a decision that only the user can make."),
         "session": string("The session that the report is about: an id, a unique id prefix, or a unique name."),
       ], required: ["text"]),
+    Tool(
+      "approve",
+      "Approves the merge that a `judgment needed` message about a wait asks about, as `sb operator approve` does. It works only in the operator. The approval covers the PR head and the last reply that the message named, so sbd asks again after a push or a new reply. sbd checks the PR again before it merges.",
+      ["wait": string("The id of the wait that the message names.")], required: ["wait"]),
     Tool(
       "highlight",
       "Highlights a session as high priority, or with `clear` true removes the highlight. A highlighted session gets an orange ring in the app, and its Inbox item comes first. Use it for the few sessions that matter most, because a highlight on every session ranks none. The highlight clears when the session reaches Done. A session can't highlight itself.",
