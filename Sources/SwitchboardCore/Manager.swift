@@ -109,6 +109,7 @@ public enum Manager {
     - `sb note fix-cache "stacked on #1190"` adds a note to a session.
     - `sb done fix-cache` marks a session done.
     - `sb rm fix-cache --worktree` removes a session and its worktree. It does not delete the branch. It refuses a worktree with uncommitted files, or with commits that are on no remote branch unless the PR merged. After the user agrees to lose that work, run `sb rm fix-cache` and then `git worktree remove --force <cwd>`.
+    - `sb rm --keep fix-cache` clears a session's failed delete, shown in the Inbox as "Delete failed", and keeps the session.
     - `sb events --session fix-cache --limit \(MCPToolServer.defaultEventLimit)` shows what happened in a session. `--kind Stop`, which repeats, shows only that kind.
 
     ## What changed
