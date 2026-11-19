@@ -413,7 +413,7 @@ private struct IssueSkeleton: View {
       }
     }
     .redacted(reason: .placeholder)
-    .padding(16)
+    .padding(Design.listInset)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .accessibilityLabel("Loading issues")
   }

@@ -53,12 +53,6 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
-  private var viewChoice: Binding<MainView?> {
-    Binding(
-      get: { model.selected == nil ? model.mainView : nil },
-      set: { if let view = $0 { model.show(view) } })
-  }
-
   private var isConfirmingDelete: Binding<Bool> {
     Binding(get: { model.confirmingDelete != nil }, set: { if !$0 { model.confirmingDelete = nil } })
   }
@@ -122,39 +116,7 @@ struct ContentView: View {
       } message: { offer in
         Text(model.sessionNames.replacingIDs(in: offer.message))
       }
-    }
-    .toolbar {
-      ToolbarItem(placement: .navigation) { NavHistoryControls() }
-      ToolbarItem(placement: .navigation) {
-        // No segment is selected while a session shows.
-        Picker("View", selection: viewChoice) {
-          Text(Self.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
-          Text("Board").tag(MainView?.some(.board))
-          Text(Self.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
-      }
-      ToolbarItem(placement: .navigation) { SessionFilterMenu() }
-      ToolbarItem { ManagerButton() }
-      ToolbarItem { AccountMenu() }
-      ToolbarItem {
-        Button {
-          model.showingImport = true
-        } label: {
-          Label("Import Sessions", systemImage: "square.and.arrow.down")
-        }
-        .help("Import Claude sessions that run outside Switchboard (⇧⌘I)")
-      }
-      ToolbarItem {
-        Button {
-          model.openNewSession()
-        } label: {
-          Label("New Session", systemImage: "plus")
-        }
-        .help("Start a session (⌘N)")
-      }
+      .mainToolbar()
     }
     .removingToolbarTitle()
     .confirmationDialog(
@@ -298,7 +260,7 @@ struct Sidebar: View {
     } message: { move in
       Text(move.message)
     }
-    // A sixth toolbar item pushes New Session into the overflow menu at the minimum window width, so search
+    // Another toolbar item would push New Session into the overflow menu at the minimum window width, so search
     // sits here. It looks like a search field, and the panel holds the real one.
     .safeAreaInset(edge: .top) {
       Button {
@@ -581,7 +543,7 @@ struct BoardView: View {
   static let minColumnWidth: CGFloat = 165
   static let maxColumnWidth: CGFloat = 280
   static let columnSpacing: CGFloat = 12
-  static let boardPadding: CGFloat = 16
+  static let boardPadding = Design.listInset
   static var legacyScrollerWidth: CGFloat { NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) }
 
   /// How wide each column draws in a Board `width` points wide with `columns` columns. The columns fill the width

@@ -9,7 +9,7 @@ enum Design {
   static let highlight = AttentionState.needsYou.color
   static let highlightRingWidth: CGFloat = 2.5
   /// The leading and trailing inset of the text and controls in a list pane: its header row, its section headers, and
-  /// its rows' content. It equals the Board's padding, so every main view starts its content at the same x.
+  /// its rows' content. The Board pads its lanes by the same amount, so every main view starts its content at one x.
   static let listInset: CGFloat = 16
 }
 
