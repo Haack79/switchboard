@@ -66,7 +66,7 @@ public enum Headless {
     }
     switch end {
     case .cancelled: throw APIError("cancelled")
-    case .timedOut: throw APIError("timed out after \(Int(timeout)) s")
+    case .timedOut: throw TimedOut(description: "timed out after \(Int(timeout)) s")
     case .exited, nil: break
     }
     guard p.terminationStatus == 0 else {
@@ -78,6 +78,11 @@ public enum Headless {
   }
 
   private enum RunEnd: Sendable { case exited, timedOut, cancelled }
+
+  /// `run` throws it when the run outlasts its timeout.
+  public struct TimedOut: Error, CustomStringConvertible {
+    public let description: String
+  }
 
   /// The JSON object that the output of `claude -p --output-format json` answers with.
   public static func answer(_ output: String) throws -> [String: JSON] {

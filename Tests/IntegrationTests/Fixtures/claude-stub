@@ -90,8 +90,21 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt that holds <skill-file> is the skill classification
+# call. It is checked first, because a skill file can hold any other tag. It
+# writes each argument with a NUL after it to $SB_HOME/skill-classify-args,
+# replacing that file, and writes $CLAUDE_CONFIG_DIR, or nothing when that
+# variable is unset, to $SB_HOME/skill-classify-account. It appends the
+# skill's name, the text between <skill-name> and </skill-name>, as one line
+# per call to $SB_HOME/skill-classify-calls.log. It keeps the last prompt in
+# $SB_HOME/skill-classify-input.txt, and writes $SB_SESSION_ID, or unset when
+# that variable is unset, to $SB_HOME/skill-classify-session. A prompt that
+# holds FAIL-SKILL makes it exit 1, and SLOW-SKILL makes it exec sleep 30.
+# BAD-SKILL answers {"label":"maybe","reason":"x"}, LABEL-SAFE answers
+# {"label":"safe","reason":"It reads notes."}, and anything else answers
+# {"label":"work","reason":"It runs a pipeline."}, in the same envelope.
 # A `claude -p` prompt that holds <switchboard-state> is the quick ask call.
-# It is checked first, because the snapshot can hold <rows> or <pr-body>. It
+# It is checked next, because the snapshot can hold <rows> or <pr-body>. It
 # writes each argument with a NUL after it to $SB_HOME/quick-ask-args,
 # replacing that file, so a test can split the last call's arguments exactly.
 # It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one
@@ -138,7 +151,26 @@
 args=("$@")
 if [ "${1-}" = -p ]; then
   input=$(cat)
-  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
+  # A skill file can hold any of the tags below, so this check comes first.
+  if [[ $input == *"<skill-file>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/skill-classify-args"
+    printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/skill-classify-account"
+    name=${input#*<skill-name>}
+    name=${name%%</skill-name>*}
+    printf '%s\n' "$name" >>"$SB_HOME/skill-classify-calls.log"
+    printf '%s' "$input" >"$SB_HOME/skill-classify-input.txt"
+    printf '%s' "${SB_SESSION_ID-unset}" >"$SB_HOME/skill-classify-session"
+    case $input in
+    *FAIL-SKILL*) echo "skill failed" >&2 && exit 1 ;;
+    *SLOW-SKILL*) exec sleep 30 ;;
+    *BAD-SKILL*) out='{"label":"maybe","reason":"x"}' ;;
+    *LABEL-SAFE*) out='{"label":"safe","reason":"It reads notes."}' ;;
+    *) out='{"label":"work","reason":"It runs a pipeline."}' ;;
+    esac
+    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    exit 0
+  fi
+  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes next.
   if [[ $input == *"<switchboard-state>"* ]]; then
     printf '%s\0' "$@" >"$SB_HOME/quick-ask-args"
     printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/quick-ask-account"

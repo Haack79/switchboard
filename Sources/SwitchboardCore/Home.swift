@@ -29,6 +29,8 @@ public struct Home: Sendable {
   public var autoContinue: String { "\(path)/auto-continue" }
   /// sbd's cache of open issues from the configured sources.
   public var issues: String { "\(path)/issues.json" }
+  /// The labels that the skill classifier gave the skills a Manager can load, by cache key.
+  public var skillLabels: String { "\(path)/skill-labels.json" }
   /// Holds `on` while `sb activity on` is in force.
   public var activityLog: String { "\(path)/activity-log" }
   /// The --mcp-config file that every session gets, which lists the shared MCP servers.
@@ -163,6 +165,7 @@ public struct Config: Codable, Equatable, Sendable {
   public var docket = DocketSettings()
   public var planUpdates = PlanUpdateSettings()
   public var quickAsk = QuickAskSettings()
+  public var managerSkills = ManagerSkillSettings()
   public var recheck = RecheckSettings()
   /// Where the Issues view reads issues from, the team, and the Start presets.
   public var issues = IssueSettings()
@@ -175,7 +178,7 @@ public struct Config: Codable, Equatable, Sendable {
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
-      quickAsk
+      quickAsk, managerSkills
     case issues
     case recheck = "recheckSeconds"
     case testTrashOtherVolume
@@ -257,6 +260,7 @@ public struct Config: Codable, Equatable, Sendable {
     docket = try c.decodeIfPresent(DocketSettings.self, forKey: .docket) ?? d.docket
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
     quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
+    managerSkills = ManagerSkillSettings(parsing: try c.decodeIfPresent(JSON.self, forKey: .managerSkills))
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     // sbd logs a bad `issues` section and keeps the defaults. Throwing would make sbd ignore all of config.json.
     do {

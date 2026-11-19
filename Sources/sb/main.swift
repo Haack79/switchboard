@@ -78,6 +78,15 @@ let usage = """
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    manager skills [<conv>]       list the skills that the Manager conversations
+                                  and the operator can load, or only those of
+                                  the conversation's account, each labeled work
+                                  or safe. A work skill belongs in a session of
+                                  its own. config.json's managerSkills.work and
+                                  managerSkills.safe set a label by name
+    manager skills relabel [<name>…]
+                                  scan the skill folders again, then label the
+                                  named skills again, or every skill
     ask <question>                answer a question about Switchboard from a
                                   snapshot of its state. The answer comes from
                                   claude with no tools, so it changes nothing.

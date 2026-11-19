@@ -183,6 +183,25 @@ public final class Service {
     jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
+  /// The skills that each account's Manager conversations and operator can load, by account folder and name.
+  var skillIndex: [String: [String: CatalogEntry]] = [:]
+  /// The classifier's labels, as `Home.skillLabels` holds them.
+  var skillLabels = SkillLabelCache()
+  /// The last failed run of each cache key. A refresh retries one only after `skillRetryMs`.
+  var skillFailures: [String: SkillFailure] = [:]
+  /// When sbd last scanned each account's skills.
+  var skillRefreshed: [String: Int64] = [:]
+  /// The cache keys whose run waits on `skillJobs` or runs.
+  var skillQueued: Set<String> = []
+  /// Runs the skill classifier, one run at a time, because a first scan can queue dozens.
+  let skillJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.skills"
+    jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the scans of the accounts' skill folders, one at a time.
+  let skillScanQueue = DispatchQueue(label: "sbd.skill-scan")
   /// Runs the gh reads of draft reply targets.
   let ghJobs: OperationQueue = {
     let jobs = OperationQueue()
@@ -313,6 +332,7 @@ public final class Service {
     autoContinueOn = autoContinueSwitch.isOn
     activityOn = activitySwitch.isOn
     loadIssueCache()
+    skillLabels = SkillLabelCache.load(home.skillLabels)
     try store.pruneSnapshots()
     var uncertain: [String: [String]] = [:]
     for session in try store.sessions() {
@@ -357,6 +377,7 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      refreshManagerSkills()
     }
   }
 
@@ -505,6 +526,9 @@ public final class Service {
     case "quick-ask":
       // A quick ask can run claude for minutes. It runs off the state queue.
       return .success(try quickAsk(request.args, clientGone: hookGone))
+    case "manager-skills":
+      // A relabel scans the folders and the transcript, so it runs off the state queue.
+      return .success(try managerSkills(request.args))
     case "send" where request.args["images"] != nil:
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
@@ -861,6 +885,9 @@ public final class Service {
       // A message that arrived while claude was starting waits until claude
       // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
       deliverPending(id, after: 1.5)
+      if session.kind.runsInManagerFolder, stamp == nil, case .local(let account) = claudeAccount(of: id) {
+        refreshManagerSkills(account: account.folder)
+      }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
         answer = ParentDigest.hookOutput(text, event: kind)
