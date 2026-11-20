@@ -43,7 +43,7 @@ extension Instance {
 /// reruns the failed runs once (`flake`), or raises a judgment message to the Operator. Fixtures/gh-merge-stub serves
 /// the runs and the logs, and Fixtures/claude-stub answers the reader from `ci-judge-answer.json`.
 ///
-/// `holdRetrySeconds` is 60, not a second or two: sbd ticks once a second of real time, so a window that short would
+/// `holdRetrySeconds` is 60, not a second or two: sbd ticks on real time, so a window that short would
 /// pass on real ticks alone, and every check that the reader has not run yet would race. The tests move sbd's clock
 /// instead.
 ///
