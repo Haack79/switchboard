@@ -43,6 +43,16 @@ final class Instance {
   static let slowShell = root.appendingPathComponent("Tests/IntegrationTests/Fixtures/slow-shell").path
   static let reap = root.appendingPathComponent("Tests/IntegrationTests/Fixtures/reap").path
 
+  /// Lets the pane shells of `slowShell` start. Until then they wait, so the claude in a pane has not started.
+  func startSlowShells() throws {
+    FileManager.default.createFile(atPath: "\(home.path)/shell-go", contents: nil)
+  }
+
+  /// Makes the pane shells of `slowShell` that start from now on wait for `startSlowShells`.
+  func holdSlowShells() throws {
+    try? FileManager.default.removeItem(atPath: "\(home.path)/shell-go")
+  }
+
   /// Runs once per test process, before the first home.
   private static let watcher: Void = { try? watch(getpid()) }()
 
