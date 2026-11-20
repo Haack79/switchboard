@@ -636,3 +636,39 @@ extension SessionNameApplyTests {
     }
   }
 }
+
+// MARK: - Account of the call
+
+extension SessionNameApplyTests {
+  @Suite struct Account {
+    /// sbd may run with CLAUDE_CONFIG_DIR set to another account. A session on the default account keeps its turn on
+    /// the default account, which the quota check also reads.
+    @Test(.timeLimit(.minutes(1)))
+    func aDefaultAccountSessionDropsSbdsConfigDir() throws {
+      try withNamingService { service in
+        try service.addLive("s1", name: fallback)
+        service.queue.sync { service.entries["s1"]?.session.claudeConfigDir = ClaudeAccount.defaultFolder }
+
+        let env = service.queue.sync {
+          service.headlessEnv(session: "s1", account: nil, base: ["CLAUDE_CONFIG_DIR": "/tmp/sbd-account"])
+        }
+
+        #expect(env["CLAUDE_CONFIG_DIR"] == nil)
+      }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func anotherAccountSessionKeepsItsOwnConfigDir() throws {
+      try withNamingService { service in
+        try service.addLive("s1", name: fallback)
+        service.queue.sync { service.entries["s1"]?.session.claudeConfigDir = "/tmp/session-account" }
+
+        let env = service.queue.sync {
+          service.headlessEnv(session: "s1", account: nil, base: ["CLAUDE_CONFIG_DIR": "/tmp/sbd-account"])
+        }
+
+        #expect(env["CLAUDE_CONFIG_DIR"] == ClaudeAccount(folder: "/tmp/session-account").folder)
+      }
+    }
+  }
+}
