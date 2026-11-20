@@ -187,8 +187,26 @@ extension MCPToolServer {
       [
         "session": session,
         "every": interval,
-        "prompt": string("The prompt to send on each run."),
-      ], required: ["every", "prompt"]),
+        "prompt": string(
+          "The prompt to send on each run. Required without `topup`. With `topup` and no prompt, Switchboard writes one."
+        ),
+        "topup": [
+          "type": "object",
+          "description": .string(
+            "Makes the schedule a work queue top-up. On each run Switchboard counts the active work sessions of the group in the repository. A session needs attention when it is Ready to merge and no wait will merge it, when it is Done or merged and no wait will remove it, or when Switchboard can't read its repository or host. When the group has its target and no session needs attention, Switchboard records the check and sends nothing. When the group is short and no session needs attention, a one-shot judge picks the most important open issues and follow-ups by the rubric, and Switchboard starts each issue with the template as its prompt and each follow-up with its own prompt, arms the removal of its worktree once it is done, and records one report. Otherwise, or when the top-up fails, it sends the prompt with the queue status, the rubric, and the template to the session. Only a Manager conversation, the Operator, or the user can add one, and a group chat can't."
+          ),
+          "properties": [
+            "group": group,
+            "repo": string("The repository as owner/name."),
+            "target": integer("How many active work sessions the group should have, 1 to 20."),
+            "template": string(
+              "The prompt of each session started from an issue, with the placeholders {url}, {title}, {number}, {repo}, and {body}."
+            ),
+            "rubric": string("How to rank the open issues and follow-ups, most important first."),
+          ],
+          "required": ["group", "repo", "target", "template", "rubric"],
+        ],
+      ], required: ["every"]),
     Tool(
       "list_schedules",
       "Lists the schedules with their session, prompt, interval, next run, and last result, the next due first. Pass a session to list only its schedules. A next run in the past means the run waits for the session to be free.",

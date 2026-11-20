@@ -136,9 +136,10 @@ extension Service {
   /// session, and when none of the parent's children moved. A change in the
   /// counts alone sends no digest, because each digest stays in the
   /// conversation's context for every later call. sbd counts the digest as
-  /// heard once it returns it.
+  /// heard once it returns it. The operator gets none, because its turns come
+  /// from schedules and waits that carry their own status.
   func digest(_ parent: String, now: Int64) -> String? {
-    guard !hearsNotices(parent) else { return nil }
+    guard entries[parent]?.session.kind != .operator, !hearsNotices(parent) else { return nil }
     var lines: [String] = []
     for id in entries.keys.sorted() {
       guard let e = entries[id], parentOf(e.session) == parent else { continue }
