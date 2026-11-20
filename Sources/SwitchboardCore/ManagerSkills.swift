@@ -550,9 +550,10 @@ public enum ManagerSkillGate {
   public static func promptReason(skill: String, session: String) -> String {
     "Switchboard blocked /\(skill) in this Manager conversation. /\(skill) is a work skill, and a Manager rereads "
       + "everything it loads on every later turn. Start a session for it instead: send it again from the "
-      + "conversation's Message Claude field in Switchboard (⇧⌘E) and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
-      + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(session) "
-      + "--run-here \"/\(skill) …\" in a terminal. sb manager skills lists the labels."
+      + "conversation's Message Claude field in Switchboard (⇧⌘E) and pick Spawn a session with this, or run "
+      + "sb spawn --repo <owner/name> --branch <branch> --prompt \"/\(skill) …\". To run it here once, pick "
+      + "Run here anyway, or run sb send \(session) --run-here \"/\(skill) …\" in a terminal. "
+      + "sb manager skills lists the labels."
   }
 
   /// The reason of a PreToolUse deny, which the model reads. It holds only the skill's name.
