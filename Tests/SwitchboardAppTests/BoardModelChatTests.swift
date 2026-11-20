@@ -69,9 +69,14 @@ import Testing
     let model = offlineModel()
     let log = [ChatMessage(role: .user, text: "How is it going?", t: 100)]
     model.chatLogs["m"] = log
-    model.send = { _, _ in throw Boom() }
+    let read = Counter()
+    model.send = { _, _ in
+      read.increment()
+      throw Boom()
+    }
 
     model.loadChatLog("m")
+    await settle { read.value > 0 }
     try? await Task.sleep(nanoseconds: 100_000_000)
 
     #expect(model.chatLogs["m"] == log)

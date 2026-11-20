@@ -215,7 +215,7 @@ extension BoardModel {
 
 /// Where "Open in transcript" shows a session's whole conversation.
 enum TranscriptTarget: Equatable {
-  /// The session's own view. The Inbox leaves out a chat's and a Manager conversation's items.
+  /// The session's own view. The Inbox leaves out some of a conversation's cards, such as a group message that waits for the user.
   case session
   /// The terminal of the Inbox item.
   case terminal

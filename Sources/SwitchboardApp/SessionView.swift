@@ -31,7 +31,10 @@ struct SessionView: View {
       header
       if session.kind == .manager { ManagerStatusStrip(session: session) }
       if session.kind.isConversation { SchedulesStrip(session: session) }
-      let proposals = session.chat.map { g in model.planProposals.filter { $0.group == g } } ?? []
+      // The Inbox lists every proposal above the item that nests this view.
+      let proposals =
+        model.selection == session.id
+        ? session.chat.map { g in model.planProposals.filter { $0.group == g } } ?? [] : []
       if !proposals.isEmpty { PlanProposalList(proposals: proposals) }
       PauseBanner(session: session)
       Divider()
