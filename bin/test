@@ -93,9 +93,8 @@ shards() {
   while read -r p i pattern; do
     if [ "$p" -eq "$part" ]; then patterns[i]=$pattern; fi
   done <<<"$plan"
-  # A part can get no suite when the suites fill fewer shards than the parts
-  # before the last hold. shard-plan has already checked that every test
-  # matches one filter, so the other parts run every test.
+  # shard-plan can leave a part with no suite. It has already checked that
+  # every test matches one filter, so the other parts run every test.
   if [ "${#patterns[@]}" -eq 0 ]; then
     echo "bin/test: part $part of $parts has no tests to run" >&2
     exit 0
