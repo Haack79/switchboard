@@ -28,12 +28,15 @@ public struct Schedule: Codable, Equatable, Sendable {
     public var skipped: Int
     /// Set only for `failed`.
     public var error: String?
+    /// The id of the run's `sent` event. A failed run, and a run that sbd recorded before it stored this, has none.
+    public var sent: Int64?
 
-    public init(t: Int64, outcome: Outcome, skipped: Int, error: String? = nil) {
+    public init(t: Int64, outcome: Outcome, skipped: Int, error: String? = nil, sent: Int64? = nil) {
       self.t = t
       self.outcome = outcome
       self.skipped = skipped
       self.error = error
+      self.sent = sent
     }
 
     /// Such as `pasted 5m ago · 2 skipped` or `failed 2m ago: <error>`.

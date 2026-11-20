@@ -1534,7 +1534,7 @@ public final class Service {
   /// session's last SessionStart named. For a session on a host, this reads nothing of the state queue.
   func transcriptFile(_ session: Session, named: String?, on machine: any Machine) throws -> String? {
     guard session.started else { return nil }
-    if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
+    if let path = named, Transcript.isFile(path, of: session.claudeSessionId) {
       return machine.exists(path) ? path : nil
     }
     return Transcript.find(
@@ -1605,7 +1605,8 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
+      let mark = trigger == .schedule ? resumeMark(id) : [:]
+      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra.merging(mark) { $1 })
       try startClaude(id, prompt: text, trigger: trigger)
       if runHere { armSkillBypass(id, text) }
       return SentMessage(delivery: .resumed, sent: sent)
@@ -1621,6 +1622,17 @@ public final class Service {
       let sent = try queueMessage(id, text, by: by, from: from, extra: extra)
       return SentMessage(delivery: .queued, sent: sent)
     }
+  }
+
+  /// The conversation and the transcript's size before a loop run launches claude with its prompt, which
+  /// `chat-log` uses to find the prompt. Only a session that shows as a chat gets them, because no other kind
+  /// links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// size 0.
+  private func resumeMark(_ id: String) -> [String: JSON] {
+    guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }
+    let size: UInt64
+    do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
+    return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
@@ -1705,13 +1717,18 @@ public final class Service {
     }
   }
 
+  /// The text that claude gets for a message to the session `id`, without the paths of its images.
+  func pastedText(_ text: String, _ id: String) -> String {
+    Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text
+  }
+
   /// The messages with the `pasting` event of each. It runs on the state queue.
   func uncertainPastes(_ id: String, _ texts: [String]) throws -> [UncertainPaste] {
     var pastings = try store.events(session: id).filter { $0.kind == "pasting" }
     return texts.map { text in
       let pasting = pastings.lastIndex { $0.data["text"]?.string == text }.map { pastings.remove(at: $0) }
       return UncertainPaste(
-        text: text, pasted: Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text,
+        text: text, pasted: pastedText(text, id),
         started: pasting != nil, transcript: pasting?.data["transcript"]?.string,
         offset: UInt64(pasting?.data["transcript_bytes"]?.int ?? 0))
     }
@@ -1792,7 +1809,10 @@ public final class Service {
         data["transcript"] = .string(found.path)
         data["transcript_bytes"] = .number(Double(found.size))
       }
+      // `chat-log` finds a run's prompt from the last `pasting` that names its `sent` event.
+      if let conversation = entries[id]?.session.claudeSessionId { data["conversation"] = .string(conversation) }
       if let sent = message.sent {
+        data["sent"] = .number(Double(sent.id))
         guard let row = try store.event(id: sent.id), row.session == id, row.t == sent.t, row.kind == "sent",
           row.data["text"] == sent.data["text"]
         else {

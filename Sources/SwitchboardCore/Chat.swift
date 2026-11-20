@@ -86,11 +86,14 @@ public struct ChatMessage: Codable, Equatable, Sendable {
   public var text: String
   /// When the message was written, in ms since the epoch.
   public var t: Int64?
+  /// The id of the `sent` event whose prompt this message is, when a `chat-log` read with `sent` found it.
+  public var sent: Int64?
 
-  public init(role: Role, text: String, t: Int64? = nil) {
+  public init(role: Role, text: String, t: Int64? = nil, sent: Int64? = nil) {
     self.role = role
     self.text = text
     self.t = t
+    self.sent = sent
   }
 
   /// Whether the message is a notice that Switchboard pasted into the conversation.
