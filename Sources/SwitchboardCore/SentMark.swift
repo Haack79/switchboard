@@ -62,8 +62,7 @@ public struct SentMark: Equatable, Sendable {
   /// Whether the `sent` event launched claude with its message and recorded where the message started. Without a
   /// size, a mark would start at 0 and could find an earlier run's copy of the prompt.
   private static func marksLaunch(_ sent: Event) -> Bool {
-    sent.kind == "sent" && sent.data["delivery"]?.string == Delivery.resumed.rawValue
-      && sent.data["transcript_bytes"] != nil
+    sent.data["delivery"]?.string == Delivery.resumed.rawValue && sent.data["transcript_bytes"] != nil
   }
 
   private static func names(_ pasting: Event, _ sent: Int64) -> Bool {
