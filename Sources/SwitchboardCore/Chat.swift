@@ -129,4 +129,14 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     guard let args = elements["command-args"], !args.isEmpty else { return name }
     return "\(name) \(args)"
   }
+
+  /// Whether this message is the transcript's record of a prompt whose text was `text`. The match reads the
+  /// text the way `Transcript.hasUserMessage` matches a paste, because the transcript adds image markers to a
+  /// prompt.
+  public func records(_ text: String) -> Bool {
+    guard role == .user, !isNotice, commandOutput == nil else { return false }
+    let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Foundation's `contains` finds no empty string. An images-only message has no text.
+    return wanted.isEmpty || (slashCommand ?? self.text).contains(wanted)
+  }
 }
