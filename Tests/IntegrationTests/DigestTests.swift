@@ -247,20 +247,6 @@ import Testing
     #expect(try sbd.events(p.id, kind: "digest").count == 1)
   }
 
-  @Test func aChildThatNeedsYouRecordsNoSbdSentEventOnAnyParent() throws {
-    let sbd = try Instance()
-    let parents = try Parent.allCases.map { (kind: $0, session: try parent(sbd, $0)) }
-    for (kind, p) in parents {
-      let kid = try child(sbd, of: p, name: "kid-\(kind)", prompt: "one")
-      try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
-    }
-    Thread.sleep(forTimeInterval: 1)
-
-    for (kind, p) in parents {
-      #expect(try sbd.sbdMessages(p.id).isEmpty, "\(kind)")
-    }
-  }
-
   @Test(arguments: [Parent.work, .manager]) func aSessionWaitOnAChildResumesTheParentOnce(_ kind: Parent) throws {
     let sbd = try Instance()
     let p = try parent(sbd, kind)

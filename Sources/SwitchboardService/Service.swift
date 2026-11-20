@@ -1019,9 +1019,9 @@ public final class Service {
         break
       }
       try nameConversation(id, prompt: payload["prompt"]?.string)
-      let digestText = digest(id, now: event.t)
+      // A host's hook answer never reaches claude, so a host session keeps its digest and its replies unheard.
+      let digestText = stamp == nil ? digest(id, now: event.t) : nil
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
-      // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
     case "PreToolUse":

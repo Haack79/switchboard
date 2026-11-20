@@ -60,7 +60,9 @@ extension Service {
     parentNotices.marks[id] = seeded
   }
 
-  /// Drops the child's mark, so no parent's digest has a line about it.
+  /// Drops the mark of a child that left its parent or was removed. A child that still has a parent and no mark
+  /// gets a line for its whole current state at the next digest, so a caller that links it to a new parent
+  /// calls `seedMark` afterward.
   func forgetChild(_ id: String) {
     parentNotices.marks[id] = nil
   }

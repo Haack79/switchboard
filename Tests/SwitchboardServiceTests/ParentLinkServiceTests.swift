@@ -183,6 +183,9 @@ extension Service {
   }
 }
 
+// MARK: Clear
+
+/// `parent` with `clear` unlinks a session from its parent: the field, the store, and an `unlinked` event on each end.
 @Suite struct ParentLinkClearTests {
   static let family = [work("boss", name: "planner"), work("kid", parent: "boss")]
 

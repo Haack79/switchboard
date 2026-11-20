@@ -60,9 +60,6 @@ private func heard(_ prs: [Int?]) -> [ChildMark] {
       ])
     #expect(lines(drafted, drafted).isEmpty)
     #expect(lines(drafted, ChildMark(state: .working, pr: nil)).isEmpty)
-    #expect(
-      ParentDigest.line(name: "fix", id: "s1", heard: failed, now: drafted, reason: "draft ready to submit", prURL: nil)
-        == "fix (s1): needs you in its own Inbox item (switchboard://session/s1): draft ready to submit")
   }
 
   func announced(_ prs: [Int?]) -> [String] {

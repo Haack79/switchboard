@@ -1055,6 +1055,29 @@ private func text(_ answer: Response) -> String {
     }
   }
 
+  /// A host's hook answer never reaches claude, so a stamped prompt must leave the child's change unheard for the
+  /// next prompt that does reach the parent.
+  @Test(.timeLimit(.minutes(1)))
+  func aStampedPromptOfAParentOnTheHostLeavesItsChildrensChangesUnheard() throws {
+    try withSessions(hosts: listedHosts) { service in
+      service.queue.sync {
+        var child = session("m3", host: "mini")
+        child.parent = "m1"
+        service.entries["m3"] = Service.Entry(session: child)
+      }
+      try service.givePR("m3", listed: true)
+      let stamp = HostEventStamp(
+        id: try #require(HostEventID("00000001700000000000-4242-0001")), host: "mini", t: 2_000)
+      let args: JSON = ["session": "m1", "payload": ["hook_event_name": "UserPromptSubmit", "prompt": "next"]]
+
+      let answered = try service.queue.sync { try service.hook(args, stamp: stamp) }
+
+      #expect(answered?.answer == [:], "\(String(describing: answered?.answer.text))")
+      let heard = service.queue.sync { service.digest("m1", now: nowMs()) ?? "" }
+      #expect(heard.contains("m3 (m3): opened PR #77"), "\(heard)")
+    }
+  }
+
   /// sbd remembers every PR that a child had across a restart, so the child's return to an earlier PR tells its
   /// parent on the host nothing new.
   @Test(.timeLimit(.minutes(1)))
