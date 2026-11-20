@@ -13,7 +13,8 @@ import SwitchboardCore
 /// first. SB_SNAPSHOT_APPEARANCE=dark draws the dark appearance, and the default is
 /// light. SB_SNAPSHOT_SIZE=<width>x<height> sets the window's content size in
 /// points 1 s before the drawing, so a narrow layout can be drawn, and puts
-/// the window's frame back after it. SwiftTerm draws text in layers that the
+/// the window's frame back after it. SB_SNAPSHOT_EXIT ends the app once it has drawn, with status 1 when it
+/// wrote no PNG. SwiftTerm draws text in layers that the
 /// drawing misses, so `sb screen` checks terminals.
 /// SB_GROUP_FILTER=<id,id> starts the app with that group filter, where `(ungrouped)` names the sessions in no
 /// group. Like SB_ORG_FILTER, it never saves the filter. SB_ORGS=open opens the menu that holds both filters.
@@ -106,10 +107,11 @@ enum Snapshot {
       }
       // The split views fit their panes to the new size only on a later turn of the run loop.
       DispatchQueue.main.asyncAfter(deadline: .now() + (size == nil ? 0 : 1)) {
-        write(to: path)
+        let written = write(to: path)
         // AppKit saves the main window's frame on every change. Restoring it keeps the next launch at the user's last size.
         if let window, let frame { window.setFrame(frame, display: false) }
-        if env["SB_SNAPSHOT_EXIT"] != nil { NSApp.terminate(nil) }
+        // An open sheet keeps NSApp.terminate from quitting, so the hook ends the process itself.
+        if env["SB_SNAPSHOT_EXIT"] != nil { exit(written ? 0 : 1) }
       }
     }
   }
@@ -380,10 +382,12 @@ enum Snapshot {
     return context.makeImage()
   }
 
-  static func write(to path: String) {
+  /// Returns false when it wrote no PNG. It writes to a temporary file first, so the PNG never exists half written.
+  @discardableResult
+  static func write(to path: String) -> Bool {
     guard let main = NSApp.switchboardWindow else {
       FileHandle.standardError.write(Data("snapshot: no window to draw\n".utf8))
-      return
+      return false
     }
     // A popover's window is a child window of the window that presents it, which is the main window or its sheet.
     let sheet = main.attachedSheet
@@ -396,7 +400,7 @@ enum Snapshot {
         bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
         bytesPerRow: 0, bitsPerPixel: 0)
-    else { return }
+    else { return false }
     rep.size = bounds.size
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -419,10 +423,13 @@ enum Snapshot {
       image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
     NSGraphicsContext.restoreGraphicsState()
+    guard let png = rep.representation(using: .png, properties: [:]) else { return false }
     do {
-      try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+      try png.write(to: URL(fileURLWithPath: path), options: .atomic)
+      return true
     } catch {
       FileHandle.standardError.write(Data("snapshot: \(error)\n".utf8))
+      return false
     }
   }
 }
