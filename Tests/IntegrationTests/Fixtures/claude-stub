@@ -33,6 +33,10 @@
 #                    Code sends no hook after Escape
 #   fail ...         ends the turn with StopFailure, as an API error does
 #   clear <uuid>     switches to another conversation, as /clear does
+#   context <n>      writes an assistant line of model claude-test whose
+#                    usage gives an input context of n tokens, as an API
+#                    call does, then replies "Context: <n>". The reply's line
+#                    carries no usage
 #   linger <n>       waits n s after SIGTERM before it exits. A second
 #                    SIGTERM does not restart the wait
 #   lag ...          waits 1 s before it reports the prompt, which keeps the
@@ -70,6 +74,9 @@
 #   a prompt that holds "Switchboard plan artifact task." plays the chat's
 #                    side of the task with a fake Artifact tool. See artifact
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
+#   /compact ...     sends only SessionStart with source compact, as Claude
+#                    Code runs a built-in command with no UserPromptSubmit
+#                    and no turn
 #   /<command> ...   replies "Done: <prompt>". Its UserPromptSubmit goes
 #                    first, as Claude Code runs the hook before it writes the
 #                    prompt to the transcript. A hook answer whose decision is
@@ -385,6 +392,15 @@ reply_line() {
   mkdir -p "$project"
   jq -nc --arg t "$1" \
     '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: $t}]}}' >>"$project/$session.jsonl"
+}
+
+# usage_line <n>: appends an assistant line whose usage gives an input context of n tokens.
+usage_line() {
+  mkdir -p "$project"
+  jq -nc --argjson n "$1" \
+    '{type: "assistant", message: {model: "claude-test", role: "assistant", content: [],
+      usage: {input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: ($n - 1), output_tokens: 5}}}' \
+    >>"$project/$session.jsonl"
 }
 
 # hook <event> [json fields]
@@ -898,6 +914,11 @@ turn() {
   fi
   listed=1
   case $p in
+  /compact*)
+    hook SessionStart '{"source":"compact"}'
+    echo "⏺ compacted"
+    return
+    ;;
   /* | skill\ * | subskill\ *)
     gated "$p"
     return
@@ -962,6 +983,10 @@ turn() {
     transcript /clear
     echo "⏺ cleared, now $session"
     return
+    ;;
+  context\ *)
+    usage_line "${p#context }"
+    reply="Context: ${p#context }"
     ;;
   mcp\ *)
     url=$(jq -r --arg n "${p#mcp }" '.mcpServers[$n].url' "$mcp_config")

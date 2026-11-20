@@ -77,6 +77,18 @@ let usage = """
     manager <conv> --read         mark the conversation's replies read
     manager pin|unpin <conv>      pin the conversation to the top of the
                                   app's Conversations list, or unpin it
+    manager end <conv> [--drop <id>]… [--new [--name N]]
+                                  end the conversation: stop its claude and remove
+                                  it. Its transcript stays on disk. Its own waits
+                                  and schedules block the end until --drop names
+                                  each one. Waits it handed to the operator stay.
+                                  --new starts a conversation with its account,
+                                  MCP servers, and pin
+    manager hint <conv> [--dismiss]
+                                  the suggestion to end the conversation: every
+                                  session it started is done, or its context
+                                  passed conversationHintTokens. --dismiss hides
+                                  it until it changes
     manager mcp <conv> [add <server>… | rm <server>… | --all | --none]
                                   show or change the MCP servers that the
                                   conversation loads besides switchboard. A new
@@ -571,7 +583,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--backlog", "--steps", "--for",
-      "--reason", "--message",
+      "--reason", "--message", "--drop",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {

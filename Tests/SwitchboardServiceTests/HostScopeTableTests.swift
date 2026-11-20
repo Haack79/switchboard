@@ -72,7 +72,8 @@ enum PlannedScope {
     "group-note", "group-describe", "group-link-add", "group-link-rm", "group-account", "group-suggest", "manager",
     "manager-ls", "manager-mcp",
     "manager-skills", "chat",
-    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-model", "item-context", "manager-mcp-request",
+    "chat-log", "slash-commands", "removed-ls", "manager-pin", "manager-end", "manager-hint", "manager-model",
+    "item-context", "manager-mcp-request",
     "operator", "operator-report", "operator-reports", "quick-ask", "ref-details", "pause", "snooze", "unsnooze",
     "highlight", "parent", "schedule", "wait-approve",
     "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule", "rm-plan", "rm-queue",
@@ -233,6 +234,18 @@ private func refuses(_ text: String?, _ body: () throws -> Request) -> (Bool, St
 
   @Test func noOpIsBothAdmittedAndRefused() {
     #expect(Set(HostScope.rules.keys).isDisjoint(with: HostScope.refused.keys))
+  }
+
+  /// `manager-end` stops the conversation's claude, so a host's client could be inside the session it stops.
+  @Test func managerEndIsRefusedForTheReasonThatRmIs() {
+    #expect(HostScope.refused["manager-end"] != nil)
+    #expect(HostScope.refused["manager-end"] == HostScope.refused["rm"])
+  }
+
+  /// `manager-hint` reads and dismisses a conversation's hint on this Mac, as `manager-ls` reads its conversations.
+  @Test func managerHintIsRefusedForTheReasonThatManagerLsIs() {
+    #expect(HostScope.refused["manager-hint"] != nil)
+    #expect(HostScope.refused["manager-hint"] == HostScope.refused["manager-ls"])
   }
 
   // MARK: The keys

@@ -73,6 +73,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// Whether the main session sent any hook since the last launch. Claude
   /// sends none while the trust dialog shows.
   public var hookSinceLaunch = false
+  /// Set while a prompt that sbd launched claude with or started to paste has no UserPromptSubmit yet. It holds the
+  /// launch's or the `pasting` event's time, or the time of a later SessionStart, as `Service` moves its in-flight
+  /// window. A built-in command's paste does not set it, because Claude Code sends no UserPromptSubmit for one.
+  /// `requeued` clears it, and so does `trust_closed`, because both move the message to the queue.
+  public var promptOnItsWaySince: Int64?
   /// Background jobs that run under claude, as the last `job` event counted
   /// them. A job sends no hooks, so sbd's tick finds it in the process list.
   public var jobs = 0
@@ -214,6 +219,14 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The operator's asks and waits that this session owns. sbd sets them with `OperatorItems.assign`, and no event
   /// folds them.
   public var operatorItems = OperatorItems()
+  /// The input context of a Manager conversation's latest turn, from its `context` events. Nil since a `/clear`
+  /// or a compaction until the next turn's read.
+  public var contextTokens: Int?
+  /// The sessions that the session created or that `sb parent` linked under it, less those it unlinked. A removed
+  /// session stays in it.
+  public var spawned: Set<String> = []
+  /// The key of the end hint that the user dismissed last.
+  public var endHintDismissed: String?
   /// The main session's `UserPromptSubmit` events since the last `conversation-reset`, each of which starts a turn.
   public var turnsSinceReset = 0
   /// When sbd last started a fresh conversation for the session, from its last `conversation-reset`.
@@ -256,6 +269,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     let touchedBefore = lastTouched
     applyWait(event, userPrompt: userPrompt)
     applyArtifact(event)
+    applyConversation(event)
     // A subagent's tool calls don't change what the main session waits on.
     let fromSubagent = event.fromSubagent
     let tool = d["tool_name"]?.string ?? ""
@@ -267,6 +281,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     case "SessionStart":
       live = true
       lastStart = event.t
+      if promptOnItsWaySince != nil { promptOnItsWaySince = event.t }
       transcriptPath = d["transcript_path"]?.string
     case "running":
       live = true
@@ -286,6 +301,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       lastResumeTrigger = event.kind == "resumed" ? d["trigger"]?.string.flatMap(LaunchTrigger.init) : nil
       exitedAtTrust = false
       hookSinceLaunch = false
+      promptOnItsWaySince = lastLaunchPrompt?.isEmpty == false ? event.t : nil
       permissionMode = d["permission_mode"]?.string
     case "imported":
       // The transcript's last line, not the import, is the session's last activity.
@@ -304,7 +320,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       jobs = 0
       endTurn()
       subagents = []
+    case "pasting":
+      if !SlashCommand.isBuiltIn(prompt: d["text"]?.string ?? "") { promptOnItsWaySince = event.t }
+    case "requeued":
+      promptOnItsWaySince = nil
     case "UserPromptSubmit":
+      promptOnItsWaySince = nil
       if userPrompt { prompts += 1 }
       if !fromSubagent { turnsSinceReset += 1 }
       promptSinceReply = true
@@ -484,6 +505,10 @@ extension SessionFacts {
 
   /// Whether a background job runs, or claude may still report one that exited.
   public func jobsRunning(now: Int64) -> Bool { jobs > 0 || mayReportJob(now: now) }
+
+  /// Whether a turn runs or a background job that claude reported has not exited. It leaves out a job that claude
+  /// may still report.
+  public var inTurnOrJob: Bool { turnRunning || jobs > 0 }
 
   /// Whether a subagent runs that sent an event within `Attention.subagentQuietMs`.
   public func subagentsRunning(now: Int64) -> Bool {
@@ -883,5 +908,26 @@ public enum Attention {
   static func minutes(_ ms: Int64) -> String {
     let m = max(0, ms) / 60_000
     return m < 1 ? "<1 min" : "\(m) min"
+  }
+}
+
+extension SessionFacts {
+  /// Folds the facts that only a Manager conversation shows.
+  mutating func applyConversation(_ event: Event) {
+    switch event.kind {
+    case "context":
+      contextTokens = event.data["tokens"]?.int
+    case "SessionStart" where ["clear", "compact"].contains(event.data["source"]?.string):
+      contextTokens = nil
+    // The child's own `linked` and `unlinked` events name its parent and no child.
+    case "child", "linked":
+      if let child = event.data["child"]?.string { spawned.insert(child) }
+    case "unlinked":
+      if let child = event.data["child"]?.string { spawned.remove(child) }
+    case "end-hint-dismissed":
+      endHintDismissed = event.data["key"]?.string
+    default:
+      break
+    }
   }
 }

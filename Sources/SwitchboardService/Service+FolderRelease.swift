@@ -29,16 +29,15 @@ public enum Caller: Sendable {
 }
 
 extension Service {
-  /// The pids of the session's Claude and shell panes that still run. It runs on the state queue.
-  func livePanePids(_ id: String) -> [Int] {
-    [Pane.claude, .shell].compactMap { paneRow(id, $0) }.filter { !$0.dead }.map(\.pid)
-      .filter(Processes.isValidPid)
+  /// The pids of the session's `panes` that still run. It runs on the state queue.
+  func livePanePids(_ id: String, panes: [Pane] = [.claude, .shell]) -> [Int] {
+    panes.compactMap { paneRow(id, $0) }.filter { !$0.dead }.map(\.pid).filter(Processes.isValidPid)
   }
 
-  /// Whether `ancestry` holds the pid of a live Claude or shell pane of a session on this Mac. A session on a
-  /// host never holds a local caller, because its pane pids belong to the host. It runs on the state queue.
-  func isInside(_ id: String, _ ancestry: Set<Int>) -> Bool {
-    entries[id]?.session.host == nil && !ancestry.isDisjoint(with: livePanePids(id))
+  /// Whether `ancestry` holds the pid of a live pane of `panes` of a session on this Mac. A session on a host never
+  /// holds a local caller, because its pane pids belong to the host. It runs on the state queue.
+  func isInside(_ id: String, _ ancestry: Set<Int>, panes: [Pane] = [.claude, .shell]) -> Bool {
+    entries[id]?.session.host == nil && !ancestry.isDisjoint(with: livePanePids(id, panes: panes))
   }
 
   /// Where a client with `ancestry` runs: the sessions on this Mac whose panes it runs below, in id order, and

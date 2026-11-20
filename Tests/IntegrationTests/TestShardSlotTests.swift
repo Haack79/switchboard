@@ -499,16 +499,16 @@ private struct WarningCase: Sendable, CustomTestStringConvertible {
     }
   }
 
-  /// shard-plan runs MeasureTests in the last part only, and CoreTests in part 1 only.
-  @Test func aPartRunsOnlyThatPartsShards() throws {
+  /// shard-plan runs the integration suites in the parts before the last. It
+  /// runs CoreTests and MeasureTests in the last part only.
+  @Test(arguments: [("1/2", ["AlphaTests", "BetaTests"]), ("2/2", ["CoreTests", "MeasureTests"])])
+  func aPartRunsOnlyThatPartsShards(_ part: String, _ expected: [String]) throws {
     let rig = try ShardRig()
     defer { rig.stop() }
 
-    let r = try rig.run(["--shards", "2", "--part", "2/2"], env: ["CI": "true"])
+    let r = try rig.run(["--shards", "2", "--part", part], env: ["CI": "true"])
 
     #expect(r.status == 0, "\(r.stderr)")
-    let ids = Set(rig.shardCalls().map(\.id))
-    #expect(ids.contains("MeasureTests"), "\(ids)")
-    #expect(!ids.contains("CoreTests"), "\(ids)")
+    #expect(Set(rig.shardCalls().map(\.id)) == Set(expected), "\(rig.swiftCalls())")
   }
 }

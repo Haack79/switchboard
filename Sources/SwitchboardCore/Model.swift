@@ -390,6 +390,13 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   /// The session's place in sbd's removal job, or nil when no removal is
   /// queued, running, or failed.
   public var removal: Removal?
+  /// The input context of a Manager conversation's latest turn, or nil for every other session and while no turn
+  /// has reported one since the last `/clear` or compaction.
+  public var contextTokens: Int?
+  /// The suggestion in a Manager conversation's header to end it, or nil when there is none.
+  public var endHint: EndHint?
+  /// The operator's waits that a Manager conversation handed off, or nil when there are none.
+  public var handedWaits: [Wait]?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,
