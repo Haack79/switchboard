@@ -175,7 +175,7 @@ private struct LoopDetail: View {
               Text("never ran").font(.caption).foregroundStyle(.secondary)
             }
             ForEach(Array(history.enumerated()), id: \.offset) { _, run in
-              Text(run.text(now: now)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+              RunLine(row: row, run: run, now: now)
             }
           }
         }
@@ -183,5 +183,27 @@ private struct LoopDetail: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+}
+
+/// One run in a loop's Recent Runs, with a link to its prompt and reply when the loop's session shows as a chat.
+private struct RunLine: View {
+  @EnvironmentObject var model: BoardModel
+  let row: LoopRow
+  let run: Schedule.Run
+  let now: Int64
+
+  var body: some View {
+    let text = run.text(now: now)
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Text(text).foregroundStyle(.secondary).textSelection(.enabled)
+      if LoopRow.linksReply(row.session, run) {
+        Button("Show Reply") { model.openRunReply(row.session, run) }
+          .buttonStyle(.link)
+          .help("Show this run's prompt and reply in \(row.session.name)")
+          .accessibilityLabel("Show reply to the run \(text)")
+      }
+    }
+    .font(.caption)
   }
 }
