@@ -160,6 +160,8 @@ public struct Config: Codable, Equatable, Sendable {
   /// the session back with nothing stopped.
   public var removalDelaySeconds = 5
   public static let maxRemovalDelaySeconds = 86_400
+  /// The longest wait that `pasteSettleSeconds`, `stopWaitSeconds`, and `reviewTimeoutSeconds` accept.
+  public static let maxWaitSeconds = 86_400.0
   /// Makes the removal job treat the trash as on another volume than every
   /// worktree. sbd reads it only with `testClock`.
   public var testTrashOtherVolume = false
@@ -201,6 +203,21 @@ public struct Config: Codable, Equatable, Sendable {
     case testTrashOtherVolume
   }
 
+  /// A wait in seconds from config.json, or nil when the key is missing or null. sbd turns a wait into whole
+  /// milliseconds or nanoseconds, and a value outside `0...maxWaitSeconds` would trap there. Such a value, or one
+  /// that is not a number, logs a line and returns nil, because throwing would make sbd ignore all of config.json.
+  private static func wait(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) throws -> Double? {
+    switch try c.decodeIfPresent(JSON.self, forKey: key) {
+    case nil, .null:
+      return nil
+    case .number(let seconds) where (0...maxWaitSeconds).contains(seconds):
+      return seconds
+    default:
+      logLine("skipping \(key.stringValue): its value must be a number of seconds from 0 to \(Int(maxWaitSeconds))")
+      return nil
+    }
+  }
+
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = Config()
@@ -222,10 +239,9 @@ public struct Config: Codable, Equatable, Sendable {
     testClock = try c.decodeIfPresent(Bool.self, forKey: .testClock) ?? d.testClock
     machineLog = try c.decodeIfPresent(Bool.self, forKey: .machineLog) ?? d.machineLog
     hostWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .hostWaitSeconds) ?? d.hostWaitSeconds
-    pasteSettleSeconds = try c.decodeIfPresent(Double.self, forKey: .pasteSettleSeconds) ?? d.pasteSettleSeconds
-    stopWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .stopWaitSeconds) ?? d.stopWaitSeconds
-    reviewTimeoutSeconds =
-      try c.decodeIfPresent(Double.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
+    pasteSettleSeconds = try Self.wait(c, .pasteSettleSeconds) ?? d.pasteSettleSeconds
+    stopWaitSeconds = try Self.wait(c, .stopWaitSeconds) ?? d.stopWaitSeconds
+    reviewTimeoutSeconds = try Self.wait(c, .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
     // This skips a server that doesn't decode, such as a stdio one copied from
     // a Claude config. Throwing would make sbd ignore all of config.json.
     for (name, value) in try c.decodeIfPresent([String: JSON].self, forKey: .mcpServers) ?? [:] {
