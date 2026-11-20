@@ -22,6 +22,7 @@ sb wait <session> --kind date --until 2h --note "check the dashboard"
 sb wait <session> --kind session --target flag-cache
 sb wait <session> --clear
 sb schedule <session> --every 30m "Run the Waiting audit"
+sb schedule Operator --every 30m --topup --group Infra --repo owner/name --target 5 --template-file template.md --rubric-file rubric.md
 sb schedule ls                # the schedules, the next due first; ls <session> for one session's
 sb schedule pause|resume|rm <id>
 sb schedule edit <id> --every 1h "Run the Waiting audit"   # change the interval, the prompt, or both
