@@ -277,9 +277,9 @@ private func verdict(_ f: SessionFacts) -> Verdict { Attention.evaluate(session(
 }
 
 @Suite struct ConfiguredIgnoredPathTests {
-  @Test(arguments: [".env", "app/.env", ".notes/", ".notes/brief.md"])
+  @Test(arguments: [".env", "app/.env", ".scratch/", ".scratch/brief.md"])
   func namesInAlsoCount(_ path: String) {
-    #expect(BuildOutput.contains(path, also: [".env", ".notes"]))
+    #expect(BuildOutput.contains(path, also: [".env", ".scratch"]))
   }
 
   @Test func otherNamesStayRefused() {

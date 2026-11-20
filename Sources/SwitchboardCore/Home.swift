@@ -152,7 +152,7 @@ public struct Config: Codable, Equatable, Sendable {
   /// The file that `followup import` reads when the request names none.
   public var followupsFile = "~/dev/haacked/notes/PostHog/Followups.md"
   /// Names of ignored files and folders that `sb cleanup` may delete besides
-  /// build output, such as `.env` or `.notes`.
+  /// build output and a top-level `.notes` folder, such as `.env`.
   public var cleanupDeletes: [String] = []
   /// The supacode command, which deletes a worktree that Supacode locked. A test points it at a stub.
   public var supacode = "supacode"
