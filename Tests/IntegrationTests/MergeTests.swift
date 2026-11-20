@@ -5,16 +5,18 @@ import Testing
 extension Instance {
   /// A private sbd whose poller asks `github`, with Fixtures/gh-merge-stub as
   /// its gh. Polls run only when a test asks. `mergeRepos` sets
-  /// `operator.mergeRepos` in config.json, and nil leaves the key out.
-  static func withMergeStub(_ github: FakeGitHub, mergeRepos: [String]? = nil) throws -> Instance {
+  /// `operator.mergeRepos` in config.json, and nil leaves the key out. `accounts` are the Claude config folders that
+  /// `Instance` creates. `extra` replaces top-level keys of config.json.
+  static func withMergeStub(
+    _ github: FakeGitHub, mergeRepos: [String]? = nil, accounts: [String] = [], config extra: [String: JSON] = [:]
+  ) throws -> Instance {
     var config: [String: JSON] = [
       "github": [
         "gh": .string("\(FakeGitHub.fixtures)/gh-merge-stub"), "url": .string(github.url), "pollSeconds": 0,
-      ],
-      "tickSeconds": 1,
+      ]
     ]
     if let mergeRepos { config["operator"] = ["mergeRepos": .array(mergeRepos.map(JSON.string))] }
-    return try Instance(config: config)
+    return try Instance(accounts: accounts, config: config.merging(extra) { $1 })
   }
 
   /// The arguments of each gh call that the stub ran and that starts with

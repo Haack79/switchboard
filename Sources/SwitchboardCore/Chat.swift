@@ -78,7 +78,7 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     case user
     case assistant
 
-    /// The name of the speaker, as a chat shows it.
+    /// The name of the speaker, as `sb chat --log` prints it.
     public var label: String { self == .user ? "You" : "Claude" }
   }
 
@@ -86,11 +86,14 @@ public struct ChatMessage: Codable, Equatable, Sendable {
   public var text: String
   /// When the message was written, in ms since the epoch.
   public var t: Int64?
+  /// The id of the `sent` event whose prompt this message is, when a `chat-log` read with `sent` found it.
+  public var sent: Int64?
 
-  public init(role: Role, text: String, t: Int64? = nil) {
+  public init(role: Role, text: String, t: Int64? = nil, sent: Int64? = nil) {
     self.role = role
     self.text = text
     self.t = t
+    self.sent = sent
   }
 
   /// Whether the message is a notice that Switchboard pasted into the conversation.
@@ -128,5 +131,15 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     guard let name = elements["command-name"], !name.isEmpty else { return nil }
     guard let args = elements["command-args"], !args.isEmpty else { return name }
     return "\(name) \(args)"
+  }
+
+  /// Whether this message is the transcript's record of a prompt whose text was `text`. The match reads the
+  /// text the way `Transcript.hasUserMessage` matches a paste, because the transcript adds image markers to a
+  /// prompt.
+  public func records(_ text: String) -> Bool {
+    guard role == .user, !isNotice, commandOutput == nil else { return false }
+    let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Foundation's `contains` finds no empty string. An images-only message has no text.
+    return wanted.isEmpty || (slashCommand ?? self.text).contains(wanted)
   }
 }

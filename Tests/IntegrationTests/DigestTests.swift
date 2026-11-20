@@ -57,7 +57,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, kind)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(kid)
     // Five ticks, each of which would send a notice.
     Thread.sleep(forTimeInterval: 1)
     #expect(try sbd.sbdMessages(p.id).isEmpty)
@@ -93,7 +93,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .manager)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(kid)
     try prompt(sbd, p, "what changed")
     #expect(contexts(sbd, p).last?.contains("kid (\(kid.id))") == true)
     let heard = contexts(sbd, p).count
@@ -137,7 +137,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .chat)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(kid)
     try prompt(sbd, p, "what changed")
     #expect(contexts(sbd, p).contains { $0.contains("kid (\(kid.id))") })
 
@@ -152,7 +152,7 @@ import Testing
     let p = try parent(sbd, kind)
     let other = try sbd.new(prompt: "hello", name: "other")
     if kind == .chat { _ = try sbd.sb("group", "move", other.id, "--to", "Flags") }
-    try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(other)
     let given = contexts(sbd, p).count
     let digests = try sbd.events(p.id, kind: "digest").count
 
@@ -166,9 +166,9 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .manager)
     let other = try sbd.new(prompt: "hello", name: "other")
-    try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(other)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitForReply(kid)
 
     try prompt(sbd, p, "what changed")
 
@@ -185,7 +185,7 @@ import Testing
     _ = try sbd.sb("group", "move", inFlags.id, "--to", "Flags")
     _ = try sbd.sb("group", "add", "--json", "Docs", inDocs.id)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    for s in [inFlags, inDocs, kid] { try sbd.waitFor(s.id, "the reply") { $0.state == .needsYou } }
+    for s in [inFlags, inDocs, kid] { try sbd.waitForReply(s) }
 
     try prompt(sbd, p, "what changed")
 
@@ -231,5 +231,53 @@ import Testing
     }
     #expect(Manager.guide.contains("Your waits go to the operator"))
     #expect(!Manager.guide.contains("resumes you once"))
+  }
+}
+
+/// Decision 46: the Operator's turns come from schedules and waits that carry their own status, so its prompts get
+/// no per-turn digest. A Manager conversation's prompts still get one. The Operator's start digest stays, and the
+/// count taken before the prompt leaves it out.
+extension DigestTests {
+  enum Holder: CaseIterable { case theOperator, conversation }
+
+  /// The Operator takes its prompts through `sb operator`. A conversation takes them through `sb send`.
+  func promptHolder(_ sbd: Instance, _ holder: Holder, _ s: SessionSummary, _ text: String) throws {
+    switch holder {
+    case .theOperator:
+      try sbd.sb("operator", text)
+      try sbd.waitFor(s.id, "the reply to \(text)", timeout: 30) { $0.lastReply == "Done: \(text)" }
+    case .conversation:
+      try prompt(sbd, s, text)
+    }
+  }
+
+  @Test(arguments: Holder.allCases) func onlyAManagerConversationsPromptGetsTheDigest(_ holder: Holder) throws {
+    let sbd = try Instance()
+    let p =
+      holder == .theOperator
+      ? try OperatorTests().idleOperator(sbd) : try ManagerConversationsTests().idleConversation(sbd)
+    let kid = try child(sbd, of: p, name: "kid", prompt: "one")
+    let kidParent = try sbd.get(kid.id).parent
+    try #require(kidParent == p.id, "the kid's parent is \(String(describing: kidParent))")
+    try sbd.waitFor(kid.id, "the first reply") { $0.lastReply == "Done: one" && $0.state == .needsYou }
+    try flip(sbd, kid)
+    let before = contexts(sbd, p).count
+
+    try promptHolder(sbd, holder, p, "what changed")
+
+    let given = contexts(sbd, p).dropFirst(before).joined(separator: "\n")
+    // The start digest is a `digest` event too, so only a per-turn digest's text counts.
+    let digests = try sbd.events(p.id).filter {
+      $0.kind == "digest" && $0.data["text"]?.string?.hasPrefix("Switchboard: what changed") == true
+    }
+    switch holder {
+    case .theOperator:
+      #expect(!given.contains("kid (\(kid.id))"), "\(given)")
+      #expect(!given.contains("Switchboard: what changed since your last turn."), "\(given)")
+      #expect(digests.isEmpty, "\(digests)")
+    case .conversation:
+      #expect(given.contains("kid (\(kid.id))"), "\(given)")
+      #expect(digests.count == 1, "\(digests)")
+    }
   }
 }

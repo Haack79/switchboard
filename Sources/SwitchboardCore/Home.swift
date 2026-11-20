@@ -125,6 +125,14 @@ public struct Config: Codable, Equatable, Sendable {
   public var machineLog = false
   /// How long a request that needs a remote host waits for the host's link. Only tests change it.
   public var hostWaitSeconds: Double = 15
+  /// How long after claude's SessionStart sbd waits before it pastes a message. 1.5 s covers the redraws of
+  /// claude's prompt that Phase 0 measured. Only tests change it.
+  public var pasteSettleSeconds: Double = 1.5
+  /// How long a stop waits for claude to exit after SIGTERM. A pane stop then waits as long for the session's
+  /// processes. Only tests change it.
+  public var stopWaitSeconds: Double = 5
+  /// How long sbd waits for a gh call that requests a review or posts or lists a draft reply. Only tests change it.
+  public var reviewTimeoutSeconds: Double = 60
   /// The MCP servers that sbd runs once and shares with every session, by
   /// the name that sessions see.
   public var mcpServers: [String: MCPServer] = [:]
@@ -144,7 +152,7 @@ public struct Config: Codable, Equatable, Sendable {
   /// The file that `followup import` reads when the request names none.
   public var followupsFile = "~/dev/haacked/notes/PostHog/Followups.md"
   /// Names of ignored files and folders that `sb cleanup` may delete besides
-  /// build output, such as `.env` or `.notes`.
+  /// build output and a top-level `.notes` folder, such as `.env`.
   public var cleanupDeletes: [String] = []
   /// The supacode command, which deletes a worktree that Supacode locked. A test points it at a stub.
   public var supacode = "supacode"
@@ -152,6 +160,11 @@ public struct Config: Codable, Equatable, Sendable {
   /// the session back with nothing stopped.
   public var removalDelaySeconds = 5
   public static let maxRemovalDelaySeconds = 86_400
+  /// The context size in tokens at which a Manager conversation's header suggests ending it. 0 turns that hint off.
+  public var conversationHintTokens = 120_000
+  public static let maxConversationHintTokens = 10_000_000
+  /// The longest wait that `pasteSettleSeconds`, `stopWaitSeconds`, and `reviewTimeoutSeconds` accept.
+  public static let maxWaitSeconds = 86_400.0
   /// Makes the removal job treat the trash as on another volume than every
   /// worktree. sbd reads it only with `testClock`.
   public var testTrashOtherVolume = false
@@ -172,6 +185,7 @@ public struct Config: Codable, Equatable, Sendable {
   public var quickAsk = QuickAskSettings()
   public var `operator` = OperatorSettings()
   public var managerSkills = ManagerSkillSettings()
+  public var sessionNames = SessionNameSettings()
   public var manager = ManagerSettings()
   public var recheck = RecheckSettings()
   /// Where the Issues view reads issues from, the team, and the Start presets.
@@ -182,14 +196,45 @@ public struct Config: Codable, Equatable, Sendable {
   enum CodingKeys: String, CodingKey {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
-    case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
-      cleanupDeletes, supacode, removalDelaySeconds
+    case testClock, machineLog, hostWaitSeconds, pasteSettleSeconds, stopWaitSeconds, reviewTimeoutSeconds, mcpServers,
+      ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
+      cleanupDeletes, supacode, removalDelaySeconds, conversationHintTokens
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
-      quickAsk, managerSkills
+      quickAsk, managerSkills, sessionNames
     case manager
     case issues, `operator`
     case recheck = "recheckSeconds"
     case testTrashOtherVolume
+  }
+
+  /// A wait in seconds from config.json, or nil when the key is missing or null. sbd turns a wait into whole
+  /// milliseconds or nanoseconds, and a value outside `0...maxWaitSeconds` would trap there. Such a value, or one
+  /// that is not a number, logs a line and returns nil, because throwing would make sbd ignore all of config.json.
+  private static func wait(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) throws -> Double? {
+    switch try c.decodeIfPresent(JSON.self, forKey: key) {
+    case nil, .null:
+      return nil
+    case .number(let seconds) where (0...maxWaitSeconds).contains(seconds):
+      return seconds
+    default:
+      logLine("skipping \(key.stringValue): its value must be a number of seconds from 0 to \(Int(maxWaitSeconds))")
+      return nil
+    }
+  }
+
+  /// The whole number under `key` when it is from 0 to `max`, or nil. A bad value logs and returns nil, so it keeps
+  /// the default. Throwing would make sbd ignore all of config.json.
+  private static func decodeBounded(
+    _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys, upTo max: Int, unit: String
+  ) throws -> Int? {
+    switch try c.decodeIfPresent(JSON.self, forKey: key) {
+    case nil, .null:
+      return nil
+    case let value?:
+      if let n = value.int, (0...max).contains(n) { return n }
+      logLine("skipping \(key.stringValue): its value must be a whole number of \(unit) from 0 to \(max)")
+      return nil
+    }
   }
 
   public init(from decoder: Decoder) throws {
@@ -213,6 +258,9 @@ public struct Config: Codable, Equatable, Sendable {
     testClock = try c.decodeIfPresent(Bool.self, forKey: .testClock) ?? d.testClock
     machineLog = try c.decodeIfPresent(Bool.self, forKey: .machineLog) ?? d.machineLog
     hostWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .hostWaitSeconds) ?? d.hostWaitSeconds
+    pasteSettleSeconds = try Self.wait(c, .pasteSettleSeconds) ?? d.pasteSettleSeconds
+    stopWaitSeconds = try Self.wait(c, .stopWaitSeconds) ?? d.stopWaitSeconds
+    reviewTimeoutSeconds = try Self.wait(c, .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
     // This skips a server that doesn't decode, such as a stdio one copied from
     // a Claude config. Throwing would make sbd ignore all of config.json.
     for (name, value) in try c.decodeIfPresent([String: JSON].self, forKey: .mcpServers) ?? [:] {
@@ -242,19 +290,12 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
-    // A bad value keeps the default. Throwing would make sbd ignore all of config.json.
-    switch try c.decodeIfPresent(JSON.self, forKey: .removalDelaySeconds) {
-    case nil, .null:
-      break
-    case let value?:
-      if let seconds = value.int, (0...Self.maxRemovalDelaySeconds).contains(seconds) {
-        removalDelaySeconds = seconds
-      } else {
-        logLine(
-          "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
-            + "\(Self.maxRemovalDelaySeconds)")
-      }
-    }
+    removalDelaySeconds =
+      try Self.decodeBounded(c, .removalDelaySeconds, upTo: Self.maxRemovalDelaySeconds, unit: "seconds")
+      ?? d.removalDelaySeconds
+    conversationHintTokens =
+      try Self.decodeBounded(c, .conversationHintTokens, upTo: Self.maxConversationHintTokens, unit: "tokens")
+      ?? d.conversationHintTokens
     testTrashOtherVolume =
       try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)
@@ -269,6 +310,7 @@ public struct Config: Codable, Equatable, Sendable {
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
     quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
     managerSkills = try c.decodeIfPresent(ManagerSkillSettings.self, forKey: .managerSkills) ?? d.managerSkills
+    sessionNames = try c.decodeIfPresent(SessionNameSettings.self, forKey: .sessionNames) ?? d.sessionNames
     manager = try c.decodeIfPresent(ManagerSettings.self, forKey: .manager) ?? d.manager
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     `operator` = try c.decodeIfPresent(OperatorSettings.self, forKey: .operator) ?? d.operator

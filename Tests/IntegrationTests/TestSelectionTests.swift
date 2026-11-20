@@ -68,6 +68,9 @@ private let srcDir = "Sour" + "ces"
 /// FxRepoPathTests.swift quotes the folder's name only in a made-up path.
 /// CLIMoreTests.swift names FxCLITests only as `extension FxCLITests`.
 /// FxMergeTests.swift calls `fxGroupFixture()`, which FxGroupTests.swift declares.
+/// No file uses Helpers.swift's `fxFixturePath`. FxRepoPathTests and FxGroupTests
+/// are the smoke suites. The smoke list's `Nested.Skipped` line has too many parts,
+/// so the selector skips it.
 private let baselineFiles: [String: String] = [
   "Package.swift": "// swift-tools-version: 6.0\n",
   "README.md": "# Fixture\n",
@@ -114,6 +117,8 @@ private let baselineFiles: [String: String] = [
 
   """,
   "Tests/IntegrationTests/Fixtures/claude-stub": "#!/bin/sh\nexit 0\n",
+  "Tests/smoke-suites":
+    "# Smoke suites\nIntegrationTests.FxRepoPathTests\nIntegrationTests.Nested.Skipped\nIntegrationTests.FxGroupTests\n",
 ]
 
 /// The lines that `swift test list --skip-build` prints for the baseline files.
@@ -373,18 +378,8 @@ private func canonicalFilters(_ filters: [String]) -> Set<String> {
   return result
 }
 
-/// Checks that bin/test ran swift test once with no filter and exited 0.
-private func expectEveryTest(_ run: SelectionRun, sourceLocation: SourceLocation = #_sourceLocation) {
-  #expect(run.result.status == 0, "\(run.result.stderr)", sourceLocation: sourceLocation)
-  #expect(run.testRuns.count == 1, "\(run.invocations)", sourceLocation: sourceLocation)
-  for args in run.testRuns {
-    #expect(SelectionRun.filters(args).isEmpty, "\(args)", sourceLocation: sourceLocation)
-    #expect(!args.contains("--skip"), "\(args)", sourceLocation: sourceLocation)
-  }
-}
-
 /// Checks that bin/test built the tests, then ran swift test once with
-/// `--skip-build` and exactly `filters`, and exited 0.
+/// `--skip-build` and exactly `filters`, exited 0, and said that CI runs the rest.
 private func expectTargeted(
   _ run: SelectionRun, _ filters: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
 ) {
@@ -395,18 +390,20 @@ private func expectTargeted(
     canonicalFilters(SelectionRun.filters(args)) == canonicalFilters(Array(filters)), "\(args)",
     sourceLocation: sourceLocation)
   #expect(args.contains("--skip-build"), "\(args)", sourceLocation: sourceLocation)
+  #expect(
+    run.result.stderr.contains("CI runs every other test on every push"), "\(run.result.stderr)",
+    sourceLocation: sourceLocation)
   let buildIndex = run.invocations.firstIndex { $0.first == "build" && $0.contains("--build-tests") }
   #expect(buildIndex.map { $0 < runIndex } == true, "\(run.invocations)", sourceLocation: sourceLocation)
 }
 
 /// A change to the baseline repo and the filters bin/test should then pass.
-/// Nil filters mean every test.
 private struct SelectionCase: Sendable, CustomTestStringConvertible {
   var name: String
   var files: [String: String] = [:]
   var listing: [String] = []
   var change: @Sendable (SelectionRepo) throws -> Void
-  var filters: Set<String>?
+  var filters: Set<String>
 
   var testDescription: String { name }
 
@@ -416,16 +413,22 @@ private struct SelectionCase: Sendable, CustomTestStringConvertible {
 
     let run = try repo.run()
 
-    if let filters { expectTargeted(run, filters) } else { expectEveryTest(run) }
+    expectTargeted(run, filters)
   }
 }
 
 private let sourceScanSuite = suiteFilter("SwitchboardServiceTests", "FxSourceScanTests")
 
 /// The unit test targets. A source change leaves IntegrationTests to CI.
-private let unitTargets: Set<String> = [
-  wholeTarget("SwitchboardCoreTests"), wholeTarget("SwitchboardServiceTests"), wholeTarget("SwitchboardAppTests"),
-]
+private let unitTargetNames = ["SwitchboardCoreTests", "SwitchboardServiceTests", "SwitchboardAppTests"]
+
+private let unitTargets = Set(unitTargetNames.map(wholeTarget))
+
+/// The suites that the baseline's Tests/smoke-suites lists.
+private let smoke = suiteFilter("IntegrationTests", "FxRepoPathTests", "FxGroupTests")
+
+/// What a change that no rule maps selects.
+private let unitsAndSmoke = unitTargets.union([smoke])
 
 private let sourceCases: [SelectionCase] = [
   SelectionCase(name: "Core", change: { try $0.edit("\(srcDir)/SwitchboardCore/Core.swift") }, filters: unitTargets),
@@ -457,7 +460,7 @@ private let sourceCases: [SelectionCase] = [
     change: { repo in
       try repo.edit("\(srcDir)/SwitchboardCore/Core.swift")
       try repo.edit("Tests/IntegrationTests/Helpers.swift")
-    }, filters: nil),
+    }, filters: unitsAndSmoke),
   SelectionCase(
     name: "App", change: { try $0.edit("\(srcDir)/SwitchboardApp/App.swift") },
     filters: [wholeTarget("SwitchboardAppTests"), sourceScanSuite]),
@@ -546,87 +549,140 @@ private let freeTests: [(name: String, text: String)] = [
   ("@Test indented under #if", "#if os(macOS)\n  @Test func free() {}\n#endif\n"),
 ]
 
+/// An IntegrationTests file that the selector cannot narrow to its own suites
+/// selects them and the suites of the files that use its names, or the smoke
+/// suites in their place.
+private let integrationFileCases: [SelectionCase] = [
+  SelectionCase(
+    name: "deleted test file", change: { try $0.delete("Tests/IntegrationTests/FxMergeTests.swift") },
+    filters: [smoke]),
+  SelectionCase(
+    name: "helper file of functions", change: { try $0.edit("Tests/IntegrationTests/Helpers.swift") },
+    filters: [smoke]),
+  SelectionCase(
+    name: "helper file of a type",
+    files: ["Tests/IntegrationTests/FxServer.swift": "final class FxServer {\n  func start() {}\n}\n"],
+    change: { try $0.edit("Tests/IntegrationTests/FxServer.swift") },
+    filters: [smoke]),
+  SelectionCase(
+    name: "namespace enum that other files extend with suites",
+    files: [
+      "Tests/IntegrationTests/FxToolServerTests.swift": "enum FxToolServerTests {}\n",
+      "Tests/IntegrationTests/MCPScopedTests.swift":
+        "import Testing\n\nextension FxToolServerTests {\n  @Suite struct FxScoped {\n    @Test func calls() {}\n  }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxToolServerTests/FxScoped/calls()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxToolServerTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxToolServerTests")]),
+  SelectionCase(
+    name: "top-level function another file calls",
+    change: { try $0.edit("Tests/IntegrationTests/FxGroupTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxGroupTests", "FxMergeTests")]),
+  SelectionCase(
+    name: "suite type another file names",
+    files: [
+      "Tests/IntegrationTests/FxHostTests.swift":
+        "import Testing\n\nstruct FxHostTests {\n  static let name = \"h\"\n  @Test func resolves() {}\n}\n",
+      "Tests/IntegrationTests/FxHostScopeTests.swift":
+        "import Testing\n\nstruct FxHostScopeTests {\n  @Test func scopes() { #expect(FxHostTests.name == \"h\") }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxHostTests/resolves()", "IntegrationTests.FxHostScopeTests/scopes()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxHostTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxHostTests", "FxHostScopeTests")]),
+  SelectionCase(
+    name: "top-level constant another file reads",
+    files: [
+      "Tests/IntegrationTests/FxTimeoutTests.swift":
+        "import Testing\n\nlet fxSharedTimeout = 5\n\nstruct FxTimeoutTests {\n  @Test func waits() { #expect(fxSharedTimeout == 5) }\n}\n",
+      "Tests/IntegrationTests/FxRetryTests.swift":
+        "import Testing\n\nstruct FxRetryTests {\n  @Test func retries() { #expect(fxSharedTimeout > 0) }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxTimeoutTests/waits()", "IntegrationTests.FxRetryTests/retries()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxTimeoutTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxTimeoutTests", "FxRetryTests")]),
+  // FxEchoTests never names the extended type. Changing `fxShouted` still
+  // changes what FxEchoTests runs, so the smoke suites stand in for it.
+  SelectionCase(
+    name: "extension of a non-suite type whose member another suite uses",
+    files: [
+      "Tests/IntegrationTests/FxShoutTests.swift":
+        "import Testing\n\nextension Substring {\n  var fxShouted: String { uppercased() }\n}\n\nstruct FxShoutTests {\n  @Test func shouts() { #expect(\"a\".dropFirst(0).fxShouted == \"A\") }\n}\n",
+      "Tests/IntegrationTests/FxEchoTests.swift":
+        "import Testing\n\nstruct FxEchoTests {\n  @Test func echoes() { #expect(\"b\".dropFirst(0).fxShouted == \"B\") }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxShoutTests/shouts()", "IntegrationTests.FxEchoTests/echoes()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxShoutTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxShoutTests", "Substring"), smoke]),
+  SelectionCase(
+    name: "extension of a type the parse cannot name whose member another suite uses",
+    files: [
+      "Tests/IntegrationTests/FxTallyTests.swift":
+        "import Testing\n\nextension [String: Int] {\n  var fxTotal: Int { values.reduce(0, +) }\n}\n\nstruct FxTallyTests {\n  @Test func totals() { #expect([\"a\": 1].fxTotal == 1) }\n}\n",
+      "Tests/IntegrationTests/FxSumTests.swift":
+        "import Testing\n\nstruct FxSumTests {\n  @Test func sums() { #expect([\"b\": 2].fxTotal == 2) }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxTallyTests/totals()", "IntegrationTests.FxSumTests/sums()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxTallyTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxTallyTests"), smoke]),
+  SelectionCase(
+    name: "helper under #if that another suite uses",
+    files: [
+      "Tests/IntegrationTests/FxPlatformTests.swift":
+        "import Testing\n\n#if os(macOS)\n  func fxPlatformHelper() -> Int { 1 }\n#endif\n\nstruct FxPlatformTests {\n  @Test func runs() { #expect(fxPlatformHelper() == 1) }\n}\n",
+      "Tests/IntegrationTests/FxPlatformUserTests.swift":
+        "import Testing\n\nstruct FxPlatformUserTests {\n  @Test func uses() { #expect(fxPlatformHelper() == 1) }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxPlatformTests/runs()", "IntegrationTests.FxPlatformUserTests/uses()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxPlatformTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxPlatformTests"), smoke]),
+  SelectionCase(
+    name: "helper whose only user declares tests outside a type",
+    files: [
+      "Tests/IntegrationTests/FxValue.swift": "func fxValue() -> Int { 1 }\n",
+      "Tests/IntegrationTests/FxFreeUserTests.swift":
+        "import Testing\n\n@Test func checksValue() { #expect(fxValue() == 1) }\n",
+    ],
+    change: { try $0.edit("Tests/IntegrationTests/FxValue.swift") },
+    filters: [smoke]),
+  SelectionCase(
+    name: "file with a test outside a type and a helper another suite uses",
+    files: [
+      "Tests/IntegrationTests/FxFreeOwnTests.swift":
+        "import Testing\n\nfunc fxOwnHelper() -> Int { 1 }\n\n@Test func free() { #expect(fxOwnHelper() == 1) }\n",
+      "Tests/IntegrationTests/FxOwnUserTests.swift":
+        "import Testing\n\nstruct FxOwnUserTests {\n  @Test func uses() { #expect(fxOwnHelper() == 1) }\n}\n",
+    ],
+    listing: ["IntegrationTests.free()", "IntegrationTests.FxOwnUserTests/uses()"],
+    change: { try $0.edit("Tests/IntegrationTests/FxFreeOwnTests.swift") },
+    filters: [suiteFilter("IntegrationTests", "FxOwnUserTests"), smoke]),
+  SelectionCase(
+    name: "helper as many files use as the cap allows",
+    files: sharedHelperFiles(users: 10), listing: sharedHelperListing(users: 10),
+    change: { try $0.edit("Tests/IntegrationTests/FxShared.swift") },
+    filters: [suiteFilter("IntegrationTests", (0..<10).map { "FxUser\($0)Tests" })]),
+  SelectionCase(
+    name: "helper more files use than the cap allows",
+    files: sharedHelperFiles(users: 11), listing: sharedHelperListing(users: 11),
+    change: { try $0.edit("Tests/IntegrationTests/FxShared.swift") },
+    filters: [smoke]),
+]
+
+/// FxShared.swift declares `fxShared()`, and `users` suites with one test each call it.
+private func sharedHelperFiles(users: Int) -> [String: String] {
+  var files = ["Tests/IntegrationTests/FxShared.swift": "func fxShared() -> Int { 1 }\n"]
+  for i in 0..<users {
+    files["Tests/IntegrationTests/FxUser\(i)Tests.swift"] =
+      "import Testing\n\nstruct FxUser\(i)Tests {\n  @Test func a() { #expect(fxShared() == 1) }\n}\n"
+  }
+  return files
+}
+
+private func sharedHelperListing(users: Int) -> [String] {
+  (0..<users).map { "IntegrationTests.FxUser\($0)Tests/a()" }
+}
+
 private let wholeTargetCases: [SelectionCase] =
   [
-    SelectionCase(
-      name: "helper file of functions", change: { try $0.edit("Tests/IntegrationTests/Helpers.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "helper file of a type",
-      files: ["Tests/IntegrationTests/FxServer.swift": "final class FxServer {\n  func start() {}\n}\n"],
-      change: { try $0.edit("Tests/IntegrationTests/FxServer.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "namespace enum that other files extend with suites",
-      files: [
-        "Tests/IntegrationTests/FxToolServerTests.swift": "enum FxToolServerTests {}\n",
-        "Tests/IntegrationTests/MCPScopedTests.swift":
-          "import Testing\n\nextension FxToolServerTests {\n  @Suite struct FxScoped {\n    @Test func calls() {}\n  }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxToolServerTests/FxScoped/calls()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxToolServerTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "top-level function another file calls",
-      change: { try $0.edit("Tests/IntegrationTests/FxGroupTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "suite type another file names",
-      files: [
-        "Tests/IntegrationTests/FxHostTests.swift":
-          "import Testing\n\nstruct FxHostTests {\n  static let name = \"h\"\n  @Test func resolves() {}\n}\n",
-        "Tests/IntegrationTests/FxHostScopeTests.swift":
-          "import Testing\n\nstruct FxHostScopeTests {\n  @Test func scopes() { #expect(FxHostTests.name == \"h\") }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxHostTests/resolves()", "IntegrationTests.FxHostScopeTests/scopes()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxHostTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "top-level constant another file reads",
-      files: [
-        "Tests/IntegrationTests/FxTimeoutTests.swift":
-          "import Testing\n\nlet fxSharedTimeout = 5\n\nstruct FxTimeoutTests {\n  @Test func waits() { #expect(fxSharedTimeout == 5) }\n}\n",
-        "Tests/IntegrationTests/FxRetryTests.swift":
-          "import Testing\n\nstruct FxRetryTests {\n  @Test func retries() { #expect(fxSharedTimeout > 0) }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxTimeoutTests/waits()", "IntegrationTests.FxRetryTests/retries()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxTimeoutTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    // FxEchoTests never names the extended type. Changing `fxShouted` still
-    // changes what FxEchoTests runs.
-    SelectionCase(
-      name: "extension of a non-suite type whose member another suite uses",
-      files: [
-        "Tests/IntegrationTests/FxShoutTests.swift":
-          "import Testing\n\nextension Substring {\n  var fxShouted: String { uppercased() }\n}\n\nstruct FxShoutTests {\n  @Test func shouts() { #expect(\"a\".dropFirst(0).fxShouted == \"A\") }\n}\n",
-        "Tests/IntegrationTests/FxEchoTests.swift":
-          "import Testing\n\nstruct FxEchoTests {\n  @Test func echoes() { #expect(\"b\".dropFirst(0).fxShouted == \"B\") }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxShoutTests/shouts()", "IntegrationTests.FxEchoTests/echoes()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxShoutTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "extension of a type the parse cannot name whose member another suite uses",
-      files: [
-        "Tests/IntegrationTests/FxTallyTests.swift":
-          "import Testing\n\nextension [String: Int] {\n  var fxTotal: Int { values.reduce(0, +) }\n}\n\nstruct FxTallyTests {\n  @Test func totals() { #expect([\"a\": 1].fxTotal == 1) }\n}\n",
-        "Tests/IntegrationTests/FxSumTests.swift":
-          "import Testing\n\nstruct FxSumTests {\n  @Test func sums() { #expect([\"b\": 2].fxTotal == 2) }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxTallyTests/totals()", "IntegrationTests.FxSumTests/sums()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxTallyTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
-    SelectionCase(
-      name: "helper under #if that another suite uses",
-      files: [
-        "Tests/IntegrationTests/FxPlatformTests.swift":
-          "import Testing\n\n#if os(macOS)\n  func fxPlatformHelper() -> Int { 1 }\n#endif\n\nstruct FxPlatformTests {\n  @Test func runs() { #expect(fxPlatformHelper() == 1) }\n}\n",
-        "Tests/IntegrationTests/FxPlatformUserTests.swift":
-          "import Testing\n\nstruct FxPlatformUserTests {\n  @Test func uses() { #expect(fxPlatformHelper() == 1) }\n}\n",
-      ],
-      listing: ["IntegrationTests.FxPlatformTests/runs()", "IntegrationTests.FxPlatformUserTests/uses()"],
-      change: { try $0.edit("Tests/IntegrationTests/FxPlatformTests.swift") },
-      filters: [wholeTarget("IntegrationTests")]),
     SelectionCase(
       name: "deleted test file", change: { try $0.delete("Tests/SwitchboardServiceTests/FxServiceTests.swift") },
       filters: [wholeTarget("SwitchboardServiceTests")]),
@@ -712,71 +768,95 @@ private let listingFallbackCases: [SelectionCase] = [
         "import Testing\n\nstruct FxShapeTests {\n  @Test func a() {}\n}\n\nstruct FxOtherShapeTests {\n  @Test func a() {}\n}\n"
       )
     },
-    filters: [wholeTarget("IntegrationTests")]),
+    filters: [suiteFilter("IntegrationTests", "FxShapeTests", "FxOtherShapeTests"), smoke]),
 ]
 
-private let everyTestCases: [SelectionCase] = [
+private let unknownCases: [SelectionCase] = [
   SelectionCase(
     name: "FxCoreTests fixture", change: { try $0.edit("Tests/SwitchboardCoreTests/Fixtures/sample.json") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "deleted FxCoreTests fixture", change: { try $0.delete("Tests/SwitchboardCoreTests/Fixtures/sample.json") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "IntegrationTests fixture script", change: { try $0.edit("Tests/IntegrationTests/Fixtures/claude-stub") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "Swift file under Fixtures",
-    change: { try $0.add("Tests/SwitchboardCoreTests/Fixtures/FxStub.swift", "struct FxStub {}\n") }, filters: nil),
-  SelectionCase(name: "Package.swift", change: { try $0.edit("Package.swift") }, filters: nil),
-  SelectionCase(name: "Package.resolved", change: { try $0.add("Package.resolved", "{}\n") }, filters: nil),
-  SelectionCase(name: "bin file", change: { try $0.edit("bin/other") }, filters: nil),
-  SelectionCase(name: "new bin file", change: { try $0.add("bin/measure", "#!/bin/sh\n") }, filters: nil),
+    change: { try $0.add("Tests/SwitchboardCoreTests/Fixtures/FxStub.swift", "struct FxStub {}\n") },
+    filters: unitsAndSmoke),
+  SelectionCase(name: "Package.swift", change: { try $0.edit("Package.swift") }, filters: unitsAndSmoke),
+  SelectionCase(name: "Package.resolved", change: { try $0.add("Package.resolved", "{}\n") }, filters: unitsAndSmoke),
+  SelectionCase(name: "bin file", change: { try $0.edit("bin/other") }, filters: unitsAndSmoke),
+  SelectionCase(name: "new bin file", change: { try $0.add("bin/measure", "#!/bin/sh\n") }, filters: unitsAndSmoke),
   SelectionCase(
-    name: "workflow", change: { try $0.add(".github/workflows/ci.yml", "name: CI\n") }, filters: nil),
+    name: "workflow", change: { try $0.add(".github/workflows/ci.yml", "name: CI\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "Tests/GUI Swift file",
     change: { try $0.add("Tests/GUI/FxWindowTests.swift", suiteFile("FxWindowTests", "opens")) },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "Tests/shard-weights", change: { try $0.add("Tests/shard-weights", "1.0 IntegrationTests.FxCLITests\n") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "Swift file in a folder that is no target",
-    change: { try $0.add("\(srcDir)/Retired/FxThing.swift", "struct FxThing {}\n") }, filters: nil),
+    change: { try $0.add("\(srcDir)/Retired/FxThing.swift", "struct FxThing {}\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "folder whose name starts with a target's name",
-    change: { try $0.add("\(srcDir)/SwitchboardAppKit/FxPanel.swift", "struct FxPanel {}\n") }, filters: nil),
+    change: { try $0.add("\(srcDir)/SwitchboardAppKit/FxPanel.swift", "struct FxPanel {}\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "test folder whose name starts with a test target's name",
-    change: { try $0.add("Tests/SwitchboardAppTestsSupport/FxFake.swift", "struct FxFake {}\n") }, filters: nil),
+    change: { try $0.add("Tests/SwitchboardAppTestsSupport/FxFake.swift", "struct FxFake {}\n") },
+    filters: unitsAndSmoke),
   SelectionCase(
-    name: "Markdown below the root", change: { try $0.add("docs/testing.md", "# Testing\n") }, filters: nil),
+    name: "Markdown below the root", change: { try $0.add("docs/testing.md", "# Testing\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "Markdown in a source target", change: { try $0.add("\(srcDir)/SwitchboardCore/notes.md", "# Notes\n") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "Markdown in a test target", change: { try $0.add("Tests/SwitchboardServiceTests/README.md", "# Tests\n") },
-    filters: nil),
+    filters: unitsAndSmoke),
   SelectionCase(
     name: "resource in a source target",
-    change: { try $0.add("\(srcDir)/SwitchboardCore/Resources/strings.json", "{}\n") }, filters: nil),
+    change: { try $0.add("\(srcDir)/SwitchboardCore/Resources/strings.json", "{}\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "text file in a test target", change: { try $0.add("Tests/SwitchboardAppTests/notes.txt", "note\n") },
-    filters: nil),
-  SelectionCase(name: "root dotfile", change: { try $0.add(".swift-format", "{}\n") }, filters: nil),
+    filters: unitsAndSmoke),
+  SelectionCase(name: "root dotfile", change: { try $0.add(".swift-format", "{}\n") }, filters: unitsAndSmoke),
   SelectionCase(
     name: "root Markdown and Package.swift",
     change: { repo in
       try repo.append("README.md")
       try repo.edit("Package.swift")
-    }, filters: nil),
+    }, filters: unitsAndSmoke),
   SelectionCase(
     name: "root Markdown and a Core source",
     change: { repo in
       try repo.append("README.md")
       try repo.edit("\(srcDir)/SwitchboardCore/Core.swift")
     }, filters: unitTargets),
+  SelectionCase(
+    name: "fixture that a suite names by its file name",
+    files: [
+      "Tests/IntegrationTests/FxStubUserTests.swift":
+        "import Testing\n\nstruct FxStubUserTests {\n  @Test func runs() { #expect(\"claude-stub\".count > 0) }\n}\n",
+      "Tests/IntegrationTests/FxStubLookalikeTests.swift":
+        "import Testing\n\nstruct FxStubLookalikeTests {\n  @Test func runs() { #expect(\"claude-stub2\".count > 0) }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxStubUserTests/runs()", "IntegrationTests.FxStubLookalikeTests/runs()"],
+    change: { try $0.edit("Tests/IntegrationTests/Fixtures/claude-stub") },
+    filters: unitsAndSmoke.union([suiteFilter("IntegrationTests", "FxStubUserTests")])),
+  SelectionCase(
+    name: "bin file that a suite names by its path",
+    files: [
+      "Tests/IntegrationTests/FxScriptTests.swift":
+        "import Testing\n\nstruct FxScriptTests {\n  @Test func runs() { #expect(\"bin/other\".count > 0) }\n}\n",
+      "Tests/IntegrationTests/FxOtherwiseTests.swift":
+        "import Testing\n\nstruct FxOtherwiseTests {\n  @Test func runs() { #expect(\"bin/other-tool other\".count > 0) }\n}\n",
+    ],
+    listing: ["IntegrationTests.FxScriptTests/runs()", "IntegrationTests.FxOtherwiseTests/runs()"],
+    change: { try $0.edit("bin/other") },
+    filters: unitsAndSmoke.union([suiteFilter("IntegrationTests", "FxScriptTests")])),
 ]
 
 private let rootMarkdownChanges: [(name: String, change: @Sendable (SelectionRepo) throws -> Void)] = [
@@ -813,6 +893,10 @@ private struct SelectCase: Sendable, CustomTestStringConvertible {
   var testDescription: String { name }
 }
 
+private let smokeLine = "suites IntegrationTests 0 FxGroupTests FxRepoPathTests"
+
+private let unitAndSmokeLines = Set(unitTargetNames.map { "target \($0)" } + [smokeLine])
+
 /// The lines of `select_tests` output, with the names of each `suites` line sorted.
 private func selectionLines(_ output: String) -> Set<String> {
   Set(
@@ -845,7 +929,12 @@ private func selectionLines(_ output: String) -> Set<String> {
   }
 
   @Test(arguments: listingFallbackCases)
-  fileprivate func aListingWithFewerTestsThanTheFileRunsTheWholeTarget(_ c: SelectionCase) throws {
+  fileprivate func aListingWithFewerTestsThanTheFileRunsTheWholeTargetOrTheSmokeSuites(_ c: SelectionCase) throws {
+    try c.check()
+  }
+
+  @Test(arguments: integrationFileCases)
+  fileprivate func anIntegrationFileRunsTheSuitesThatUseItOrTheSmokeSuites(_ c: SelectionCase) throws {
     try c.check()
   }
 
@@ -854,8 +943,8 @@ private func selectionLines(_ output: String) -> Set<String> {
     try c.check()
   }
 
-  @Test(arguments: everyTestCases)
-  fileprivate func aChangeOutsideSwiftTargetCodeRunsEveryTest(_ c: SelectionCase) throws {
+  @Test(arguments: unknownCases)
+  fileprivate func aChangeOutsideSwiftTargetCodeRunsTheUnitTargetsAndTheSmokeSuites(_ c: SelectionCase) throws {
     try c.check()
   }
 
@@ -882,27 +971,28 @@ private func selectionLines(_ output: String) -> Set<String> {
   }
 
   @Test(arguments: ["exit 1", "echo not-json; exit 0"])
-  func anUnreadablePackageRunsEveryTest(_ dump: String) throws {
+  func anUnreadablePackageRunsEveryTestOutsideIntegrationTests(_ dump: String) throws {
     let repo = try SelectionRepo()
     try repo.edit("Tests/SwitchboardServiceTests/FxServiceTests.swift")
     repo.dumpPackage = dump
 
     let run = try repo.run()
 
-    expectEveryTest(run)
+    #expect(run.result.status == 0, "\(run.result.stderr)")
+    #expect(run.testRuns == [["test", "--skip", wholeTarget("IntegrationTests")]], "\(run.invocations)")
     #expect(run.result.stderr.contains("could not read the package's targets"), "\(run.result.stderr)")
   }
 
-  @Test func missingOriginMainRunsEveryTest() throws {
+  @Test func missingOriginMainRunsTheUnitTargetsAndTheSmokeSuites() throws {
     let repo = try SelectionRepo(originMain: false)
     try repo.edit("Tests/SwitchboardServiceTests/FxServiceTests.swift")
 
     let run = try repo.run()
 
-    expectEveryTest(run)
+    expectTargeted(run, unitsAndSmoke)
   }
 
-  @Test func originMainWithNoCommonHistoryRunsEveryTest() throws {
+  @Test func originMainWithNoCommonHistoryRunsTheUnitTargetsAndTheSmokeSuites() throws {
     let repo = try SelectionRepo(originMain: false)
     let tree = try repo.git("hash-object", "-t", "tree", "-w", "/dev/null")
     let orphan = try repo.git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-m", "orphan")
@@ -911,7 +1001,7 @@ private func selectionLines(_ output: String) -> Set<String> {
 
     let run = try repo.run()
 
-    expectEveryTest(run)
+    expectTargeted(run, unitsAndSmoke)
   }
 
   /// origin/main moves past the merge base with a Package.swift change that
@@ -1019,6 +1109,26 @@ private func selectionLines(_ output: String) -> Set<String> {
     #expect(r.stderr.contains("leaves IntegrationTests to CI"), "\(r.stderr)")
   }
 
+  /// Every suite that the real Tests/smoke-suites lists is a type that a file
+  /// of its target declares, so a renamed suite cannot drop out of the smoke run.
+  @Test func eachRealSmokeSuiteExists() throws {
+    let text = try String(
+      contentsOf: Instance.root.appendingPathComponent("Tests/smoke-suites"), encoding: .utf8)
+    let entries = text.split(separator: "\n").filter { !$0.hasPrefix("#") }
+    #expect(!entries.isEmpty)
+    for entry in entries {
+      let parts = entry.split(separator: ".")
+      try #require(parts.count == 2, "\(entry)")
+      let dir = Instance.root.appendingPathComponent("Tests/\(parts[0])")
+      let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
+      let declared = try files.contains { name in
+        let source = try String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)
+        return source.range(of: "(struct|class|enum|actor) \(parts[1])\\b", options: .regularExpression) != nil
+      }
+      #expect(declared, "\(entry)")
+    }
+  }
+
   @Test func aFailingTargetedTestRunFailsBinTest() throws {
     let repo = try SelectionRepo()
     try repo.edit("\(srcDir)/SwitchboardApp/App.swift")
@@ -1043,8 +1153,8 @@ private func selectionLines(_ output: String) -> Set<String> {
 
   @Test(arguments: [
     SelectCase(name: "root Markdown", paths: ["README.md"], lines: []),
-    SelectCase(name: "Package.swift", paths: ["Package.swift"], lines: ["all"]),
-    SelectCase(name: "fixture", paths: ["Tests/IntegrationTests/Fixtures/claude-stub"], lines: ["all"]),
+    SelectCase(name: "Package.swift", paths: ["Package.swift"], lines: unitAndSmokeLines),
+    SelectCase(name: "fixture", paths: ["Tests/IntegrationTests/Fixtures/claude-stub"], lines: unitAndSmokeLines),
     SelectCase(
       name: "App source", paths: ["\(srcDir)/SwitchboardApp/App.swift"],
       lines: ["target SwitchboardAppTests", "suites SwitchboardServiceTests 1 FxSourceScanTests"]),
@@ -1062,7 +1172,7 @@ private func selectionLines(_ output: String) -> Set<String> {
       ],
       paths: ["Tests/IntegrationTests/FxShapeTests.swift"],
       lines: ["suites IntegrationTests 2 FxOtherShapeTests FxShapeTests"]),
-    SelectCase(name: "helper", paths: ["Tests/IntegrationTests/Helpers.swift"], lines: ["target IntegrationTests"]),
+    SelectCase(name: "helper", paths: ["Tests/IntegrationTests/Helpers.swift"], lines: [smokeLine]),
     SelectCase(
       name: "missing test file", paths: ["Tests/SwitchboardServiceTests/GoneTests.swift"],
       lines: ["target SwitchboardServiceTests"]),

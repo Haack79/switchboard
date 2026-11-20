@@ -31,7 +31,7 @@ import Testing
   }
 }
 
-/// The bar that a Manager's chat pane shows in place of sending a work skill's command.
+/// The bar that a Manager's view shows over the Message Claude field in place of sending a work skill's command.
 @Suite struct WorkSkillOfferViewLabels {
   @Test func theButtonsReadSpawnRunHereAndCancel() {
     #expect(WorkSkillOfferBar.spawnTitle == "Spawn a session with this")
