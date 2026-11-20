@@ -86,11 +86,14 @@ public struct ChatMessage: Codable, Equatable, Sendable {
   public var text: String
   /// When the message was written, in ms since the epoch.
   public var t: Int64?
+  /// The id of the `sent` event whose prompt this message is, when a `chat-log` read with `sent` found it.
+  public var sent: Int64?
 
-  public init(role: Role, text: String, t: Int64? = nil) {
+  public init(role: Role, text: String, t: Int64? = nil, sent: Int64? = nil) {
     self.role = role
     self.text = text
     self.t = t
+    self.sent = sent
   }
 
   /// Whether the message is a notice that Switchboard pasted into the conversation.
@@ -109,5 +112,34 @@ public struct ChatMessage: Codable, Equatable, Sendable {
       }
     }
     return nil
+  }
+
+  /// The `/name args` that the user typed, when the message is the line Claude Code writes for a slash
+  /// command. The line is a run of `<command-…>` elements in no fixed order, so the parser reads each by its tag.
+  public var slashCommand: String? {
+    guard role == .user else { return nil }
+    var rest = text.trimmingCharacters(in: .whitespacesAndNewlines)[...]
+    var elements: [Substring: String] = [:]
+    // An element's text may mention another tag, so the scan skips each element whole.
+    while rest.hasPrefix("<command-"), let tagEnd = rest.firstIndex(of: ">") {
+      let tag = rest[rest.index(after: rest.startIndex)..<tagEnd]
+      let start = rest.index(after: tagEnd)
+      guard let close = rest.range(of: "</\(tag)>", range: start..<rest.endIndex) else { break }
+      elements[tag] = rest[start..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+      rest = rest[close.upperBound...].drop(while: \.isWhitespace)
+    }
+    guard let name = elements["command-name"], !name.isEmpty else { return nil }
+    guard let args = elements["command-args"], !args.isEmpty else { return name }
+    return "\(name) \(args)"
+  }
+
+  /// Whether this message is the transcript's record of a prompt whose text was `text`. The match reads the
+  /// text the way `Transcript.hasUserMessage` matches a paste, because the transcript adds image markers to a
+  /// prompt.
+  public func records(_ text: String) -> Bool {
+    guard role == .user, !isNotice, commandOutput == nil else { return false }
+    let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Foundation's `contains` finds no empty string. An images-only message has no text.
+    return wanted.isEmpty || (slashCommand ?? self.text).contains(wanted)
   }
 }
