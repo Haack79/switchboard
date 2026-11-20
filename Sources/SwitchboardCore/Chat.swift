@@ -78,7 +78,7 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     case user
     case assistant
 
-    /// The name of the speaker, as a chat shows it.
+    /// The name of the speaker, as `sb chat --log` prints it.
     public var label: String { self == .user ? "You" : "Claude" }
   }
 

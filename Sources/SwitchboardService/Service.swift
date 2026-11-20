@@ -1419,6 +1419,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // A conversation shows Claude's terminal alone. The user opens its shell on demand.
+    if session.kind.isConversation { session.shellClosed = true }
     // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
     if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
@@ -1438,8 +1440,10 @@ public final class Service {
     if let parent = session.parent, entries[parent]?.session.kind == .manager {
       record(parent, "child", ["child": .string(id)])
     }
-    if session.kind.showsAsChat { recordRead(id, 0) }
-    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    if session.kind.isConversation { recordRead(id, 0) }
+    if session.shellClosed != true {
+      try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    }
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
@@ -1731,11 +1735,11 @@ public final class Service {
   }
 
   /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
-  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
-  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a conversation gets them, because
+  /// `chat-log` reads only conversations. A size that a host did not answer leaves both out. A missing transcript reads as
   /// size 0.
   private func resumeMark(_ id: String) -> [String: JSON] {
-    guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }
+    guard let session = entries[id]?.session, session.kind.isConversation else { return [:] }
     let size: UInt64
     do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
     return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
@@ -2919,7 +2923,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
+    if s.kind.isConversation { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {

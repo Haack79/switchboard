@@ -125,7 +125,7 @@ extension Service {
       id = chat
     }
     let session = entries[id]!.session
-    guard anyKind || session.kind.showsAsChat else {
+    guard anyKind || session.kind.isConversation else {
       throw APIError("\(session.name) is not a Manager conversation or a group chat. \(op) reads only those")
     }
     return id

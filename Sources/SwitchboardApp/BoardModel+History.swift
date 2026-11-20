@@ -23,8 +23,8 @@ struct NavLocation: Hashable {
   }
 
   var place: Place
-  /// Whether the place shows the session's terminal instead of its overview. Only the Inbox, a chat,
-  /// and a Manager conversation have a Terminal toggle. It is false everywhere else.
+  /// Whether the Inbox shows the item's terminal instead of its overview. Only the Inbox has a Terminal toggle.
+  /// The flag is false for every other place.
   var terminal: Bool
 }
 
@@ -40,8 +40,7 @@ extension BoardModel {
   /// What the window shows now.
   var location: NavLocation {
     if let selection {
-      return NavLocation(
-        place: .session(selection), terminal: showingTerminal && summary(selection)?.kind.showsAsChat == true)
+      return NavLocation(place: .session(selection), terminal: false)
     }
     switch mainView {
     case .board: return NavLocation(place: .board, terminal: false)
@@ -57,7 +56,7 @@ extension BoardModel {
   /// Maps a location to the place it shows now, or nil when its session is removed or the filter hides
   /// it. A hidden session counts as unavailable, because selecting it would widen the filter.
   func resolver() -> (NavLocation) -> NavLocation? {
-    let shown = Dictionary(board.map { ($0.id, $0.kind.showsAsChat) }, uniquingKeysWith: { a, _ in a })
+    let shown = Set(board.map(\.id))
     let pending = pendingSelection
     let inbox = Set(sessions.map(\.id))
     let first = triage.first?.id
@@ -69,8 +68,8 @@ extension BoardModel {
         let current = item.flatMap { inbox.contains($0) ? $0 : nil } ?? first
         return NavLocation(place: .inbox(current), terminal: location.terminal)
       case .session(let id):
-        guard let chat = shown[id] ?? (id == pending ? false : nil) else { return nil }
-        return NavLocation(place: .session(id), terminal: location.terminal && chat)
+        guard shown.contains(id) || id == pending else { return nil }
+        return NavLocation(place: .session(id), terminal: false)
       }
     }
   }
@@ -84,10 +83,6 @@ extension BoardModel {
     change()
     navigating = false
     record(mode)
-    // Going straight from one chat to another updates the chat view in place, so the view can't end the jump.
-    if let jump = chatJump, location != NavLocation(place: .session(jump.session), terminal: false) {
-      chatJump = nil
-    }
   }
 
   /// Clears the selection when it is one of `ids`, because those sessions are gone. The user did not
@@ -137,7 +132,6 @@ extension BoardModel {
     switch location.place {
     case .session(let id):
       selection = id
-      if summary(id)?.kind.showsAsChat == true { showingTerminal = location.terminal }
     case .inbox(let item):
       inboxFocus = item
       showingTerminal = location.terminal

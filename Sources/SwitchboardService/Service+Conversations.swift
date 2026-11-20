@@ -31,7 +31,7 @@ extension Service {
   /// state. Only one from before read state lacks it. `create` records a read
   /// of 0 for each new one, so a restart keeps a new chat's unread replies.
   func migrateReadState() {
-    for (id, e) in entries where e.session.kind.showsAsChat && e.facts.repliesRead == nil {
+    for (id, e) in entries where e.session.kind.isConversation && e.facts.repliesRead == nil {
       recordRead(id, e.facts.replies)
     }
   }
