@@ -102,6 +102,14 @@ extension SessionNamerTests {
       #expect(throws: (any Error).self, "\(name.debugDescription)") { try SessionNamer.validate(name) }
     }
 
+    /// The refusal reaches the event log, which never holds the prompt that a model might echo as its name.
+    @Test func aRefusalDoesNotQuoteTheAnswer() {
+      let answer = "Fix the login redirect on the settings page"
+
+      #expect(throws: (any Error).self) { try SessionNamer.validate(answer) }
+      do { _ = try SessionNamer.validate(answer) } catch { #expect(!"\(error)".contains("login")) }
+    }
+
     @Test func exactly40CharactersIsAccepted() throws {
       #expect(fortyCharacters.count == 40)
       #expect(try SessionNamer.validate(fortyCharacters) == fortyCharacters)

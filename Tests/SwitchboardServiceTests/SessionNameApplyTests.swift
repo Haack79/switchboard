@@ -29,7 +29,7 @@ extension Service {
   /// Adds a live session named `name` whose naming call is pending, as `create` leaves it.
   fileprivate func addPendingName(_ id: String, name: String = fallback) throws {
     try addLive(id, name: name)
-    queue.sync { entries[id]?.namePending = true }
+    queue.sync { entries[id]?.pendingName = name }
   }
 
   /// Hands the session a naming answer on the state queue, as the job does once claude answers.
@@ -45,7 +45,7 @@ extension Service {
 
   fileprivate func liveName(_ id: String) -> String? { queue.sync { entries[id]?.session.name } }
 
-  fileprivate func hasPendingName(_ id: String) -> Bool { queue.sync { entries[id]?.namePending == true } }
+  fileprivate func hasPendingName(_ id: String) -> Bool { queue.sync { entries[id]?.pendingName != nil } }
 
   /// The session that `sb get <key>` resolves.
   fileprivate func resolved(_ key: String) throws -> String {
@@ -182,6 +182,20 @@ extension SessionNameApplyTests {
         service.answerName("s1", "fix-login-redirect")
 
         #expect(service.liveName("s1") == "mine")
+      }
+    }
+
+    /// A name set through `update`, not `renameSession`, is no longer the fallback, so the answer leaves it.
+    @Test(.timeLimit(.minutes(1)))
+    func aNameSetWithoutARenameRequestIsKept() throws {
+      try withNamingService { service in
+        try service.addPendingName("s1")
+        try service.queue.sync { try service.update("s1") { $0.name = "mine" } }
+
+        service.answerName("s1", "fix-login-redirect")
+
+        #expect(service.liveName("s1") == "mine")
+        #expect(try service.nameEvents("s1").first?.data["skipped"]?.string == "renamed")
       }
     }
 

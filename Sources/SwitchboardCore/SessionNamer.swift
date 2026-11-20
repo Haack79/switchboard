@@ -111,7 +111,7 @@ public enum SessionNamer {
   public static func validate(_ answer: String) throws -> String {
     let name = answer.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard name.count <= maxLength, name.wholeMatch(of: try! Regex(pattern)) != nil else {
-      throw APIError("claude's name \"\(oneLine(answer, max: 60))\" is not 2 to 5 lowercase words joined by hyphens")
+      throw APIError("claude's name is not 2 to 5 lowercase words joined by hyphens")
     }
     return name
   }

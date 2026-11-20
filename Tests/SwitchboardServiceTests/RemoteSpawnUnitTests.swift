@@ -76,6 +76,7 @@ private struct Layout {
         "x/nothere": .string("\(root)/mac/nothere"),
       ],
       "repoRoots": [.string("\(root)/roots")], "claudeConfigDirs": [.string(account)],
+      "sessionNames": ["enabled": false],
     ]
   }
 

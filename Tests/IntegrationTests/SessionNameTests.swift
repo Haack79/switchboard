@@ -167,7 +167,7 @@ extension SessionNameTests {
     let repo = try sbd.makeRepo("widgets", origin: "https://github.com/acme/widgets.git")
     let shapes: [[String: JSON]] = [
       ["name": "mine"], ["name": ""], ["branch": "feature-x"], ["branch": "feature-y", "worktree": true],
-      ["prompt": ""], ["prompt": .null],
+      ["prompt": ""], ["prompt": "  \n\t"], ["prompt": .null],
     ]
     var started: [SessionSummary] = []
     for shape in shapes {

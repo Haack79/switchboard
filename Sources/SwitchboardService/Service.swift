@@ -44,9 +44,9 @@ public final class Service {
     /// pastes, so a held message keeps one retry timer however many messages
     /// queue behind it.
     var deliveryGeneration = 0
-    /// Whether the call that names the session has not answered. A rename clears it, so a late answer can't replace
-    /// a name that someone chose.
-    var namePending = false
+    /// The fallback name while the call that names the session has not answered. A rename clears it. An answer
+    /// applies only while the session still has this name, so a late answer can't replace a name that someone chose.
+    var pendingName: String?
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
@@ -1411,7 +1411,7 @@ public final class Service {
   func renameSession(_ id: String, to name: String) throws {
     try refuseRename(id, to: name)
     try update(id) { $0.name = name }
-    entries[id]?.namePending = false
+    entries[id]?.pendingName = nil
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it

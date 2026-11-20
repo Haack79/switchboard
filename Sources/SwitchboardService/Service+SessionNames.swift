@@ -18,15 +18,14 @@ extension Service {
       record(id, Self.sessionNameEvent, ["skipped": .string("no quota left for \(account.key)")])
       return
     }
-    entries[id]?.namePending = true
+    entries[id]?.pendingName = session.name
     let env = headlessEnv(session: id, account: account.account)
     let (site, cwd, issue) = (site(for: session), session.cwd, session.issue)
     let branch = worktree ? nil : session.branch
-    let head = String(prompt.prefix(SessionNamer.maxPrompt))
     nameJobs.addOperation { [self] in
       let repository = githubRepository(cwd, at: site)
       let issue = issue.map { "\($0.repo ?? repository ?? "")#\($0.number)" }
-      let input = SessionNamer.input(prompt: head, repository: repository, branch: branch, issue: issue)
+      let input = SessionNamer.input(prompt: prompt, repository: repository, branch: branch, issue: issue)
       let call = headlessCall(
         .sessionName, session: id, arguments: SessionNamer.arguments(model: settings.model), input: input, env: env,
         folder: home.path, timeout: settings.timeoutSeconds, parse: SessionNamer.parse)
@@ -43,10 +42,11 @@ extension Service {
       logLine("dropping the name for \(id): the session was removed")
       return
     }
-    entries[id]?.namePending = false
+    let fallback = entry.pendingName
+    entries[id]?.pendingName = nil
     var data = call.reply?.eventFields ?? [:]
     defer { record(id, Self.sessionNameEvent, .object(data)) }
-    guard entry.namePending else {
+    guard let fallback, entry.session.name == fallback else {
       data["skipped"] = "renamed"
       return
     }
