@@ -1337,6 +1337,124 @@ extension TriageOperatorTests {
   }
 }
 
+/// `SessionFacts.contextTokens`, the input context of a Manager conversation's latest turn. sbd records a `context`
+/// event after each turn, and a `/clear` or a compaction starts a context that the old value doesn't describe.
+@Suite struct ConversationContextFoldTests {
+  @Test func noContextEventLeavesTheTokensUnset() {
+    #expect(facts([event("SessionStart", 0), event("Stop", 1)]).contextTokens == nil)
+  }
+
+  @Test func aContextEventSetsTheTokens() {
+    let f = facts([event("Stop", 1), event("context", 2, ["tokens": 250_000])])
+
+    #expect(f.contextTokens == 250_000)
+  }
+
+  @Test func aLaterContextEventReplacesTheTokens() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("context", 4, ["tokens": 90_000])])
+
+    #expect(f.contextTokens == 90_000)
+  }
+
+  /// sbd records null when a read finds no value while one is stored, as after a compaction without a turn since.
+  @Test func aContextEventWithNullTokensClearsThem() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("context", 4, ["tokens": .null])])
+
+    #expect(f.contextTokens == nil)
+  }
+
+  @Test func aContextEventLeavesTheLastActivity() {
+    let f = facts([event("Stop", 1), event("context", 500, ["tokens": 250_000])])
+
+    #expect(f.lastActivity == 1)
+  }
+
+  @Test(arguments: ["clear", "compact"])
+  func aSessionStartOfANewContextClearsTheTokens(_ source: String) {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": .string(source)])])
+
+    #expect(f.contextTokens == nil)
+  }
+
+  @Test func aSessionStartThatResumesKeepsTheTokens() {
+    let f = facts([event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": "resume"])])
+
+    #expect(f.contextTokens == 250_000)
+  }
+
+  @Test func aContextEventAfterAClearSetsTheTokensAgain() {
+    let f = facts([
+      event("context", 2, ["tokens": 250_000]), event("SessionStart", 3, ["source": "clear"]),
+      event("context", 5, ["tokens": 12_000]),
+    ])
+
+    #expect(f.contextTokens == 12_000)
+  }
+}
+
+/// The sessions that a Manager conversation spawned, folded from the conversation's own events: `child` when it
+/// created one, `linked` when `sb parent` linked one in, and `unlinked` when `sb parent --clear` took one out. The
+/// set keeps a child after its removal. `end-hint-dismissed` records the key of the hint that the user dismissed.
+@Suite struct ConversationSpawnFoldTests {
+  @Test func noEventsLeaveNothingSpawnedAndNothingDismissed() {
+    let f = facts([event("SessionStart", 0), event("Stop", 1)])
+
+    #expect(f.spawned.isEmpty)
+    #expect(f.endHintDismissed == nil)
+  }
+
+  @Test func aChildEventAddsTheChild() {
+    #expect(facts([event("child", 2, ["child": "k1"])]).spawned == ["k1"])
+  }
+
+  @Test func aLinkedEventWithAChildAddsTheChild() {
+    #expect(facts([event("linked", 2, ["child": "k1", "by": "you"])]).spawned == ["k1"])
+  }
+
+  /// sbd records `linked` on the child too, with `parent` and no `child`. The child spawned nothing.
+  @Test func aLinkedEventThatNamesOnlyAParentAddsNothing() {
+    #expect(facts([event("linked", 2, ["parent": "m1", "by": "you"])]).spawned.isEmpty)
+  }
+
+  @Test func anUnlinkedEventRemovesTheChild() {
+    let f = facts([
+      event("child", 2, ["child": "k1"]), event("child", 3, ["child": "k2"]),
+      event("unlinked", 4, ["child": "k1", "by": "you"]),
+    ])
+
+    #expect(f.spawned == ["k2"])
+  }
+
+  @Test func anUnlinkedEventThatNamesOnlyAParentRemovesNothing() {
+    let f = facts([event("child", 2, ["child": "k1"]), event("unlinked", 4, ["parent": "m1", "by": "you"])])
+
+    #expect(f.spawned == ["k1"])
+  }
+
+  @Test func theDismissedEventRecordsTheKey() {
+    #expect(facts([event("end-hint-dismissed", 2, ["key": "done:1"])]).endHintDismissed == "done:1")
+  }
+
+  @Test func aLaterDismissalReplacesTheKey() {
+    let f = facts([
+      event("end-hint-dismissed", 2, ["key": "context:2"]), event("end-hint-dismissed", 4, ["key": "context:3"]),
+    ])
+
+    #expect(f.endHintDismissed == "context:3")
+  }
+
+  /// None of these kinds moves `lastActivity`, so none holds off the idle stop or brings back an archived
+  /// conversation.
+  @Test(arguments: [
+    event("child", 500, ["child": "k1"]), event("linked", 500, ["child": "k1", "by": "you"]),
+    event("unlinked", 500, ["child": "k1", "by": "you"]), event("end-hint-dismissed", 500, ["key": "done:1"]),
+    event("context", 500, ["tokens": 250_000]),
+  ])
+  func aConversationEventLeavesTheLastActivity(_ e: Event) {
+    #expect(facts([event("Stop", 1), e]).lastActivity == 1)
+  }
+}
+
 /// A `skill_blocked` event ends the turn that a blocked prompt started, because Claude Code sends no Stop after a
 /// UserPromptSubmit block. A blocked tool call clears the running tool and leaves the turn running.
 @Suite struct SkillBlockedAttentionTests {
@@ -1382,5 +1500,74 @@ extension TriageOperatorTests {
 
     #expect(!f.turnRunning)
     #expect(f.lastReply == "Hi.")
+  }
+}
+
+/// `SessionFacts.promptOnItsWaySince`, which a restarted sbd reads to count a prompt that claude has not submitted
+/// as a message on its way.
+@Suite struct PromptOnItsWayFoldTests {
+  static let text = "the deploy finished"
+
+  static func pasting(_ t: Int64, _ text: String = text) -> Event { event("pasting", t, ["text": .string(text)]) }
+  static func delivered(_ t: Int64, _ text: String = text) -> Event { event("delivered", t, ["text": .string(text)]) }
+  static func submit(_ t: Int64) -> Event { event("UserPromptSubmit", t, ["prompt": .string(text)]) }
+  static let ready = [event("resumed", 0, ["prompt": .null]), event("SessionStart", 100)]
+
+  @Test func aLaunchWithAPromptSetsTheLaunchsTime() {
+    #expect(facts([event("resumed", 50, ["prompt": .string(Self.text)])]).promptOnItsWaySince == 50)
+  }
+
+  @Test func aLaunchWithoutAPromptSetsNothing() {
+    #expect(facts(Self.ready).promptOnItsWaySince == nil)
+  }
+
+  @Test func theLaunchsSessionStartMovesTheTime() {
+    let f = facts([event("resumed", 50, ["prompt": .string(Self.text)]), event("SessionStart", 80)])
+
+    #expect(f.promptOnItsWaySince == 80)
+  }
+
+  /// `pasting` reaches the log before the paste starts, so its time is in the past at any later restart.
+  @Test func aPasteSetsThePastingTimeAndDeliveredKeepsIt() {
+    #expect(facts(Self.ready + [Self.pasting(200)]).promptOnItsWaySince == 200)
+    #expect(facts(Self.ready + [Self.pasting(200), Self.delivered(210)]).promptOnItsWaySince == 200)
+  }
+
+  @Test func theSubmitClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), Self.delivered(210), Self.submit(300)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  /// The hook can reach sbd before the paste's `delivered` does.
+  @Test func aSubmitBeforeDeliveredLeavesNothingOnItsWay() {
+    let f = facts(Self.ready + [Self.pasting(200), Self.submit(205), Self.delivered(210)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  @Test(arguments: ["/compact", "/clear", "/model opus"])
+  func aBuiltInCommandsPasteSetsNothing(_ command: String) {
+    let f = facts(Self.ready + [Self.pasting(200, command), Self.delivered(210, command)])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  /// A skill sends a prompt, so its UserPromptSubmit confirms it as for any other message.
+  @Test func aSkillsPasteSetsTheTime() {
+    #expect(facts(Self.ready + [Self.pasting(200, "/code-review")]).promptOnItsWaySince == 200)
+  }
+
+  /// `requeued` puts the message back in the queue, which counts it from then on.
+  @Test func aRequeueClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), event("requeued", 210, ["text": .string(Self.text)])])
+
+    #expect(f.promptOnItsWaySince == nil)
+  }
+
+  @Test func aLaterLaunchWithoutAPromptClearsAPaste() {
+    let f = facts(Self.ready + [Self.pasting(200), event("exited", 250), event("resumed", 300, ["prompt": .null])])
+
+    #expect(f.promptOnItsWaySince == nil)
   }
 }

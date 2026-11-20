@@ -150,9 +150,10 @@ extension Service {
   }
 
   /// The operator's id and the waits on it that the conversation `id` handed
-  /// off, or nil when no operator exists.
-  private func handedOff(from id: String) -> (holder: String, waits: [Wait])? {
-    guard let op = operatorID(), op != id else { return nil }
+  /// off, or nil when no operator exists. With `quiet`, it does not log more than one operator. The summary of
+  /// every conversation passes `quiet`, because each `ls` builds those summaries.
+  func handedOff(from id: String, quiet: Bool = false) -> (holder: String, waits: [Wait])? {
+    guard let op = operatorID(quiet: quiet), op != id else { return nil }
     return (op, (entries[op]?.session.waits ?? []).filter { $0.handedFrom?.id == id })
   }
 

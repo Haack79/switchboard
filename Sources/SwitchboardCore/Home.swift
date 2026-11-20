@@ -152,6 +152,9 @@ public struct Config: Codable, Equatable, Sendable {
   /// the session back with nothing stopped.
   public var removalDelaySeconds = 5
   public static let maxRemovalDelaySeconds = 86_400
+  /// The context size in tokens at which a Manager conversation's header suggests ending it. 0 turns that hint off.
+  public var conversationHintTokens = 120_000
+  public static let maxConversationHintTokens = 10_000_000
   /// Makes the removal job treat the trash as on another volume than every
   /// worktree. sbd reads it only with `testClock`.
   public var testTrashOtherVolume = false
@@ -183,13 +186,28 @@ public struct Config: Codable, Equatable, Sendable {
     case claude, idleStopSeconds, liveCap, livePriority, tickSeconds, model, worktreeRoot, tmux, shell, claudeArgs,
       autoMode, env
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
-      cleanupDeletes, supacode, removalDelaySeconds
+      cleanupDeletes, supacode, removalDelaySeconds, conversationHintTokens
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
       quickAsk, managerSkills
     case manager
     case issues, `operator`
     case recheck = "recheckSeconds"
     case testTrashOtherVolume
+  }
+
+  /// The whole number under `key` when it is from 0 to `max`, or nil. A bad value logs and returns nil, so it keeps
+  /// the default. Throwing would make sbd ignore all of config.json.
+  private static func decodeBounded(
+    _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys, upTo max: Int, unit: String
+  ) throws -> Int? {
+    switch try c.decodeIfPresent(JSON.self, forKey: key) {
+    case nil, .null:
+      return nil
+    case let value?:
+      if let n = value.int, (0...max).contains(n) { return n }
+      logLine("skipping \(key.stringValue): its value must be a whole number of \(unit) from 0 to \(max)")
+      return nil
+    }
   }
 
   public init(from decoder: Decoder) throws {
@@ -242,19 +260,12 @@ public struct Config: Codable, Equatable, Sendable {
     followupsFile = try c.decodeIfPresent(String.self, forKey: .followupsFile) ?? d.followupsFile
     cleanupDeletes = try c.decodeIfPresent([String].self, forKey: .cleanupDeletes) ?? d.cleanupDeletes
     supacode = try c.decodeIfPresent(String.self, forKey: .supacode) ?? d.supacode
-    // A bad value keeps the default. Throwing would make sbd ignore all of config.json.
-    switch try c.decodeIfPresent(JSON.self, forKey: .removalDelaySeconds) {
-    case nil, .null:
-      break
-    case let value?:
-      if let seconds = value.int, (0...Self.maxRemovalDelaySeconds).contains(seconds) {
-        removalDelaySeconds = seconds
-      } else {
-        logLine(
-          "skipping removalDelaySeconds: its value must be a whole number of seconds from 0 to "
-            + "\(Self.maxRemovalDelaySeconds)")
-      }
-    }
+    removalDelaySeconds =
+      try Self.decodeBounded(c, .removalDelaySeconds, upTo: Self.maxRemovalDelaySeconds, unit: "seconds")
+      ?? d.removalDelaySeconds
+    conversationHintTokens =
+      try Self.decodeBounded(c, .conversationHintTokens, upTo: Self.maxConversationHintTokens, unit: "tokens")
+      ?? d.conversationHintTokens
     testTrashOtherVolume =
       try c.decodeIfPresent(Bool.self, forKey: .testTrashOtherVolume) ?? d.testTrashOtherVolume
     claudeConfigDirs = try c.decodeIfPresent([String].self, forKey: .claudeConfigDirs)

@@ -390,6 +390,7 @@ extension SessionFacts {
       if let card = Card(mcpRequest: event) { cards.append(card) }
     case "trust_closed":
       exitedAtTrust = true
+      promptOnItsWaySince = nil
       if let card { cards.remove(at: card) }
     case "trust_dialog":
       trustLaunch = d["launch"]?.int.map(Int64.init)
