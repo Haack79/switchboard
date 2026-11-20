@@ -6,8 +6,9 @@ import Testing
 @testable import SwitchboardApp
 
 /// The Message Claude field of a Manager conversation or the operator checks a draft that starts with a command
-/// before it sends it. It fetches `slash-commands` again, and a row labeled `work` sets an offer in place of the send: Spawn a
-/// session with this, Run here anyway, or Cancel. Any other draft, and any draft to another kind of session, sends.
+/// before it sends it. It fetches `slash-commands` again, and a row labeled `work` sets an offer in place of the
+/// send: Spawn a session with this, Run here anyway, or Cancel. Any other draft, and any draft to another kind of
+/// session, sends.
 @MainActor
 @Suite struct BoardModelManagerSkillsTests {
   static let conversation = needsItem("m", manager: true)
@@ -399,19 +400,6 @@ import Testing
     #expect(ran.value == 0)
   }
 
-  /// The gated read path, the gated early return, an ungated chat, and an ungated work session.
-  @Test(arguments: [("m", "/go x"), ("m", "hello"), ("op", "hello"), ("c", "hello"), ("w", "/go x")])
-  func aRefusedSendRunsNoThen(_ session: String, _ text: String) async throws {
-    let (model, sent) = try slashModel(slash: Self.rows(go: .safe), refuseSend: true)
-    let ran = Counter()
-
-    model.submitChecked(session: session, draft: draft(text), then: { ran.increment() })
-    await untilAnswered(model, sent, session)
-
-    #expect(texts(sent) == [text])
-    #expect(ran.value == 0)
-  }
-
   @Test func aDraftChangedDuringTheReadRunsNoThen() async throws {
     let hold = DispatchSemaphore(value: 0)
     defer { hold.signal() }
@@ -483,16 +471,33 @@ import Testing
     }
   }
 
+  /// Sends `path`'s text the way `path` reaches `draft.submit`.
+  func submit(_ path: SendPath, to model: BoardModel, then: @escaping () -> Void) {
+    if path == .plainSubmit {
+      draft(path.text).submit(path.session, to: model, then: then)
+    } else {
+      model.submitChecked(session: path.session, draft: draft(path.text), then: then)
+    }
+  }
+
+  @Test(arguments: SendPath.allCases)
+  func aRefusedSendRunsNoThen(_ path: SendPath) async throws {
+    let (model, sent) = try slashModel(slash: slash(for: path), refuseSend: true)
+    let ran = Counter()
+
+    submit(path, to: model, then: { ran.increment() })
+    await untilAnswered(model, sent, path.session)
+
+    #expect(texts(sent) == [path.text])
+    #expect(ran.value == 0)
+  }
+
   @Test(arguments: SendPath.allCases)
   func everyPathThatSendsRunsThenExactlyOnce(_ path: SendPath) async throws {
     let (model, sent) = try slashModel(slash: slash(for: path))
     let ran = Counter()
 
-    if path == .plainSubmit {
-      draft(path.text).submit(path.session, to: model, then: { ran.increment() })
-    } else {
-      model.submitChecked(session: path.session, draft: draft(path.text), then: { ran.increment() })
-    }
+    submit(path, to: model, then: { ran.increment() })
     await untilAnswered(model, sent, path.session)
 
     #expect(texts(sent) == [path.text])

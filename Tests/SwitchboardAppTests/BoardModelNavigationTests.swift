@@ -535,25 +535,17 @@ private func child(_ id: String, of parent: String, state: AttentionState = .wor
       return model
     }
 
-    /// The Terminal toggle belongs to the Inbox. A selected conversation's own view always shows its terminal.
-    @Test(arguments: ["c", "m", "op"])
-    func aSelectedConversationGetsTheTerminalFocus(_ id: String) throws {
-      let model = try model(everyKindSession(id), at: .selection)
-      model.showingTerminal = false
+    /// The Terminal toggle belongs to the Inbox. A conversation's own view always shows its terminal, and the Inbox
+    /// keeps showing an item whose terminal shows in place.
+    @Test(arguments: ["c", "m", "op"], Place.allCases)
+    func aConversationGetsTheTerminalFocus(_ id: String, _ place: Place) throws {
+      let model = try model(everyKindSession(id), at: place)
 
       model.focusTerminal()
 
       #expect(model.canFocusTerminal)
       #expect(model.terminalFocus == id)
-      #expect(model.selection == id)
-    }
-
-    /// ⇧⌘E reveals the field under the selected chat's terminal, whatever the Inbox's toggle says.
-    @Test func theMessageFieldTargetIsTheSelectedChatWithTheToggleOff() throws {
-      let model = try model(chatItem("c", group: "g"), at: .selection)
-      model.showingTerminal = false
-
-      #expect(model.messageFieldTarget?.id == "c")
+      #expect(model.selection == (place == .inboxTerminalOn ? nil : id))
     }
 
     @Test func aSelectedSessionGetsTheTerminalFocus() throws {
