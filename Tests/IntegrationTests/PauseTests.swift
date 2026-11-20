@@ -364,9 +364,10 @@ extension Instance {
   }
 
   /// sbd stops while the resumed claude waits before SessionStart, so the queue that `unpause` built in memory
-  /// is gone. The restarted sbd must rebuild the same order from the log.
+  /// is gone. The restarted sbd must rebuild the same order from the log. The restarted sbd has no record of the
+  /// launch prompt in flight, so only the production wait after SessionStart keeps a held note from going first.
   @Test func theResumeMessageStaysFirstWhenSbdRestartsBeforeItIsPasted() throws {
-    let sbd = try Instance()
+    let sbd = try Instance(config: Instance.productionPasteSettle)
     let s = try sbd.pausedStopped()
     try sbd.sb("send", s.id, "first held note")
     try sbd.sb("send", s.id, "second held note")
@@ -429,8 +430,8 @@ extension Instance {
   @Test func aPasteThatStartsAfterThePauseWaitsForTheResume() throws {
     let sbd = try Instance()
     let s = try sbd.liveIdle()
-    // sbd pastes only 1.5 s after SessionStart. A paste that `send` starts reaches the gate at once.
-    usleep(2_000_000)
+    // sbd pastes only `pasteSettleSeconds` after SessionStart. A paste that `send` starts reaches the gate at once.
+    Thread.sleep(forTimeInterval: Instance.pasteSettleSeconds + 0.3)
     sbd.hold("hold-paste")
     let reply = try #require(JSON.parse(try sbd.sb("send", "--json", s.id, "late note")))
     try #require(reply["delivery"] == "pasted", "\(reply.text)")

@@ -13,8 +13,7 @@ extension Instance {
     var config: [String: JSON] = [
       "github": [
         "gh": .string("\(FakeGitHub.fixtures)/gh-merge-stub"), "url": .string(github.url), "pollSeconds": 0,
-      ],
-      "tickSeconds": 1,
+      ]
     ]
     if let mergeRepos { config["operator"] = ["mergeRepos": .array(mergeRepos.map(JSON.string))] }
     return try Instance(accounts: accounts, config: config.merging(extra) { $1 })

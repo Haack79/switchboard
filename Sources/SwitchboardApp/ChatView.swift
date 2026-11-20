@@ -20,7 +20,8 @@ struct ChatView: View {
           log: model.chatLogs[session.id],
           pending: pending,
           emptyText: emptyText,
-          session: session.id)
+          session: session.id,
+          jump: jump)
         Divider()
         // The Inbox leaves out the cards of a chat and a Manager, such as a group message that waits for the user.
         // They show here instead.
@@ -38,7 +39,10 @@ struct ChatView: View {
       }
     }
     // A tool call changes lastActivity, so the log reloads only when the reply or the state changes.
-    .task(id: "\(session.lastReply?.count ?? 0)/\(session.state)/\(session.since)") { model.loadChatLog(session.id) }
+    // A jump into the chat that already shows reads the log again with the run's id.
+    .task(id: "\(session.lastReply?.count ?? 0)/\(session.state)/\(session.since)/\(jump?.sent ?? 0)") {
+      model.loadChatLog(session.id)
+    }
     // A reload on the state change can run before claude writes the prompt to the transcript. The log therefore
     // reloads while a message that sbd accepted waits. Each state change starts the reads again. The cap stops them for a
     // message that never arrives, such as one queued for a host that is down.
@@ -70,6 +74,8 @@ struct ChatView: View {
   }
 
   private var pending: [PendingChatMessage] { model.pendingChat[session.id] ?? [] }
+
+  private var jump: ChatJump? { model.chatJump?.session == session.id ? model.chatJump : nil }
 }
 
 private struct ChatHeader: View {
@@ -99,6 +105,8 @@ private struct ChatMessages: View {
   let pending: [PendingChatMessage]
   let emptyText: String
   let session: String
+  /// The loop run whose prompt the chat shows, when a Show Reply link opened it.
+  let jump: ChatJump?
 
   private var messages: [ChatMessage] { log ?? [] }
 
@@ -112,7 +120,7 @@ private struct ChatMessages: View {
             Text(emptyText).foregroundStyle(.secondary)
           }
           ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
-            ChatBubble(message: message).id(index)
+            ChatBubble(message: message, marked: index == jump?.row).id(index)
           }
           ForEach(pending) { message in
             PendingBubble(message: message, session: session).id(message.id)
@@ -121,13 +129,36 @@ private struct ChatMessages: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
+      // The notice sits outside the scroll content, so it stays in view while the chat follows the bottom.
+      .safeAreaInset(edge: .top) {
+        if jump?.found == .missing {
+          Text("Can't find this run's prompt in this chat's transcript.").font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.background)
+        }
+      }
       // The scroll follows the last message, because the count stops changing once the log is full.
       .onChange(of: messages.last, initial: true) { scrollToBottom(proxy) }
       .onChange(of: pending) { scrollToBottom(proxy) }
+      // A missing prompt leaves the log as it was, so no change of the last message scrolls the chat.
+      .onChange(of: jump?.found) { _, found in
+        if found == .missing { scrollToBottom(proxy) }
+      }
+      // Rows are keyed by index, and a later read can move the prompt to another index, so the view scrolls
+      // again whenever the index changes.
+      .onChange(of: jump?.row, initial: true) { _, row in
+        guard let row else { return }
+        proxy.scrollTo(row, anchor: .top)
+        // A lazy stack guesses the height of rows it has not drawn, so the first scroll can land short.
+        DispatchQueue.main.async { proxy.scrollTo(row, anchor: .top) }
+      }
     }
   }
 
   private func scrollToBottom(_ proxy: ScrollViewProxy) {
+    guard ChatJump.followsBottom(jump) else { return }
     if let last = pending.last {
       proxy.scrollTo(last.id, anchor: .bottom)
     } else {
@@ -140,6 +171,8 @@ private struct ChatMessages: View {
 /// text in the tooltip.
 private struct ChatBubble: View {
   let message: ChatMessage
+  /// Whether the message is the prompt of the run that a Show Reply link opened.
+  var marked = false
 
   var body: some View {
     if let grey = message.commandOutput ?? (message.isNotice ? message.text : nil) {
@@ -152,6 +185,10 @@ private struct ChatBubble: View {
           MarkdownView(text: message.text)
         }
       }
+      .overlay {
+        if marked { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 2) }
+      }
+      .accessibilityAddTraits(marked ? .isSelected : [])
     }
   }
 }
