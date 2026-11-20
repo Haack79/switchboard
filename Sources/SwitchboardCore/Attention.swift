@@ -78,6 +78,18 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// window. A built-in command's paste does not set it, because Claude Code sends no UserPromptSubmit for one.
   /// `requeued` clears it, and so does `trust_closed`, because both move the message to the queue.
   public var promptOnItsWaySince: Int64?
+
+  /// How long a prompt that sbd passed at launch counts as pending when claude takes none. Past it, the session
+  /// reads Needs you again, so a claude that hangs before it takes the prompt does not hide.
+  public static let launchPromptWindowMs: Int64 = 5 * 60_000
+
+  /// Whether a prompt that sbd passed at launch or pasted is still waiting for claude to take it. It stops
+  /// waiting when claude ends after the prompt was sent, and when `launchPromptWindowMs` passes.
+  public func launchPromptPending(now: Int64) -> Bool {
+    guard let since = promptOnItsWaySince, now - since < Self.launchPromptWindowMs else { return false }
+    return lastExit.map { $0 < since } ?? true
+  }
+
   /// Background jobs that run under claude, as the last `job` event counted
   /// them. A job sends no hooks, so sbd's tick finds it in the process list.
   public var jobs = 0
@@ -301,7 +313,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       lastResumeTrigger = event.kind == "resumed" ? d["trigger"]?.string.flatMap(LaunchTrigger.init) : nil
       exitedAtTrust = false
       hookSinceLaunch = false
-      promptOnItsWaySince = lastLaunchPrompt?.isEmpty == false ? event.t : nil
+      promptOnItsWaySince =
+        lastLaunchPrompt.map { !$0.isEmpty && !SlashCommand.isBuiltIn(prompt: $0) } == true ? event.t : nil
       permissionMode = d["permission_mode"]?.string
     case "imported":
       // The transcript's last line, not the import, is the session's last activity.
@@ -699,6 +712,9 @@ public enum Attention {
   ) -> Verdict {
     if let verdict = waitVerdict(session, facts, now: now) { return verdict }
     if facts.prompts == 0 && facts.lastReply == nil {
+      if facts.launchPromptPending(now: now) {
+        return Verdict(state: .working, reason: "starting with its first prompt")
+      }
       return Verdict(state: .needsYou, reason: "give it a first prompt")
     }
     if let v = blockedPR(facts, stateOf: stateOf) { return v }

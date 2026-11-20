@@ -196,12 +196,8 @@ final class BoardModel: ObservableObject {
   @Published var recentEvents: [String: [Event]] = [:]
   /// The transcript steps that lead up to each session's Inbox item, by session id.
   @Published var itemContexts: [String: ItemContext] = [:]
-  /// Each chat's last messages, by session id, read while its pane shows.
+  /// Each Manager conversation's last messages, by session id, read while its status strip shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
-  /// The loop run whose prompt a chat shows, set by the run's Show Reply link.
-  @Published var chatJump: ChatJump?
-  /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
-  @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
@@ -1201,9 +1197,7 @@ final class BoardModel: ObservableObject {
   /// `sent` runs only when sbd accepted the message. A second send to the
   /// same session does nothing until sbd answers the first. Each image is a
   /// file name and the image's bytes. `ref` names the Inbox item that the
-  /// message answers. A message to a chat shows in the chat at once as a
-  /// pending message, which carries sbd's refusal in place of `actionError`.
-  /// `runHere` lets a work skill's command past a Manager's gate once.
+  /// message answers. `runHere` lets a work skill's command past a Manager's gate once.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
     runHere: Bool = false, sent: (() -> Void)? = nil
@@ -1213,34 +1207,7 @@ final class BoardModel: ObservableObject {
     if let ref { args["ref"] = .string(ref) }
     if runHere { args["runHere"] = true }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
-    let pending =
-      summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
-    if let pending {
-      pendingChat[id, default: []].removeAll(where: \.failed)
-      pendingChat[id, default: []].append(pending)
-      releaseChatJump(id)
-    }
-    perform(
-      "send", args,
-      then: { result in
-        if let pending {
-          // `perform` clears `actionError` only for a request without a `failed` handler.
-          self.actionError = nil
-          self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
-        }
-        sent?()
-      },
-      failed: pending.map { pending in { self.setPending(pending.id, in: id, .failed("\($0)")) } },
-      finally: { self.sending.remove(id) })
-  }
-
-  private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
-    guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
-    pendingChat[session]?[i].status = status
-  }
-
-  func dismissPending(_ message: UUID, in session: String) {
-    pendingChat[session]?.removeAll { $0.id == message }
+    perform("send", args, then: { _ in sent?() }, finally: { self.sending.remove(id) })
   }
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
@@ -1596,29 +1563,12 @@ final class BoardModel: ObservableObject {
   /// Reads the session's chat messages from its transcript, which can be large, so off the main thread.
   func loadChatLog(_ session: String) {
     let send = send
-    let jumpSent = chatJump.flatMap { $0.session == session ? $0.sent : nil }
-    var request: [String: JSON] = ["session": .string(session)]
-    if let jumpSent { request["sent"] = .number(Double(jumpSent)) }
-    let args = request
     poller.async {
-      let answer = try? JSONCoding.convert(send("chat-log", args), to: [ChatMessage].self)
+      let messages = try? JSONCoding.convert(
+        send("chat-log", ["session": .string(session)]), to: [ChatMessage].self)
       Task { @MainActor in
-        // A read that started before the current jump would replace the log that the jump's row points into.
-        if let current = self.chatJump, current.session == session, current.sent != jumpSent { return }
-        var messages = answer
-        if let jumpSent, let answer {
-          let read = ChatJump.reading(answer, sent: jumpSent)
-          messages = read.log
-          // The user may have left the chat while sbd answered.
-          if self.chatJump?.session == session, self.chatJump?.found != read.found { self.chatJump?.found = read.found }
-        }
-        // A failed first read shows an empty log, so the pane stops showing that it is loading.
-        if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
+        if let messages, self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
-        }
-        if let messages, let pending = self.pendingChat[session] {
-          let left = PendingChatMessage.notInLog(pending, log: messages)
-          if left != pending { self.pendingChat[session] = left }
         }
       }
     }

@@ -14,7 +14,8 @@ import Testing
     case selection, inboxSummary, inboxTerminal, board, issues, loops
   }
 
-  /// The sessions the target tests cover, with the Terminal toggle where it matters.
+  /// The sessions the target tests cover. A chat and a Manager come with the Inbox's Terminal toggle off and on,
+  /// and the toggle must not change what their own view shows.
   enum Kind: CaseIterable {
     case work, chatToggleOff, chatToggleOn, managerToggleOff, managerToggleOn
     case docketRow, followupNotStarted, unstartedFollowupWithFolder, cleanedUp
@@ -55,11 +56,11 @@ import Testing
     }
   }
 
-  /// Whether `place` draws the session's `SessionView`. A selected chat or Manager draws it only while the
-  /// Terminal toggle is on. The Inbox in terminal mode draws it for any session with a Claude terminal.
+  /// Whether `place` draws the session's `SessionView`. A selected session draws it whatever the Terminal toggle
+  /// says. The Inbox in terminal mode draws it for any session with a Claude terminal.
   nonisolated static func showsTerminalView(_ kind: Kind, at place: Place) -> Bool {
     switch place {
-    case .selection: return kind.hasClaudeTerminal && kind.toggle != false
+    case .selection: return kind.hasClaudeTerminal
     case .inboxTerminal: return kind.hasClaudeTerminal
     case .inboxSummary, .board, .issues, .loops: return false
     }
@@ -134,13 +135,9 @@ import Testing
     #expect(model.messageFieldTarget?.id == "a")
   }
 
-  @Test(arguments: [Kind.chatToggleOff, .managerToggleOff])
-  func aSelectedChatOrManagerWithTheTerminalToggleOffHasNoTarget(_ kind: Kind) throws {
-    #expect(try Self.model(kind, at: .selection).messageFieldTarget == nil)
-  }
-
-  @Test(arguments: [Kind.chatToggleOn, .managerToggleOn])
-  func aSelectedChatOrManagerWithTheTerminalToggleOnIsTheTarget(_ kind: Kind) throws {
+  /// The Terminal toggle belongs to the Inbox, so ⇧⌘E reaches a selected conversation with the toggle off or on.
+  @Test(arguments: [Kind.chatToggleOff, .chatToggleOn, .managerToggleOff, .managerToggleOn])
+  func aSelectedChatOrManagerIsTheTarget(_ kind: Kind) throws {
     #expect(try Self.model(kind, at: .selection).messageFieldTarget?.id == "a")
   }
 
@@ -283,6 +280,24 @@ import Testing
     model.hideMessageField("a")
 
     #expect(model.messageDraft(for: session).text == "Rebase onto main")
+  }
+
+  // MARK: hideMessageFieldIfEmpty
+
+  /// The draft is empty once sbd accepted the send and nobody typed more. `isEmpty` trims, so whitespace counts
+  /// as empty. Text or an image the user added while the send was on its way keeps the field.
+  @Test(arguments: [("", false, true), ("  \n", false, true), ("And rebase", false, false), ("", true, false)])
+  func hideIfEmptyHidesOnlyAnEmptyDraft(_ text: String, _ image: Bool, _ hides: Bool) throws {
+    let session = needsItem("a")
+    let model = try Self.model(session, at: .selection)
+    model.revealMessageField()
+    let draft = model.messageDraft(for: session)
+    draft.text = text
+    if image { draft.images = [MessageField.Draft.Image(name: "shot.png", data: Data([0x89]), thumbnail: nil)] }
+
+    model.hideMessageFieldIfEmpty("a", draft: draft)
+
+    #expect(model.revealedMessageField == (hides ? nil : "a"))
   }
 
   @Test func hideReturnsKeyboardFocusToTheClaudeTerminal() throws {

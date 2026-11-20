@@ -11,8 +11,9 @@
 # integration suites. Slot <shards> runs the other test targets, and slot
 # <shards>+1 runs MeasureTests, both in the last part only. With more than one
 # part, the last part runs no integration suite. The other targets then never
-# share a machine's CPUs with the integration shards. With one part, every
-# process runs in part 1.
+# share a machine's CPUs with the integration shards. A part before the last
+# gets no line when the suites fill fewer shards than those parts hold. With
+# one part, every process runs in part 1.
 #
 # Each integration suite, slowest first, goes to the shard with the least time
 # so far, among the shards of every part that runs integration suites. The

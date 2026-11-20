@@ -45,6 +45,9 @@ public final class Service {
     /// pastes, so a held message keeps one retry timer however many messages
     /// queue behind it.
     var deliveryGeneration = 0
+    /// The fallback name while the call that names the session has not answered. A rename clears it. An answer
+    /// applies only while the session still has this name, so a late answer can't replace a name that someone chose.
+    var pendingName: String?
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
@@ -263,6 +266,14 @@ public final class Service {
     let jobs = OperationQueue()
     jobs.name = "sbd.skills"
     jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the calls that name new sessions, apart from `triageJobs`, so names and turn summaries don't wait on each
+  /// other.
+  let nameJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.session-names"
+    jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
   /// Runs the scans of the accounts' skill folders, one at a time.
@@ -848,8 +859,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseRename(id, to: name)
-      try update(id) { $0.name = name }
+      try renameSession(id, to: name)
       return try JSON(encoding: summary(id, for: origin))
     case "parent":
       return try parentRequest(args, origin: origin)
@@ -1302,7 +1312,13 @@ public final class Service {
   /// `args.host` is a host of config.json, or nil for this Mac. `origin` is the machine that asked, which `create`
   /// checks the parent against.
   func startSession(_ args: NewSession, origin: RequestOrigin) throws -> SessionSummary {
-    if let host = args.host { return try startSession(args, onHost: host, origin: origin) }
+    // Before either path sets an auto branch, which would read as a branch that the caller chose.
+    let namingPrompt =
+      args.name == nil && (args.branch ?? "").isEmpty
+        && !(args.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? args.prompt : nil
+    if let host = args.host {
+      return try startSession(args, onHost: host, origin: origin, namingPrompt: namingPrompt)
+    }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
     // An unknown group, an unknown account, an account that differs from
@@ -1321,6 +1337,7 @@ public final class Service {
       // The launch reads the cached checkout, so git doesn't run on the state queue.
       if let main { memoryCheckouts[folder.cwd] = main }
       let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
       // The session's creation time keeps the repo in its place in the list after the session is removed.
       if let main { try? store.remember(repo: main, used: summary.created ?? nowMs()) }
       return summary
@@ -1330,7 +1347,8 @@ public final class Service {
   /// Starts a session on a remote host. The folder is absolute or starts with `~`, and the host resolves it.
   /// It waits for the host, makes the folder and worktree there off the state queue, and reads the host's
   /// panes and processes before it creates the session.
-  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin) throws
+  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin, namingPrompt: String?)
+    throws
     -> SessionSummary
   {
     let site = try remoteSite(host)
@@ -1358,7 +1376,9 @@ public final class Service {
     let read = try readSnapshot(onHost: host)
     return try queue.sync {
       install(read, onHost: host)
-      return try create(args, folder, origin: origin)
+      let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
+      return summary
     }
   }
 
@@ -1413,6 +1433,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // A conversation shows Claude's terminal alone. The user opens its shell on demand.
+    if session.kind.isConversation { session.shellClosed = true }
     // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
     if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
@@ -1432,8 +1454,10 @@ public final class Service {
     if let parent = session.parent, entries[parent]?.session.kind == .manager {
       record(parent, "child", ["child": .string(id)])
     }
-    if session.kind.showsAsChat { recordRead(id, 0) }
-    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    if session.kind.isConversation { recordRead(id, 0) }
+    if session.shellClosed != true {
+      try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    }
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
@@ -1445,6 +1469,14 @@ public final class Service {
     try store.save(session)
     // The operator's waits, and whether a session may own an item, decide which sessions show the operator's items.
     syncOperatorItems()
+  }
+
+  /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
+  /// then leaves the name alone. It runs on the state queue.
+  func renameSession(_ id: String, to name: String) throws {
+    try refuseRename(id, to: name)
+    try update(id) { $0.name = name }
+    entries[id]?.pendingName = nil
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
@@ -1722,11 +1754,11 @@ public final class Service {
   }
 
   /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
-  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
-  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a conversation gets them, because
+  /// `chat-log` reads only conversations. A size that a host did not answer leaves both out. A missing transcript reads as
   /// size 0.
   private func resumeMark(_ id: String) -> [String: JSON] {
-    guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }
+    guard let session = entries[id]?.session, session.kind.isConversation else { return [:] }
     let size: UInt64
     do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
     return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
@@ -2800,7 +2832,9 @@ public final class Service {
           entries[id]?.unreportedSince = nil
           // Exit typed in the terminal, a stop, or a crash ends claude at the trust dialog.
           if let card = entries[id]?.facts.trustCard { closeTrust(card) }
-          if live { record(id, "exited") }
+          // sbd records `exited` for a claude that dies before its SessionStart while its launch prompt is pending.
+          // Without the event, the session reads Working until `launchPromptWindowMs` passes.
+          if live || entries[id]?.facts.launchPromptPending(now: now) == true { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
           // unless a resume came while it ran. These launches come at most
@@ -2910,7 +2944,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
+    if s.kind.isConversation { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {

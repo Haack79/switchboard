@@ -31,12 +31,6 @@ struct LoopRow: Identifiable {
   func caption(now: Int64) -> ScheduleCaption {
     ScheduleCaption(schedule, status: status, hold: session.scheduleHold, now: now)
   }
-
-  /// Whether the run links to its prompt in the session's chat. A work session shows a terminal, which has no
-  /// messages to scroll to. A failed run, and a run that sbd recorded before it stored `sent`, has no `sent`.
-  static func linksReply(_ session: SessionSummary, _ run: Schedule.Run) -> Bool {
-    session.kind.showsAsChat && run.sent != nil
-  }
 }
 
 extension SessionSummary {

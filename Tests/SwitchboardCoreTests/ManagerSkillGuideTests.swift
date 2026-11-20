@@ -3,7 +3,7 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// The Manager guide's `## Work skills` section, and the README paragraph that describes the gate.
+/// The Manager guide's `## Work skills` section, and the Manager page paragraph that describes the gate.
 @Suite struct ManagerSkillGuideTests {
   /// The `## ` headings of the guide, in order.
   private var headings: [String] {
@@ -44,22 +44,22 @@ import Testing
     #expect(try workSkills().contains("wait"))
   }
 
-  // MARK: README
+  // MARK: Manager page
 
-  private static let readme = URL(fileURLWithPath: #filePath)
+  private static let managerPage = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    .appendingPathComponent("README.md")
+    .appendingPathComponent("docs/manager.md")
 
-  /// The paragraphs of the README, split at blank lines.
+  /// The paragraphs of the Manager page, split at blank lines.
   private func paragraphs() throws -> [String] {
-    try String(contentsOf: Self.readme, encoding: .utf8).components(separatedBy: "\n\n")
+    try String(contentsOf: Self.managerPage, encoding: .utf8).components(separatedBy: "\n\n")
   }
 
-  @Test func theReadmeDescribesTheGateRightAfterTheQuickAskParagraph() throws {
+  @Test func theManagerPageDescribesTheGateRightAfterTheOperatorReportsParagraph() throws {
     let all = try paragraphs()
-    let ask = try #require(all.firstIndex { $0.hasPrefix("`sb ask <question>` answers") })
+    let reports = try #require(all.firstIndex { $0.hasPrefix("The operator tells you what it did with reports") })
 
-    let next = try #require(all.indices.contains(ask + 1) ? all[ask + 1] : nil)
+    let next = try #require(all.indices.contains(reports + 1) ? all[reports + 1] : nil)
 
     #expect(next.hasPrefix("A Manager conversation and the operator don't run work skills"), "\(next.prefix(120))")
   }
@@ -67,7 +67,7 @@ import Testing
   @Test(arguments: [
     "skill-labels.json", "skill_unchecked", "skill_blocked", "sb manager skills", "--run-here", "managerSkills",
   ])
-  func theReadmeGateParagraphNames(_ text: String) throws {
+  func theManagerPageGateParagraphNames(_ text: String) throws {
     let paragraph = try #require(
       try paragraphs().first { $0.hasPrefix("A Manager conversation and the operator don't run work skills") })
 

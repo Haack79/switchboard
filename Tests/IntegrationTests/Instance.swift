@@ -43,6 +43,16 @@ final class Instance {
   static let slowShell = root.appendingPathComponent("Tests/IntegrationTests/Fixtures/slow-shell").path
   static let reap = root.appendingPathComponent("Tests/IntegrationTests/Fixtures/reap").path
 
+  /// Lets the pane shells of `slowShell` start. Until then they wait, so the claude in a pane has not started.
+  func startSlowShells() throws {
+    FileManager.default.createFile(atPath: "\(home.path)/shell-go", contents: nil)
+  }
+
+  /// Makes the pane shells of `slowShell` that start from now on wait for `startSlowShells`.
+  func holdSlowShells() throws {
+    try? FileManager.default.removeItem(atPath: "\(home.path)/shell-go")
+  }
+
   /// Runs once per test process, before the first home.
   private static let watcher: Void = { try? watch(getpid()) }()
 
@@ -121,6 +131,8 @@ final class Instance {
       "triage": ["systemPrompt": ""],
       // Nor do they expect --permission-mode auto. AutoModeTests turn it on.
       "autoMode": false,
+      // An unnamed session keeps its fallback name and makes no naming call. SessionNameTests turn it on.
+      "sessionNames": ["enabled": false],
       // Tests that start many sessions don't expect sbd to stop the idle ones.
       "liveCap": 50,
       // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the
@@ -334,6 +346,14 @@ final class Instance {
     let s = try new(prompt: "hello", name: name)
     try waitFor(s.id, "the first reply") { $0.lastReply == "Done: hello" }
     return s
+  }
+
+  /// Waits for the reply to the prompt that the session launched with.
+  /// A session launched with a prompt shows Needs you before claude takes the prompt.
+  /// The state alone can therefore match before the reply.
+  @discardableResult
+  func waitForReply(_ s: SessionSummary) throws -> SessionSummary {
+    try waitFor(s.id, "\(s.name)'s reply") { $0.lastReply != nil && $0.state == .needsYou }
   }
 
   func get(_ id: String) throws -> SessionSummary { try client.session(id) }

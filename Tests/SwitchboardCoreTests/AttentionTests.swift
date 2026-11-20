@@ -39,6 +39,70 @@ func tool(_ name: String, _ input: [String: JSON], id: String? = nil, agent: Str
     #expect(v == Verdict(state: .needsYou, reason: "give it a first prompt"))
   }
 
+  @Test(arguments: ["started", "resumed"]) func aLaunchPromptThatClaudeHasNotTakenReadsWorking(_ kind: String) {
+    let f = facts([event(kind, 1, ["prompt": "fix it"])])
+    let v = Attention.evaluate(session(), f, now: 2)
+    #expect(v == Verdict(state: .working, reason: "starting with its first prompt"))
+    let started = facts([event(kind, 1, ["prompt": "fix it"]), event("SessionStart", 5)])
+    #expect(Attention.evaluate(session(), started, now: 6).state == .working)
+  }
+
+  @Test func aLaunchWithoutAPromptStillNeedsAFirstPrompt() {
+    for prompt in [nil, ""] as [String?] {
+      let f = facts([event("started", 1, prompt.map { ["prompt": .string($0)] } ?? [:]), event("SessionStart", 2)])
+      #expect(Attention.evaluate(session(), f, now: 3) == Verdict(state: .needsYou, reason: "give it a first prompt"))
+    }
+  }
+
+  @Test(arguments: ["exited", "stopped", "SessionEnd"]) func aClaudeThatEndsBeforeTakingTheLaunchPromptNeedsYou(
+    _ ending: String
+  ) {
+    let f = facts([event("started", 1, ["prompt": "fix it"]), event(ending, 4)])
+    #expect(Attention.evaluate(session(), f, now: 5) == Verdict(state: .needsYou, reason: "give it a first prompt"))
+  }
+
+  @Test func aRelaunchWithAPromptAfterAnExitReadsWorkingAgain() {
+    let f = facts([
+      event("started", 1, ["prompt": "a"]), event("exited", 4), event("resumed", 10, ["prompt": "b"]),
+    ])
+    #expect(Attention.evaluate(session(), f, now: 11).state == .working)
+  }
+
+  @Test func aLaunchPromptThatNeverArrivesStopsHidingTheSession() {
+    let f = facts([event("started", 1, ["prompt": "fix it"])])
+    let late = 1 + SessionFacts.launchPromptWindowMs
+    #expect(Attention.evaluate(session(), f, now: late - 1).state == .working)
+    #expect(Attention.evaluate(session(), f, now: late) == Verdict(state: .needsYou, reason: "give it a first prompt"))
+  }
+
+  @Test func theLaunchPromptIsTakenWhenClaudeSubmitsIt() {
+    let f = facts([
+      event("started", 1, ["prompt": "fix it"]), event("SessionStart", 2),
+      event("UserPromptSubmit", 3, ["prompt": "fix it"]),
+      event("Stop", 4, ["last_assistant_message": "Done."]),
+    ])
+    #expect(!f.launchPromptPending(now: 5))
+    #expect(Attention.evaluate(session(), f, now: 5).state != .working)
+  }
+
+  @Test func aFirstMessagePastedIntoABareSessionReadsWorking() {
+    let f = facts([event("started", 1), event("SessionStart", 2), event("pasting", 3, ["text": "fix it"])])
+    #expect(
+      Attention.evaluate(session(), f, now: 4) == Verdict(state: .working, reason: "starting with its first prompt"))
+  }
+
+  @Test(arguments: ["started", "resumed"]) func aBuiltInCommandAsTheLaunchPromptLeavesNothingPending(_ kind: String) {
+    let f = facts([event(kind, 1, ["prompt": "/compact"]), event("SessionStart", 2)])
+    #expect(!f.launchPromptPending(now: 3))
+    #expect(Attention.evaluate(session(), f, now: 3) == Verdict(state: .needsYou, reason: "give it a first prompt"))
+  }
+
+  @Test func aTrustDialogExitComesBeforeAPendingLaunchPrompt() {
+    var f = facts([event("started", 1, ["prompt": "fix it"])])
+    f.exitedAtTrust = true
+    #expect(Attention.evaluate(session(), f, now: 2).state == .needsYou)
+  }
+
   @Test func runningTurnIsWorkingWithItsTool() {
     let f = facts([
       event("SessionStart", 0), event("UserPromptSubmit", 1000, ["prompt": "go"]),
