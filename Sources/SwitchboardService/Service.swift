@@ -816,8 +816,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseRename(id, to: name)
-      try update(id) { $0.name = name }
+      try renameSession(id, to: name)
       return try JSON(encoding: summary(id, for: origin))
     case "parent":
       return try parentRequest(args, origin: origin)
@@ -1384,6 +1383,12 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+  }
+
+  /// Gives the session a new name, unless the name breaks `sb get Operator`. It runs on the state queue.
+  func renameSession(_ id: String, to name: String) throws {
+    try refuseRename(id, to: name)
+    try update(id) { $0.name = name }
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
