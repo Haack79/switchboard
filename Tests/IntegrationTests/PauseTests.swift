@@ -607,7 +607,7 @@ extension Instance {
     let pauseMark = try sbd.lastEventId(parent.id)
 
     let kid = try sbd.childOf(parent.id, name: "kid")
-    try sbd.waitFor(kid.id, "the child to need you") { $0.lastReply != nil && $0.state == .needsYou }
+    try sbd.waitForReply(kid)
     try sbd.tickThrice()
 
     #expect(try !sbd.events(parent.id, after: pauseMark).contains { $0.kind == "sent" })
