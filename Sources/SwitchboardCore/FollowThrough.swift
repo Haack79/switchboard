@@ -457,6 +457,8 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
   public var holdLimitSeconds = 21600
   /// The model that answers judgment calls.
   public var judgeModel = "sonnet"
+  /// How long a top-up's pick may run before sbd sends the schedule's prompt instead.
+  public var topupTimeoutSeconds = 120
   /// The turns after which sbd starts a fresh operator conversation. 0 turns the turn limit off.
   public var maxTurns = 20
   /// The age, in seconds, after which sbd starts a fresh operator conversation. 0 turns the age limit off.
@@ -475,6 +477,7 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
     holdRetrySeconds = try c.decodeIfPresent(Int.self, forKey: .holdRetrySeconds) ?? d.holdRetrySeconds
     holdLimitSeconds = try c.decodeIfPresent(Int.self, forKey: .holdLimitSeconds) ?? d.holdLimitSeconds
     judgeModel = try c.decodeIfPresent(String.self, forKey: .judgeModel) ?? d.judgeModel
+    topupTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .topupTimeoutSeconds) ?? d.topupTimeoutSeconds
     maxTurns = try c.decodeIfPresent(Int.self, forKey: .maxTurns) ?? d.maxTurns
     resetEverySeconds = try c.decodeIfPresent(Int.self, forKey: .resetEverySeconds) ?? d.resetEverySeconds
     autoCompactWindow = try c.decodeIfPresent(Int.self, forKey: .autoCompactWindow) ?? d.autoCompactWindow

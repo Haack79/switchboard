@@ -216,6 +216,22 @@ let usage = """
                                   at least 1m, such as 30m. sbd keeps it across
                                   restarts. A session holds 10 at most. Inside
                                   a session, name it too: $SB_SESSION_ID
+    schedule <session> --every <interval> --topup --group G --repo R
+      --target N --template-file F --rubric-file F2 [<prompt>]
+                                  a work queue top-up: on each run sbd counts
+                                  the active work sessions of group G in repo
+                                  R (owner/name). Unless a session needs a
+                                  merge or cleanup that no wait covers, or sbd
+                                  can't read one, it sends nothing: with the
+                                  target N (1 to 20) met it records the check,
+                                  and when short it starts the open issues and
+                                  follow-ups that a judge picks by the rubric
+                                  F2, each issue with the template F as its
+                                  prompt. Otherwise, or when the top-up fails,
+                                  it sends the prompt with the status, the
+                                  rubric, and the template. Without a prompt
+                                  sbd writes one. Only a Manager conversation,
+                                  the Operator, or you can add or edit one
     schedule ls [<session>]       list the schedules, the next due first
     schedule rm <id>              remove a schedule
     schedule pause|resume <id>    pause a schedule, or resume it one interval
@@ -575,7 +591,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--backlog", "--steps", "--for",
-      "--reason", "--message", "--drop",
+      "--reason", "--message", "--drop", "--template-file", "--rubric-file",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {

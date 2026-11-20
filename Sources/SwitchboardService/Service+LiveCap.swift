@@ -141,7 +141,7 @@ extension Service {
   func livePriorityEntry(_ e: Entry) -> String? {
     let priority = livePriority
     guard !priority.entries.isEmpty, e.session.kind == .work else { return nil }
-    return priority.entry(of: checkout(e.session).flatMap { repository($0, of: e.session) })
+    return priority.entry(of: repository(of: e.session))
   }
 
   /// The sessions of the site that sbd may stop to free a slot, in the order to stop them. A session whose
