@@ -371,7 +371,7 @@ private struct Lifecycle {
   }
 
   @Test func aSessionCantStartOnAHostWhileTheHostRefusesTheLink() throws {
-    let sbd = try Instance.remote()
+    let sbd = try Instance.remote(config: Instance.attemptHostWait)
     try sbd.makeBoxFolder()
     let refusal = "ssh: connect to host mini.local port 22: Operation timed out"
     try sbd.setSSHStub("refuse", refusal + "\n")
