@@ -1280,6 +1280,16 @@ private final class FailingMachine: Machine, @unchecked Sendable {
   func builtInsLeaveOutCommandsThatTheListingCarries(_ name: String) {
     #expect(!builtInNames.contains(name))
   }
+
+  /// A built-in command's paste stops counting as a message on its way once it lands. A skill or a custom command
+  /// sends a prompt, so its UserPromptSubmit clears the paste instead.
+  @Test(arguments: [
+    ("/compact", true), ("/compact keep the plan", true), ("/model\nopus", true), ("/code-review", false),
+    ("/compactly", false), ("compact", false), ("the /compact command", false),
+  ])
+  func aPromptIsABuiltInByItsCommandsName(_ text: String, _ expected: Bool) {
+    #expect(SlashCommand.isBuiltIn(prompt: text) == expected)
+  }
 }
 
 @Suite struct SlashCommandRankTests {
@@ -1321,5 +1331,52 @@ private final class FailingMachine: Machine, @unchecked Sendable {
 
   @Test func queryThatMatchesNoNameGivesNothing() {
     #expect(SlashCommands.rank(Self.mixed, query: "zzz").isEmpty)
+  }
+}
+
+/// A `slash-commands` row carries an optional `label`, which sbd fills only for a Manager conversation or the
+/// operator. An answer from an older sbd has no `label`, and the app still decodes it.
+@Suite struct SlashCommandsTests {
+  @Test func aRowWithoutALabelDecodesWithNone() throws {
+    let row = try JSONCoding.decode(SlashCommand.self, from: #"{"name":"go","description":"Ship it.","source":"scan"}"#)
+
+    #expect(row == SlashCommand(name: "go", description: "Ship it.", source: .scan))
+    #expect(row.label == nil)
+  }
+
+  @Test func anAnswerFromAnOlderSbdDecodes() throws {
+    let answer = #"[{"name":"go","source":"listing"},{"name":"clear","description":"Clear","source":"builtIn"}]"#
+
+    let rows = try JSONCoding.decode([SlashCommand].self, from: answer)
+
+    #expect(rows.map(\.name) == ["go", "clear"])
+    #expect(rows.allSatisfy { $0.label == nil })
+  }
+
+  @Test(arguments: [("work", SkillLabel.work), ("safe", .safe)])
+  func aRowWithALabelDecodesIt(_ raw: String, _ label: SkillLabel) throws {
+    let row = try JSONCoding.decode(
+      SlashCommand.self, from: #"{"name":"go","source":"scan","label":"\#(raw)"}"#)
+
+    #expect(row.label == label)
+  }
+
+  @Test func theInitWithoutALabelSetsNone() {
+    #expect(SlashCommand(name: "go", description: nil, source: .scan).label == nil)
+  }
+
+  @Test func aLabeledRowRoundTrips() throws {
+    let row = SlashCommand(name: "go", description: nil, source: .scan, label: .work)
+
+    let decoded = try JSONCoding.decode(SlashCommand.self, from: try JSON(encoding: row).text)
+
+    #expect(decoded == row)
+  }
+
+  /// The label is part of a row's equality, so the app stores a fetched answer whose only change is a label.
+  @Test func rowsThatDifferOnlyInTheLabelAreNotEqual() {
+    #expect(
+      SlashCommand(name: "go", description: nil, source: .scan, label: .work)
+        != SlashCommand(name: "go", description: nil, source: .scan))
   }
 }

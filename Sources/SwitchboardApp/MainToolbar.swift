@@ -44,24 +44,28 @@ private struct AccountItems: ToolbarContent {
   }
 }
 
-/// Inbox, Board, and Issues. No segment is selected while a session shows.
+/// Inbox, Board, Issues, and Loops. No segment is selected while a session shows.
 private struct ViewPicker: View {
   @EnvironmentObject var model: BoardModel
 
   var body: some View {
-    Picker(
-      "View",
-      selection: Binding(
-        get: { model.selected == nil ? model.mainView : nil },
-        set: { if let view = $0 { model.show(view) } })
-    ) {
-      Text(ContentView.viewLabel("Inbox", model.triage.count)).tag(MainView?.some(.inbox))
-      Text("Board").tag(MainView?.some(.board))
-      Text(ContentView.viewLabel("Issues", model.issueCount)).tag(MainView?.some(.issues))
+    // The Loops count changes with the time alone, while sbd's `ls` answer stays the same.
+    TimelineView(.everyMinute) { _ in
+      let now = nowMs()
+      Picker(
+        "View",
+        selection: Binding(
+          get: { model.selected == nil ? model.mainView : nil },
+          set: { if let view = $0 { model.show(view) } })
+      ) {
+        ForEach(MainView.allCases, id: \.self) { view in
+          Text(ContentView.viewLabel(view.title, model.viewCount(view, now: now))).tag(MainView?.some(view))
+        }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .help("Show the Inbox (⌘1), the Board (⌘2), Issues (⌘3), or Loops (⌘4)")
     }
-    .pickerStyle(.segmented)
-    .labelsHidden()
-    .help("Show the Inbox (⌘1), the Board (⌘2), or Issues (⌘3)")
   }
 }
 

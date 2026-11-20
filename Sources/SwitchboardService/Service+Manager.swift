@@ -38,17 +38,35 @@ extension Service {
   }
 
   /// A new conversation, or the operator with `isOperator`, loads only the
-  /// switchboard MCP server. Without a name, it takes the first line of
-  /// `prompt`, or `Manager.untitled` until its first prompt names it.
-  private func createManager(name: String?, prompt: String?, isOperator: Bool = false) throws -> SessionSummary {
+  /// switchboard MCP server, unless `mcp` names more, or is nil for the full setup. Without a name, it takes the
+  /// first line of `prompt`, or `Manager.untitled` until its first prompt names it. `account` is a Claude config
+  /// folder, kept as it is, so it need not be one that `sb account` knows. Without it, the conversation runs under
+  /// the active account.
+  func createManager(
+    name: String?, prompt: String?, isOperator: Bool = false, account: String? = nil, mcp: [String]? = []
+  ) throws -> SessionSummary {
     let folder = home.managerFolder
     let named = name ?? prompt.map(Manager.name(fromPrompt:)) ?? Manager.untitled
     return try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
       $0.manager = true
+      $0.claudeConfigDir = account
       if isOperator { $0.isOperator = true }
-      $0.mcp = []
+      $0.mcp = mcp
       $0.mcpScoped = true
     }
+  }
+
+  /// The `manager-model` request. With `model`, it saves the model in config.json's `manager` and uses it from
+  /// the next launch of each conversation. The answer is the model.
+  func managerModelRequest(_ args: JSON) throws -> JSON {
+    if let value = args["model"] {
+      guard let model = value.string else { throw APIError("the model is a name, such as sonnet") }
+      if let problem = Manager.modelProblem(model) { throw APIError(problem) }
+      try saveSetting(section: "manager", "model", .string(model))
+      managerModel = model
+      logLine("the Manager's model is \(model)")
+    }
+    return .object(["model": .string(managerModel)])
   }
 
   /// The `operator` request: sends `text` to the operator, or without text
@@ -84,12 +102,12 @@ extension Service {
   }
 
   /// The operator's id, or nil when none exists. When the store holds more
-  /// than one, it is the oldest. sbd logs the others and leaves them as they are.
-  func operatorID() -> String? {
+  /// than one, it is the oldest. sbd logs the others, unless `quiet`, and leaves them as they are.
+  func operatorID(quiet: Bool = false) -> String? {
     let operators = entries.values.map(\.session).filter { $0.kind == .operator }
       .sorted { ($0.created, $0.id) < ($1.created, $1.id) }
     guard let oldest = operators.first else { return nil }
-    if operators.count > 1 {
+    if operators.count > 1, !quiet {
       let others = operators.dropFirst().map(\.id).joined(separator: ", ")
       logLine("found more than one operator. Using \(oldest.id), the oldest, and leaving \(others)")
     }
@@ -150,10 +168,22 @@ extension Service {
     }
     let text = oneLine(args["text"]?.string ?? "", max: TriageCard.lineLength)
     guard !text.isEmpty else { throw APIError("a report needs text") }
-    var data: [String: JSON] = ["text": .string(text), "needsYou": .bool(args["needsYou"]?.bool == true)]
-    if let about = args["session"]?.string { data["about"] = .string(try lookup(["session": .string(about)])) }
-    let event = try recordStored(id, OperatorReport.event, .object(data))
+    let about = try args["session"]?.string.map { try lookup(["session": .string($0)]) }
+    let event = try recordReport(text, needsYou: args["needsYou"]?.bool == true, about: about, on: id)
     return try reportRow(OperatorReport(event)!, of: id)
+  }
+
+  /// Records a report on the operator `op`, cut to one line. `about` is the session that the report is about, and
+  /// `wait` is the wait whose action made the report.
+  @discardableResult
+  func recordReport(_ text: String, needsYou: Bool, about: String?, on op: String, wait: String? = nil) throws -> Event
+  {
+    var data: [String: JSON] = [
+      "text": .string(oneLine(text, max: TriageCard.lineLength)), "needsYou": .bool(needsYou),
+    ]
+    if let about { data["about"] = .string(about) }
+    if let wait { data["wait"] = .string(wait) }
+    return try recordStored(op, OperatorReport.event, .object(data))
   }
 
   /// The `operator-reports` request: the operator's reports, oldest first, each with whether it is open. It
@@ -161,7 +191,7 @@ extension Service {
   func operatorReports(_ args: JSON) throws -> JSON {
     guard let id = operatorID() else { return [] }
     let limit = args["all"]?.bool == true ? Int.max : Event.defaultLimit
-    let events = try store.events(session: id, kind: OperatorReport.event, limit: limit, newest: true)
+    let events = try store.events(session: id, kinds: [OperatorReport.event], limit: limit, newest: true)
     return .array(try events.compactMap(OperatorReport.init).map { try reportRow($0, of: id) })
   }
 

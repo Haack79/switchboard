@@ -4,7 +4,7 @@ import SwiftUI
 import SwitchboardCore
 
 /// Hooks for scripted checks of the GUI. SB_SELECT selects a session when the
-/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, and SB_HOVER_REF=<session id> opens the session card on the first text that names that session by its id or links to its id link, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ACCOUNT_MOVE=<session id>:<account name> asks to move that session to that account once both are listed, which shows the move's confirmation when it asks one, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_ORGS=open opens the org filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, or `issues`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
+/// app starts, SB_INBOX focuses a session's item in the Inbox, SB_ISSUES starts on the Issues view, SB_ISSUES=setup also opens its setup sheet, SB_ISSUES=backlog-hidden also turns on Hide Backlog, SB_LOOPS starts on the Loops view, SB_BOARD_CLICK starts on the Board and opens that session's card after 2 seconds, SB_BOARD_SELECT=<id,id> starts on the Board and selects those cards once sbd lists the sessions, SB_JUMP then runs Next Needing You (⌘J) after 3, SB_SHEET=import opens the import sheet, SB_SHEET=new opens the New Session sheet, SB_SHEET_GROUP=<name or id> opens it instead with that group chosen once sessions are listed, SB_REPO_PICKER=open then opens its repository picker once the repositories are read, SB_SHEET=search opens the search panel once sessions are listed, SB_SHEET=loop opens New Loop… once sessions are listed, SB_SEARCH=<query> types that query into the panel, SB_DETAILS opens each card's Details, SB_HOVER=<id> starts on the Board and opens that session's hover card a second after its card appears, because the card otherwise opens only on a real hover, SB_HOVER_REF=<owner/name#N> opens the reference card on the first text that names that reference a second after the text appears, and SB_HOVER_REF=<session id> opens the session card on the first text that names that session by its id or links to its id link, SB_ACCOUNTS=open opens the account menu once the accounts and their usage are read, SB_ACCOUNTS_CHOOSE=<name> then chooses that account a second later, SB_ACCOUNTS_MOVE=1 instead presses the menu's Move button, SB_ACCOUNTS_CONFIRM=new-only or move then answers the switch's dialog 2 seconds after that, SB_ACCOUNT_MOVE=<session id>:<account name> asks to move that session to that account once both are listed, which shows the move's confirmation when it asks one, SB_ORG_FILTER=<org,org> starts the app with that org filter, where `(local)` names the sessions with no GitHub remote, SB_ORGS=open opens the org filter's menu once sbd lists the sessions, SB_HISTORY=<place,place> goes to each place in turn once sbd lists the sessions, where a place is a session id, `inbox`, `board`, `issues`, or `loops`, SB_HISTORY_BACK=<n> then goes back n times, SB_HISTORY_MENU=open then opens Recent Places, and SB_QUIT_FILE=<path> quits the app (⌘Q) once that file exists. SB_SNAPSHOT names a
 /// PNG file that the app draws its windows into after SB_SNAPSHOT_DELAY
 /// seconds (default 3): the main window with its toolbar, and any sheet or
 /// popover in front of it. The app draws the windows itself, so this needs no
@@ -13,7 +13,8 @@ import SwitchboardCore
 /// first. SB_SNAPSHOT_APPEARANCE=dark draws the dark appearance, and the default is
 /// light. SB_SNAPSHOT_SIZE=<width>x<height> sets the window's content size in
 /// points 1 s before the drawing, so a narrow layout can be drawn, and puts
-/// the window's frame back after it. SwiftTerm draws text in layers that the
+/// the window's frame back after it. SB_SNAPSHOT_EXIT ends the app once it has drawn, with status 1 when it
+/// wrote no PNG. SwiftTerm draws text in layers that the
 /// drawing misses, so `sb screen` checks terminals.
 /// SB_GROUP_FILTER=<id,id> starts the app with that group filter, where `(ungrouped)` names the sessions in no
 /// group. Like SB_ORG_FILTER, it never saves the filter. SB_ORGS=open opens the menu that holds both filters.
@@ -38,6 +39,7 @@ enum Snapshot {
       if let id = env["SB_INBOX"] { model.inboxFocus = id }
       if env["SB_BOARD_CLICK"] != nil || env["SB_BOARD_SELECT"] != nil || hoverSession != nil { model.show(.board) }
       if env["SB_ISSUES"] != nil { model.show(.issues) }
+      if env["SB_LOOPS"] != nil { model.show(.loops) }
     }
     if env["SB_ISSUES"] == "setup" { model.showingIssueSetup = true }
     if env["SB_ISSUES"] == "backlog-hidden" { model.hidesBacklog = true }
@@ -63,6 +65,7 @@ enum Snapshot {
       }
     }
     if env["SB_SHEET"] == "search" { openSearch(model) }
+    if env["SB_SHEET"] == "loop" { whenListed(model) { model.loopEditor = .new } }
     if env["SB_ACCOUNTS"] == "open" {
       openAccounts(
         model, choose: env["SB_ACCOUNTS_CHOOSE"], move: env["SB_ACCOUNTS_MOVE"] != nil,
@@ -104,10 +107,11 @@ enum Snapshot {
       }
       // The split views fit their panes to the new size only on a later turn of the run loop.
       DispatchQueue.main.asyncAfter(deadline: .now() + (size == nil ? 0 : 1)) {
-        write(to: path)
+        let written = write(to: path)
         // AppKit saves the main window's frame on every change. Restoring it keeps the next launch at the user's last size.
         if let window, let frame { window.setFrame(frame, display: false) }
-        if env["SB_SNAPSHOT_EXIT"] != nil { NSApp.terminate(nil) }
+        // An open sheet keeps NSApp.terminate from quitting, so the hook ends the process itself.
+        if env["SB_SNAPSHOT_EXIT"] != nil { exit(written ? 0 : 1) }
       }
     }
   }
@@ -124,13 +128,14 @@ enum Snapshot {
   }
 
   /// Goes to each place in turn as the user would, once sbd lists the sessions, so each one records a history
-  /// entry. A place is a session id, `inbox`, `board`, or `issues`. Then it goes back `back` times and opens Recent Places.
+  /// entry. A place is a session id, `inbox`, `board`, `issues`, or `loops`. Then it goes back `back` times and opens Recent Places.
   private static func visit(_ places: [String], _ model: BoardModel, back: Int, openList: Bool) {
     var steps: [@MainActor @Sendable () -> Void] = places.map { place in
       switch place {
       case "inbox": { model.show(.inbox) }
       case "board": { model.show(.board) }
       case "issues": { model.show(.issues) }
+      case "loops": { model.show(.loops) }
       default: { model.selection = place }
       }
     }
@@ -377,10 +382,12 @@ enum Snapshot {
     return context.makeImage()
   }
 
-  static func write(to path: String) {
+  /// Returns false when it wrote no PNG. It writes to a temporary file first, so the PNG never exists half written.
+  @discardableResult
+  static func write(to path: String) -> Bool {
     guard let main = NSApp.switchboardWindow else {
       FileHandle.standardError.write(Data("snapshot: no window to draw\n".utf8))
-      return
+      return false
     }
     // A popover's window is a child window of the window that presents it, which is the main window or its sheet.
     let sheet = main.attachedSheet
@@ -393,7 +400,7 @@ enum Snapshot {
         bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
         bytesPerRow: 0, bitsPerPixel: 0)
-    else { return }
+    else { return false }
     rep.size = bounds.size
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -416,10 +423,13 @@ enum Snapshot {
       image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
     NSGraphicsContext.restoreGraphicsState()
+    guard let png = rep.representation(using: .png, properties: [:]) else { return false }
     do {
-      try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+      try png.write(to: URL(fileURLWithPath: path), options: .atomic)
+      return true
     } catch {
       FileHandle.standardError.write(Data("snapshot: \(error)\n".utf8))
+      return false
     }
   }
 }

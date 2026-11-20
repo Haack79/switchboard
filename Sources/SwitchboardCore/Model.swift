@@ -163,10 +163,11 @@ public enum SessionKind: String, Codable, Sendable {
     self = isOperator == true ? .operator : manager == true ? .manager : chat != nil ? .chat : .work
   }
 
-  /// Whether the app shows a session of this kind as a chat. `chat-log`
-  /// reads only these kinds, because a work session's transcript can hold
-  /// what its user never meant to show in the chat pane.
-  public var showsAsChat: Bool {
+  /// Whether sbd counts the session's unread replies, starts it with its shell
+  /// closed, and lets `chat-log` read its transcript. `chat-log` reads only
+  /// these kinds, because a work session's transcript can hold what its user
+  /// never meant to share.
+  public var isConversation: Bool {
     switch self {
     case .work: false
     case .manager, .chat, .operator: true
@@ -207,7 +208,7 @@ public enum InboxItems: Sendable {
   /// Only a prompt that stops the conversation until the user answers it.
   /// The conversation's replies and group messages repeat or name the
   /// sessions it manages, and those sessions have their own items. A reply
-  /// waits on the user's next message, which the chat pane takes.
+  /// waits on the user's next message in the conversation's own view.
   case blockingPrompts
   /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
   /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
@@ -338,6 +339,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var plans: [PlanSummary]?
   /// The artifacts that the session published, in first-publish order, or nil when there are none.
   public var artifacts: [SessionArtifact]?
+  /// When sbd last started a fresh conversation for the operator, or nil before the first one and for other kinds.
+  public var conversationStarted: Int64?
   /// The review that a docket row tracks, or nil for any other session.
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.
@@ -381,11 +384,19 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var url: String?
   /// The session's pause, or nil when it isn't paused.
   public var pause: Pause?
-  /// How many messages wait for the resume of a paused session, or nil when it isn't paused.
+  /// How many messages wait in sbd's queue for the session: for a paused session's resume, for the end of the
+  /// turn, or for claude's next start. It is nil when the session isn't paused and its queue is empty.
   public var heldMessages: Int?
   /// The session's place in sbd's removal job, or nil when no removal is
   /// queued, running, or failed.
   public var removal: Removal?
+  /// The input context of a Manager conversation's latest turn, or nil for every other session and while no turn
+  /// has reported one since the last `/clear` or compaction.
+  public var contextTokens: Int?
+  /// The suggestion in a Manager conversation's header to end it, or nil when there is none.
+  public var endHint: EndHint?
+  /// The operator's waits that a Manager conversation handed off, or nil when there are none.
+  public var handedWaits: [Wait]?
 
   public init(
     id: String, name: String, cwd: String, repo: String?, branch: String?, claudeSessionId: String,

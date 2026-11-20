@@ -231,11 +231,12 @@ extension Service {
     if starting.contains(id) { return "it is starting" }
     if let refusal = beingDeletedRefusal(id) { return "\(refusal)" }
     switch claudeState(id) {
+    // A stopped claude's queue moves with the session, and its next launch reads the moved transcript.
     case .stopped: break
-    case .running where listsRunningAsMovable: break
+    case .running where listsRunningAsMovable:
+      if e.hasMessageOnItsWay { return "a message is on its way to it" }
     default: return "its claude is running. Stop it first"
     }
-    if !e.pending.isEmpty || e.inFlight != nil { return "a message is on its way to it" }
     if let source = transcriptFile(e.session) {
       let dest = transcriptDestination(source, id: e.session.claudeSessionId, to: target)
       if let conflict = transcriptConflict(source, dest) { return conflict }

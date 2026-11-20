@@ -11,9 +11,10 @@
 # DraftSelfTest, selects another session, whose field stays hidden, and comes back,
 # presses Esc, quits, and checks that the draft shows the field after a relaunch,
 # that two Escs clear it, and that a third hides the field.
-# Then it closes the shell pane of the Manager, a work session, an Inbox item, and a chat
-# through the app's ShellSelfTest: the pane's close button, `exit`, Ctrl-D, and
-# the Session menu. It checks that the shell stays closed after a relaunch and
+# Then it checks that a new Manager conversation and a new chat start with no shell, opens
+# each with Open Shell, and closes the shell pane of the Manager, a work session, an Inbox
+# item, and a chat through the app's ShellSelfTest: the pane's close button, `exit`, Ctrl-D,
+# and the Session menu. It checks that the shell stays closed after a relaunch and
 # a switch to another session, that Open Shell starts it again, that the pane
 # attaches to a shell that `sb shell --open` starts right after `exit`, and that the
 # Claude terminal keeps its tmux client and claude its process throughout.
@@ -118,7 +119,8 @@ sb() { "$bin_dir/sb" "$@"; }
 
 jq -n --arg claude "$root/Tests/GUI/received-bytes-stub" --arg home "$home" \
   '{claude: $claude, idleStopSeconds: 600, tickSeconds: 0.2, worktreeRoot: "\($home)/worktrees",
-    shell: "/bin/sh", github: {pollSeconds: 0}, triage: {systemPrompt: ""}}' >"$home/config.json"
+    shell: "/bin/sh", github: {pollSeconds: 0}, triage: {systemPrompt: ""}, sessionNames: {enabled: false}}' \
+  >"$home/config.json"
 mkdir "$home/work" "$home/shots"
 : >"$home/sbd.log"
 "$bin_dir/sbd" --home "$home" >>"$home/sbd.log" 2>&1 &
@@ -421,12 +423,9 @@ check_shell() {
     result=$(app click "$1")
     [[ $result == "clicked at "* ]] || fail "the app could not click $1 on $2: $result"
   }
-  # A chat and the Manager show their messages until the test shows their terminals. `terminal` shows them, then
-  # waits like `attached`.
-  start_app() { # <session> [attached | terminal]
+  start_app() { # <session> [attached]
     SB_SELECT="$1" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
     app_pid=$!
-    [ "${2:-}" != terminal ] || app show-terminal >/dev/null
     [ -z "${2:-}" ] || wait_for 120 has_clients "$1-claude" || fail "the app did not attach to $1's Claude pane"
   }
   remember_claude() { cc=$(clients "$1-claude") cp=$(sb get "$1" --json | jq -r .claudePid); }
@@ -440,21 +439,30 @@ check_shell() {
     wait_for 10 panes_are 1 || fail "$2 left the shell pane of $1 in the window"
     same_claude "$1"
   }
+  opens() { # <session> <what>
+    click open "$2"
+    wait_for 10 is_open "$1" || fail "Open Shell did not open the shell of $2"
+    wait_for 60 has_clients "$1-shell" || fail "the app did not attach to the opened shell of $2"
+  }
+  # sbd starts a conversation with its shell closed, so the window shows Claude's terminal alone.
+  starts_closed() { # <session> <what>
+    closed "$1" && shell_gone "$1" || fail "$2 started with a shell"
+    wait_for 10 panes_are 1 || fail "the window shows a shell pane for $2"
+  }
 
-  start_app "$manager" terminal
-  wait_for 60 has_clients "$manager-shell" || fail "the app did not attach to the Manager's shell"
+  start_app "$manager" attached
+  starts_closed "$manager" "the Manager"
   remember_claude "$manager"
+  opens "$manager" "the Manager"
   click close "the Manager"
   closes "$manager" "the close button"
   app snapshot "$shots/manager-closed.png" >/dev/null
   end_app
-  start_app "$manager" terminal
+  start_app "$manager" attached
   sleep 2
   shell_gone "$manager" && panes_are 1 || fail "a relaunch started the Manager's shell again"
   remember_claude "$manager"
-  click open "the Manager"
-  wait_for 10 is_open "$manager" || fail "Open Shell did not open the Manager's shell"
-  wait_for 60 has_clients "$manager-shell" || fail "the app did not attach to the opened shell"
+  opens "$manager" "the Manager"
   app type exit >/dev/null
   closes "$manager" "exit"
   end_app
@@ -464,7 +472,6 @@ check_shell() {
   remember_claude "$work"
   app ctrl-d >/dev/null
   closes "$work" "Ctrl-D"
-  app show-terminal >/dev/null
   app select "$manager" >/dev/null
   sleep 3
   app select "$work" >/dev/null
@@ -491,17 +498,16 @@ check_shell() {
   app show-terminal >/dev/null
   wait_for 120 has_clients "$work-claude" || fail "the Inbox did not attach to the work session's Claude pane"
   remember_claude "$work"
-  click open "the Inbox"
-  wait_for 10 is_open "$work" || fail "the Inbox's Open Shell did not open the shell"
-  wait_for 60 has_clients "$work-shell" || fail "the Inbox did not attach to the opened shell"
+  opens "$work" "the Inbox"
   wait_for 10 panes_are 2 || fail "the Inbox shows no shell pane"
   click close "the Inbox"
   closes "$work" "the Inbox's close button"
   end_app
 
-  start_app "$chat" terminal
-  wait_for 60 has_clients "$chat-shell" || fail "the app did not attach to the chat's shell"
+  start_app "$chat" attached
+  starts_closed "$chat" "the chat"
   remember_claude "$chat"
+  opens "$chat" "the chat"
   click close "the chat"
   closes "$chat" "the chat's close button"
   app snapshot "$shots/chat-closed.png" >/dev/null
@@ -733,7 +739,7 @@ check_slash() {
     got=$(probe_rows "${!view}")
     [ "$got" = "$probe" ] || fail "sb slash gave the $view the probe rows $got, not $probe"
   done
-  # A session's terminal view hides the field after each send, so the keystroke check runs in the chat only.
+  # The keystroke check runs in the chat. Its view hides the field after each send, and SlashSelfTest shows it again.
   view=chat
   SB_SELECT="$chat" SB_SLASH_TEST=1 "$bin_dir/Switchboard" >"$shots/$view.log" 2>&1 &
   app_pid=$!
@@ -744,6 +750,8 @@ check_slash() {
   field_logged slashtest "$view" 'down, tab: "/probe-cmd-user-only " open false focused true cursor at end true'
   field_logged slashtest "$view" 'return on /probe-d: "/probe-default " open false'
   field_logged slashtest "$view" 'return again: ""'
+  [ "$(grep -cxF 'slashtest: hidden after send: true' "$shots/$view.log")" = 3 ] ||
+    fail "the $view field did not hide after each of its three sends"
   field_logged slashtest "$view" 'enter on /probe-d: "/probe-default " open false focused true'
   field_logged slashtest "$view" 'enter again: ""'
   field_logged slashtest "$view" "exact name: open true rows probe-user-only"

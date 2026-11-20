@@ -43,7 +43,7 @@ func group(_ a: Args) {
       json: a.json)
   case "describe":
     guard let ref = words.first else { die("group describe needs a group, and text or --clear") }
-    var args: [String: JSON] = ["group": .string(ref)]
+    var args: [String: JSON] = ["group": .string(ref), "by": by]
     if a.switches.contains("--clear") {
       args["clear"] = true
     } else if words.count > 1 {
@@ -52,6 +52,8 @@ func group(_ a: Args) {
       die("group describe needs text, or --clear")
     }
     printGroup(call("group-describe", args), json: a.json)
+  case "link":
+    groupLink(a, Array(words.dropFirst()), sub: words.first, by: by)
   case "account":
     guard let ref = words.first else { die("group account needs a group, and an account or --clear") }
     var args: [String: JSON] = ["group": .string(ref)]
@@ -93,16 +95,44 @@ func group(_ a: Args) {
     }
     print("\nAccept one with: sb group suggest --accept <id>, or decline it with --decline <id>")
   default:
-    die("usage: sb group ls|add|rm|move|note|describe|account|suggest")
+    die("usage: sb group ls|add|rm|move|note|describe|link|account|suggest")
   }
+}
+
+/// `sb group link add <group> <url> [--title T]` and `sb group link rm <group> <link-id>`.
+private func groupLink(_ a: Args, _ words: [String], sub: String?, by: JSON) {
+  switch sub {
+  case "add":
+    guard words.count == 2 else { die("group link add needs a group and a URL") }
+    var args: [String: JSON] = ["group": .string(words[0]), "url": .string(words[1]), "by": by]
+    if let title = a.values["--title"] { args["title"] = .string(title) }
+    printGroup(call("group-link-add", args), json: a.json)
+  case "rm":
+    guard words.count == 2 else { die("group link rm needs a group and a link id") }
+    printGroup(
+      call("group-link-rm", ["group": .string(words[0]), "link": .string(words[1]), "by": by]), json: a.json)
+  default:
+    die("usage: sb group link add <group> <url> [--title T] | rm <group> <link-id>")
+  }
+}
+
+/// The description with `(written by Claude)` after it when Claude wrote it.
+private func descriptionLine(_ g: GroupSummary) -> String? {
+  g.description.map { g.descriptionBy == .claude ? "\($0)  (written by Claude)" : $0 }
 }
 
 private func printGroup(_ result: JSON, json: Bool) {
   if json { return printJSON(result) }
   let g = decode(result, as: GroupSummary.self)
   print("\(g.id)  \(g.name)  \(g.sessions.count == 1 ? "1 session" : "\(g.sessions.count) sessions")".printable)
-  if let description = g.description { print("  \(description)".printable) }
+  if let description = descriptionLine(g) { print("  \(description)".printable) }
   if let account = g.account { print("  \(accountLine(account))".printable) }
+  printLinks(g)
+}
+
+/// Such as `link: l4k2m  Flag Evaluations RFC  https://…`.
+private func printLinks(_ g: GroupSummary) {
+  for link in g.links ?? [] { print("  link: \(link.id)  \(link.title)  \(link.url)".printable) }
 }
 
 /// Such as `account: personal (/Users/me/.claude-personal)`.
@@ -114,8 +144,9 @@ private func printGroups(_ list: GroupList) {
   }
   for g in list.groups {
     print("\(g.name)  (\(g.id))".printable)
-    if let description = g.description { print("  \(description)".printable) }
+    if let description = descriptionLine(g) { print("  \(description)".printable) }
     if let account = g.account { print("  \(accountLine(account))".printable) }
+    printLinks(g)
     for note in g.notes { print("  note: \(oneLine(note.text, max: 200))".printable) }
     for a in g.artifacts ?? [] {
       print("  artifact: \(a.title)  \(a.url)  by \(a.sessionName)\(a.removed == nil ? "" : " (removed)")".printable)

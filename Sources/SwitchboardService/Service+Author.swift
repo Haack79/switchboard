@@ -9,6 +9,11 @@ extension Service {
     args["from"] != nil || args["insideClaude"]?.bool == true ? .claude : .you
   }
 
+  /// Throws `refusal` unless the request's `by` names the user. A missing `by` means the user.
+  func requireUser(_ args: JSON, _ refusal: String) throws {
+    guard try Author(parsing: args["by"]?.string) == .you else { throw APIError(refusal) }
+  }
+
   /// Refuses a request from a Claude Code that would act for the user. `act` names what the request does.
   static func refuseClaude(_ args: JSON, _ act: String) throws {
     guard author(args) == .claude else { return }

@@ -363,3 +363,9 @@ func undoSession(_ id: String, _ state: Removal.State = .queued, notBefore: Int6
     #expect(model.selection == nil)
   }
 }
+
+@Suite struct RemovalJobKeepHelp {
+  @Test func keepSaysThatItCancelsTheDeleteAndKeepsTheSession() {
+    #expect(FailedRemovalActions.keepHelp == "Cancel the delete and keep the session")
+  }
+}

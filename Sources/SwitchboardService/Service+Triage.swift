@@ -13,7 +13,7 @@ extension Service {
       return .success(
         try queue.sync {
           try requireOnHost(request, origin: origin)
-          return try setSummary(args)
+          return try setSummary(args, origin: origin)
         })
     case "item-context":
       return .success(try itemContext(args))
@@ -23,12 +23,15 @@ extension Service {
   }
 
   /// Records the card that the session wrote for its current turn. A new
-  /// prompt drops it.
-  private func setSummary(_ args: JSON) throws -> JSON {
+  /// prompt drops it. When the card asks the user something, `childItems`
+  /// lists the session's children that ask the user in their own Inbox item,
+  /// so the CLI can say not to ask their questions again.
+  private func setSummary(_ args: JSON, origin: RequestOrigin) throws -> JSON {
     let id = try lookup(args)
     guard let raw = args["card"] else { throw APIError("summary set needs the card as JSON") }
     let cleaned = try TriageCard.clean(raw, now: nowMs())
     let event = record(id, Triage.sessionEvent, try JSON(encoding: cleaned.card))
+    let asks = !cleaned.card.options.isEmpty || !cleaned.card.decisions.isEmpty
     return [
       "session": .string(id), "event": .number(Double(event.id)),
       "options": .number(Double(cleaned.card.options.count)),
@@ -36,7 +39,24 @@ extension Service {
       "decisions": .number(Double(cleaned.card.decisions.count)),
       "drafts": .number(Double(cleaned.card.drafts.count)),
       "dropped": .array(cleaned.dropped.map(JSON.string)),
+      "childItems": .array(asks ? childItems(of: id, for: origin) : []),
     ]
+  }
+
+  /// The children of `id` that ask the user in their Inbox item, sorted by name. A child asks when it is in Needs
+  /// you, or when its item is the card that it wrote. The list leaves out a Ready to merge child that shows only
+  /// sbd's merge item, because whether to merge is the parent's own decision.
+  private func childItems(of id: String, for origin: RequestOrigin) -> [JSON] {
+    let children: [SessionSummary] = entries.values.filter { parentOf($0.session) == id }
+      .map { summary($0.session.id, for: origin) }
+    var items: [JSON] = []
+    for child in children.sorted(by: { $0.name < $1.name }) {
+      guard let item = child.triage, child.state == .needsYou || item.source == .session else { continue }
+      let url = SessionLink.url(for: child.id).absoluteString
+      items.append(
+        ["session": .string(child.id), "name": .string(child.name), "url": .string(url), "title": .string(item.title)])
+    }
+    return items
   }
 
   /// The request that does what a click on the option does. Each action is a
@@ -88,6 +108,8 @@ extension Service {
       }
       return Request(op: "review", args: ["session": session, "reviewers": .array(reviewers.map(JSON.string))])
     case .wait:
+      // A card stored before `TriageCard.clean` refused actions may still hold one.
+      if let action = option.wait?.actionKind { throw TriageCard.armsAction(action) }
       var wait = try option.wait.map { try JSON(encoding: $0).object ?? [:] } ?? [:]
       wait["session"] = session
       return Request(op: "wait", args: .object(wait))
@@ -165,6 +187,14 @@ extension Service {
 
   // MARK: Summaries
 
+  /// The account of a one-shot call that sbd makes for the session `id`: `triage.account` when it is set, or else
+  /// the session's own. `key` is the account that the call's quota counts against. `account` is the override that
+  /// `headlessEnv` applies, nil when the call takes the session's pane environment.
+  func triageAccount(for id: String) -> (key: String, account: ClaudeAccount?) {
+    let account = config.triage.account.map(ClaudeAccount.init(folder:))
+    return (account?.folder ?? claudeAccount(of: id).key, account)
+  }
+
   /// Starts each model call that `verdict` asks for: the turn's summary and the PR's merge brief.
   func startSummaries(_ id: String, _ verdict: Verdict) {
     summarizeTurn(id, verdict)
@@ -183,9 +213,8 @@ extension Service {
     // A skip records an event, which calls this again. Setting `summaryAttempt` first makes that call return at the
     // guard above.
     entries[id]?.summaryAttempt = stop
-    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
-    let account = triageAccount?.folder ?? claudeAccount(of: id).key
-    if let skip = summarySkip(e.facts, account: account) {
+    let triage = triageAccount(for: id)
+    if let skip = summarySkip(e.facts, account: triage.key) {
       record(id, "triage", ["stop": .number(Double(stop)), "skipped": .string(skip)])
       return
     }
@@ -195,13 +224,13 @@ extension Service {
     guard Triage.summarizes(session.kind) else { return }
     let reply = e.facts.lastReply ?? ""
     let input = TriageSummarizer.input(session: session, reply: reply)
-    let env = headlessEnv(session: id, account: triageAccount)
+    let env = headlessEnv(session: id, account: triage.account)
     triageJobs.addOperation { [self] in
-      let result = Result {
-        try TriageSummarizer.parse(
-          triageCall(TriageSummarizer.arguments(model: config.triage.model), input, env), reply: reply)
-      }
-      queue.async { self.finishSummary(id, stop: stop, result) }
+      let call = headlessCall(
+        .triage, session: id, arguments: TriageSummarizer.arguments(model: config.triage.model), input: input, env: env,
+        folder: home.path, timeout: config.triage.timeoutSeconds
+      ) { try TriageSummarizer.parse($0, reply: reply) }
+      queue.async { self.finishSummary(id, stop: stop, call) }
     }
   }
 
@@ -218,9 +247,8 @@ extension Service {
     else { return }
     let attempt = "#\(pr.number)@\(pr.headSha)"
     guard e.mergeBriefAttempt != attempt || e.mergeBriefSkipped else { return }
-    let triageAccount = config.triage.account.map(ClaudeAccount.init(folder:))
-    let account = triageAccount?.folder ?? claudeAccount(of: id).key
-    let skip = budgetSkip(e.facts, account: account)
+    let triage = triageAccount(for: id)
+    let skip = budgetSkip(e.facts, account: triage.key)
     // A head records one skip, and then waits for the budget.
     if e.mergeBriefAttempt == attempt, skip != nil { return }
     // A skip records an event, which calls this again.
@@ -232,16 +260,17 @@ extension Service {
       return
     }
     let input = MergeBrief.input(pr, description: details.description)
-    let env = headlessEnv(session: id, account: triageAccount)
+    let env = headlessEnv(session: id, account: triage.account)
     let (number, title) = (pr.number, pr.title)
     triageJobs.addOperation { [self] in
-      let result = Result {
-        try MergeBrief.parse(triageCall(MergeBrief.arguments(model: config.triage.model), input, env), title: title)
-      }
+      let call = headlessCall(
+        .mergeBrief, session: id, arguments: MergeBrief.arguments(model: config.triage.model), input: input, env: env,
+        folder: home.path, timeout: config.triage.timeoutSeconds
+      ) { try MergeBrief.parse($0, title: title) }
       queue.async {
         guard self.entries[id] != nil else { return }
-        var data = key
-        switch result {
+        var data = key.merging(call.reply?.eventFields ?? [:]) { $1 }
+        switch call.result {
         case .success(let text): data["text"] = .string(text)
         case .failure(let error):
           logLine("can't summarize #\(number) of \(id): \(error)")
@@ -250,11 +279,6 @@ extension Service {
         self.record(id, MergeBrief.event, .object(data))
       }
     }
-  }
-
-  /// Runs one `claude -p` call under the triage settings, off the state queue.
-  private func triageCall(_ arguments: [String], _ input: String, _ env: [String: String]) throws -> String {
-    try runHeadless(arguments, input: input, env: env, folder: home.path, timeout: config.triage.timeoutSeconds)
   }
 
   /// Why the turn summary does not run: the session wrote its card, or the budget is spent.
@@ -273,13 +297,13 @@ extension Service {
     return nil
   }
 
-  private func finishSummary(_ id: String, stop: Int64, _ result: Result<TriageSummary, Error>) {
+  private func finishSummary(_ id: String, stop: Int64, _ call: HeadlessOutcome<TriageSummary>) {
     // A call for a turn the user moved on from still counts toward
     // `triage.perHour`. applyTriage ignores its summary because its stop no
     // longer matches.
     guard entries[id] != nil else { return }
     var data: [String: JSON]
-    switch result {
+    switch call.result {
     case .success(let summary):
       data = (try? JSON(encoding: summary).object) ?? [:]
     case .failure(let error):
@@ -287,6 +311,7 @@ extension Service {
       data = ["error": .string("\(error)")]
     }
     data["stop"] = .number(Double(stop))
+    data.merge(call.reply?.eventFields ?? [:]) { $1 }
     record(id, "triage", .object(data))
   }
 }

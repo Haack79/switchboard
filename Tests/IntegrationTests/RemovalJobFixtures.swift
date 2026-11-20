@@ -11,6 +11,11 @@ let holdRemoval = "hold-removal"
 /// removal recorded `released`, before the branch deletes.
 let holdReleased = "hold-removal-released"
 
+/// The gate file that holds the removal worker on the trash path after the rename and before the trash check. The
+/// folder is at the trash path, and git still has the worktree's record. A removal that deletes in place never
+/// waits here.
+let holdTrashCheck = "hold-removal-trash"
+
 /// A recorded PR in PostHog/posthog and its head branch.
 struct RemovalPR {
   let number: Int
@@ -68,6 +73,13 @@ struct MergedPRRepo {
 /// The ids in an `rm-queue` result's `queued`.
 func queued(_ result: JSON) -> [String] { result["queued"]?.array?.compactMap(\.string) ?? [] }
 
+/// The ids in an `rm-cancel` result's `cancelled`.
+func cancelled(_ result: JSON) -> [String] { result["cancelled"]?.array?.compactMap(\.string) ?? [] }
+
+/// An sbd whose undo window lasts a day, longer than any clock advance in a test, so the removal job holds a queued
+/// session without starting its removal.
+func longUndoInstance() throws -> Instance { try Instance(config: ["removalDelaySeconds": 86_400]) }
+
 /// The lock reason that Supacode writes.
 let supacodeLock = #"{"build":"1792934673","createdAt":1793889333,"owner":"supacode","version":"0.11.6"}"#
 
@@ -83,6 +95,17 @@ extension Instance {
     ]
     if let resolve { args["resolve"] = .array(resolve.map(JSON.string)) }
     return try client.call("rm-queue", args)
+  }
+
+  /// The `rm-cancel` op with every id in one request. It is the app's Undo.
+  func cancelRemoval(_ ids: [String]) throws -> JSON {
+    try client.call("rm-cancel", ["sessions": .array(ids.map(JSON.string))])
+  }
+
+  /// Queues the session's removal and keeps its worktree, so the removal job holds the session. Sessions that share
+  /// one folder can each be held this way.
+  func holdForRemoval(_ id: String) throws {
+    #expect(queued(try queueRemoval([id], scope: "work", worktree: false)) == [id])
   }
 
   /// Marks the session Done and waits until its state is Done.
@@ -156,6 +179,17 @@ extension Instance {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub)
     try restart(setting: "supacode", to: .string(stub))
     return calls
+  }
+
+  /// The folder that a removal moves the session's worktree to.
+  func trashFolder(_ id: String) -> String { "\(home.path)/trash/\(id)" }
+
+  /// Waits until the session's worktree folder sits at its trash path and not at `cwd`.
+  func waitForFolderInTrash(_ s: SessionSummary, timeout: Double = 60) throws {
+    try waitFor("\(s.id)'s folder to move to the trash", timeout: timeout) {
+      let fm = FileManager.default
+      return fm.fileExists(atPath: trashFolder(s.id)) && !fm.fileExists(atPath: s.cwd)
+    }
   }
 
   func lockForSupacode(_ repo: String, _ cwd: String) throws {

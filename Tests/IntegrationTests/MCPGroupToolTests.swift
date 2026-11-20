@@ -91,6 +91,88 @@ import Testing
     #expect(try sbd.get(a.id).group == accepted.id)
   }
 
+  // MARK: Descriptions and links
+
+  @Test func addGroupWithADescriptionIsByClaude() throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let g = try mcp.call("add_group", ["name": "Flags", "description": "Ship the cache."]).decode(GroupSummary.self)
+
+    #expect(g.description == "Ship the cache.")
+    #expect(g.descriptionBy == .claude)
+    let listed = try #require(try groupList(sbd).groups.first { $0.id == g.id })
+    #expect(listed.description == "Ship the cache.")
+    #expect(listed.descriptionBy == .claude)
+  }
+
+  @Test func addGroupWithoutADescriptionHasNoAuthor() throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let g = try mcp.call("add_group", ["name": "Flags"]).decode(GroupSummary.self)
+
+    #expect(g.description == nil)
+    #expect(g.descriptionBy == nil)
+  }
+
+  @Test func addGroupRefusesADescriptionOverTheLimitAndMakesNoGroup() throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+    let text = String(repeating: "a", count: SessionGroup.descriptionLimit + 1)
+
+    let result = try mcp.call("add_group", ["name": "Flags", "description": .string(text)])
+
+    #expect(result.isError)
+    #expect(try groupList(sbd).groups.isEmpty)
+  }
+
+  /// The links and the description's author of Flags, which the user linked and Claude described.
+  func linkedAndDescribed(_ sbd: Instance) throws -> GroupSummary {
+    let s = try sbd.new(name: "alpha")
+    let g = try addGroup(sbd, "Flags", s.id)
+    try sbd.sb("group", "link", "add", "Flags", "https://example.com/rfc", "--title", "RFC")
+    try sbd.sb(["group", "describe", "Flags", "Ship the cache."], env: inside(s.id))
+    return g
+  }
+
+  @Test func listGroupsCarriesTheLinksAndTheDescriptionsAuthor() throws {
+    let sbd = try Instance()
+    let g = try linkedAndDescribed(sbd)
+    let mcp = try MCPClient(sbd)
+
+    let groups = try mcp.call("list_groups").decode(GroupList.self).groups
+
+    let flags = try #require(groups.first { $0.id == g.id })
+    #expect(flags.links?.map(\.url) == ["https://example.com/rfc"])
+    #expect(flags.links?.map(\.title) == ["RFC"])
+    #expect(flags.descriptionBy == .claude)
+  }
+
+  @Test func aScopedListGroupsCarriesTheSameLinksAndAuthorAsAnUnscopedOne() throws {
+    let sbd = try Instance()
+    let g = try linkedAndDescribed(sbd)
+
+    let unscoped = try MCPClient(sbd).call("list_groups").decode(GroupList.self).groups
+    let scoped = try MCPClient(sbd, group: g.id).call("list_groups").decode(GroupList.self).groups
+
+    let all = try #require(unscoped.first { $0.id == g.id })
+    let one = try #require(scoped.first)
+    #expect(one.links == all.links)
+    #expect(one.descriptionBy == all.descriptionBy)
+  }
+
+  /// Only the user adds or removes a group's links.
+  @Test func noToolAddsOrRemovesALink() throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let names = try mcp.toolNames()
+
+    #expect(!names.isEmpty)
+    #expect(!names.contains { $0.lowercased().contains("link") }, "\(names)")
+  }
+
   // MARK: send_group
 
   func answer(_ sbd: Instance, _ session: String, _ card: Int64, allow: Bool) throws {

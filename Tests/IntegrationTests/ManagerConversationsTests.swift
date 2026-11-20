@@ -762,6 +762,44 @@ import Testing
     #expect(missing?.data["servers"] == ["notes"])
   }
 
+  // MARK: Auto-compact window
+
+  /// The CLAUDE_CODE_AUTO_COMPACT_WINDOW of each launch of the session's claude, oldest first, once there are
+  /// `count`. Empty means unset.
+  func compactWindows(_ sbd: Instance, _ s: SessionSummary, count: Int) throws -> [String] {
+    try sbd.waitFor(
+      "\(count) launches of \(s.id)",
+      fetch: { sbd.stubCalls().filter { $0.args.contains(s.claudeSessionId) }.map(\.compactWindow) }
+    ) { $0.count >= count }
+  }
+
+  @Test func aConversationStartsAndResumesWithTheAutoCompactWindow() throws {
+    let sbd = try Instance(config: Self.sharedServers)
+    _ = try sbd.waitForRunning("grafana")
+    let c = try idleConversation(sbd)
+
+    try changeServers(sbd, c, "add", "grafana")
+
+    #expect(try compactWindows(sbd, c, count: 2) == ["183000", "183000"])
+  }
+
+  @Test func zeroLeavesTheConversationOnClaudesOwnWindow() throws {
+    let sbd = try Instance(config: ["manager": ["autoCompactWindow": 0]])
+
+    let c = try idleConversation(sbd)
+
+    #expect(try compactWindows(sbd, c, count: 1) == [""])
+  }
+
+  /// The operator's window comes from `operator.autoCompactWindow`, which OperatorResetTests covers.
+  @Test func workSessionsGetNoAutoCompactWindow() throws {
+    let sbd = try Instance()
+
+    let work = try sbd.idleSession()
+
+    #expect(try compactWindows(sbd, work, count: 1) == [""])
+  }
+
   // MARK: Inside Claude Code
 
   /// A change that widens what the conversation can do, which only the user may make.

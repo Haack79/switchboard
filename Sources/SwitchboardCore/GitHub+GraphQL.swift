@@ -222,9 +222,7 @@ extension GitHub {
         author: login(n["author"]), state: n["state"]?.string ?? "", submittedAt: n["submittedAt"]?.string,
         commit: n["commit"]?["oid"]?.string, bot: isBot(n["author"]) ? true : nil)
     }
-    let reviewRequests = node["reviewRequests"].map {
-      nodes($0).compactMap { $0["requestedReviewer"].flatMap { $0["login"]?.string ?? $0["slug"]?.string } }
-    }
+    let reviewRequests = node["reviewRequests"].map(requestedReviewers)
     let repo = node["repository"]?["nameWithOwner"]?.string ?? ""
     // A decision that ReviewDecision doesn't know stays unread, so it never
     // reads as "no review required".
@@ -368,6 +366,11 @@ extension GitHub {
 
   /// Whether the author is a GitHub App.
   static func isBot(_ author: JSON?) -> Bool { author?["__typename"]?.string == "Bot" }
+
+  /// The logins and team slugs of a `reviewRequests` connection.
+  static func requestedReviewers(_ connection: JSON) -> [String] {
+    nodes(connection).compactMap { $0["requestedReviewer"].flatMap { $0["login"]?.string ?? $0["slug"]?.string } }
+  }
 
   static func nodes(_ connection: JSON?) -> [JSON] {
     (connection?["nodes"]?.array ?? []).filter { $0 != .null }

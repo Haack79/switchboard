@@ -1,13 +1,43 @@
 import AppKit
+import Combine
 import Foundation
 import SwitchboardCore
 import UserNotifications
 
 /// The views that the detail pane shows while no session is selected.
-enum MainView {
+enum MainView: CaseIterable {
   case inbox
   case board
   case issues
+  case loops
+
+  var title: String {
+    switch self {
+    case .inbox: "Inbox"
+    case .board: "Board"
+    case .issues: "Issues"
+    case .loops: "Loops"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .inbox: "tray"
+    case .board: "square.grid.3x3"
+    case .issues: "smallcircle.filled.circle"
+    case .loops: "clock.arrow.circlepath"
+    }
+  }
+
+  /// The key that, with ⌘, shows the view from the Session menu.
+  var shortcutKey: Character {
+    switch self {
+    case .inbox: "1"
+    case .board: "2"
+    case .issues: "3"
+    case .loops: "4"
+    }
+  }
 }
 
 /// The app's view of sbd. It polls `ls` once a second, because sbd keeps
@@ -102,9 +132,22 @@ final class BoardModel: ObservableObject {
   var showingDoneRemoval: Bool { doneRemoval != nil }
   /// The quick-ask panel's state, or nil while it is closed.
   @Published var quickAsk: QuickAskState?
+  /// The New Loop… or Edit… sheet's opening, or nil while it is closed. A save closes it once sbd accepts the loop.
+  @Published var loopEditor: LoopEditorRequest? {
+    didSet {
+      loopEditorOpening += 1
+      loopEditorError = nil
+    }
+  }
+  /// sbd's refusal of the open loop editor's last save.
+  @Published var loopEditorError: String?
+  /// Changes on every open and close of the loop editor, so a late save answer can tell a reopened editor from its own.
+  private(set) var loopEditorOpening = 0
+  /// A loop editor's save is on its way to sbd, so a second Save would add a second loop.
+  @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil
+      || pickingSnoozeTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -146,21 +189,23 @@ final class BoardModel: ObservableObject {
   @Published var showingRecentPlaces = false
   var navigating = false
   /// The last reply of the sessions the Inbox showed, read from their
-  /// transcripts, by session id.
-  @Published var replies: [String: String] = [:]
+  /// transcripts, by session id. `hook` is the `lastReply` that the read was for.
+  @Published var replies: [String: (hook: String?, text: String)] = [:]
   /// The newest events of the sessions whose card details the Inbox showed,
   /// oldest first, by session id.
   @Published var recentEvents: [String: [Event]] = [:]
   /// The transcript steps that lead up to each session's Inbox item, by session id.
   @Published var itemContexts: [String: ItemContext] = [:]
-  /// Each chat's last messages, by session id, read while its pane shows.
+  /// Each Manager conversation's last messages, by session id, read while its status strip shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
-  /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
-  @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
   @Published var mcpAnswers: [String: ManagerMCPAnswer] = [:]
   /// The commands that each session's claude takes after `/`, by session id, read when a message field's list opens.
   @Published var slashCommands: [String: [SlashCommand]] = [:]
+  /// The work-skill command that each Manager conversation's or the operator's pane holds back, by session id.
+  @Published var workSkillOffers: [String: WorkSkillOffer] = [:]
+  /// The watch on each offer's draft, which closes the offer when the user edits the draft.
+  var workSkillOfferWatches: [String: AnyCancellable] = [:]
   /// Options whose click is on its way to sbd, as "<session>/<number>".
   @Published var choosing: Set<String> = []
   /// Cards whose answer is on its way to sbd. Their views stay disabled
@@ -205,6 +250,11 @@ final class BoardModel: ObservableObject {
   @Published var deciding: Set<String> = []
   /// sbd's refusal of the last decision request, by session. The card shows it.
   @Published var decisionErrors: [String: String] = [:]
+  /// sbd's refusal of the last Clear wait, by session. The wait panel shows it.
+  @Published var waitErrors: [String: String] = [:]
+  /// The waits, as `<session>/<wait>`, whose Clear wait sbd has not answered. Their buttons stay disabled, so a
+  /// second click can't send it again.
+  @Published var clearingWaits: Set<String> = []
   /// The reply keys of the drafts whose `draft-post` sbd has not answered.
   @Published var postingDrafts: Set<String> = []
   /// The reply keys of the drafts whose `draft-check` sbd has not answered.
@@ -273,6 +323,16 @@ final class BoardModel: ObservableObject {
   /// entry starts in `KnownRepos.preferredGroup`.
   @Published var issueGroupPicks: [String: String?] = [:]
   @Published var showingIssueSetup = false
+  /// The loop that the user last moved to in the Loops view, by schedule id.
+  @Published var loopFocus: String?
+  /// Counts moves in the Loops view. Each one scrolls to the current loop.
+  @Published var loopJumps = 0
+  /// The Loops view's order. The installed app saves it in its view settings.
+  @Published var loopSort: LoopSort {
+    didSet { if loopSort != oldValue { viewSettingsStore?.set(loopSort.rawValue, forKey: Self.loopSortKey) } }
+  }
+  /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
+  @Published var loopSessionFilter: String?
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -300,6 +360,8 @@ final class BoardModel: ObservableObject {
   lazy var send: @Sendable (String, [String: JSON]) throws -> JSON = { [client = self.client] op, args in
     try client.call(op, args, timeout: 300)
   }
+  /// The undo manager that Edit > Undo reads for the session menu's actions. Tests replace it.
+  var actionUndoManager: () -> UndoManager? = { NSApp.keyWindow?.undoManager ?? NSApp.mainWindow?.undoManager }
   /// Posts the notification that a session needs the user. Tests replace it.
   lazy var notifier: @MainActor (SessionSummary) -> Void = { [weak self] s in self?.notify(s) }
   /// Sends a quick ask to sbd. Tests replace it.
@@ -316,8 +378,8 @@ final class BoardModel: ObservableObject {
   /// Issue reads and Starts, which wait on GitHub, gh, or git. They run here so the session list and other
   /// actions do not wait behind them.
   let issueWork = DispatchQueue(label: "switchboard.issues", attributes: .concurrent)
-  /// Item-context reads, which can take seconds for a long or remote transcript. They run apart from the poll.
-  /// The queue is serial, so two reads for one session answer in the order the user asked for them.
+  /// Item-context and reply reads, which can take seconds for a long or remote transcript. They run apart from the
+  /// poll. The queue is serial, so two reads for one session answer in the order the user asked for them.
   private let contextWork = DispatchQueue(label: "switchboard.context")
   private let worker = DispatchQueue(label: "switchboard.actions")
   /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
@@ -357,6 +419,7 @@ final class BoardModel: ObservableObject {
   static let orgFilterKey = "orgFilter"
   static let groupFilterKey = "groupFilter"
   static let hidesBacklogKey = "issuesHideBacklog"
+  static let loopSortKey = "loopsSort"
   /// Where the org filter, the group filter, and the other saved view settings are saved. It is nil outside the
   /// installed app, so a debug or test run never saves a setting that changes a later run.
   private let viewSettingsStore: UserDefaults?
@@ -376,6 +439,7 @@ final class BoardModel: ObservableObject {
       org: viewSettingsStore?.stringArray(forKey: Self.orgFilterKey).map { OrgFilter(keys: $0) } ?? orgFilter,
       group: viewSettingsStore?.stringArray(forKey: Self.groupFilterKey).map { GroupFilter(keys: $0) } ?? groupFilter)
     hidesBacklog = viewSettingsStore?.bool(forKey: Self.hidesBacklogKey) ?? false
+    loopSort = viewSettingsStore?.string(forKey: Self.loopSortKey).flatMap(LoopSort.init) ?? .status
     makeHoverCards()
   }
 
@@ -579,6 +643,16 @@ final class BoardModel: ObservableObject {
   }
 
   var triage: [SessionSummary] { Triage.order(sessions) }
+
+  /// The count that the view picker shows next to `view`'s title.
+  func viewCount(_ view: MainView, now: Int64) -> Int {
+    switch view {
+    case .inbox: triage.count
+    case .board: 0
+    case .issues: issueCount
+    case .loops: loopAttentionCount(now: now)
+    }
+  }
 
   /// The repo label of each session in the sidebar. The Inbox uses the same
   /// labels. A session therefore shows the same repo in both lists.
@@ -791,6 +865,19 @@ final class BoardModel: ObservableObject {
     }
   }
 
+  /// Registers `handler` as the undo of an action named `name` on `actionUndoManager`. An answer from sbd arrives
+  /// outside any event, so no undo group is open then. This opens one, because an undo manager that doesn't group
+  /// by event refuses a registration outside a group. An undo or a redo has its own group open. The undo manager
+  /// holds the model weakly.
+  func registerUndo(named name: String, _ handler: @escaping @MainActor (BoardModel) -> Void) {
+    guard let undo = actionUndoManager() else { return }
+    let opens = undo.groupingLevel == 0
+    if opens { undo.beginUndoGrouping() }
+    undo.registerUndo(withTarget: self) { model in MainActor.assumeIsolated { handler(model) } }
+    undo.setActionName(name)
+    if opens { undo.endUndoGrouping() }
+  }
+
   /// The account that new sessions without a parent use.
   var activeAccount: AccountInfo? { accounts.first(where: \.active) }
 
@@ -948,6 +1035,7 @@ final class BoardModel: ObservableObject {
     }
     guard clean != groups[index].description else { return true }
     groups[index].description = clean
+    groups[index].descriptionBy = nil
     if let clean {
       perform("group-describe", ["group": .string(id), "text": .string(clean)])
     } else {
@@ -1101,43 +1189,17 @@ final class BoardModel: ObservableObject {
   /// `sent` runs only when sbd accepted the message. A second send to the
   /// same session does nothing until sbd answers the first. Each image is a
   /// file name and the image's bytes. `ref` names the Inbox item that the
-  /// message answers. A message to a chat shows in the chat at once as a
-  /// pending message, which carries sbd's refusal in place of `actionError`.
+  /// message answers. `runHere` lets a work skill's command past a Manager's gate once.
   func send(
     _ id: String, _ text: String, images: [(name: String, data: Data)] = [], ref: String? = nil,
-    sent: (() -> Void)? = nil
+    runHere: Bool = false, sent: (() -> Void)? = nil
   ) {
     guard sending.insert(id).inserted else { return }
     var args: [String: JSON] = ["session": .string(id), "text": .string(text)]
     if let ref { args["ref"] = .string(ref) }
+    if runHere { args["runHere"] = true }
     if !images.isEmpty { args["images"] = .array(images.map { Attachments.json(name: $0.name, data: $0.data) }) }
-    let pending =
-      summary(id)?.kind.showsAsChat == true ? PendingChatMessage(text: text, after: chatLogs[id]?.last) : nil
-    if let pending {
-      pendingChat[id, default: []].removeAll(where: \.failed)
-      pendingChat[id, default: []].append(pending)
-    }
-    perform(
-      "send", args,
-      then: { result in
-        if let pending {
-          // `perform` clears `actionError` only for a request without a `failed` handler.
-          self.actionError = nil
-          self.setPending(pending.id, in: id, .accepted(result["delivery"]?.string.flatMap(Delivery.init(rawValue:))))
-        }
-        sent?()
-      },
-      failed: pending.map { pending in { self.setPending(pending.id, in: id, .failed("\($0)")) } },
-      finally: { self.sending.remove(id) })
-  }
-
-  private func setPending(_ message: UUID, in session: String, _ status: PendingChatMessage.Status) {
-    guard let i = pendingChat[session]?.firstIndex(where: { $0.id == message }) else { return }
-    pendingChat[session]?[i].status = status
-  }
-
-  func dismissPending(_ message: UUID, in session: String) {
-    pendingChat[session]?.removeAll { $0.id == message }
+    perform("send", args, then: { _ in sent?() }, finally: { self.sending.remove(id) })
   }
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
@@ -1481,11 +1543,12 @@ final class BoardModel: ObservableObject {
     }
   }
 
-  /// Reads the session's events of `kind` among the newest that sbd returns by default, off the main thread.
+  /// Reads the session's newest events of `kind`, with their whole payloads, off the main thread.
   func events(_ session: String, kind: String) async -> [Event] {
     let client = client
     return await Task.detached {
-      ((try? client.call("events", ["session": .string(session)], as: [Event].self)) ?? []).filter { $0.kind == kind }
+      (try? client.call(
+        "events", ["session": .string(session), "kinds": [.string(kind)], "full": true], as: [Event].self)) ?? []
     }.value
   }
 
@@ -1496,27 +1559,23 @@ final class BoardModel: ObservableObject {
       let messages = try? JSONCoding.convert(
         send("chat-log", ["session": .string(session)]), to: [ChatMessage].self)
       Task { @MainActor in
-        // A failed first read shows an empty log, so the pane stops showing that it is loading.
-        if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
+        if let messages, self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
-        }
-        if let messages, let pending = self.pendingChat[session] {
-          let left = PendingChatMessage.notInLog(pending, log: messages)
-          if left != pending { self.pendingChat[session] = left }
         }
       }
     }
   }
 
   /// Reads the commands that the session's claude takes after `/`. A failed read keeps the stored rows, which the
-  /// message field shows while sbd answers.
-  func loadSlashCommands(_ session: String) {
+  /// message field shows while sbd answers. `then` gets the rows that sbd answered, or nil when the read failed.
+  func loadSlashCommands(_ session: String, then: (([SlashCommand]?) -> Void)? = nil) {
     let send = send
     poller.async {
       let commands = try? JSONCoding.convert(
         send("slash-commands", ["session": .string(session)])["commands"], to: [SlashCommand].self)
       Task { @MainActor in
         if let commands, self.slashCommands[session] != commands { self.slashCommands[session] = commands }
+        then?(commands)
       }
     }
   }
@@ -1558,16 +1617,43 @@ final class BoardModel: ObservableObject {
   }
 
   /// Reads the session's last reply from its transcript, which can be large,
-  /// so off the main thread.
-  func loadReply(_ session: String) {
-    let client = client
-    poller.async {
-      let text = try? client.call("reply", ["session": .string(session)])["reply"]?.string
+  /// so off the main thread. The text belongs to the session's `lastReply` at the time of the call.
+  func loadReply(_ session: SessionSummary) {
+    let send = send
+    let (id, hook) = (session.id, session.lastReply)
+    contextWork.async {
+      let text = try? send("reply", ["session": .string(id)])["reply"]?.string
       Task { @MainActor in
-        if let text, self.replies[session] != text { self.replies[session] = text }
+        guard let text, self.replies[id].map({ $0.hook != hook || $0.text != text }) ?? true else { return }
+        self.replies[id] = (hook, text)
       }
     }
   }
+
+  /// The session's last reply: the transcript's text when it was read for the current `lastReply`, and
+  /// `lastReply` otherwise.
+  func reply(for session: SessionSummary) -> String? {
+    guard let read = replies[session.id], read.hook == session.lastReply else { return session.lastReply }
+    return read.text
+  }
+
+  /// Asks sbd to drop one wait of the session. A refusal shows in the wait panel, not in the error banner.
+  func clearWait(_ session: String, wait: String) {
+    let key = Self.clearingWaitKey(session, wait)
+    guard clearingWaits.insert(key).inserted else { return }
+    perform(
+      "clear-wait", ["session": .string(session), "wait": .string(wait)],
+      then: { _ in self.waitErrors[session] = nil },
+      failed: { self.waitErrors[session] = "\($0)" },
+      finally: { self.clearingWaits.remove(key) })
+  }
+
+  /// Whether sbd has not yet answered the Clear wait of this wait.
+  func isClearingWait(_ session: String, _ wait: String) -> Bool {
+    clearingWaits.contains(Self.clearingWaitKey(session, wait))
+  }
+
+  private static func clearingWaitKey(_ session: String, _ wait: String) -> String { "\(session)/\(wait)" }
 
   /// Reads the blocks of the session's recent assistant messages for the copy buttons in its Claude terminal.
   /// A failed read gives no blocks, so a quote's button copies the screen's text.
@@ -1759,12 +1845,14 @@ final class BoardModel: ObservableObject {
   }
 
   /// Puts the session's repository first in `knownRepos` at once. A New Session sheet opened before `new`
-  /// returns preselects it, because the sheet's `repos` request waits behind `new` on `worker`.
-  func create(_ args: NewSession) {
+  /// returns preselects it, because the sheet's `repos` request waits behind `new` on `worker`. Once sbd creates
+  /// the session, it empties the draft of `clearingDraft`'s session unless the user changed it from that text.
+  func create(_ args: NewSession, clearingDraft: (session: String, text: String)? = nil) {
     guard let json = try? JSON(encoding: args).object else { return }
     if let repo = knownRepos?.first(where: { $0.path == args.path }) { moveToFront(repo) }
     perform("new", json) { value in
       if let id = value["id"]?.string { self.selectUnlisted(id) }
+      if let clearingDraft { self.clearDraft(of: clearingDraft.session, ifStill: clearingDraft.text) }
     }
   }
 

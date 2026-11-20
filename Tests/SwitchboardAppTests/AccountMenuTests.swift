@@ -12,8 +12,9 @@ import os
     UsageLimit(kind: "weekly_scoped", label: "Week (Fable)", percent: 63.6),
   ]
 
-  func row(_ reading: AccountUsage?, active: Bool = true) -> AccountRow {
-    AccountRow(account: AccountInfo(name: "automation", folder: "/a", active: active, sessions: 11), usage: reading)
+  func row(_ reading: AccountUsage?, active: Bool = true, sessions: Int = 11) -> AccountRow {
+    AccountRow(
+      account: AccountInfo(name: "automation", folder: "/a", active: active, sessions: sessions), usage: reading)
   }
 
   @Test func theLabelNamesTheAccountWithItsSessionAndHighestWeeklyPercent() {
@@ -64,8 +65,16 @@ import os
     #expect(AccountMenu.limitRow(limits[1], now: 0) == "Week (all models): 21%")
   }
 
-  @Test func theTitleCountsTheAccountsSessions() {
-    #expect(row(nil).title == "automation (11)")
+  @Test func theSessionCountNamesTheAccountsSessions() {
+    #expect(row(nil).sessionCount == "11 sessions")
+  }
+
+  @Test func theSessionCountIsSingularForOneSession() {
+    #expect(row(nil, sessions: 1).sessionCount == "1 session")
+  }
+
+  @Test func theSessionCountIsNilForAnAccountWithoutSessions() {
+    #expect(row(nil, sessions: 0).sessionCount == nil)
   }
 }
 

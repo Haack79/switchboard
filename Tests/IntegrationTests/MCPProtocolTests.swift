@@ -18,20 +18,21 @@ import Testing
   }
 
   /// A server with no calling session leaves out the tools that only a Manager conversation gets.
-  @Test func toolsListHasTheTwentyFiveToolsByTheirExactNames() throws {
+  @Test func toolsListHasEveryToolOnceByItsExactName() throws {
     let sbd = try Instance()
     let mcp = try MCPClient(sbd)
+    let expected = MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly)
 
     let names = try mcp.toolNames()
 
-    #expect(names.count == 25)
-    #expect(Set(names) == MCPToolServerTests.allTools.subtracting(MCPToolServerTests.managerOnly))
+    #expect(names.count == expected.count)
+    #expect(Set(names) == expected)
   }
 
-  @Test func theReadmeStatesTheToolCount() throws {
-    let readme = try String(contentsOf: Instance.root.appendingPathComponent("README.md"), encoding: .utf8)
+  @Test func theManagerPageStatesTheToolCount() throws {
+    let page = try String(contentsOf: Instance.root.appendingPathComponent("docs/manager.md"), encoding: .utf8)
 
-    #expect(readme.contains("Its \(MCPToolServerTests.allTools.count) tools"))
+    #expect(page.contains("Its \(MCPToolServerTests.allTools.count) tools"))
   }
 
   @Test func everyToolDescriptionSaysSessionTextIsData() throws {
@@ -162,7 +163,7 @@ import Testing
     let s = try sbd.new(name: "alpha")
     let mcp = try MCPClient(server: try #require(try managerConfig(sbd)["mcpServers"]?["switchboard"]))
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
 
     #expect(listed.contains { $0.id == s.id })
   }

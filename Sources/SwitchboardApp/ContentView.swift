@@ -69,6 +69,10 @@ struct ContentView: View {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
   }
 
+  private var isEditingLoop: Binding<Bool> {
+    Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
+  }
+
   private var isShowingQuickAsk: Binding<Bool> {
     Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
   }
@@ -95,8 +99,6 @@ struct ContentView: View {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
-        } else if let s = model.selected, s.kind.showsAsChat {
-          ChatView(session: s).id(s.id)
         } else if let s = model.selected {
           SessionView(session: s).id(s.id)
         } else {
@@ -104,6 +106,7 @@ struct ContentView: View {
           case .inbox: InboxView()
           case .board: BoardView()
           case .issues: IssuesView()
+          case .loops: LoopsView()
           }
         }
       }
@@ -144,6 +147,15 @@ struct ContentView: View {
     }
     .sheet(isPresented: isPickingSnoozeTime) {
       if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+    }
+    .sheet(isPresented: isEditingLoop) {
+      if let request = model.loopEditor {
+        LoopEditor(
+          request: request, schedule: model.editedSchedule(request),
+          choices: LoopEditor.sessionChoices(model.sessions, operatorID: model.operatorSession?.id)
+        )
+        .environmentObject(model)
+      }
     }
     .inlineLinks(model)
   }
@@ -1031,6 +1043,12 @@ extension SessionSummary {
 
   /// Needs you is not a column, so its card keeps its column and gets an orange edge.
   var hasNeedsYouEdge: Bool { state == .needsYou }
+
+  /// A paused card draws its text at this opacity, so it reads as greyed out.
+  var boardCardOpacity: Double { pause == nil ? 1 : 0.45 }
+
+  /// The color of the card's fill and edge. A paused card uses gray in place of its state's color.
+  var boardCardTint: Color { pause == nil ? state.color : .gray }
 }
 
 extension BoardHolder {
@@ -1143,13 +1161,14 @@ struct BoardCard: View {
               .font(.caption2).foregroundStyle(.tertiary)
           }
         }
+        .opacity(s.boardCardOpacity)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(
           RoundedRectangle(cornerRadius: 8)
             .fill(
               !selected
-                ? s.state.color.opacity(0.08)
+                ? s.boardCardTint.opacity(0.08)
                 : Color(
                   nsColor: emphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor)
             )
@@ -1158,7 +1177,7 @@ struct BoardCard: View {
         .overlay {
           RoundedRectangle(cornerRadius: 8)
             .stroke(
-              s.hasNeedsYouEdge ? AttentionState.needsYou.color : s.state.color.opacity(0.3),
+              s.hasNeedsYouEdge ? AttentionState.needsYou.color : s.boardCardTint.opacity(0.3),
               lineWidth: s.hasNeedsYouEdge ? 2 : 1)
         }
         .overlay {
@@ -1186,6 +1205,7 @@ struct BoardCard: View {
               .foregroundStyle(pr.status.color)
               .help(pr.tooltip)
               .accessibilityValue(pr.status.rawValue)
+              .opacity(s.boardCardOpacity)
               .frame(width: rect.width, height: rect.height)
               .offset(x: rect.minX, y: rect.minY)
           }

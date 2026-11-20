@@ -330,39 +330,47 @@ func request(_ kind: Wait.Kind, adding field: WaitField) -> WaitRequest {
 @Suite struct WaitResolution {
   @Test(arguments: [(Wait.Kind.date, "the time came"), (.manual, "time to recheck")], [Int64(1000), 5000])
   func timedWaitResolvesOnceItsTimeComes(_ kind: (Wait.Kind, String), _ now: Int64) {
-    #expect(waitOn(kind.0, until: 1000).resolution(now: now, stateOf: { _ in nil }) == kind.1)
+    #expect(waitOn(kind.0, until: 1000).settlement(now: now, stateOf: { _ in nil })?.outcome == kind.1)
   }
 
   @Test(arguments: [Wait.Kind.date, .manual])
   func timedWaitStaysOpenBeforeItsTime(_ kind: Wait.Kind) {
-    #expect(waitOn(kind, until: 1000).resolution(now: 999, stateOf: { _ in nil }) == nil)
+    #expect(waitOn(kind, until: 1000).settlement(now: 999, stateOf: { _ in nil })?.outcome == nil)
+  }
+
+  /// A due date or manual wait is met, so an action on it runs.
+  @Test(arguments: [Wait.Kind.date, .manual])
+  func aDueTimedWaitIsMet(_ kind: Wait.Kind) throws {
+    let settlement = try #require(waitOn(kind, until: 1000).settlement(now: 1000, stateOf: { _ in nil }))
+
+    #expect(settlement.met)
   }
 
   @Test func manualWaitWithoutARecheckTimeStaysOpen() {
-    #expect(waitOn(.manual, note: "ask Alex").resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(waitOn(.manual, note: "ask Alex").settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 
   @Test(arguments: AttentionState.allCases)
   func sessionWaitResolvesWhenTheOtherSessionReachesItsState(_ state: AttentionState) {
     let wait = waitOn(.session, session: flagCache, state: state)
-    #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? state : nil }) == "it did")
+    #expect(wait.settlement(now: 1, stateOf: { $0 == "k3x9p" ? state : nil })?.outcome == "it did")
   }
 
   @Test(arguments: AttentionState.allCases.filter { $0 != .done && $0 != .stale })
   func sessionWaitStaysOpenInAnotherState(_ other: AttentionState) {
     let wait = waitOn(.session, session: flagCache, state: .done)
-    #expect(wait.resolution(now: 1, stateOf: { $0 == "k3x9p" ? other : nil }) == nil)
+    #expect(wait.settlement(now: 1, stateOf: { $0 == "k3x9p" ? other : nil })?.outcome == nil)
   }
 
   @Test func sessionWaitResolvesWhenTheOtherSessionIsGone() {
     let wait = waitOn(.session, session: flagCache, state: .done)
-    #expect(wait.resolution(now: 1, stateOf: { _ in nil }) == "it was removed")
+    #expect(wait.settlement(now: 1, stateOf: { _ in nil })?.outcome == "it was removed")
   }
 
   @Test(arguments: prKinds)
   func pollerKindNeverResolvesInSbd(_ kind: Wait.Kind) {
     let wait = waitOn(kind, pr: pr1204, session: flagCache, state: .done, until: 0)
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 }
 
@@ -875,8 +883,8 @@ extension WaitResolution {
     let wait = RecheckSettings().stamped(waitOn(.manual, note: "ask Alex"))
     let due = wait.created + Attention.dayMs
 
-    #expect(wait.resolution(now: due - 1, stateOf: { _ in nil }) == nil)
-    #expect(wait.resolution(now: due, stateOf: { _ in nil }) == "time to recheck")
+    #expect(wait.settlement(now: due - 1, stateOf: { _ in nil })?.outcome == nil)
+    #expect(wait.settlement(now: due, stateOf: { _ in nil })?.outcome == "time to recheck")
   }
 
   /// The wait stays open past its recheck time, and the session goes to Needs you instead.
@@ -884,13 +892,13 @@ extension WaitResolution {
   func pollerKindStaysOpenPastItsRecheck(_ kind: Wait.Kind) {
     let wait = stamped(waitOn(kind, pr: pr1204), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in .done }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in .done })?.outcome == nil)
   }
 
   @Test func sessionWaitStaysOpenPastItsRecheckWhileTheTargetWorks() {
     let wait = stamped(waitOn(.session, session: flagCache, state: .done), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { $0 == "k3x9p" ? .working : nil }) == nil)
+    #expect(wait.settlement(now: farFuture, stateOf: { $0 == "k3x9p" ? .working : nil })?.outcome == nil)
   }
 }
 
@@ -898,7 +906,7 @@ extension WaitResolution {
 @Suite struct SessionWaitTargets {
   func resolution(wanting state: AttentionState, target: AttentionState?, now: Int64 = 1) -> String? {
     waitOn(.session, session: flagCache, state: state)
-      .resolution(now: now, stateOf: { $0 == flagCache.id ? target : nil })
+      .settlement(now: now, stateOf: { $0 == flagCache.id ? target : nil })?.outcome
   }
 
   @Test(arguments: AttentionState.allCases.filter { $0 != .done })
@@ -921,7 +929,7 @@ extension WaitResolution {
   func realOutcomeWinsPastTheRecheck(_ state: AttentionState) {
     let wait = stamped(waitOn(.session, session: flagCache, state: state), after: 5000)
 
-    #expect(wait.resolution(now: farFuture, stateOf: { _ in state }) == "it did")
+    #expect(wait.settlement(now: farFuture, stateOf: { _ in state })?.outcome == "it did")
   }
 
   @Test func targetRemovedEndsTheWait() {
@@ -939,7 +947,41 @@ extension WaitResolution {
   @Test func onlyTheTargetsOwnStateCounts() {
     let wait = waitOn(.session, session: flagCache, state: .readyForReview)
 
-    #expect(wait.resolution(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done }) == nil)
+    #expect(wait.settlement(now: 1, stateOf: { $0 == flagCache.id ? .waiting : .done })?.outcome == nil)
+  }
+}
+
+/// A target's state when sbd checks a `session` wait, and how the wait settles.
+struct SessionMetCase: CustomTestStringConvertible, Sendable {
+  var wanted: AttentionState
+  var target: AttentionState?
+  var outcome: String
+  var met: Bool
+
+  var testDescription: String { "wanting \(wanted.rawValue), target \(target?.rawValue ?? "removed"): \(outcome)" }
+}
+
+extension SessionWaitTargets {
+  /// Every outcome that `settlement(now:stateOf:)` gives a `session` wait. An
+  /// action runs only on an outcome that met the wait's condition.
+  static let metCases: [SessionMetCase] =
+    AttentionState.allCases.map { SessionMetCase(wanted: $0, target: $0, outcome: "it did", met: true) } + [
+      SessionMetCase(wanted: .readyToMerge, target: .done, outcome: "it reached Done first", met: false),
+      SessionMetCase(wanted: .readyForReview, target: .done, outcome: "it reached Done first", met: false),
+      SessionMetCase(wanted: .readyToMerge, target: .stale, outcome: "it went stale", met: false),
+      SessionMetCase(wanted: .done, target: .stale, outcome: "it went stale", met: false),
+      SessionMetCase(wanted: .readyToMerge, target: nil, outcome: "it was removed", met: false),
+      SessionMetCase(wanted: .done, target: nil, outcome: "it was removed", met: false),
+    ]
+
+  @Test(arguments: SessionWaitTargets.metCases)
+  func aSessionSettlementIsMetOnlyWhenTheTargetReachedTheState(_ c: SessionMetCase) throws {
+    let wait = waitOn(.session, session: flagCache, state: c.wanted)
+
+    let settlement = try #require(wait.settlement(now: 1, stateOf: { $0 == flagCache.id ? c.target : nil }))
+
+    #expect(settlement.outcome == c.outcome)
+    #expect(settlement.met == c.met)
   }
 }
 
@@ -956,7 +998,7 @@ extension WaitResolution {
   @Test func overdueWaitNeedsYouAndNamesTheWait() {
     let v = Attention.evaluate(withWaits([review]), idle, now: Attention.dayMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "a review from alex on #1204: still open after 1 d"))
+    #expect(v == Verdict(state: .needsYou, reason: "a review from alex on #1204: still open after 1d"))
   }
 
   @Test func overdueWaitIsAnInfoItem() {
@@ -972,18 +1014,18 @@ extension WaitResolution {
   @Test func oneOverdueWaitAndOneOpenWaitNameOnlyTheOverdueOne() {
     let v = Attention.evaluate(withWaits([merge, ci]), idle, now: 2 * hourMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h"))
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h"))
   }
 
   @Test func twoOverdueWaitsAreJoinedInTheirOrder() {
     let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2 h; #2 to merge: still open after 1 d"))
+    #expect(v == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h; #2 to merge: still open after 1d"))
   }
 
   @Test(arguments: [
-    (59 * minuteMs, "59 min"), (60 * minuteMs, "1 h"), (90 * minuteMs, "1 h"), (2 * hourMs, "2 h"),
-    (24 * hourMs, "1 d"), (25 * hourMs, "1 d"), (3 * Attention.dayMs, "3 d"),
+    (59 * minuteMs, "59m"), (60 * minuteMs, "1h"), (90 * minuteMs, "1h"), (2 * hourMs, "2h"),
+    (24 * hourMs, "1d"), (25 * hourMs, "1d"), (3 * Attention.dayMs, "3d"),
   ])
   func ageIsTheLargestWholeUnit(_ ms: Int64, _ age: String) {
     let wait = stamped(waitOn(.ci, pr: pr1), after: ms)
@@ -1042,7 +1084,143 @@ extension WaitResolution {
 
     let v = Attention.evaluate(withWaits([deploy]), f, now: 4 * hourMs)
 
-    #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4 h"))
+    #expect(v == Verdict(state: .needsYou, reason: "#1204 to reach prod: still open after 4h"))
+  }
+}
+
+/// The wait with this id.
+private func withId(_ wait: Wait, _ id: String) -> Wait {
+  var w = wait
+  w.id = id
+  return w
+}
+
+/// `Wait.age` prints the largest whole unit with no space, and at least one minute.
+@Suite struct WaitAge {
+  @Test(arguments: [
+    (Int64(86_400_000), "1d"), (7_200_000, "2h"), (30_000, "1m"), (0, "1m"), (59_999, "1m"), (60_000, "1m"),
+    (45 * minuteMs, "45m"), (25 * hourMs, "1d"), (3 * Attention.dayMs, "3d"),
+  ])
+  func ageIsCompactAndAtLeastAMinute(_ ms: Int64, _ age: String) {
+    #expect(Wait.age(ms) == age)
+  }
+}
+
+/// The overdue verdict names the waits that raised it by id, so the item can show them.
+@Suite struct OverdueWaitIds {
+  let idle = facts([
+    event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+  ])
+  let ci = withId(stamped(waitOn(.ci, pr: pr1), after: 2 * hourMs), "a")
+  let merge = withId(stamped(waitOn(.merge, pr: pr2), after: Attention.dayMs), "b")
+
+  @Test func twoOverdueWaitsGiveTheirIdsInTheirOrder() {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits == ["a", "b"])
+  }
+
+  @Test func theIdsFollowTheWaitsOrderNotTheirRecheckTimes() {
+    let v = Attention.evaluate(withWaits([merge, ci]), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits == ["b", "a"])
+  }
+
+  @Test func anOpenWaitThatIsNotOverdueIsLeftOut() {
+    let v = Attention.evaluate(withWaits([merge, ci]), idle, now: 2 * hourMs)
+
+    #expect(v.overdueWaits == ["a"])
+  }
+
+  @Test func theWaitingVerdictNamesNoOverdueWaits() throws {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: 2 * hourMs - 1)
+    try #require(v.state == .waiting)
+
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  /// A `notify` outcome has no wait left, so its item gets no wait panel.
+  @Test func aNotifyOutcomeNamesNoOverdueWaits() throws {
+    let notified = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+      try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2),
+    ])
+
+    let v = Attention.evaluate(withWaits([ci]), notified, now: Attention.dayMs)
+
+    #expect(v.reason == "CI on #1204: the checks passed")
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  @Test func aRuleThatIsNotAWaitNamesNoOverdueWaits() {
+    let v = Attention.evaluate(withWaits(nil), idle, now: Attention.dayMs)
+
+    #expect(v.overdueWaits.isEmpty)
+  }
+
+  @Test func verdictEqualityIgnoresTheOverdueWaits() {
+    var named = Verdict(state: .needsYou, reason: "CI on #1: still open after 2h")
+    named.overdueWaits = ["a"]
+
+    #expect(named == Verdict(state: .needsYou, reason: "CI on #1: still open after 2h"))
+  }
+
+  @Test func theRuleItemCarriesTheOverdueWaits() throws {
+    let v = Attention.evaluate(withWaits([ci, merge]), idle, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(idle, v, kind: .work))
+
+    #expect(item.source == .rule)
+    #expect(item.details.overdueWaits == ["a", "b"])
+  }
+
+  /// `addRule` puts the overdue wait under the session's own card.
+  @Test func theSessionsCardCarriesTheOverdueWaitsThatItsRuleAdds() throws {
+    let carded = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), try summaryEvent(2, 1, sessionCard),
+      stop(3, 2, "Want me to push?"),
+    ])
+    let v = Attention.evaluate(withWaits([ci]), carded, now: 2 * hourMs)
+
+    let item = try #require(Triage.item(carded, v, kind: .work))
+
+    #expect(item.source == .session)
+    #expect(item.details.overdueWaits == ["a"])
+  }
+
+  @Test func theOutcomeItemCarriesNoOverdueWaits() throws {
+    let notified = facts([
+      event("UserPromptSubmit", 0, ["prompt": "go"]), event("Stop", 1, ["last_assistant_message": "Want me to push?"]),
+      try resolved(waitOn(.ci, pr: pr1204, then: .notify), "the checks passed", 2),
+    ])
+    let v = Attention.evaluate(withWaits([ci]), notified, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(notified, v, kind: .work))
+
+    #expect(item.details.overdueWaits.isEmpty)
+  }
+
+  /// The operator's wait item comes from `operatorItem`, which builds it with `ruleItem`.
+  @Test func theOperatorsWaitItemCarriesTheOverdueWaits() throws {
+    let s = operatorSession(waits: [ci])
+    let v = Attention.evaluate(s, idle, now: 2 * hourMs)
+    try #require(v.byWaitRule, "\(v.state) \(v.reason)")
+
+    let item = try #require(Triage.item(idle, v, kind: .operator))
+
+    #expect(item.details.overdueWaits == ["a"])
+  }
+
+  /// The issue's title: 64 characters, which the old 60-character cut ended at "still open aft…".
+  @Test func aTeamReviewWaitsTitleIsWhole() throws {
+    let team = stamped(
+      waitOn(.review, pr: Wait.PullRequest(number: 135173), who: "PostHog/clickhouse"), after: Attention.dayMs)
+    let v = Attention.evaluate(withWaits([team]), idle, now: Attention.dayMs)
+
+    let item = try #require(Triage.item(idle, v, kind: .work))
+
+    #expect(item.title == "A review from PostHog/clickhouse on #135173: still open after 1d")
+    #expect(item.ref.hasPrefix("rule:A review from PostHog/clickhouse on #135173: still open after 1d"))
   }
 }
 
@@ -1277,5 +1455,70 @@ let qualifiedTargets = [
     let decoded = try JSONCoding.convert(JSON.object(json), to: Wait.self)
 
     #expect(decoded.handedFrom == nil)
+  }
+}
+
+// MARK: Whether the wait's reviewer is still requested
+
+/// `pendingReviewer(in:)` reads GitHub's review requests, where a team comes back as its slug alone.
+@Suite struct WaitPendingReviewer {
+  func review(_ who: String?) -> Wait { waitOn(.review, pr: pr1204, who: who) }
+
+  @Test(arguments: [
+    ("alex", ["alex"], true), ("alex", ["sam"], false), ("Alex", ["alex"], true), ("alex", ["sam", "alex"], true),
+    ("copilot[bot]", ["copilot"], true), ("copilot", ["copilot[bot]"], true), ("@alex", ["alex"], true),
+    ("@alex", ["sam"], false),
+  ])
+  func aUserLoginMatchesAsGitHubWritesIt(_ who: String, _ requests: [String], _ requested: Bool) {
+    #expect(review(who).pendingReviewer(in: requests) == requested)
+  }
+
+  @Test(arguments: [
+    ("PostHog/clickhouse", ["clickhouse"]), ("posthog/ClickHouse", ["clickhouse"]),
+    ("PostHog/clickhouse", ["ClickHouse"]), ("@PostHog/clickhouse", ["clickhouse"]),
+    ("PostHog/clickhouse", ["alex", "clickhouse"]),
+  ])
+  func aTeamMatchesItsSlugIgnoringCase(_ who: String, _ requests: [String]) {
+    #expect(review(who).pendingReviewer(in: requests) == true)
+  }
+
+  /// GitHub returns no org with the slug, so a team of another org with the same slug reads as requested.
+  @Test func aTeamOfAnotherOrgWithTheSameSlugReadsAsRequested() {
+    #expect(review("Other-Org/clickhouse").pendingReviewer(in: ["clickhouse"]) == true)
+  }
+
+  @Test(arguments: [["infra"], ["alex", "infra"], ["posthog"]])
+  func aTeamWhoseSlugIsNotRequestedIsNotPending(_ requests: [String]) {
+    #expect(review("PostHog/clickhouse").pendingReviewer(in: requests) == false)
+  }
+
+  @Test(arguments: ["alex", "PostHog/clickhouse"])
+  func anUnreadListCantTell(_ who: String) {
+    #expect(review(who).pendingReviewer(in: nil) == nil)
+  }
+
+  @Test(arguments: ["alex", "PostHog/clickhouse"])
+  func anEmptyListCantTell(_ who: String) {
+    #expect(review(who).pendingReviewer(in: []) == nil)
+  }
+
+  @Test func aWaitWithoutAReviewerCantTell() {
+    #expect(review(nil).pendingReviewer(in: ["alex"]) == nil)
+  }
+
+  @Test(arguments: [("alex", ["alex"], true), ("PostHog/clickhouse", ["clickhouse"], true), ("alex", ["sam"], false)])
+  func anApprovalWaitUsesTheSameMatch(_ who: String, _ requests: [String], _ requested: Bool) {
+    #expect(waitOn(.approval, pr: pr1204, who: who).pendingReviewer(in: requests) == requested)
+  }
+}
+
+/// `reviewerName` gives the name that GitHub's review requests use. The wait panel shows it.
+@Suite struct WaitReviewerName {
+  @Test(arguments: [
+    ("alex", "alex"), ("@alex", "alex"), ("copilot[bot]", "copilot[bot]"), ("PostHog/clickhouse", "clickhouse"),
+    ("@PostHog/clickhouse", "clickhouse"),
+  ])
+  func aReviewerLosesItsAtSignAndItsTeamsOrg(_ who: String, _ name: String) {
+    #expect(Wait.reviewerName(who) == name)
   }
 }

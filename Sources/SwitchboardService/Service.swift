@@ -1,5 +1,6 @@
 import Foundation
 import SwitchboardCore
+import os
 
 /// sbd's state and operations. Every change runs on `queue`, so requests,
 /// hooks, and the stop rule see one consistent state. Work that takes long,
@@ -23,15 +24,20 @@ public final class Service {
   struct Entry {
     var session: Session
     var facts = SessionFacts()
-    /// Messages for a session whose turn runs or whose claude is starting.
-    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one.
+    /// Messages that wait for a paste: for a turn to end, for claude to start, or for a paused session's resume.
+    /// Each end of a turn, each SessionStart, and sbd's start pastes the oldest one. A stopped claude's
+    /// messages wait for its next launch.
     var pending: [QueuedMessage] = []
     /// When the tick first saw a running claude that no SessionStart reported.
     var unreportedSince: Int64?
-    /// When sbd last pasted a message or launched claude with a prompt. Until
+    /// The message that sbd last pasted or launched claude with. Until
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
-    var inFlight: Int64?
+    /// A built-in command such as `/compact` sends no UserPromptSubmit. Its paste clears this once it lands.
+    /// `load` sets it from `SessionFacts.promptOnItsWaySince`, which the log keeps for a launch prompt and a paste.
+    var inFlight: InFlight?
+    /// Whether a message is queued for the session, or sbd pasted or launched one that claude has not confirmed.
+    var hasMessageOnItsWay: Bool { !pending.isEmpty || inFlight != nil }
     /// The text of the last message that a draft in claude's prompt box
     /// held. The log names each held message once.
     var heldText: String?
@@ -39,6 +45,9 @@ public final class Service {
     /// pastes, so a held message keeps one retry timer however many messages
     /// queue behind it.
     var deliveryGeneration = 0
+    /// The fallback name while the call that names the session has not answered. A rename clears it. An answer
+    /// applies only while the session still has this name, so a late answer can't replace a name that someone chose.
+    var pendingName: String?
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
@@ -78,15 +87,8 @@ public final class Service {
     /// queued resume message once that claude exits, even when it exited before its SessionStart. It stays set
     /// until a launch starts claude or the running claude reports SessionStart.
     var resumeLaunch: LaunchTrigger?
-
-    /// Whether a message is queued for the session or on its way. A launch's
-    /// prompt stays on its way until SessionStart, for up to `startingMs`.
-    func messageWaiting(now: Int64) -> Bool {
-      guard pending.isEmpty else { return true }
-      guard let sent = inFlight else { return false }
-      let starting = !facts.startedSinceLaunch && now - (facts.lastLaunch ?? 0) < Service.startingMs
-      return starting || now - sent < Service.inFlightMs
-    }
+    /// The user's "Run here anyway" for a work skill in a manager-kind session.
+    var skillBypass: SkillBypass?
 
     var dialogs = DialogWatch()
   }
@@ -97,10 +99,43 @@ public final class Service {
     /// The message's `sent` event, or nil for a message that sbd restored
     /// from the log. A paste checks that the log still holds it.
     var sent: Event?
+    /// Whether the user sent it with "Run here anyway". A message that sbd restored from the log reads false.
+    var runHere: Bool { sent?.data["runHere"]?.bool == true }
+  }
+
+  /// Whether a message is queued for the session or on its way, so a prompt sent now could land in its turn.
+  /// A launch's prompt stays on its way until SessionStart, for up to `startingMs`. A paste stays on its way
+  /// for `inFlightMs`, even after claude exits, because the paste queue may not have run it yet. The queue of
+  /// a stopped claude in a session that is not paused does not count. A send launches that claude, and the
+  /// launch takes the queued messages in order before the new one. A claude that exits before its
+  /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
+  /// because a send then only adds to the queue that the start delivers.
+  func messageWaiting(_ e: Entry, now: Int64) -> Bool {
+    if let sent = e.inFlight?.since {
+      let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
+      if starting || now - sent < Service.inFlightMs { return true }
+    }
+    guard !e.pending.isEmpty else { return false }
+    return e.queuedSince != nil || Pause.blocker(e.session) != nil || claudeState(e.session.id) != .stopped
   }
 
   /// How long a message counts as in flight without its UserPromptSubmit.
   static let inFlightMs: Int64 = 10_000
+
+  /// A message that sbd pasted or launched claude with, which claude has not confirmed.
+  struct InFlight: Equatable {
+    /// When sbd started the paste or the launch. A paste's callback finds its own message by it.
+    let sent: Int64
+    /// When the message's in-flight window started. SessionStart moves it, because claude reads a launch's prompt
+    /// after SessionStart.
+    var since: Int64
+
+    init(_ t: Int64) {
+      sent = t
+      since = t
+    }
+  }
+
   /// How long a running claude with no SessionStart may run before the tick
   /// counts it as live, because its hook may have failed.
   static let unreportedMs: Int64 = 10_000
@@ -116,11 +151,35 @@ public final class Service {
   var removedNames: [String: String] = [:]
   /// The follow-ups that `followup start` is starting.
   var starting: Set<String> = []
-  /// The sessions whose PR `merge` is merging.
+  /// The sessions whose PR `merge` or a merge action is merging.
   var merging: Set<String> = []
+  /// The merge waits, as `holder wait`, whose CI reader runs on `ciReaderQueue`. Only the state queue reads and
+  /// writes it.
+  var ciReads: Set<String> = []
+  /// Runs wait actions, one at a time, off the state queue.
+  let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// Runs top-ups, one at a time, off the state queue.
+  let topupQueue = DispatchQueue(label: "sbd.topup")
+  /// The schedules whose top-up runs on `topupQueue`. The tick skips them, so they stay due until the top-up ends.
+  var topupsInFlight: Set<String> = []
+  /// The operator settings that `operatorSettings` last read, with config.json's modification date at that read.
+  /// The lock guards it, because the follow-through and top-up queues read the settings too.
+  let operatorSettingsRead = OSAllocatedUnfairLock<(stamp: Date?, settings: OperatorSettings)?>(initialState: nil)
+  /// Runs the CI reader, one read at a time, off the state queue. A judge call there never delays a due merge on
+  /// `followThroughQueue`.
+  let ciReaderQueue = DispatchQueue(label: "sbd.ci-reader")
+  /// The last PR that a merge action merged in each repository, keyed by the lowercased owner/name.
+  /// `loadSbdMerges` rebuilds it at startup.
+  var lastSbdMerges: [String: SbdMergeRecord] = [:]
+  /// The changed files that a merge action read for each PR, keyed by the lowercased owner/name and the number, with
+  /// the head they were read at. Only `followThroughQueue` reads and writes it.
+  var changedFilesRead: [String: (head: String, files: Set<String>)] = [:]
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
+  /// The wait and schedule ids that `manager-end` lets the removal of each conversation drop, as
+  /// `refuseConversationRemoval` reads them.
+  var endingDrops: [String: Set<String>] = [:]
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
   /// The drafts whose reply target a gh read is resolving, or whose unknown
@@ -145,7 +204,9 @@ public final class Service {
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
   /// can become a repo. sbd reads such a folder again after `checkoutRetryMs`.
-  var checkouts: [SitePath: (path: String?, readMs: Int64)] = [:]
+  /// `failed` marks a lookup that couldn't read the folder, such as a folder
+  /// that is gone, which also stores a nil path.
+  var checkouts: [SitePath: (path: String?, readMs: Int64, failed: Bool)] = [:]
   /// The folders whose checkout a lookup off the queue is reading.
   var checkoutLookups: Set<SitePath> = []
   /// The main checkout that names the auto-memory folder of each local session folder in a git repo, or nil
@@ -154,8 +215,9 @@ public final class Service {
   var memoryCheckouts: [String: String?] = [:]
   /// The owner/name that the origin remote of each checkout names on GitHub,
   /// or nil when it names none, with the time of the lookup. sbd reads a
-  /// checkout without one again after `checkoutRetryMs`.
-  var repositories: [SitePath: (repository: String?, readMs: Int64)] = [:]
+  /// checkout without one again after `checkoutRetryMs`. `failed` marks a
+  /// lookup where git couldn't read the checkout, which also stores nil.
+  var repositories: [SitePath: (repository: String?, readMs: Int64, failed: Bool)] = [:]
   /// The checkouts whose origin a lookup off the queue is reading.
   var repositoryLookups: Set<SitePath> = []
   /// Each session's folded skill listing and the transcript it was read
@@ -183,6 +245,39 @@ public final class Service {
     jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
+  /// The skills that each account's Manager conversations and operator can load, by account folder and name.
+  var skillIndex: [String: [String: CatalogEntry]] = [:]
+  /// The classifier's labels, as `Home.skillLabels` holds them.
+  var skillLabels = SkillLabelCache()
+  /// The last failed run of each cache key, by account folder. A refresh retries one only after `skillRetryMs`.
+  var skillFailures: [String: [String: SkillFailure]] = [:]
+  /// The last run of each account whose claude call failed, timed out, or didn't start. Every skill of the account
+  /// would fail the same way. So a run in the next `skillRetryMs` records this failure for its own key and starts
+  /// no claude.
+  var skillAccountFailures: [String: SkillFailure] = [:]
+  /// When sbd last scanned each account's skills.
+  var skillRefreshed: [String: Int64] = [:]
+  /// The cache keys whose run waits on `skillJobs` or runs.
+  var skillQueued: Set<String> = []
+  /// The reason, account folder, and cache key of each `skill_unchecked` event that this run of sbd recorded.
+  var skillUnchecked: Set<String> = []
+  /// Runs the skill classifier, one run at a time, because a first scan can queue dozens.
+  let skillJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.skills"
+    jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the calls that name new sessions, apart from `triageJobs`, so names and turn summaries don't wait on each
+  /// other.
+  let nameJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.session-names"
+    jobs.maxConcurrentOperationCount = 2
+    return jobs
+  }()
+  /// Runs the scans of the accounts' skill folders, one at a time.
+  let skillScanQueue = DispatchQueue(label: "sbd.skill-scan")
   /// Runs the gh reads of draft reply targets.
   let ghJobs: OperationQueue = {
     let jobs = OperationQueue()
@@ -241,6 +336,10 @@ public final class Service {
   var memoryPinOff = false
   /// The most claude processes that may run at once. `sb live --set` changes it.
   var liveCap: Int
+  /// The `operator` settings that the tick last read, with config.json's modification time then.
+  var cachedOperatorSettings: (modified: Date?, settings: OperatorSettings)?
+  /// The model of a Manager conversation without its own. `sb manager model` changes it.
+  var managerModel: String
   /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
   var issueSettings: IssueSettings
   /// The open issues from `issueSettings.sources`, as issues.json holds them.
@@ -294,6 +393,7 @@ public final class Service {
     self.hostCLIRunner = HostCLIRunner(program: sbPath)
     self.keeper = SnapshotKeeper(path: home.database, every: config.snapshotEvery)
     self.liveCap = config.liveCap
+    self.managerModel = config.manager.model
     self.issueSettings = config.issues
     let links = Service.makeHostLinks(config: config, home: home)
     self.hostLinks = links
@@ -304,8 +404,8 @@ public final class Service {
 
   public var tickSeconds: Double { config.tickSeconds }
 
-  /// Loads the sessions and rebuilds their facts and queued messages from the
-  /// event log. It records `delivered` or `delivery_unknown` for each message whose
+  /// Loads the sessions and rebuilds their facts, queued messages, and the prompts that claude has not submitted
+  /// from the event log. It records `delivered` or `delivery_unknown` for each message whose
   /// paste may have reached claude. Its last step queues the pastes of each
   /// running claude's queued messages on the state queue.
   public func load() throws {
@@ -313,6 +413,7 @@ public final class Service {
     autoContinueOn = autoContinueSwitch.isOn
     activityOn = activitySwitch.isOn
     loadIssueCache()
+    skillLabels = SkillLabelCache.load(home.skillLabels)
     try store.pruneSnapshots()
     var uncertain: [String: [String]] = [:]
     for session in try store.sessions() {
@@ -321,6 +422,7 @@ public final class Service {
       var e = Entry(session: session)
       e.facts = replay.facts
       e.pending = replay.pending.map { QueuedMessage(text: $0) }
+      e.inFlight = replay.facts.promptOnItsWaySince.map(InFlight.init)
       e.events = replay.events
       entries[session.id] = e
       if !replay.uncertain.isEmpty { uncertain[session.id] = replay.uncertain }
@@ -357,6 +459,9 @@ public final class Service {
       superviseSites(now: nowMs())
       purgeUnnamedTrash()
       resumeRemovals()
+      loadSbdMerges()
+      resumeActions()
+      refreshManagerSkills()
     }
   }
 
@@ -442,6 +547,8 @@ public final class Service {
       return .success(try slashCommands(request.args))
     case "rm":
       return .success(try remove(request.args, caller: caller))
+    case "manager-end":
+      return .success(try managerEnd(request.args, caller: caller))
     case "cleanup":
       return .success(try cleanup(request.args, caller: caller))
     case "rm-done":
@@ -456,6 +563,35 @@ public final class Service {
       return .success(try reviewRequest(request.args))
     case "draft-post", "draft-check":
       return .success(try draftReplyRequest(request.op, request.args, caller: caller))
+    case "wait-approve":
+      // The check reads the client's panes, so it takes a new snapshot.
+      let fresh = buildSnapshot()
+      return try .success(
+        queue.sync {
+          install(fresh)
+          return try approveWait(request.args, caller: caller)
+        })
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
+      // A top-up's caller check reads the client's panes, so it takes a new snapshot.
+      let checksCaller =
+        (request.op == "schedule" && request.args["gate"] != nil)
+        || (request.op == "edit-schedule" && queue.sync { editsGatedSchedule(request.args) })
+      let fresh = checksCaller ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try scheduleRequest(request.op, request.args, origin: origin, caller: caller)
+        })
+    case "wait", "clear-wait", "resolve-wait":
+      // An action's check reads the client's panes, so it takes a new snapshot.
+      let arms =
+        request.op == "wait" && (try? JSONCoding.convert(request.args, to: WaitRequest.self))?.actionKind != nil
+      let fresh = arms ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try waitRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     // An advance runs a tick before the reply, so the stop rule sees the
     // new time. `tick` takes the state queue itself, so `clock` runs here
     // and not in `dispatch`.
@@ -505,6 +641,9 @@ public final class Service {
     case "quick-ask":
       // A quick ask can run claude for minutes. It runs off the state queue.
       return .success(try quickAsk(request.args, clientGone: hookGone))
+    case "manager-skills":
+      // A relabel scans the folders and the transcript, so it runs off the state queue.
+      return .success(try managerSkills(request.args))
     case "send" where request.args["images"] != nil:
       return try sendWithImages(request, hookGone: hookGone)
     case "account-use", "account-move", "group-account":
@@ -635,6 +774,8 @@ public final class Service {
     case "send":
       let id = try lookup(args)
       guard let text = args["text"]?.string, !text.isEmpty else { throw APIError("send needs text") }
+      let runHere = args["runHere"]?.bool == true
+      if runHere { try refuseRunHere(id, args) }
       // The `sent` event names a session that messages itself as the sender. Its launch trigger stays `send`.
       // A sender that sbd no longer knows goes unrecorded.
       let sender = try? lookup(["session": args["from"] ?? .null])
@@ -645,7 +786,7 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender)
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -681,12 +822,8 @@ public final class Service {
       return try highlightRequest(args)
     case ChatActivity.readEvent:
       return try chatReadRequest(args)
-    case "wait", "clear-wait", "resolve-wait":
-      return try waitRequest(op, args, origin: origin)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule":
-      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":
@@ -703,12 +840,17 @@ public final class Service {
       return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
+    case "manager-hint":
+      return try managerHint(args)
+    case "manager-model":
+      return try managerModelRequest(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseRename(id, to: name)
-      try update(id) { $0.name = name }
+      try renameSession(id, to: name)
       return try JSON(encoding: summary(id, for: origin))
+    case "parent":
+      return try parentRequest(args, origin: origin)
     case "issue":
       let id = try lookup(args)
       let session = entries[id]!.session
@@ -728,14 +870,18 @@ public final class Service {
       if case .remote = origin, session == nil, sessions == nil {
         sessions = entries.values.filter { origin.reaches($0.session.host) }.map(\.session.id)
       }
-      let limit = args["limit"]?.int ?? Event.defaultLimit
+      let limit = args["all"]?.bool == true ? Int.max : args["limit"]?.int ?? Event.defaultLimit
+      let kinds = try args["kinds"].map { value in
+        guard let kinds = value.strings else { throw APIError("kinds needs a list of event kinds") }
+        return kinds
+      }
       // Without `since`, the newest events, so `sb events` shows what just happened.
-      let events =
+      var events =
         try args["since"]?.int.map {
-          try store.events(since: Int64($0), session: session, sessions: sessions, limit: limit)
-        } ?? store.events(session: session, sessions: sessions, limit: limit, newest: true)
-      guard case .remote(let host) = origin else { return try JSON(encoding: events) }
-      return try JSON(encoding: events.map { event($0, shownTo: host) })
+          try store.events(since: Int64($0), session: session, sessions: sessions, kinds: kinds, limit: limit)
+        } ?? store.events(session: session, sessions: sessions, kinds: kinds, limit: limit, newest: true)
+      if case .remote(let host) = origin { events = events.map { event($0, shownTo: host) } }
+      return try JSON(encoding: args["full"]?.bool == true ? events : events.map(\.slimmed))
     case "answer":
       return try answer(args, origin: origin)
     case "screen":
@@ -758,13 +904,16 @@ public final class Service {
       return try activityReport(args)
     case "activity-clear":
       return try activityClear()
+    case "headless-usage":
+      return try headlessUsage(args)
     case "live":
       return try liveRequest(args)
     case "live-next":
       // A session that started after the user asked, such as on a second click, is already where it should be.
       try openSession(try lookup(args))
       return try liveRequest(.object([:]))
-    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-account",
+    case "group-ls", "group-add", "group-rm", "group-move", "group-note", "group-describe", "group-link-add",
+      "group-link-rm", "group-account",
       "group-suggest",
       "send-group",
       "send-pending":
@@ -852,27 +1001,34 @@ public final class Service {
       checkFolderRule(session, payload)
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
-      if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
+      entries[id]?.inFlight?.since = event.t
       // This claude takes the queued resume message, so the tick launches no other claude for the resume.
       entries[id]?.resumeLaunch = nil
       refreshSoon()
-      // A message that arrived while claude was starting waits until claude
-      // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
-      deliverPending(id, after: 1.5)
+      // A message that arrived while claude was starting waits until claude has drawn its prompt.
+      deliverPending(id, after: config.pasteSettleSeconds)
+      if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
         answer = ParentDigest.hookOutput(text, event: kind)
       }
     case "UserPromptSubmit":
       entries[id]?.inFlight = nil
+      if let block = managerSkillPromptGate(id, payload, stamp: stamp) {
+        answer = block
+        break
+      }
       try nameConversation(id, prompt: payload["prompt"]?.string)
       let digestText = digest(id, now: event.t)
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
       // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
+    case "PreToolUse":
+      answer = managerSkillToolGate(id, payload, stamp: stamp) ?? answer
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
+      if session.kind == .manager { recordContext(id) }
     case "Notification" where payload["notification_type"]?.string == "idle_prompt":
       deliverPending(id, after: 0.5)
     default:
@@ -904,12 +1060,14 @@ public final class Service {
     let id = event.session
     if var e = entries[id] {
       e.facts.apply(event)
+      if e.skillBypass == .turn, Service.endsSkillBypass(event) { e.skillBypass = nil }
       let verdict = Attention.track(e.session, &e.facts, now: event.t, stateOf: lastState)
       e.events += 1
       entries[id] = e
       // A reply can decide the state after its turn ended, as when a
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
+      dropStaleFailedRemoval(id, event: event)
     }
     releaseCards(id)
     return event
@@ -1026,10 +1184,20 @@ public final class Service {
     }
     if checkoutLookups.insert(folder).inserted {
       DispatchQueue.global().async { [self] in
-        // The first worktree that git lists is the main checkout.
-        let main = (try? worktreeEntries(folder.path, at: site))?.first.flatMap { try? site.realPath($0.path) }
+        let main: String?
+        let failed: Bool
+        do {
+          // The first worktree that git lists is the main checkout.
+          main = try worktreeEntries(folder.path, at: site).first.flatMap { try? site.realPath($0.path) }
+          failed = main == nil
+        } catch {
+          // git exits 128 for a folder outside any repo, a folder that is gone, a broken gitdir, and a repo of another
+          // owner. Only a folder outside any repo is a read. Only git's message for that folder has this prefix.
+          main = nil
+          failed = !"\(error)".contains("not a git repository (or any")
+        }
         queue.async { [self] in
-          checkouts[folder] = (main, nowMs())
+          checkouts[folder] = (main, nowMs(), failed)
           checkoutLookups.remove(folder)
         }
       }
@@ -1054,10 +1222,13 @@ public final class Service {
     }
     if repositoryLookups.insert(key).inserted {
       DispatchQueue.global().async { [self] in
-        let url = try? gitOutput(checkout, ["config", "--get", "remote.origin.url"], at: site)
+        let result = try? site.machine.run(site.git(), ["-C", checkout, "remote", "get-url", "origin"])
+        let url = result?.status == 0 ? result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         let repository = url.flatMap(GitHub.repo(remoteURL:))
+        // git exits 2 when the checkout has no origin remote, and 128 when it can't read the checkout.
+        let failed = result.map { $0.status != 0 && $0.status != 2 } ?? true
         queue.async { [self] in
-          repositories[key] = (repository, nowMs())
+          repositories[key] = (repository, nowMs(), failed)
           repositoryLookups.remove(key)
         }
       }
@@ -1065,12 +1236,25 @@ public final class Service {
     return nil
   }
 
+  /// The owner/name of the session's checkout, or nil until sbd has read both.
+  func repository(of s: Session) -> String? {
+    checkout(s).flatMap { repository($0, of: s) }
+  }
+
   /// Whether sbd has read the session's checkout and, when it has one, the
-  /// checkout's origin remote.
+  /// checkout's origin remote. A lookup that failed counts as a read.
   func repositoryRead(_ s: Session, checkout: String?) -> Bool {
     let site = self.site(for: s)
     if let checkout { return repositories[SitePath(checkout, at: site)] != nil }
     return checkouts[SitePath(s.cwd, at: site)] != nil
+  }
+
+  /// Whether a lookup read the session's checkout and, when it has one, the checkout's origin remote, and neither
+  /// lookup failed.
+  func repositoryKnown(_ s: Session, checkout: String?) -> Bool {
+    let site = self.site(for: s)
+    if let checkout { return repositories[SitePath(checkout, at: site)]?.failed == false }
+    return checkouts[SitePath(s.cwd, at: site)]?.failed == false
   }
 
   func lockedError(_ path: String) -> APIError {
@@ -1114,7 +1298,13 @@ public final class Service {
   /// `args.host` is a host of config.json, or nil for this Mac. `origin` is the machine that asked, which `create`
   /// checks the parent against.
   func startSession(_ args: NewSession, origin: RequestOrigin) throws -> SessionSummary {
-    if let host = args.host { return try startSession(args, onHost: host, origin: origin) }
+    // Before either path sets an auto branch, which would read as a branch that the caller chose.
+    let namingPrompt =
+      args.name == nil && (args.branch ?? "").isEmpty
+        && !(args.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? args.prompt : nil
+    if let host = args.host {
+      return try startSession(args, onHost: host, origin: origin, namingPrompt: namingPrompt)
+    }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
     // An unknown group, an unknown account, an account that differs from
@@ -1133,6 +1323,7 @@ public final class Service {
       // The launch reads the cached checkout, so git doesn't run on the state queue.
       if let main { memoryCheckouts[folder.cwd] = main }
       let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
       // The session's creation time keeps the repo in its place in the list after the session is removed.
       if let main { try? store.remember(repo: main, used: summary.created ?? nowMs()) }
       return summary
@@ -1142,7 +1333,8 @@ public final class Service {
   /// Starts a session on a remote host. The folder is absolute or starts with `~`, and the host resolves it.
   /// It waits for the host, makes the folder and worktree there off the state queue, and reads the host's
   /// panes and processes before it creates the session.
-  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin) throws
+  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin, namingPrompt: String?)
+    throws
     -> SessionSummary
   {
     let site = try remoteSite(host)
@@ -1170,7 +1362,9 @@ public final class Service {
     let read = try readSnapshot(onHost: host)
     return try queue.sync {
       install(read, onHost: host)
-      return try create(args, folder, origin: origin)
+      let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
+      return summary
     }
   }
 
@@ -1212,7 +1406,7 @@ public final class Service {
     let id = newSessionID()
     var session = Session(
       id: id, name: args.name ?? args.branch ?? (folder.cwd as NSString).lastPathComponent, cwd: folder.cwd,
-      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model ?? config.model,
+      branch: folder.branch, claudeSessionId: UUID().uuidString.lowercased(), model: args.model,
       created: nowMs())
     session.repo = folder.repo
     session.parent = args.parent.flatMap { try? lookup(["session": .string($0)]) }
@@ -1225,21 +1419,31 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // A conversation shows Claude's terminal alone. The user opens its shell on demand.
+    if session.kind.isConversation { session.shellClosed = true }
+    // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
+    if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
       try site(for: session).requireReady()
     } else {
-      // After `configure`, which sets a chat's group.
+      // After `configure`, which sets a chat's group. `configure` may also set an account folder that no name resolves.
       session.claudeConfigDir =
-        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount.folder
+        try accountForNew(named: args.account, parent: session.parent, for: session) ?? session.claudeConfigDir
+        ?? activeAccount.folder
     }
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
-    if session.kind.showsAsChat { recordRead(id, 0) }
-    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    if let parent = session.parent, entries[parent]?.session.kind == .manager {
+      record(parent, "child", ["child": .string(id)])
+    }
+    if session.kind.isConversation { recordRead(id, 0) }
+    if session.shellClosed != true {
+      try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    }
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
@@ -1249,6 +1453,14 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+  }
+
+  /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
+  /// then leaves the name alone. It runs on the state queue.
+  func renameSession(_ id: String, to name: String) throws {
+    try refuseRename(id, to: name)
+    try update(id) { $0.name = name }
+    entries[id]?.pendingName = nil
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
@@ -1306,11 +1518,15 @@ public final class Service {
       tmux: terminals.tmux, socket: terminals.socket, claude: paneName(id, .claude), shell: shell, host: session.host)
   }
 
-  /// The text of a local launch's `--append-system-prompt`, or nil to pass none. The operator's role prompt
-  /// comes first. A blank line separates it from the triage prompt.
+  /// The text of a launch's `--append-system-prompt`, or nil to pass none. The triage prompt is written for work
+  /// sessions, so a Manager conversation and the operator get their own prompt instead.
   func appendedSystemPrompt(for session: Session) -> String? {
-    let role = session.kind == .operator ? Manager.operatorPrompt : ""
-    let text = [role, config.triage.systemPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    let text =
+      switch session.kind {
+      case .manager: Manager.conversationPrompt
+      case .operator: Manager.operatorPrompt
+      case .work, .chat: config.triage.systemPrompt
+      }
     return text.isEmpty ? nil : text
   }
 
@@ -1338,10 +1554,15 @@ public final class Service {
       try writeClaudeSettings(id, session)
       args += ["--settings", home.claudeSettings(id)]
       args += launchMCPArgs(id, session)
+      // Claude in Chrome loads even under `--strict-mcp-config`. Nobody reads the operator's chat, so it has no use
+      // for a browser.
+      if session.kind == .operator { args.append("--no-chrome") }
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
-    if let model = session.model { args += ["--model", model] }
+    if let model = Manager.launchModel(for: session.kind, stored: session.model, managerModel: managerModel) {
+      args += ["--model", model]
+    }
     if local { args += config.claudeArgs }
     // After claudeArgs, so that the session's mode wins over a global one.
     let mode = PermissionMode.forLaunch(session, resume: resume, lastReported: entries[id]?.facts.permissionMode)
@@ -1353,7 +1574,14 @@ public final class Service {
     if let prompt, !prompt.isEmpty { args += ["--", prompt] }
     let site = self.site(for: session)
     let terminals = try site.terminals()
-    let env = try newPaneEnv(id)
+    var env = try newPaneEnv(id)
+    let window =
+      switch session.kind {
+      case .manager: config.manager.autoCompactWindow
+      case .operator: operatorSettings.autoCompactWindow
+      case .work, .chat: 0
+      }
+    AutoCompact.apply(window: window, to: &env)
     // On a host, `$SB_HOME/bin` goes first on PATH, so claude and its tools run the host's `sb` wrapper.
     let path = local ? "" : #"export PATH="$SB_HOME/bin:$PATH""# + "\n"
     try writeLauncher(
@@ -1375,7 +1603,9 @@ public final class Service {
     entries[id]?.mcpRelaunch = nil
     entries[id]?.resumeLaunch = nil
     entries[id]?.unreportedSince = nil
-    entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
+    // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
+    entries[id]?.skillBypass = nil
+    entries[id]?.inFlight = prompt?.isEmpty == false ? InFlight(nowMs()) : nil
     record(
       id, resume ? "resumed" : "started",
       [
@@ -1413,7 +1643,7 @@ public final class Service {
   /// session's last SessionStart named. For a session on a host, this reads nothing of the state queue.
   func transcriptFile(_ session: Session, named: String?, on machine: any Machine) throws -> String? {
     guard session.started else { return nil }
-    if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
+    if let path = named, Transcript.isFile(path, of: session.claudeSessionId) {
       return machine.exists(path) ? path : nil
     }
     return Transcript.find(
@@ -1428,7 +1658,7 @@ public final class Service {
   }
 
   /// Whether claude sits at its prompt, ready for a paste: this launch's
-  /// claude reported SessionStart at least 1.5 s ago, no turn runs, and no
+  /// claude reported SessionStart at least `pasteSettleSeconds` ago, no turn runs, and no
   /// message is on its way. A claude that shows a dialog at startup, such as
   /// the workspace trust dialog, has not reported SessionStart. A paused session takes no paste.
   private func readyForPaste(_ id: String, now: Int64) -> Bool {
@@ -1436,9 +1666,11 @@ public final class Service {
       let start = e.facts.lastStart
     else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
-    if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
-    return now - start >= 1500
+    if let sent = e.inFlight?.since, now - sent < Service.inFlightMs { return false }
+    return now - start >= pasteSettleMs
   }
+
+  private var pasteSettleMs: Int64 { Int64(config.pasteSettleSeconds * 1000) }
 
   /// `by` is who wrote the message, which the `sent` event records. With `launchesWithPrompt` false, a stopped
   /// claude starts without a prompt and gets the message as a paste, which
@@ -1446,16 +1678,34 @@ public final class Service {
   /// nothing, when the store can't keep the `sent` event.
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
+  /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil
+    from: String? = nil, runHere: Bool = false
   ) throws -> Delivery {
+    try deliver(
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+    ).delivery
+  }
+
+  /// How `deliver` handled a message, and the `sent` event it stored.
+  struct SentMessage {
+    var delivery: Delivery
+    var sent: Event
+  }
+
+  /// As `send`, but it also returns the message's `sent` event.
+  func deliver(
+    _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    from: String? = nil, runHere: Bool = false
+  ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
+    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
-      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: ["held": true])
+      let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
-      return .queued
+      return SentMessage(delivery: .queued, sent: sent)
     }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
@@ -1466,29 +1716,45 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, by: by, from: from)
+      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra.merging(resumeMark(id)) { $1 })
       try startClaude(id, prompt: text, trigger: trigger)
-      return .resumed
+      if runHere { armSkillBypass(id, text) }
+      return SentMessage(delivery: .resumed, sent: sent)
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
-      let sent = try recordSent(id, text, .pasted, by: by, from: from)
+      let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
       paste(id, QueuedMessage(text: text, sent: sent))
-      return .pasted
+      return SentMessage(delivery: .pasted, sent: sent)
     } else {
       // A stopped session launches without a prompt when older messages wait,
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from)
-      return .queued
+      let sent = try queueMessage(id, text, by: by, from: from, extra: extra)
+      return SentMessage(delivery: .queued, sent: sent)
     }
+  }
+
+  /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a conversation gets them, because
+  /// `chat-log` reads only conversations. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// size 0.
+  private func resumeMark(_ id: String) -> [String: JSON] {
+    guard let session = entries[id]?.session, session.kind.isConversation else { return [:] }
+    let size: UInt64
+    do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
+    return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
-  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil) throws {
-    let sent = try recordSent(id, text, .queued, by: by, from: from)
+  @discardableResult
+  func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
+    throws -> Event
+  {
+    let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
+    return sent
   }
 
   /// `extra` adds fields to the event, such as `held`.
@@ -1504,7 +1770,7 @@ public final class Service {
   }
 
   /// Pastes the oldest queued message after `delay`, if claude is ready for
-  /// it. When claude is idle but its SessionStart is under 1.5 s old, or a
+  /// it. When claude is idle but its SessionStart is under `pasteSettleSeconds` old, or a
   /// message is still in flight, this tries again when that wait ends.
   /// Otherwise the next SessionStart or end of a turn tries again.
   func deliverPending(_ id: String, after delay: Double) {
@@ -1520,8 +1786,8 @@ public final class Service {
       let now = nowMs()
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
-          let startWait = max(0, 1500 - (now - start))
-          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0)) } ?? 0
+          let startWait = max(0, pasteSettleMs - (now - start))
+          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0.since)) } ?? 0
           let wait = max(startWait, flightWait)
           if wait > 0 { deliverPending(id, after: Double(wait) / 1000 + 0.1) }
         }
@@ -1561,13 +1827,18 @@ public final class Service {
     }
   }
 
+  /// The text that claude gets for a message to the session `id`, without the paths of its images.
+  func pastedText(_ text: String, _ id: String) -> String {
+    Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text
+  }
+
   /// The messages with the `pasting` event of each. It runs on the state queue.
   func uncertainPastes(_ id: String, _ texts: [String]) throws -> [UncertainPaste] {
     var pastings = try store.events(session: id).filter { $0.kind == "pasting" }
     return texts.map { text in
       let pasting = pastings.lastIndex { $0.data["text"]?.string == text }.map { pastings.remove(at: $0) }
       return UncertainPaste(
-        text: text, pasted: Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text,
+        text: text, pasted: pastedText(text, id),
         started: pasting != nil, transcript: pasting?.data["transcript"]?.string,
         offset: UInt64(pasting?.data["transcript_bytes"]?.int ?? 0))
     }
@@ -1585,7 +1856,8 @@ public final class Service {
     let text = message.text
     let name = paneName(id, .claude)
     let parts = Attachments.split(text, folder: home.attachmentsFolder(id))
-    entries[id]?.inFlight = nowMs()
+    let pastedAt = nowMs()
+    entries[id]?.inFlight = InFlight(pastedAt)
     let site = try? site(of: id)
     let terminals = try? site?.terminals()
     pasteQueue.async { [self] in
@@ -1605,7 +1877,14 @@ public final class Service {
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
         waitAtGate("hold-delivered")
-        queue.async { self.record(id, "delivered", ["text": .string(text)]) }
+        queue.async {
+          self.record(id, "delivered", ["text": .string(text)])
+          // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
+          // A `/clear` or `/compact` can move the window with its SessionStart first, so this compares `sent`.
+          if SlashCommand.isBuiltIn(prompt: text), self.entries[id]?.inFlight?.sent == pastedAt {
+            self.entries[id]?.inFlight = nil
+          }
+        }
       } catch {
         logLine("can't paste into \(id): \(error)")
         queue.async {
@@ -1642,21 +1921,16 @@ public final class Service {
     }
     var data: [String: JSON] = ["text": .string(message.text)]
     do {
-      if let session = entries[id]?.session {
-        // A restart looks for the message after this size, so a size that a host did not answer must not
-        // read as a missing transcript.
-        let named = entries[id]?.facts.transcriptPath
-        let found: (path: String, size: UInt64)? = try site(for: session).confirmed("the transcript size of \(id)") {
-          guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
-          else { return nil }
-          return (path, size)
-        }
-        if let found {
-          data["transcript"] = .string(found.path)
-          data["transcript_bytes"] = .number(Double(found.size))
-        }
+      // A restart looks for the message after this size, so a size that a host did not answer must not
+      // read as a missing transcript.
+      if let found = try transcriptSize(id) {
+        data["transcript"] = .string(found.path)
+        data["transcript_bytes"] = .number(Double(found.size))
       }
+      // `chat-log` finds a run's prompt from the last `pasting` that names its `sent` event.
+      if let conversation = entries[id]?.session.claudeSessionId { data["conversation"] = .string(conversation) }
       if let sent = message.sent {
+        data["sent"] = .number(Double(sent.id))
         guard let row = try store.event(id: sent.id), row.session == id, row.t == sent.t, row.kind == "sent",
           row.data["text"] == sent.data["text"]
         else {
@@ -1666,11 +1940,24 @@ public final class Service {
         }
       }
       try recordStored(id, "pasting", .object(data))
+      if message.runHere { armSkillBypass(id, message.text) }
       return true
     } catch {
       logLine("can't start a paste into \(id): \(error)")
       requeue(id, message)
       return false
+    }
+  }
+
+  /// The session's transcript and its size in bytes, or nil when the session or its transcript is missing. It
+  /// throws when the session's host did not answer the read.
+  func transcriptSize(_ id: String) throws -> (path: String, size: UInt64)? {
+    guard let session = entries[id]?.session else { return nil }
+    let named = entries[id]?.facts.transcriptPath
+    return try site(for: session).confirmed("the transcript size of \(id)") {
+      guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
+      else { return nil }
+      return (path, size)
     }
   }
 
@@ -1692,7 +1979,7 @@ public final class Service {
   }
 
   /// Stops the claude of each session that `pick` returns on the state queue.
-  /// Then it waits off the queue up to 5 s for the Claude pane of each such
+  /// Then it waits off the queue up to `stopWaitSeconds` for the Claude pane of each such
   /// session on this Mac to die. `claudeState` reads a session as stopped only
   /// once its pane is dead, so a request that follows sees each such claude
   /// stopped, unless the pane outlived the wait. A session on a host gets no
@@ -1714,7 +2001,7 @@ public final class Service {
     }
     if !panes.isEmpty {
       let terminals = mac.terminals()
-      pollFor5Seconds { panes.allSatisfy { terminals.isDead($0) != false } }
+      poll(seconds: config.stopWaitSeconds) { panes.allSatisfy { terminals.isDead($0) != false } }
     }
     return picked
   }
@@ -1753,8 +2040,9 @@ public final class Service {
   /// lists is forgotten only when its claude stopped on record.
   /// A removal of the worktree refuses a caller inside a session on this Mac before anything stops, as
   /// `beginPaneStop` describes. It refuses a session that the removal job holds, or that another `rm` or
-  /// `cleanup` is removing.
-  func remove(_ args: JSON, caller: Caller) throws -> JSON {
+  /// `cleanup` is removing. With `whileIdle`, it throws `TurnRunsError` instead of stopping a turn that runs or a
+  /// message on its way when the stop would begin.
+  func remove(_ args: JSON, caller: Caller, whileIdle: Bool = false) throws -> JSON {
     let resolving = try resolveArgument(args)
     let removesWorktree = args["worktree"]?.bool == true
     let removesBranch = args["branch"]?.bool == true
@@ -1779,7 +2067,7 @@ public final class Service {
       defer { queue.sync { _ = removing.remove(id) } }
       let released = try removeAtSite(
         id, worktree: removesWorktree, branch: removesBranch, remoteBranch: removesRemoteBranch,
-        resolving: resolving, ancestry: ancestry, by: .rm
+        resolving: resolving, ancestry: ancestry, whileIdle: whileIdle, by: .rm
       ) { check, stopped, site in
         try releaseFiles(
           check.session, repo: stopped.repo, branch: stopped.branch, supacode: stopped.supacode, pr: stopped.pr,
@@ -1811,10 +2099,11 @@ public final class Service {
   /// `release` in one scope of the site, so on a host every check and git command runs on one connection, and the
   /// scope's machine refuses each command once one got no answer. `release` gets the scope's site. Then
   /// `forgetRemoved` forgets the session. For the job, `forgetRemoved` also stores a removal notice for a branch or
-  /// remote branch that stayed. It runs off the state queue.
+  /// remote branch that stayed. `whileIdle` goes to `stopAndCheckAgain`. It runs off the state queue.
   func removeAtSite(
     _ id: String, worktree: Bool, branch: Bool, remoteBranch: Bool, resolving: Set<String>, ancestry: Set<Int>?,
-    by runner: RemovalRunner, release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
+    whileIdle: Bool = false, by runner: RemovalRunner,
+    release: (RemovalSubject, ReleaseTargets, any SessionSite) throws -> ReleasedFiles
   ) throws -> ReleasedFiles {
     let entry = try removalEntry(id, resolving: resolving, for: runner)
     let site = self.site(for: entry.session)
@@ -1830,9 +2119,10 @@ public final class Service {
         entry, worktree: worktree, branch: branch, remoteBranch: remoteBranch, at: scope.site)
       let stopped = try stopAndCheckAgain(
         check, worktree: worktree, branch: branch, resolving: resolving, for: runner, ancestry: ancestry,
-        scope: scope)
+        whileIdle: whileIdle, scope: scope)
       return try release(check, stopped, scope.site)
     }
+    waitAtGate("hold-removal-forget")
     let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
     try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
     return released
@@ -1880,6 +2170,7 @@ public final class Service {
       if let refusal = busyRefusal(id) { throw refusal }
       // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
       try refuseOperatorRemoval(id)
+      try refuseConversationRemoval(id)
       try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
       return RemovalSubject(
         session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
@@ -1913,11 +2204,13 @@ public final class Service {
   /// when `worktree` is set, and otherwise stops claude as
   /// `stopForRemoval(_:at:)` says. It first refuses a session that changed
   /// since the checks, whose record the store can't delete, or whose scope's
-  /// check fails. It returns what `checkRemoval` returns when it runs again
-  /// after the stop. It runs off the state queue.
+  /// check fails. With `whileIdle`, it throws `TurnRunsError` for a session
+  /// whose turn runs or whose message is on its way. It returns what
+  /// `checkRemoval` returns when it runs again after the stop. It runs off
+  /// the state queue.
   func stopAndCheckAgain(
     _ check: RemovalSubject, worktree: Bool, branch: Bool, resolving: Set<String>, for runner: RemovalRunner,
-    ancestry: Set<Int>?, scope: SiteScope
+    ancestry: Set<Int>?, whileIdle: Bool = false, scope: SiteScope
   ) throws -> ReleaseTargets {
     let session = check.session
     let fresh = try freshSnapshot(of: session)
@@ -1931,6 +2224,7 @@ public final class Service {
       try store.checkDeletable(
         session: removal(session.id, resolving: removalResolving(session.id, resolving, for: runner)))
       install(fresh, of: session)
+      if whileIdle, let e = entries[session.id], turnRuns(e) { throw TurnRunsError(name: session.name) }
       try scope.require()
       if worktree { return try beginPaneStop(session.id, ancestry: ancestry, command: Self.removalCommand) }
       try stopForRemoval(session, at: site(for: session))
@@ -2453,12 +2747,12 @@ public final class Service {
   private func settle(_ id: String) {
     let name = paneName(id, .claude)
     guard let terminals = queue.sync(execute: { try? site(of: id).terminals() }) else { return }
-    pollFor5Seconds { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
+    poll(seconds: 5) { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
   }
 
-  /// Checks `done` every 50 ms until it returns true, or for at most 5 s.
-  private func pollFor5Seconds(_ done: () -> Bool) {
-    let deadline = Date().addingTimeInterval(5)
+  /// Checks `done` every 50 ms until it returns true, or for at most `seconds`.
+  private func poll(seconds: Double, _ done: () -> Bool) {
+    let deadline = Date().addingTimeInterval(seconds)
     while !done(), Date() < deadline { usleep(50_000) }
   }
 
@@ -2517,7 +2811,9 @@ public final class Service {
           entries[id]?.unreportedSince = nil
           // Exit typed in the terminal, a stop, or a crash ends claude at the trust dialog.
           if let card = entries[id]?.facts.trustCard { closeTrust(card) }
-          if live { record(id, "exited") }
+          // sbd records `exited` for a claude that dies before its SessionStart while its launch prompt is pending.
+          // Without the event, the session reads Working until `launchPromptWindowMs` passes.
+          if live || entries[id]?.facts.launchPromptPending(now: now) == true { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
           // unless a resume came while it ran. These launches come at most
@@ -2545,8 +2841,11 @@ public final class Service {
       // A resolved `resume` wait and a schedule's run can launch claude.
       if !mcpStarting(now: now) {
         resolveDueWaits(now: now)
+        checkFailedCI(now: now)
         fireDueSchedules(now: now)
       }
+      armTopupMerges()
+      rotateOperatorIfDue(now: now)
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
@@ -2574,7 +2873,7 @@ public final class Service {
   func stopInput(_ e: Entry, jobs: Int, now: Int64) -> StopPolicy.Claude {
     StopPolicy.Claude(
       session: e.session, facts: e.facts, lastJobSeen: e.lastJobSeen, jobs: jobs,
-      messageWaiting: e.messageWaiting(now: now), attached: attached(e.session.id))
+      messageWaiting: messageWaiting(e, now: now), attached: attached(e.session.id))
   }
 
   // MARK: Summaries
@@ -2624,7 +2923,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
+    if s.kind.isConversation { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {
@@ -2647,6 +2946,7 @@ public final class Service {
     if !facts.dependencies.isEmpty { out.dependencies = facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
     if !facts.artifacts.isEmpty { out.artifacts = facts.artifacts }
+    out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
     if verdict.acknowledged { out.acknowledged = true }
@@ -2672,9 +2972,9 @@ public final class Service {
     // imported one is the date of its line.
     if verdict.state == .notStarted { out.since = s.created }
     if verdict.state == .readyForReview, let ready = facts.readySince { out.since = ready }
+    if s.pause != nil || !e.pending.isEmpty { out.heldMessages = e.pending.count }
     if let pause = s.pause {
       out.pause = pause
-      out.heldMessages = e.pending.count
       // A replay tracks each event under the current session, so the tracked state can start before the pause.
       if !s.done { out.since = pause.since }
     }
@@ -2684,11 +2984,7 @@ public final class Service {
         facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
-    if s.kind == .manager {
-      out.pinned = s.pinned
-      // Last, because the archive rule reads the rest of the summary.
-      if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
-    }
+    if s.kind == .manager { addConversationFields(to: &out, e, facts) }
     return out
   }
 

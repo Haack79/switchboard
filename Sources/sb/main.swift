@@ -5,11 +5,13 @@ let usage = """
   Usage: sb <command> [arguments] [--json]
 
   Sessions:
-    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped]
+    ls [--org O1,O2] [--local] [--group G1,G2] [--ungrouped] [--brief]
                                   list sessions by state, or only those in the
                                   GitHub orgs O1 and O2, or with no GitHub
                                   remote, and in the groups G1 and G2, or in no
-                                  group
+                                  group. --brief prints one line per session:
+                                  its id, name, state, reason, PR, open waits,
+                                  and url
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -60,6 +62,8 @@ let usage = """
                                   session's claude first
     usage                         show each account's use of its 5-hour and
                                   weekly limits, and when each resets
+    usage headless [--since 7d]   sum the tokens of sbd's own claude -p calls
+                                  per day and kind
     manager [<conv>] [<text>]     open a Manager conversation, a session that manages
                                   the others: the one named by id or name, else the
                                   most recent, starting one the first time. With
@@ -72,12 +76,36 @@ let usage = """
     manager <conv> --read         mark the conversation's replies read
     manager pin|unpin <conv>      pin the conversation to the top of the
                                   app's Conversations list, or unpin it
+    manager end <conv> [--drop <id>]… [--new [--name N]]
+                                  end the conversation: stop its claude and remove
+                                  it. Its transcript stays on disk. Its own waits
+                                  and schedules block the end until --drop names
+                                  each one. Waits it handed to the operator stay.
+                                  --new starts a conversation with its account,
+                                  MCP servers, and pin
+    manager hint <conv> [--dismiss]
+                                  the suggestion to end the conversation: every
+                                  session it started is done, or its context
+                                  passed conversationHintTokens. --dismiss hides
+                                  it until it changes
     manager mcp <conv> [add <server>… | rm <server>… | --all | --none]
                                   show or change the MCP servers that the
                                   conversation loads besides switchboard. A new
                                   conversation loads none. --all loads the full
                                   setup, which a claude.ai connector needs. A change
                                   restarts its claude, after the turn when one runs
+    manager model [<name>]        show or set the model of each Manager conversation,
+                                  sonnet by default. It applies from the next time a
+                                  conversation's claude starts, and not to the operator
+    manager skills [<conv>]       list the skills that the Manager conversations
+                                  and the operator can load, or only those of
+                                  the conversation's account, each labeled work
+                                  or safe. A work skill belongs in a session of
+                                  its own. config.json's managerSkills.work and
+                                  managerSkills.safe set a label by name
+    manager skills relabel [<name>…]
+                                  scan the skill folders again, then label the
+                                  named skills again, or every skill
     ask <question>                answer a question about Switchboard from a
                                   snapshot of its state. The answer comes from
                                   claude with no tools, so it changes nothing.
@@ -86,16 +114,24 @@ let usage = """
                                   session that follows through on the waits that
                                   conversations hand it, creating it the first
                                   time. With text, send it a message
-    operator --log                the operator's last messages
+    operator --log                the last messages of the operator's current
+                                  conversation. sbd starts a fresh one after
+                                  operator.maxTurns turns (20) or
+                                  operator.resetEverySeconds (1 day)
     operator report [--needs-you] [--session S] <text>
                                   record a report. Only the operator runs it.
                                   --needs-you puts it in the Inbox until you
                                   answer the operator or acknowledge it. S is
                                   the session that it is about
+    operator approve <wait>       approve the merge that a "judgment needed"
+                                  message asks about, after reading the
+                                  session's last reply in it. Only the operator
+                                  runs it, in its own pane
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
-    get <session>                 show one session
+    get <session> [--brief]       show one session. --brief shows only its id,
+                                  name, state, reason, PR, open waits, and url
     focus <session>               show the session in the Switchboard app, launching
                                   the app if it isn't running
     slash <session>               the commands that the session's claude takes
@@ -106,6 +142,11 @@ let usage = """
                                   send images with the message. sbd keeps a copy of
                                   each (png, jpg, gif, webp, heic, up to 20 MB) until
                                   the session is removed
+    send <session> --run-here <text>
+                                  send a message that starts with a work skill,
+                                  such as /go, to a Manager conversation or the
+                                  operator, past the block. The skills that its
+                                  turn calls run too. It refuses inside Claude Code
     send --group G [--yes] <text> send a message to every session in the group, after
                                   listing them and asking. Without a terminal, it
                                   needs --yes. Inside a Claude session, it sends
@@ -139,14 +180,25 @@ let usage = """
     done <session>, undone <session>
     wait <session> <note>         wait on something by hand
     wait [<session>] --kind K [--target T] [--who W] [--env E] [--service S]
-         [--state S] [--until WHEN] [--since WHEN] [--note N] [--then resume|notify]
-         [--here]
+         [--state S] [--until WHEN] [--since WHEN] [--note N]
+         [--then resume|notify|merge|rm-worktree|rm|report] [--needs-you] [--here]
                                   wait on a PR, a deploy, another session, or a
                                   time. Inside a session, the session is optional.
                                   A wait that Claude sets in a Manager
                                   conversation and that resumes goes to the
                                   operator, unless it reads the conversation's
-                                  own PR. --here keeps it on the conversation
+                                  own PR. --here keeps it on the conversation.
+                                  --then merge, rm-worktree, rm, or report has
+                                  sbd run the action with its own checks when
+                                  the wait is met: merge lands the target's PR
+                                  (state ready_to_merge, in a repo that
+                                  operator.mergeRepos lists) once the operator
+                                  approves, rm-worktree removes the target and
+                                  its worktree after its PR merged (state done,
+                                  or --kind merge), rm removes the target (state
+                                  done), and report records --note as a report.
+                                  A wait that ends unmet runs nothing and
+                                  resumes the wait's holder
     wait [<session>] --block [--timeout S] --kind K ...
                                   set the wait and block until it resolves, then
                                   print the wait-resolved event as JSON. Exits 0
@@ -164,10 +216,32 @@ let usage = """
                                   at least 1m, such as 30m. sbd keeps it across
                                   restarts. A session holds 10 at most. Inside
                                   a session, name it too: $SB_SESSION_ID
+    schedule <session> --every <interval> --topup --group G --repo R
+      --target N --template-file F --rubric-file F2 [<prompt>]
+                                  a work queue top-up: on each run sbd counts
+                                  the active work sessions of group G in repo
+                                  R (owner/name). Unless a session needs a
+                                  merge or cleanup that no wait covers, or sbd
+                                  can't read one, it sends nothing: with the
+                                  target N (1 to 20) met it records the check,
+                                  and when short it starts the open issues and
+                                  follow-ups that a judge picks by the rubric
+                                  F2, each issue with the template F as its
+                                  prompt. Otherwise, or when the top-up fails,
+                                  it sends the prompt with the status, the
+                                  rubric, and the template. Without a prompt
+                                  sbd writes one. Only a Manager conversation,
+                                  the Operator, or you can add or edit one
     schedule ls [<session>]       list the schedules, the next due first
     schedule rm <id>              remove a schedule
     schedule pause|resume <id>    pause a schedule, or resume it one interval
                                   from now
+    schedule edit <id> [--every <interval>] [<prompt>]
+                                  change a schedule's interval, its prompt, or
+                                  both. A new interval brings the next run to
+                                  one interval from now when that is sooner
+    schedule run <id>             run a schedule now, or once its session is
+                                  free
     note <session> [<text>]       add a note, or list the notes: open to-dos,
                                   then plain notes, then resolved to-dos
     note <session> --todo <text>  add a to-do, a task for you that blocks
@@ -181,6 +255,12 @@ let usage = """
                                   shows: 123, #123, owner/name#123, or an issue
                                   URL. It replaces the issue that sbd finds in
                                   the PR body or the branch name
+    parent <session> [<parent> | --clear]
+                                  show the session's parent, move it to another
+                                  parent, or unlink it with --clear. The parent
+                                  stops hearing what changed in it. Its group,
+                                  account, host, and waits stay. Refuses the
+                                  session that runs it
     rm <session> [--worktree [--delete-branch [--delete-remote-branch]]] [--resolve <id>]...
                                   remove the session, and its worktree with --worktree, which refuses
                                   uncommitted files, unpushed commits, and a folder sbd didn't make.
@@ -200,6 +280,10 @@ let usage = """
                                   and sb waits for it. --no-wait prints what the job queued
                                   and returns. Without a terminal or inside Claude, it needs
                                   --yes. With --json and without --yes, it removes nothing
+    rm --keep <session>           cancel the session's failed delete and keep the session, as the
+                                  Inbox's Keep button does: move its folder back from the trash
+                                  and clear the delete. Refuses a session whose delete didn't fail,
+                                  whose folder can't move back, or whose worktree git dropped
     cleanup <session>             remove the worktree and the local branch of a session whose PR merged,
                                   and keep the session in Done. Refuses uncommitted files, commits
                                   after the merge, a running turn, and a folder sbd didn't make.
@@ -244,8 +328,14 @@ let usage = """
     screen <session> [--shell] [--colors]
                                   print the pane's screen, with --colors as SGR escapes
     watch <session> --until <state> [--timeout S]
-    events [--session S] [--since ID] [--follow]
-                                  the newest events, or those after an id
+    events [--session S] [--since ID] [--kind K]... [--limit N | --all]
+        [--full] [--follow]
+                                  the newest events, or those after an id,
+                                  \(Event.defaultLimit) at a time. --all reads
+                                  every matching event. --kind, which
+                                  repeats, shows only those kinds. --json
+                                  leaves out tool output and cuts long
+                                  strings unless --full
 
   What needs you:
     triage                        the sessions that need you or that Claude can
@@ -317,6 +407,11 @@ let usage = """
     group describe <group> <text> | --clear
                                   set or clear the group's description, at
                                   most \(SessionGroup.descriptionLimit) characters
+    group link add <group> <url> [--title T]
+                                  add an http or https link, such as an RFC;
+                                  the title defaults to the URL. Only you add
+                                  links: inside Claude it is refused
+    group link rm <group> <link-id>
     group account <group> [<account> | --clear]
                                   show, set, or clear the Claude account that the
                                   group's sessions run under. A stopped session
@@ -464,9 +559,15 @@ let usage = """
   --state (default done). date needs --until (2h, 2026-10-26, or
   2026-10-26T09:00). manual takes an optional --until that returns it to Needs
   you, a day later without one. --then notify moves the session to Needs you
-  instead of resuming it. review, bot-review, and queue take --since WHEN, a
-  past time after which a review or a change in Trunk's queue counts, instead
-  of the time the wait was set. A wait still open past its recheck time
+  instead of resuming it. --then merge (a session wait for ready_to_merge),
+  rm-worktree (a session wait for done, or a merge wait on owner/name#N), rm
+  (a session wait for done), and report (any kind but manual, with --note, and
+  --needs-you for an Inbox item) arm an action that sbd runs when the wait is
+  met. Only a Manager conversation, the Operator, or you in a terminal can arm
+  one, and merge needs the PR's repository in operator.mergeRepos in
+  config.json. review, bot-review, and queue take --since WHEN, a past time
+  after which a review or a change in Trunk's queue counts, instead of the
+  time the wait was set. A wait still open past its recheck time
   (recheckSeconds in config.json) moves the session to Needs you.
   """
 
@@ -490,7 +591,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--backlog", "--steps", "--for",
-      "--reason", "--message",
+      "--reason", "--message", "--drop", "--template-file", "--rubric-file",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -555,9 +656,15 @@ func decode<T: Decodable>(_ value: JSON, as type: T.Type) -> T {
 
 func summary(_ value: JSON) -> SessionSummary { decode(value, as: SessionSummary.self) }
 
+func briefJSON(_ value: JSON) -> JSON {
+  do { return try SessionBrief.json(value) } catch { die("can't read sbd's answer: \(error)") }
+}
+
+let noSessions = "No sessions. Start one with: sb new <folder>"
+
 func printTable(_ sessions: [SessionSummary]) {
   if sessions.isEmpty {
-    print("No sessions. Start one with: sb new <folder>")
+    print(noSessions)
     return
   }
   let idWidth = max(2, sessions.map(\.id.count).max() ?? 0)
@@ -639,6 +746,7 @@ func printSession(_ s: SessionSummary) {
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
+  printQueue(s)
   printWaitsAndNotes(s)
   printSchedules(s)
 }
@@ -751,12 +859,19 @@ func watch(_ a: Args) -> Never {
 }
 
 /// Prints the newest events, or the events after --since, and with --follow
-/// keeps printing new ones.
+/// keeps printing new ones. --kind, which repeats, prints only those kinds.
 func events(_ a: Args) -> Never {
-  var cursor = EventCursor(since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"])
+  var cursor = EventCursor(
+    since: a.values["--since"].flatMap(Int64.init), session: a.values["--session"], kinds: a.allValues["--kind"],
+    full: a.switches.contains("--full"), all: a.switches.contains("--all"))
+  let limit = a.values["--limit"].map { value -> Int in
+    guard let limit = Int(value), limit > 0 else { die("--limit needs a positive number") }
+    return limit
+  }
+  if cursor.all, limit != nil { die("pass --all or --limit, not both") }
   while true {
     let list: [Event]
-    do { list = try cursor.next() } catch { die("\(error)") }
+    do { list = try cursor.next(limit: limit) } catch { die("\(error)") }
     for e in list {
       if a.json {
         printJSON((try? JSON(encoding: e)) ?? .null)
@@ -867,7 +982,9 @@ if ["group", "groups"].contains(command), ["note", "describe"].contains(argv.fir
   }
 }
 if flagsAfterSession.contains(command), a.positional.count > 1, a.positional[1].hasPrefix("--") { a = Args(argv) }
-if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(argv.first ?? "") { a = Args(argv) }
+if ["schedule", "schedules"].contains(command), scheduleSubcommands.contains(a.positional.first ?? "") {
+  a = Args(argv)
+}
 
 switch command {
 case "hook":
@@ -898,13 +1015,18 @@ case "ls", "list":
     if a.switches.contains("--ungrouped") { filter.group.insert(GroupFilter.ungroupedKey) }
     filter.knownGroups = Set(groups.map(\.id))
   }
+  let brief = a.switches.contains("--brief")
   if a.json && filter.isAll {
-    printJSON(result)
+    printJSON(brief ? briefJSON(result) : result)
   } else {
     let shown = decode(result, as: [SessionSummary].self).filter(filter.shows)
     if a.json {
       let ids = Set(shown.map(\.id))
-      printJSON(.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false }))
+      let list = JSON.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false })
+      printJSON(brief ? briefJSON(list) : list)
+    } else if brief {
+      if shown.isEmpty { print(noSessions) }
+      for s in shown { print(s.briefLine) }
     } else {
       printSessionList(shown, filter: filter)
     }
@@ -938,7 +1060,12 @@ case "ask":
 case "operator":
   operatorCommand(a)
 case "get", "show":
-  sessionCommand("get", a)
+  if a.switches.contains("--brief") {
+    let result = call("get", ["session": .string(a.session("get"))])
+    if a.json { printJSON(briefJSON(result)) } else { print(summary(result).briefLine) }
+  } else {
+    sessionCommand("get", a)
+  }
 case "focus":
   focus(a)
 case "open":
@@ -974,12 +1101,20 @@ case "issue":
   let clear = a.switches.contains("--clear")
   guard a.positional.count == (clear ? 1 : 2) else { die("issue needs a session and an issue, or --clear") }
   sessionCommand("issue", a, extra: clear ? ["clear": .bool(true)] : ["issue": .string(a.positional[1])])
+case "parent":
+  parentCommand(a)
 case "send" where a.values["--pending"] != nil:
   awaitGroupMessage(a, id: a.values["--pending"]!)
 case "send" where a.values["--group"] != nil:
   sendGroup(a, group: a.values["--group"]!)
 case "send":
   sendCommand(a)
+case "rm" where a.switches.contains("--keep"):
+  let other =
+    ["--done", "--worktree", "--delete-branch", "--delete-remote-branch"].filter(a.switches.contains)
+    + (a.values["--resolve"] == nil ? [] : ["--resolve"])
+  if let flag = other.first { die("--keep and \(flag) conflict") }
+  sessionCommand("rm-keep", a, session: a.session("rm --keep"))
 case "rm" where a.switches.contains("--done"):
   removeDone(a)
 case "rm":

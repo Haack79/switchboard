@@ -173,6 +173,16 @@ func summaryCommand(_ a: Args) {
     ]
     print("Recorded the summary with \(englishList(counts.compactMap { $0 })).")
     for line in result["dropped"]?.array ?? [] { print("Dropped \(line.string ?? "")".printable) }
+    let children = result["childItems"]?.array ?? []
+    if !children.isEmpty {
+      print(
+        "These sessions you started already ask the user in their own Inbox items. If your summary repeats one of their questions, run `sb summary set` again without it and link to the session instead:"
+      )
+      for child in children {
+        let link = SessionLink.markdown(name: child["name"]?.string ?? "", id: child["session"]?.string ?? "")
+        print("  \(link): \(child["title"]?.string ?? "")".printable)
+      }
+    }
   case "help", nil:
     print(TriageCard.instructions)
   default:

@@ -11,6 +11,7 @@ enum SessionMenuAction: Hashable {
   case startNow
   case stop
   case moveToAccount
+  case unlinkParent(String)
   case divider
   case cleanUp
   case delete(String)
@@ -23,8 +24,11 @@ enum SessionMenu {
   /// nil otherwise. A row in a multi-selection offers to delete the selection instead of the row alone. A session
   /// whose delete failed offers no Delete, because its Inbox item has Retry and Keep. A docket row offers Delete
   /// only in Done, because the confirmation describes a session that runs claude in a worktree.
-  /// `movesAccount` is true when the session can move to another account.
-  static func actions(for s: SessionSummary, selectionCount: Int?, movesAccount: Bool = false) -> [SessionMenuAction] {
+  /// `movesAccount` is true when the session can move to another account. `parentName` names the parent that the
+  /// session can be unlinked from, and is nil when it has none.
+  static func actions(
+    for s: SessionSummary, selectionCount: Int?, movesAccount: Bool = false, parentName: String? = nil
+  ) -> [SessionMenuAction] {
     var safe: [SessionMenuAction] = []
     if HighlightMenuItem.title(for: s) != nil { safe.append(.highlight) }
     if s.canSnooze { safe.append(.snooze) }
@@ -37,6 +41,7 @@ enum SessionMenu {
     if s.queued == true { safe.append(.startNow) }
     if s.live && s.pause == nil { safe.append(.stop) }
     if movesAccount { safe.append(.moveToAccount) }
+    if let parentName { safe.append(.unlinkParent("Unlink from \(parentName)")) }
     var destructive: [SessionMenuAction] = []
     if CleanupOffer.canCleanUp(s) { destructive.append(.cleanUp) }
     if let selectionCount {
@@ -72,7 +77,8 @@ struct SessionMenuItems<Extra: View>: View {
       multiSelection: model.multiSelection)
     let actions = SessionMenu.actions(
       for: session, selectionCount: selectionCount,
-      movesAccount: SessionAccountMenu.shows(session, accountCount: model.accounts.count))
+      movesAccount: SessionAccountMenu.shows(session, accountCount: model.accounts.count),
+      parentName: model.linkedParentName(of: session))
     let split = actions.firstIndex(of: .divider) ?? actions.endIndex
     ForEach(actions[..<split], id: \.self, content: item)
     extra()
@@ -100,6 +106,8 @@ struct SessionMenuItems<Extra: View>: View {
       Button("Stop Claude") { model.stop(id) }.help(BoardModel.stopHelp)
     case .moveToAccount:
       Menu("Move to Account") { MoveToAccountMenuItems(session: session) }
+    case .unlinkParent(let title):
+      Button(title) { model.unlinkParent(id) }.help(BoardModel.unlinkHelp)
     case .divider:
       Divider()
     case .cleanUp:

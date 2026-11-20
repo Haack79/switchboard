@@ -1,12 +1,13 @@
 import Foundation
 import SwitchboardCore
 
-/// `sb operator [<text>] [--log]`. It opens the operator, and creates it when none exists. `report` and
-/// `reports` are reserved first words.
+/// `sb operator [<text>] [--log]`. It opens the operator, and creates it when none exists. `report`,
+/// `reports`, and `approve` are reserved first words.
 func operatorCommand(_ a: Args) {
   switch a.positional.first {
   case "report": return operatorReport(a)
   case "reports": return operatorReports(a)
+  case "approve": return operatorApprove(a)
   default: break
   }
   if a.switches.contains("--log") { return printChatLog(a, ["operator": true]) }
@@ -27,6 +28,17 @@ private func operatorReport(_ a: Args) {
   let result = call("operator-report", args)
   if a.json { return printJSON(result) }
   print(reportLine(result))
+}
+
+/// `sb operator approve <wait>`, which only the operator runs: it approves the merge that a `judgment needed`
+/// message asks about.
+private func operatorApprove(_ a: Args) {
+  guard a.positional.count == 2 else { die("operator approve needs one wait id") }
+  var args = callerArg
+  args["wait"] = .string(a.positional[1])
+  let result = call("wait-approve", args)
+  if a.json { return printJSON(result) }
+  print("approved wait \(a.positional[1]). sbd checks it again before it merges.")
 }
 
 /// `sb operator reports [--all]`: the operator's reports, oldest first.

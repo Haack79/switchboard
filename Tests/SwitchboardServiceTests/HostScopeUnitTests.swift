@@ -47,7 +47,7 @@ private func withSessions(
   _ body: (Service) throws -> Void
 ) throws {
   // A request that a missing guard lets through runs no claude or tmux on this Mac.
-  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true"]
+  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true", "sessionNames": ["enabled": false]]
   try withHostService(hosts: hosts, config: config, sbPath: sbPath) { service, _ in
     service.queue.sync {
       service.hostEventWindowMs = windowMs
@@ -390,7 +390,7 @@ private func withReadySessions(_ body: (Service, BoxFacts, _ roots: [String]) th
   let root = try makeShortTempFolder()
   defer { try? FileManager.default.removeItem(atPath: root) }
   try makeCheckout("\(root)/n")
-  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true"]
+  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true", "sessionNames": ["enabled": false]]
   try withReadyService(host: ["repos": ["o/n": .string("\(root)/n")]], config: config) { bench, service, facts in
     let cwd = "\(facts.home)/work"
     try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
@@ -893,13 +893,14 @@ private func text(_ answer: Response) -> String {
 
   // MARK: Events
 
-  @Test(.timeLimit(.minutes(1)))
-  func eventsToTheHostLoseTheDataOfAnUnlistedPRAndKeepAListedOne() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func eventsToTheHostLoseTheDataOfAnUnlistedPRAndKeepAListedOne(full: Bool) throws {
     try withSessions(hosts: listedHosts) { service in
+      let args: JSON = ["session": "m1", "full": .bool(full)]
       try service.givePR("m1", listed: false)
-      let unlisted = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let unlisted = service.handle(Request(op: "events", args: args), origin: .remote("mini"))
       try service.givePR("m1", listed: true)
-      let listed = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let listed = service.handle(Request(op: "events", args: args), origin: .remote("mini"))
 
       let first = unlisted.result?.array?.first { $0["kind"] == "pr" }
       #expect(first?["data"] == .object([:]))
@@ -909,8 +910,8 @@ private func text(_ answer: Response) -> String {
     }
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func aGitHubWaitsOutcomeLeavesTheHostsEventsUnlessTheRepoIsListed() throws {
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func aGitHubWaitsOutcomeLeavesTheHostsEventsUnlessTheRepoIsListed(full: Bool) throws {
     try withSessions(hosts: listedHosts) { service in
       try service.givePR("m1", listed: false)
       func resolved(_ kind: Wait.Kind, _ outcome: String) throws {
@@ -921,7 +922,8 @@ private func text(_ answer: Response) -> String {
       try resolved(.date, "the date came")
       try resolved(.ci, "Vault sentinel title checks passed")
 
-      let answer = service.handle(Request(op: "events", args: ["session": "m1"]), origin: .remote("mini"))
+      let answer = service.handle(
+        Request(op: "events", args: ["session": "m1", "full": .bool(full)]), origin: .remote("mini"))
       let get = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))
       let onMac = service.handle(Request(op: "get", args: ["session": "m1"]))
 
@@ -973,8 +975,8 @@ private func text(_ answer: Response) -> String {
         let session = service.entries["m1"]!.session
         let site = service.site(for: session)
         let checkout = service.checkout(session) ?? session.cwd
-        if session.repo == nil { service.checkouts[SitePath(session.cwd, at: site)] = (checkout, nowMs()) }
-        service.repositories[SitePath(checkout, at: site)] = ("Secret/Listed", nowMs())
+        if session.repo == nil { service.checkouts[SitePath(session.cwd, at: site)] = (checkout, nowMs(), false) }
+        service.repositories[SitePath(checkout, at: site)] = ("Secret/Listed", nowMs(), false)
         return service.showsGitHub("m1", to: .remote("mini"))
       }
       #expect(originCounts, "the origin remote should name the listed repo")
@@ -1048,7 +1050,7 @@ private func text(_ answer: Response) -> String {
 
       let unsent = service.queue.sync { () -> [String] in
         service.notifyParents(now: nowMs())
-        return service.parentNotices.unsent["m1"] ?? []
+        return (service.parentNotices.unsent["m1"] ?? []).map(\.text)
       }
       let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
         $0.data["text"]?.string
@@ -1086,7 +1088,7 @@ private func text(_ answer: Response) -> String {
       try give(77)
       let heard = service.queue.sync { () -> [String] in
         service.notifyParents(now: nowMs())
-        return service.parentNotices.unsent["m1"] ?? []
+        return (service.parentNotices.unsent["m1"] ?? []).map(\.text)
       }
       let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
         $0.data["text"]?.string
@@ -1176,7 +1178,7 @@ private func cliOutput(_ answer: Response) throws -> (status: Int?, stdout: Data
       // ends. A read far in the future keeps the shared clock, which other tests advance, from starting one.
       service.queue.sync {
         let m1 = service.entries["m1"]!.session
-        service.checkouts[SitePath(m1.cwd, at: service.site(for: m1))] = (nil, Int64.max / 2)
+        service.checkouts[SitePath(m1.cwd, at: service.site(for: m1))] = (nil, Int64.max / 2, false)
       }
 
       let raw = service.handle(Request(op: "get", args: ["session": "m1"]), origin: .remote("mini"))

@@ -49,17 +49,12 @@ extension Service {
   /// non-empty list that a request by Claude sends.
   func resolveArgument(_ args: JSON) throws -> Set<String> {
     guard let value = args["resolve"], value != .null else { return [] }
-    guard let items = value.array else { throw APIError("resolve is a list of note ids") }
-    let ids = items.compactMap(\.string)
-    guard ids.count == items.count else { throw APIError("resolve is a list of note ids") }
+    guard let ids = value.strings else { throw APIError("resolve is a list of note ids") }
     if !ids.isEmpty { try refuseClaudeResolving(args) }
     return Set(ids)
   }
 
-  /// Throws unless the user sent the request. A missing `by` means the user.
-  func refuseClaudeResolving(_ args: JSON) throws {
-    guard try Author(parsing: args["by"]?.string) == .you else { throw APIError("Only you can resolve a to-do.") }
-  }
+  func refuseClaudeResolving(_ args: JSON) throws { try requireUser(args, "Only you can resolve a to-do.") }
 
   /// Throws unless `resolving` names exactly the session's open to-dos.
   /// Returns the `resolved_todos` rows that a delete that resolves them
@@ -116,6 +111,7 @@ extension Service {
   func forgetSession(_ id: String, resolving: Set<String>) throws {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     try refuseOperatorRemoval(id)
+    try refuseConversationRemoval(id)
     if let refusal = trashRefusal(id) { throw refusal }
     // Only a merged PR leaves marks. Other removals skip the summary.
     let removed = entries[id]?.facts.pr?.state == .merged ? summary(id) : nil

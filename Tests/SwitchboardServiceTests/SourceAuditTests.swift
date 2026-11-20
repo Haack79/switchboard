@@ -153,8 +153,8 @@ enum SourceAudit {
     #expect(
       drawers
         == [
-          "ChatView.swift", "DecisionCard.swift", "DraftView.swift", "IssuesView.swift", "Notes.swift",
-          "QuickAskView.swift", "TriageView.swift",
+          "CardView.swift", "DecisionCard.swift", "DraftView.swift", "IssuesView.swift",
+          "Notes.swift", "QuickAskView.swift",
         ].map { SourceAudit.app + $0 })
   }
 

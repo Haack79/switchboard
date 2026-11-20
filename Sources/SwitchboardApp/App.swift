@@ -58,12 +58,12 @@ struct SwitchboardApp: App {
         Button("Open Manager") { model.openManager() }
           .keyboardShortcut("m", modifiers: [.command, .shift])
         Button("Open Operator") { model.openOperator() }
-        Button("Show Inbox") { model.show(.inbox) }
-          .keyboardShortcut("1")
-        Button("Show Board") { model.show(.board) }
-          .keyboardShortcut("2")
-        Button("Show Issues") { model.show(.issues) }
-          .keyboardShortcut("3")
+        ForEach(MainView.allCases, id: \.self) { view in
+          Button("Show \(view.title)") { model.show(view) }
+            .keyboardShortcut(KeyEquivalent(view.shortcutKey))
+        }
+        Button("New Loop…") { model.loopEditor = .new }
+          .disabled(model.presentingSheet)
         Button("Filter Sessions…") { model.showingFilter.toggle() }
           .keyboardShortcut("o", modifiers: [.command, .shift])
           .disabled(model.presentingSheet)
@@ -136,7 +136,7 @@ struct SwitchboardApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
-    if BackgroundLaunch.applies(to: ProcessInfo.processInfo.environment) {
+    if BackgroundLaunch.isRunning {
       BackgroundLaunch.start()
     } else {
       // A build-folder executable has no Info.plist, so it starts as a
@@ -214,8 +214,7 @@ struct MenuBarContent: View {
       Text("Nothing needs you")
     } else {
       ForEach(model.needsUser) { s in
-        let title = "\(model.inboxName(s)): \(model.inboxLine(s))"
-        Button(title) {
+        Button(Self.title(name: model.inboxName(s), line: model.inboxLine(s))) {
           model.selection = s.id
           show()
         }
@@ -224,6 +223,12 @@ struct MenuBarContent: View {
     Divider()
     Button("Open Switchboard") { show() }
     Button("Quit") { NSApp.terminate(nil) }
+  }
+
+  /// A menu item names the session and its Inbox line, cut at `Triage.titleLength`, because a rule title can reach
+  /// 100 characters.
+  static func title(name: String, line: String) -> String {
+    "\(name): \(truncated(line, max: Triage.titleLength))"
   }
 
   private func show() {

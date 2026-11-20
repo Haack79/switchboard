@@ -24,7 +24,9 @@ extension Service {
   /// `draft-check` reads it again. sbd calls this after each event and tick,
   /// and once at startup.
   func resolveDraftTargets(_ id: String, _ verdict: Verdict) {
-    guard let e = entries[id], DraftReplies.mayBeChecking(e.facts), let item = Triage.item(e.facts, verdict, kind: e.session.kind) else {
+    guard let e = entries[id], DraftReplies.mayBeChecking(e.facts),
+      let item = Triage.item(e.facts, verdict, kind: e.session.kind)
+    else {
       return
     }
     for draft in item.drafts where draft.post == .checking {
@@ -262,7 +264,7 @@ extension Service {
     let outcome: PostOutcome
     do {
       outcome = DraftReplies.outcome(
-        try runGhResult(attempt.target.postArgs(body: text), timeout: Service.reviewTimeoutSeconds))
+        try runGhResult(attempt.target.postArgs(body: text), timeout: config.reviewTimeoutSeconds))
     } catch {
       // gh didn't start, so nothing reached GitHub.
       outcome = .failed("\(error)")
@@ -287,20 +289,14 @@ extension Service {
   }
 
   /// The refusal for a caller that runs below any session's pane or below
-  /// sbd's tmux server, or nil. A program that a session starts with
-  /// `tmux new-session` or `tmux new-window` runs below the server and
-  /// outside every pane. It runs on the state queue, after `install` of a
-  /// fresh snapshot.
+  /// sbd's tmux server, or nil. It runs on the state queue, after `install`
+  /// of a fresh snapshot.
   private func postCallerRefusal(_ ancestry: Set<Int>?, command: String) -> APIError? {
     guard let ancestry else { return nil }
     let advice = "Posting needs your click, so run it from a terminal outside the sessions."
-    if let inside = entries.keys.sorted().first(where: { isInside($0, ancestry) }) {
-      return APIError("`\(command)` runs inside \(inside). \(advice)")
-    }
-    let servers = Set(mac.snapshot.panes.values.map(\.server).filter(Processes.isValidPid))
-    guard ancestry.isDisjoint(with: servers) else {
-      return APIError("`\(command)` runs in sbd's tmux server, where the sessions run. \(advice)")
-    }
+    let place = callerPlace(ancestry)
+    if let inside = place.inside.first { return APIError("`\(command)` runs inside \(inside). \(advice)") }
+    if place.inServer { return APIError("`\(command)` runs in sbd's tmux server, where the sessions run. \(advice)") }
     return nil
   }
 
@@ -400,7 +396,7 @@ extension Service {
     let t = attempt.target.target
     let list = t.commentsPath
     let output = try runGh(
-      ["api", "--paginate", "--jq", ".[] | @json", "\(list)?per_page=100"], timeout: Service.reviewTimeoutSeconds)
+      ["api", "--paginate", "--jq", ".[] | @json", "\(list)?per_page=100"], timeout: config.reviewTimeoutSeconds)
     let comments = try output.split(whereSeparator: \.isNewline).map { line in
       guard let comment = JSON.parse(String(line)), comment.object != nil else {
         throw APIError("gh api \(list) printed a line that is not a comment")

@@ -20,11 +20,6 @@ private func doneSession(_ sbd: Instance, _ repo: String, branch: String) throws
 }
 
 extension Instance {
-  /// The `rm-cancel` op with every id in one request.
-  fileprivate func cancelRemoval(_ ids: [String]) throws -> JSON {
-    try client.call("rm-cancel", ["sessions": .array(ids.map(JSON.string))])
-  }
-
   /// Moves sbd's clock past every `notBefore` that `rm-queue` has set so far.
   fileprivate func passTheUndoWindow() throws { try advanceClock(Int64(undoWindowSeconds + 1) * 1000) }
 
@@ -34,9 +29,6 @@ extension Instance {
     try advanceClock(1)
   }
 }
-
-/// The ids in an `rm-cancel` result's `cancelled`.
-private func cancelled(_ result: JSON) -> [String] { result["cancelled"]?.array?.compactMap(\.string) ?? [] }
 
 /// The `refused` entries of an `rm-cancel` result, by id.
 private func refusals(_ result: JSON) -> [String: JSON] {
@@ -52,7 +44,7 @@ extension RemovalJobTests {
     let sbd = try undoInstance()
     let s = try sbd.idleSession()
     _ = try sbd.sb("schedule", s.id, "--every", "1m", "tick one", "--json")
-    #expect(queued(try sbd.queueRemoval([s.id], scope: "work", worktree: false)) == [s.id])
+    try sbd.holdForRemoval(s.id)
 
     try sbd.advanceClock(61_000)
     try sbd.giveTheWorkerTime()
@@ -63,6 +55,30 @@ extension RemovalJobTests {
     #expect(cancelled(try sbd.cancelRemoval([s.id])) == [s.id])
     try sbd.advanceClock(1)
     try sbd.waitFor(s.id, "the reply to the run") { $0.lastReply == "Done: tick one" }
+  }
+
+  /// The row of a due loop on a session that the job holds says why it waits, and Run now refuses the session
+  /// with the same reason, because the tick would skip it.
+  @Test func aHeldSessionsLoopIsHeldAndRunNowRefusesIt() throws {
+    let sbd = try undoInstance()
+    let s = try sbd.idleSession()
+    let made = try JSONCoding.decode(
+      ScheduleRow.self, from: sbd.sb("schedule", s.id, "--every", "1m", "tick held", "--json")
+    ).schedule
+    #expect(queued(try sbd.queueRemoval([s.id], scope: "work", worktree: false)) == [s.id])
+    try sbd.advanceClock(61_000)
+
+    let rows = try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+    let refused = try sbd.run(["schedule", "run", made.id])
+
+    let status = try #require(rows.first { $0.schedule.id == made.id }?.status)
+    #expect(status.state == .held)
+    #expect(status.text == "held: the session is being removed")
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("\(made.id) can't run, because the session is being removed"), "\(refused.stderr)")
+    #expect(try sbd.get(s.id).schedules == [made])
+    #expect(try sbd.events(s.id, kind: "schedule-run-requested").isEmpty)
+    #expect(try sbd.events(s.id, "sent", text: "tick held").isEmpty)
   }
 
   // MARK: Undo window

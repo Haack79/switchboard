@@ -23,10 +23,6 @@ extension Instance {
     try #require(try condition(id)["id"]?.string)
   }
 
-  fileprivate func unpausedEvents(_ id: String, after mark: Int64) throws -> [Event] {
-    try events(id, after: mark).filter { $0.kind == "unpaused" }
-  }
-
   /// Checks that a met condition resumed the session once: the pause is gone, one `unpaused` event carries the
   /// outcome, one launch has the `wait` trigger, and claude's first prompt is `prompt`. Every way that a condition
   /// resolves goes through this check, so that the tick, the poller, and `resolve-wait` agree.
@@ -41,14 +37,6 @@ extension Instance {
     let launches = try launchEvents(id, after: mark)
     #expect(launches.count == 1)
     #expect(launches.first?.data["trigger"] == "wait", "\(launches.map(\.data))")
-  }
-
-  /// Checks that the session stays paused after `mark`: no `unpaused` event, no launch, and no live claude.
-  fileprivate func expectStillPaused(_ id: String, after mark: Int64) throws {
-    #expect(try pauseField(id) != nil)
-    #expect(try unpausedEvents(id, after: mark).isEmpty)
-    #expect(try launchEvents(id, after: mark).isEmpty)
-    #expect(try !get(id).live)
   }
 
   /// The session's open wait of the kind.
@@ -336,6 +324,31 @@ extension Instance {
     try sbd.expectStillPaused(s.id, after: mark)
     #expect(try sbd.get(s.id).state == .done)
     #expect(try sbd.condition(s.id)["kind"] == "date")
+  }
+
+  /// `unpause` refuses a session that the removal job holds, so the met condition leaves the pause, the condition,
+  /// and the message as they were. After Undo, the next tick resumes the session once.
+  @Test func aMetConditionKeepsThePauseOfASessionTheRemovalJobHoldsAndResumesItAfterUndo() throws {
+    let sbd = try longUndoInstance()
+    let s = try sbd.pausedStopped("t", ["--until", "1h", "--message", "check the dashboard"])
+    let condition = try sbd.conditionId(s.id)
+    try sbd.holdForRemoval(s.id)
+    let heldBefore = try sbd.heldCount(s.id)
+    let mark = try sbd.lastEventId(s.id)
+
+    try sbd.advanceClock(2 * hourMs)
+    try sbd.tickThrice()
+
+    try sbd.expectStillPaused(s.id, after: mark)
+    #expect(try sbd.conditionId(s.id) == condition)
+    #expect(try sbd.pauseField(s.id)?["message"] == "check the dashboard")
+    #expect(try sbd.heldCount(s.id) == heldBefore)
+    #expect(try sbd.removalState(s.id) == "queued")
+
+    #expect(cancelled(try sbd.cancelRemoval([s.id])) == [s.id])
+    try sbd.advanceClock(1)
+
+    try sbd.expectResumedByCondition(s.id, after: mark, outcome: "the time came", prompt: "check the dashboard")
   }
 
   @Test func resolvingAnOrdinaryWaitOfAPausedSessionKeepsThePauseAndHoldsTheMessage() throws {

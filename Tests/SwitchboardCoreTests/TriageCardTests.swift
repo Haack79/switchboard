@@ -155,6 +155,26 @@ let sessionCard = TriageSummary(
     #expect(wait.by == nil)
   }
 
+  /// Each wait here is one that `makeWait` accepts, so only its action drops it.
+  @Test(arguments: [
+    JSON.object(["kind": "session", "target": "kid", "state": "ready_to_merge", "then": "merge"]),
+    .object(["kind": "session", "target": "kid", "state": "done", "then": "rm-worktree"]),
+    .object(["kind": "session", "target": "kid", "state": "done", "then": "rm"]),
+    .object(["kind": "session", "target": "kid", "state": "needs_you", "then": "report", "note": "tell the user"]),
+  ])
+  func dropsAWaitOptionThatArmsAnAction(_ wait: JSON) throws {
+    let then = try #require(wait["then"]?.string)
+    let request = try JSONCoding.convert(wait, to: WaitRequest.self)
+    _ = try request.makeWait(id: "w", waiter: "", now: 0) { Wait.SessionTarget(id: $0, name: $0) }
+    let raw = card(options: [["label": "Wait", "action": "wait", "wait": wait]])
+
+    let result = try cleaned(raw)
+
+    #expect(result.card.options.isEmpty)
+    #expect(result.dropped.count == 1)
+    #expect(result.dropped.first?.contains("can't take then \(then)") == true, "\(result.dropped)")
+  }
+
   @Test(arguments: [nil, "", "  \n "] as [String?])
   func aSendWithoutAMessageSendsItsLabel(_ message: String?) throws {
     var option: [String: JSON] = ["label": "Go on", "action": "send"]
@@ -596,6 +616,199 @@ let sessionCard = TriageSummary(
 
     #expect(f.triage == nil)
     #expect(item(f)?.source == .fallback)
+  }
+}
+
+// MARK: The card ends with its turn
+
+private let cardPrompt = event("UserPromptSubmit", 0, ["prompt": "go"])
+
+/// A `Stop` that Claude Code sends after a Stop hook blocked the stop, which continues the same turn.
+private func hookStop(_ id: Int64, _ t: Int64, _ reply: String = "Still on it.") -> Event {
+  Event(
+    id: id, session: "s1", t: t, kind: "Stop",
+    data: ["last_assistant_message": .string(reply), "stop_hook_active": .bool(true)])
+}
+
+private func subagentStop(_ id: Int64, _ t: Int64, kind: String = "Stop") -> Event {
+  Event(id: id, session: "s1", t: t, kind: kind, data: ["agent_id": "a1", "last_assistant_message": "Searched."])
+}
+
+/// A tool call that starts a turn without a prompt, as a turn that reports a background job does.
+private func toolStart(_ id: Int64, _ t: Int64) -> Event {
+  Event(id: id, session: "s1", t: t, kind: "PreToolUse", data: .object(tool("Bash", ["command": "ls"], id: "b\(id)")))
+}
+
+private let secondCard = TriageSummary(
+  title: "Pick a release day", kind: .decision, summary: "Tagged v2.\nIt needs a day.",
+  options: [TriageOption(label: "Friday", action: .send, message: "Friday.", recommended: true)])
+
+/// The events after a card, and whether the card must still be the session's.
+struct StaleCardShape: CustomTestStringConvertible, Sendable {
+  var name: String
+  var events: @Sendable () throws -> [Event]
+  var keeps: Bool
+  var testDescription: String { name }
+}
+
+let staleCardShapes: [StaleCardShape] = [
+  StaleCardShape(
+    name: "card, Stop", events: { [cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion)] },
+    keeps: true),
+  StaleCardShape(
+    name: "card, Stop, Stop",
+    events: {
+      [cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion), stop(4, 3, "The job finished.")]
+    }, keeps: false),
+  StaleCardShape(
+    name: "card, Stop, PreToolUse, Stop",
+    events: {
+      [
+        cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion), toolStart(4, 3),
+        stop(5, 4, "The job finished."),
+      ]
+    }, keeps: false),
+  StaleCardShape(
+    name: "card, Stop with stop_hook_active, Stop",
+    events: {
+      [cardPrompt, try summaryEvent(2, 1, sessionCard), hookStop(3, 2), stop(4, 3, proseQuestion)]
+    }, keeps: true),
+  StaleCardShape(
+    name: "card, Stop, Stop with stop_hook_active",
+    events: {
+      [cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion), hookStop(4, 3, proseQuestion)]
+    }, keeps: true),
+  StaleCardShape(
+    name: "card, subagent Stop",
+    events: { [cardPrompt, try summaryEvent(2, 1, sessionCard), subagentStop(3, 2)] }, keeps: true),
+  StaleCardShape(
+    name: "card, subagent Stop, Stop",
+    events: { [cardPrompt, try summaryEvent(2, 1, sessionCard), subagentStop(3, 2), stop(4, 3, proseQuestion)] },
+    keeps: true),
+  StaleCardShape(
+    name: "card, Stop, subagent Stop",
+    events: { [cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion), subagentStop(4, 3)] },
+    keeps: true),
+  StaleCardShape(
+    name: "card, Stop, SubagentStop",
+    events: {
+      [
+        cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion),
+        subagentStop(4, 3, kind: "SubagentStop"),
+      ]
+    }, keeps: true),
+  StaleCardShape(
+    name: "card, UserPromptSubmit",
+    events: {
+      [
+        cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion),
+        event("UserPromptSubmit", 4, ["prompt": "Fix it."]),
+      ]
+    }, keeps: false),
+]
+
+@Suite struct TriageStaleCard {
+  @Test(arguments: staleCardShapes)
+  func theCardStaysOnlyUntilASecondMainStop(_ shape: StaleCardShape) throws {
+    let f = facts(try shape.events())
+
+    #expect((f.sessionSummary != nil) == shape.keeps, "\(f.sessionSummary.map(\.title) ?? "no card")")
+  }
+
+  @Test(arguments: staleCardShapes)
+  func aDroppedCardDropsItsRefToo(_ shape: StaleCardShape) throws {
+    let f = facts(try shape.events())
+
+    #expect((Triage.sessionSummaryRef(f) != nil) == shape.keeps)
+  }
+
+  /// A dropped card falls back to the summary of the newer reply.
+  @Test func aTurnThatEndsWithoutAPromptShowsItsReplyNotTheOldCard() throws {
+    let f = facts([
+      cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, "Started the build."),
+      stop(4, 3, proseQuestion),
+    ])
+
+    let item = try #require(itemOf(f))
+
+    #expect(item.source == .fallback)
+    #expect(item.title != sessionCard.title)
+  }
+
+  @Test func aTurnThatStartsWithAToolCallShowsItsReplyNotTheOldCard() throws {
+    let f = facts([
+      cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, "Started the build."), toolStart(4, 3),
+      stop(5, 4, proseQuestion),
+    ])
+
+    #expect(try #require(itemOf(f)).source == .fallback)
+  }
+
+  /// A card written after the first Stop belongs to the turn that follows it, so it outlives that turn's Stop.
+  @Test func aSecondCardAfterTheFirstStopStaysThroughTheNextStop() throws {
+    let f = facts([
+      cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, "Started the build."), toolStart(4, 3),
+      try summaryEvent(5, 4, secondCard), stop(6, 5, proseQuestion),
+    ])
+
+    #expect(f.sessionSummary == secondCard)
+    #expect(itemOf(f)?.title == secondCard.title)
+  }
+
+  @Test func theSecondCardGoesAtTheStopAfterItsOwn() throws {
+    let f = facts([
+      cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, "Started the build."), toolStart(4, 3),
+      try summaryEvent(5, 4, secondCard), stop(6, 5, proseQuestion), stop(7, 6, "The build passed."),
+    ])
+
+    #expect(f.sessionSummary == nil)
+  }
+
+  /// The guard's property: no main Stop since the Stop that ended the card's turn. A card recorded after the Stop
+  /// belongs to the turn that Stop ended (`aCardSetAfterTheStopBelongsToThatTurn`), so the next Stop ends a newer turn.
+  @Test func aCardRecordedAfterItsTurnsStopGoesAtTheNextStop() throws {
+    let f = facts([cardPrompt, stop(2, 1, proseQuestion), try summaryEvent(3, 2, sessionCard), stop(4, 3, "Done.")])
+
+    #expect(f.sessionSummary == nil)
+  }
+
+  /// sbd restores a snapshot of the facts and applies the events after it. A snapshot taken at any point gives the
+  /// card that a full replay gives.
+  @Test(arguments: staleCardShapes)
+  func aSnapshotAtEveryPointGivesTheCardOfAFullReplay(_ shape: StaleCardShape) throws {
+    let events = try shape.events()
+    let replayed = facts(events)
+
+    for k in 0...events.count {
+      var restored = try JSONCoding.convert(JSON(encoding: facts(Array(events[..<k]))), to: SessionFacts.self)
+      for e in events[k...] { restored.apply(e) }
+
+      #expect(restored.sessionSummary == replayed.sessionSummary, "snapshot after \(k) events")
+      #expect(restored == replayed, "snapshot after \(k) events")
+    }
+  }
+
+  /// sbd restores a snapshot of the facts and then applies the events after it.
+  @Test func aSnapshotAfterTheFirstStopStillDropsTheCardAtTheSecond() throws {
+    let head = [cardPrompt, try summaryEvent(2, 1, sessionCard), stop(3, 2, proseQuestion)]
+    let tail = [stop(4, 3, "The job finished.")]
+    var restored = try JSONCoding.convert(JSON(encoding: facts(head)), to: SessionFacts.self)
+
+    for e in tail { restored.apply(e) }
+
+    #expect(restored.sessionSummary == nil)
+    #expect(restored == facts(head + tail))
+  }
+
+  @Test func aSnapshotBeforeTheFirstStopKeepsTheCardThroughIt() throws {
+    let head = [cardPrompt, try summaryEvent(2, 1, sessionCard)]
+    let tail = [stop(3, 2, proseQuestion)]
+    var restored = try JSONCoding.convert(JSON(encoding: facts(head)), to: SessionFacts.self)
+
+    for e in tail { restored.apply(e) }
+
+    #expect(restored.sessionSummary == sessionCard)
+    #expect(restored == facts(head + tail))
   }
 }
 

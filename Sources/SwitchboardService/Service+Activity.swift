@@ -18,13 +18,16 @@ extension Service {
 
   /// `durationMs` limits the report to the rows from that many milliseconds before now onward.
   func activityReport(_ args: JSON) throws -> JSON {
-    var since: Int64?
-    if let duration = args["durationMs"] {
-      guard let ms = duration.int, ms >= 0 else { throw APIError("durationMs is a whole number of milliseconds") }
-      since = nowMs() - Int64(ms)
-    }
+    let since = try sinceMs(args)
     let events = try store.activity(since: since ?? 0)
     return try JSON(encoding: ActivityReport.build(events, enabled: activityOn, since: since))
+  }
+
+  /// The time `durationMs` milliseconds before now, or nil when the request names no `durationMs`.
+  func sinceMs(_ args: JSON) throws -> Int64? {
+    guard let duration = args["durationMs"] else { return nil }
+    guard let ms = duration.int, ms >= 0 else { throw APIError("durationMs is a whole number of milliseconds") }
+    return nowMs() - Int64(ms)
   }
 
   /// Logs how long the last resume took to reach this SessionStart, while the log is on. `facts` are the

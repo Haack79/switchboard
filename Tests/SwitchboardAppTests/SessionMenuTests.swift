@@ -51,7 +51,8 @@ private func isDeleteSelection(_ a: SessionMenuAction) -> Bool {
 private func isDestructive(_ a: SessionMenuAction) -> Bool {
   switch a {
   case .cleanUp, .delete, .deleteSelection: true
-  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .moveToAccount, .divider: false
+  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .moveToAccount, .unlinkParent, .divider:
+    false
   }
 }
 
@@ -100,6 +101,77 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
   @Test(arguments: [SessionKind.manager, .chat, .operator])
   func offersMoveToAccountForASessionOfAnyKind(_ kind: SessionKind) {
     #expect(SessionMenu.actions(for: ofKind(kind), selectionCount: nil, movesAccount: true).contains(.moveToAccount))
+  }
+}
+
+/// "Unlink from <parent>" shows only for a session whose parent matters, and it keeps the session, so it comes before
+/// the divider.
+@Suite struct SessionMenuUnlinkParent {
+  @Test func offersUnlinkWithTheParentsNameWhenTheSessionHasAParent() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: nil, parentName: "planner")
+
+    #expect(actions.contains(.unlinkParent("Unlink from planner")))
+  }
+
+  @Test func offersNoUnlinkWithoutAParentName() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: nil)
+
+    #expect(!actions.contains { if case .unlinkParent = $0 { true } else { false } })
+  }
+
+  @Test func offersUnlinkOnce() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: nil, movesAccount: true, parentName: "planner")
+
+    #expect(actions.filter { $0 == .unlinkParent("Unlink from planner") }.count == 1)
+  }
+
+  @Test func placesUnlinkAfterMoveToAccountAndBeforeTheDivider() {
+    let s = liveWork()
+
+    #expect(
+      SessionMenu.actions(for: s, selectionCount: nil, movesAccount: true, parentName: "planner") == [
+        .highlight, .snooze, .copyLink, .pause, .stop, .moveToAccount, .unlinkParent("Unlink from planner"), .divider,
+        expectedDelete(s),
+      ])
+  }
+
+  @Test func placesUnlinkLastAmongTheSafeActionsWithoutMoveToAccount() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: nil, parentName: "planner")
+
+    let unlink = actions.firstIndex(of: .unlinkParent("Unlink from planner"))
+    #expect(unlink.map { $0 + 1 < actions.count && actions[$0 + 1] == .divider } == true, "\(actions)")
+  }
+
+  @Test func placesUnlinkBeforeTheDividerInAMultiSelection() {
+    let actions = SessionMenu.actions(for: liveWork(), selectionCount: 3, parentName: "planner")
+
+    let unlink = actions.firstIndex(of: .unlinkParent("Unlink from planner"))
+    let divider = actions.firstIndex(of: .divider)
+    #expect(unlink != nil && divider != nil && unlink! < divider!, "\(actions)")
+  }
+
+  /// A session with no destructive action shows no divider, and Unlink still shows.
+  @Test func offersUnlinkForASessionWithNoDestructiveAction() {
+    let actions = SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil, parentName: "planner")
+
+    #expect(actions.last == .unlinkParent("Unlink from planner"))
+    #expect(!actions.contains(.divider))
+  }
+
+  @Test func unlinkIsNotDestructive() {
+    #expect(!isDestructive(.unlinkParent("Unlink from planner")))
+  }
+
+  /// The divider rules of `SessionMenuOrder` hold for every shape when the session also has a parent.
+  @Test(arguments: SessionMenuOrder.shapes.indices)
+  func placesNoDestructiveActionBeforeTheDividerWithAParent(_ i: Int) {
+    let (name, s, count) = SessionMenuOrder.shapes[i]
+    let actions = SessionMenu.actions(for: s, selectionCount: count, parentName: "planner")
+    let firstDestructive = actions.firstIndex(where: isDestructive)
+    let unlink = actions.firstIndex(of: .unlinkParent("Unlink from planner"))
+
+    #expect(firstDestructive.map { $0 > 0 && actions[$0 - 1] == .divider } ?? true, "\(name)")
+    #expect(unlink.map { u in firstDestructive.map { u < $0 } ?? true } == true, "\(name)")
   }
 }
 

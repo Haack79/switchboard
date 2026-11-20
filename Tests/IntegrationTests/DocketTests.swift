@@ -271,12 +271,18 @@ private func docketLog(_ sbd: Instance, _ id: String) throws -> [String] {
     let asking: JSON = ["detail": "reading", "waiting": true, "needs": "approve git push"]
     try docket.setReviews([listed("o/r#9", "reviewing", progress: asking)])
     try poll(sbd, s.id, "the review to wait on the user") { $0.state == .needsYou }
-    #expect(try told(0, "approve git push") == ["\(prefix) needs you: review needs you: approve git push."])
+    #expect(
+      try told(0, "approve git push") == [
+        "\(prefix) needs you in its own Inbox item (switchboard://session/\(s.id)): review needs you: approve git push."
+      ])
 
     // The row stays in Needs you from the question to the draft.
     try docket.setReviews([listed("o/r#9", "drafted", prState: "OPEN")])
     try poll(sbd, s.id, "the draft") { $0.docket?.review?.state == "drafted" }
-    #expect(try told(1, "draft ready") == ["\(prefix) needs you: draft ready to submit."])
+    #expect(
+      try told(1, "draft ready") == [
+        "\(prefix) needs you in its own Inbox item (switchboard://session/\(s.id)): draft ready to submit."
+      ])
 
     try docket.setReviews([listed("o/r#9", "submitted")])
     try poll(sbd, s.id, "the submitted review") { $0.state == .done }

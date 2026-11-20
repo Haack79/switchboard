@@ -26,6 +26,10 @@ public struct MCPToolServer: Sendable {
   /// client stops waiting on a tool call long before an unbounded wait ends.
   static let maxPendingWait = 120
 
+  /// The number of events that the `events` tool lists when it names no `limit`. Its answer stays in the
+  /// conversation, so the default is far below sbd's `Event.defaultLimit`.
+  static let defaultEventLimit = 20
+
   /// The `timeout` argument, clamped to 0 through `maxPendingWait` seconds. Default 30.
   static func pendingWait(_ timeout: JSON?) -> TimeInterval {
     TimeInterval(min(max(timeout?.int ?? 30, 0), maxPendingWait))
@@ -151,9 +155,9 @@ public struct MCPToolServer: Sendable {
     }
     switch name {
     case "list_sessions":
-      return try inScope(client.call("ls"), scoped)
+      return try brief(inScope(client.call("ls"), scoped), args)
     case "get_session":
-      return try session(sessionRef(args), scoped)
+      return try brief(session(sessionRef(args), scoped), args)
     case "read_reply":
       return try client.call("reply", ["session": try sessionID(args, scoped)])
     case "triage":
@@ -173,7 +177,7 @@ public struct MCPToolServer: Sendable {
     case "set_wait":
       var wait = try JSONCoding.convert(args, to: WaitRequest.self)
       // Only a blocked `sb wait --block` reads a caller wait's outcome.
-      if wait.then == Wait.Then.caller.rawValue { throw APIError("then is resume or notify, not caller") }
+      if wait.then == Wait.Then.caller.rawValue { throw WaitRequest.unknownThen("caller") }
       wait.by = Author.claude.rawValue
       if wait.kind == Wait.Kind.session.rawValue, let target = wait.target {
         wait.target = try sessionID(target, scoped).string
@@ -181,6 +185,7 @@ public struct MCPToolServer: Sendable {
       var request = try JSON(encoding: wait).object ?? [:]
       request["session"] = try sessionOrCaller(args, scoped)
       if let here = args["here"]?.bool { request["here"] = .bool(here) }
+      if let caller { request["caller"] = .string(caller) }
       return try client.call("wait", request)
     case "clear_wait":
       var request = pick(args, ["wait"])
@@ -196,7 +201,7 @@ public struct MCPToolServer: Sendable {
       guard let scoped else { return try client.call("group-ls") }
       return try JSON(encoding: GroupList(groups: [scoped.group], ungrouped: []))
     case "add_group":
-      var request = pick(args, ["name", "sessions", "note"])
+      var request = pick(args, ["name", "sessions", "note", "description"])
       request["by"] = MCPToolServer.byClaude
       return try client.call("group-add", request)
     case "remove_group":
@@ -223,16 +228,32 @@ public struct MCPToolServer: Sendable {
       if let caller { request["caller"] = .string(caller) }
       if let scoped { request["scope"] = .string(scoped.group.id) }
       return try client.call("highlight", request)
+    case "set_parent":
+      var request: [String: JSON] = ["session": try sessionID(args, scoped), "by": MCPToolServer.byClaude]
+      if args["clear"]?.bool == true { request["clear"] = true }
+      if let parent = args["parent"]?.string { request["parent"] = try sessionID(parent, scoped) }
+      if let caller { request["caller"] = .string(caller) }
+      if let scoped { request["scope"] = .string(scoped.group.id) }
+      return try client.call("parent", request)
     case "add_schedule":
       var request = pick(args, ["every", "prompt"])
       request["session"] = try sessionOrCaller(args, scoped)
       request["by"] = MCPToolServer.byClaude
-      return try scheduleCall("schedule", request, group: scoped?.group.id)
+      if let topup = args["topup"] {
+        request["gate"] = topup
+        // sbd checks who may add a top-up, so the caller goes with it unscoped too.
+        if let caller { request["caller"] = .string(caller) }
+      }
+      return try scheduleCall("schedule", request, scoped)
     case "list_schedules":
       let request = try args["session"].map { _ in ["session": try sessionID(args, scoped)] } ?? [:]
-      return try scheduleCall("schedules", request, group: scoped?.group.id)
+      return try scheduleCall("schedules", request, scoped)
     case "remove_schedule":
-      return try scheduleCall("remove-schedule", pick(args, ["schedule"]), group: scoped?.group.id)
+      return try scheduleCall("remove-schedule", pick(args, ["schedule"]), scoped)
+    case "edit_schedule":
+      return try scheduleCall("edit-schedule", pick(args, ["schedule", "every", "prompt"]), scoped)
+    case "run_schedule":
+      return try scheduleCall("run-schedule", pick(args, ["schedule"]), scoped)
     case "request_mcp_server":
       guard let caller else {
         throw APIError("request_mcp_server works only in a Manager conversation that Switchboard started.")
@@ -247,6 +268,10 @@ public struct MCPToolServer: Sendable {
       var request = pick(args, ["text", "needsYou", "session"])
       if let caller { request["caller"] = .string(caller) }
       return try client.call("operator-report", request)
+    case "approve":
+      var request = pick(args, ["wait"])
+      if let caller { request["caller"] = .string(caller) }
+      return try client.call("wait-approve", request)
     default:
       throw APIError("no tool \(name)")
     }
@@ -319,6 +344,11 @@ public struct MCPToolServer: Sendable {
     return ["plan": args["plan"] ?? .null, "kind": args["kind"] ?? .null, "ok": true]
   }
 
+  /// The sessions in `full` in their brief form, unless `args` asks for every field.
+  private func brief(_ full: JSON, _ args: JSON) throws -> JSON {
+    args["full"]?.bool == true ? full : try SessionBrief.json(full)
+  }
+
   /// The items of `list` whose `id` is a session in the group.
   private func inScope(_ list: JSON, _ scoped: Scoped?) -> JSON {
     guard let scoped else { return list }
@@ -327,7 +357,8 @@ public struct MCPToolServer: Sendable {
 
   /// A scoped server without a session asks for its members' events.
   private func events(_ args: JSON, _ scoped: Scoped?) throws -> JSON {
-    var request = pick(args, ["since", "limit"])
+    var request = pick(args, ["since", "limit", "kinds", "full"])
+    request["limit"] = request["limit"] ?? .number(Double(MCPToolServer.defaultEventLimit))
     if args["session"] != nil {
       request["session"] = try sessionID(args, scoped)
     } else if let scoped {

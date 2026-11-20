@@ -9,8 +9,8 @@ import Testing
     let b = try sbd.new(name: "bravo")
     let mcp = try MCPClient(sbd)
 
-    let listed = try mcp.call("list_sessions").decode([SessionSummary].self)
-    let got = try mcp.call("get_session", ["session": "bravo"]).decode(SessionSummary.self)
+    let listed = try mcp.call("list_sessions").decode([SessionBrief].self)
+    let got = try mcp.call("get_session", ["session": "bravo"]).decode(SessionBrief.self)
 
     #expect(Set(listed.map(\.id)) == [a.id, b.id])
     #expect(got.id == b.id)
@@ -69,6 +69,57 @@ import Testing
     let events = try mcp.call("events", ["session": .string(s.id), "since": 0, "limit": 2]).decode([Event].self)
 
     #expect(events.count == 2)
+  }
+
+  /// An idle session in group Flags, a server for the group or for every session, and the `events` arguments
+  /// that read the session's events from that server.
+  func eventsServer(_ sbd: Instance, scoped: Bool) throws -> (SessionSummary, MCPClient, [String: JSON]) {
+    let s = try idle(sbd, name: "alpha")
+    let group = try addGroup(sbd, "Flags", s.id)
+    let mcp = try MCPClient(sbd, group: scoped ? group.id : nil)
+    return (s, mcp, scoped ? [:] : ["session": .string(s.id)])
+  }
+
+  @Test(arguments: [false, true]) func eventsWithoutALimitListsTheNewest20(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    for i in 0..<25 { try sbd.addPlainNote(s.id, "note \(i)") }
+    let newest = try sbd.events(s.id).suffix(20).map(\.id)
+
+    let events = try mcp.call("events", args).decode([Event].self)
+
+    #expect(events.map(\.id) == Array(newest))
+  }
+
+  @Test(arguments: [false, true]) func eventsPassesKindsThrough(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    try sbd.addPlainNote(s.id, "one")
+    try sbd.addPlainNote(s.id, "two")
+    try sbd.postProbe(s.id)
+    let notes = try sbd.events(s.id).filter { $0.kind == "note" }.map(\.id)
+
+    let events = try mcp.call("events", args.merging(["kinds": ["note"]]) { $1 }).decode([Event].self)
+
+    #expect(events.map(\.id) == notes)
+  }
+
+  @Test(arguments: [false, true]) func eventsPassesFullThrough(scoped: Bool) throws {
+    let sbd = try Instance()
+    let (s, mcp, args) = try eventsServer(sbd, scoped: scoped)
+    let response: JSON = ["stdout": "hello", "stderr": "", "interrupted": false]
+    try sbd.postHook(
+      s.id, "PostToolUse", ["tool_name": "Bash", "tool_use_id": "toolu_full", "tool_response": response])
+    let read = { (extra: [String: JSON]) throws -> JSON? in
+      try mcp.call("events", args.merging(extra) { $1 }).decode([Event].self)
+        .last { $0.data["tool_use_id"] == "toolu_full" }?.data["tool_response"]
+    }
+
+    let full = try read(["kinds": ["PostToolUse"], "full": true])
+    let slim = try read(["kinds": ["PostToolUse"]])
+
+    #expect(full == response)
+    #expect(slim?.string != nil, "\(slim?.text ?? "nil")")
   }
 
   @Test func sendDeliversTheText() throws {
@@ -286,7 +337,7 @@ import Testing
     try sbd.postArtifactHook(s.id)
     let mcp = try MCPClient(sbd)
 
-    let got = try #require(try mcp.call("get_session", ["session": .string(s.id)]).json)
+    let got = try #require(try mcp.call("get_session", ["session": .string(s.id), "full": true]).json)
 
     #expect(got["artifacts"]?.array?.compactMap { $0["url"]?.string } == [artifactPageURL])
     #expect(got["artifacts"]?.array?.first?["title"]?.string == "Delta Rates")
@@ -299,7 +350,7 @@ import Testing
     try sbd.postArtifactHook(a.id)
     let mcp = try MCPClient(sbd)
 
-    let listed = try #require(try mcp.call("list_sessions").json?.array)
+    let listed = try #require(try mcp.call("list_sessions", ["full": true]).json?.array)
 
     let alpha = try #require(listed.first { $0["id"]?.string == a.id })
     let bravo = try #require(listed.first { $0["id"]?.string == b.id })
@@ -315,5 +366,16 @@ import Testing
     let tool = try #require(try mcp.tools().first { $0["name"]?.string == name })
 
     #expect(tool["description"]?.string?.contains("artifacts") == true, "\(tool["description"]?.string ?? "")")
+  }
+
+  @Test(arguments: ["list_sessions", "get_session"])
+  func theSessionToolsSchemasTakeFull(_ name: String) throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let tool = try #require(try mcp.tools().first { $0["name"]?.string == name })
+
+    let properties = try #require(tool["inputSchema"]?["properties"]?.object)
+    #expect(properties["full"]?["type"]?.string == "boolean")
   }
 }

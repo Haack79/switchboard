@@ -577,7 +577,7 @@ extension WaitTests {
     return try sbd.get(s.id)
   }
 
-  static let overdueReview = "a review from alex on the session's PR: still open after 1 d"
+  static let overdueReview = "a review from alex on the session's PR: still open after 1d"
 
   @Test func aReviewWaitRechecksADayAfterItWasSet() throws {
     let sbd = try Instance()
@@ -611,6 +611,30 @@ extension WaitTests {
     let due = try sbd.waitFor(s.id, "the recheck") { $0.state == .needsYou }
     #expect(due.reason == WaitTests.overdueReview)
     #expect(due.waits.map(\.kind) == [.review])
+  }
+
+  /// The item names the waits that raised it, so the app can show them.
+  @Test func anOverdueReviewWaitsItemNamesTheWaitInItsDetails() throws {
+    let sbd = try Instance()
+    let s = try stoppedWithAReviewWait(sbd)
+    let wait = try #require(s.waits.first)
+
+    try sbd.advanceClock(25 * WaitTests.hourMs)
+
+    try sbd.waitFor(s.id, "the recheck") { $0.state == .needsYou }
+    let details = try sbd.getJSON(s.id)["triage"]?["message"]?["details"]
+    #expect(details?["overdueWaits"] == .array([.string(wait.id)]), "\(String(describing: details))")
+  }
+
+  /// An item that no wait raised names no waits.
+  @Test func aSessionWithoutAnOverdueWaitHasNoOverdueWaitsInItsDetails() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(prompt: "offer it")
+    try sbd.waitFor(s.id, "the offer") { $0.state == .canContinue }
+
+    let details = try #require(try sbd.getJSON(s.id)["triage"]?["message"]?["details"])
+
+    #expect(details["overdueWaits"] == nil, "\(details)")
   }
 
   @Test func anOverdueWaitRecordsNoResolutionAndSendsNothing() throws {
@@ -655,7 +679,7 @@ extension WaitTests {
     try sbd.advanceClock(3 * WaitTests.hourMs)
 
     let due = try sbd.waitFor(s.id, "the CI recheck") { $0.state == .needsYou }
-    #expect(due.reason == "CI on the session's PR: still open after 2 h")
+    #expect(due.reason == "CI on the session's PR: still open after 2h")
     #expect(due.waits.map(\.kind) == [.ci, .review])
   }
 
@@ -736,7 +760,7 @@ extension WaitTests {
     try sbd.sb("wait", a.id, "--kind", "session", "--target", "b")
     try sbd.advanceClock(61_000)
     let due = try sbd.waitFor(a.id, "the recheck") { $0.state == .needsYou }
-    #expect(due.reason == "b to reach Done: still open after 1 min")
+    #expect(due.reason == "b to reach Done: still open after 1m")
     #expect(due.waits.count == 1)
 
     try sbd.sb("done", b.id)

@@ -32,9 +32,7 @@ struct ListSectionHeader: View {
       if let collapsed {
         Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.caption2).accessibilityHidden(true)
       }
-      Text(title)
-      Spacer(minLength: 4)
-      if count > 0 { Text("\(count)").monospacedDigit() }
+      CountedTitle(title: title, count: count)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(Self.spoken(title: title, count: count, collapsed: collapsed))
@@ -52,6 +50,22 @@ struct ListSectionHeader: View {
     if count > 0 { parts.append("\(count)") }
     if let collapsed { parts.append(collapsed ? "collapsed" : "expanded") }
     return parts.joined(separator: ", ")
+  }
+}
+
+/// A title with its count at the trailing edge. A zero count does not show.
+struct CountedTitle: View {
+  let title: String
+  let count: Int
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Text(title)
+      Spacer(minLength: 4)
+      if count > 0 { Text("\(count)").monospacedDigit() }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(ListSectionHeader.spoken(title: title, count: count))
   }
 }
 

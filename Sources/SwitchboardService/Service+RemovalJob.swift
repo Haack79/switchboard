@@ -96,7 +96,7 @@ extension Service {
     case "rm-keep":
       let id = try failedRemoval(args)
       try restoreFromTrash(id)
-      try update(id) { $0.removal = nil }
+      try clearRemoval(id)
       return try JSON(encoding: summary(id))
     case "rm-cancel":
       return try JSON(encoding: cancelRemovals(args))
@@ -108,6 +108,59 @@ extension Service {
       return [:]
     default:
       throw APIError("unknown request \(op)")
+    }
+  }
+
+  /// Clears the session's removal, so its state comes from its events again. When the store can't save the change,
+  /// the removal stays and this throws. It runs on the state queue.
+  private func clearRemoval(_ id: String) throws {
+    let removal = entries[id]?.session.removal
+    do {
+      try update(id) { $0.removal = nil }
+    } catch {
+      // `fold` can run inside `store.transaction`, so this can't use `updateOrRestore`.
+      entries[id]?.session.removal = removal
+      throw error
+    }
+  }
+
+  /// Clears a failed removal after a main-session prompt, a launch, a resume, `undone`, or `unpaused`. It clears
+  /// the removal only when the session runs on this Mac, a folder is at `cwd`, nothing is at the trash path, the
+  /// removal has not recorded `released`, and `rm` or `cleanup` is not removing the session's files. `released` and
+  /// the folder at `cwd` stand in for git still listing the worktree. Otherwise it keeps the removal and logs why.
+  /// It never moves a folder, because moving one back from the trash is Keep's job. `fold` calls it for each new
+  /// event, and replay at startup does not. It runs on the state queue.
+  func dropStaleFailedRemoval(_ id: String, event: Event) {
+    let comesBack =
+      switch event.kind {
+      case "UserPromptSubmit": !event.fromSubagent
+      case "started", "resumed", "undone", "unpaused": true
+      default: false
+      }
+    guard comesBack, let session = entries[id]?.session, let removal = session.removal, removal.state == .failed
+    else { return }
+    let kept: String? =
+      if removing.contains(id) {
+        "`rm` or `cleanup` is removing its files"
+      } else if let host = session.host {
+        "it runs on \(host), where sbd can't check its folder"
+      } else if let trash = trashedFolder(id) {
+        "its folder is in the trash at \(trash)"
+      } else if removal.released {
+        "git no longer lists \(session.cwd) as a worktree"
+      } else if !folderExists(session.cwd) {
+        "\(session.cwd) is not a folder"
+      } else {
+        nil
+      }
+    if let kept {
+      logLine("kept the failed removal of \(id) after \(event.kind): \(kept)")
+      return
+    }
+    do {
+      try clearRemoval(id)
+    } catch {
+      logLine("can't clear the failed removal of \(id) after \(event.kind): \(error)")
     }
   }
 

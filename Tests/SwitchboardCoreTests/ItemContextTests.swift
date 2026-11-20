@@ -779,7 +779,7 @@ private struct TailOnlyMachine: Machine {
     #expect(read.steps.suffix(2).compactMap(\.text) == ["Part one.", "Part two."])
   }
 
-  /// Every assistant message that the chat view shows is a text step, in the same order and with the same time, and
+  /// Every assistant message that `chat-log` reads is a text step, in the same order and with the same time, and
   /// no line that `messages` drops gives a step. Each assistant line holds one text block, because `messages` joins
   /// a line's blocks into one message.
   @Test func theTextStepsAreTheAssistantMessagesThatMessagesReads() throws {
@@ -941,6 +941,21 @@ private struct TailOnlyMachine: Machine {
     let facts = cardlessPrompt(ToolCall(tool: Attention.notificationPromptTool, summary: "a prompt", since: 1))
 
     #expect(TranscriptAnchor.of(item: try promptItem(facts), facts: facts) == .end)
+  }
+
+  /// A title over 60 characters must still give the ref that the anchor compares with.
+  @Test(arguments: [false, true])
+  func aPromptWithoutACardWhoseReasonIsOverSixtyCharactersAnchorsAtItsCall(_ question: Bool) throws {
+    let text = "Which of the three release branches should the hotfix for #1204 land on first?"
+    let input: JSON = question ? fruitQuestions : ["command": .string(text)]
+    let facts = cardlessPrompt(
+      ToolCall(tool: question ? "AskUserQuestion" : "Bash", summary: text, since: 1, input: input), question: question)
+    let item = try promptItem(facts)
+    try #require(item.title.count > Triage.titleLength)
+
+    let anchor = TranscriptAnchor.of(item: item, facts: facts)
+
+    #expect(anchor == .toolCall(tool: question ? "AskUserQuestion" : "Bash", input: input))
   }
 
   @Test func anotherRuleItemWhileAPromptIsOpenIsUnanchored() {

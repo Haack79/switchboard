@@ -449,3 +449,482 @@ import Testing
     #expect(try sbd.events(id, "sent", text: "tick remote").count == 1)
   }
 }
+
+/// Helpers that the history, status, and Run now suites share with `ScheduleFireTests`.
+extension ScheduleFireTests {
+  /// Adds a schedule through `sb schedule <session> --every <every> <prompt> --json`.
+  func add(_ sbd: Instance, _ session: String, every: String, _ prompt: String) throws -> ScheduleRow {
+    try JSONCoding.decode(ScheduleRow.self, from: sbd.sb("schedule", session, "--every", every, prompt, "--json"))
+  }
+
+  /// The schedule's status as `sb schedule ls --json` prints it.
+  func status(_ sbd: Instance, _ id: String) throws -> ScheduleStatus? {
+    try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+      .first { $0.schedule.id == id }?.status
+  }
+
+  /// The line of `sb schedule ls` that names the schedule.
+  func listedLine(_ sbd: Instance, _ id: String) throws -> String? {
+    try sbd.sb("schedule", "ls").split(separator: "\n").first { $0.contains(id) }.map(String.init)
+  }
+
+  /// Starts a `slow held` turn, which runs a tool call until $SB_HOME/report exists.
+  func holdATurn(_ sbd: Instance, _ session: String) throws {
+    try sbd.sb("send", session, "slow held")
+    try waitForPrompt(sbd, session, "slow held")
+    try sbd.waitFor(session, "the held turn") { $0.state == .working }
+  }
+
+  /// Marks the session done, or pauses it and waits for its claude to exit.
+  func holdSession(_ sbd: Instance, _ session: String, _ how: String) throws {
+    if how == "done" {
+      try sbd.sb("done", session)
+    } else {
+      try sbd.pauseJSON(session)
+      try sbd.waitForPausedExit(session)
+    }
+  }
+
+  /// A stopped session whose folder is gone, with a schedule, so the schedule's run fails.
+  func doomedLoop(_ sbd: Instance, every: String, _ prompt: String) throws -> (SessionSummary, Schedule) {
+    let folder = "\(sbd.home.path)/doomed"
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    let s = try sbd.client.call(
+      "new", ["path": .string(folder), "name": "doomed", "prompt": "hello"], as: SessionSummary.self)
+    try sbd.waitFor(s.id, "the first reply") { $0.lastReply == "Done: hello" }
+    try sbd.passIdleStop(s.id)
+    let made = try add(sbd, s.id, every: every, prompt).schedule
+    try FileManager.default.removeItem(atPath: folder)
+    return (s, made)
+  }
+}
+
+/// `runs` keeps each schedule's recent runs, newest first, and every reader shows the same runs. The cap is a
+/// Core unit test, because each run here costs a stub turn.
+@Suite(.blocking(timeLimit: .seconds(120))) struct ScheduleHistoryTests {
+  let fire = ScheduleFireTests()
+
+  /// Moves the clock past the next run and waits until the run's turn ends, so the next move finds the session
+  /// free. Each move stays well short of the idle stop.
+  func fireOnce(_ sbd: Instance, _ session: String, _ id: String, count: Int) throws {
+    let stops = try sbd.events(session, kind: "Stop").count
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("run \(count) of \(id)", timeout: 30) {
+      try fire.current(sbd, session, id)?.runs?.count == count
+    }
+    try sbd.waitFor("the turn of run \(count)", timeout: 30) { try sbd.events(session, kind: "Stop").count > stops }
+  }
+
+  @Test func eachRunIsKeptNewestFirstAndEveryReaderShowsTheSameRuns() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick history")
+
+    for i in 1...3 { try fireOnce(sbd, s.id, made.id, count: i) }
+
+    let stored = try #require(try fire.current(sbd, s.id, made.id))
+    let runs = try #require(stored.runs)
+    #expect(runs.count == 3)
+    #expect(Set(runs.map(\.t)).count == 3)
+    #expect(runs.map(\.t) == runs.map(\.t).sorted(by: >))
+    #expect(runs.first == stored.last)
+    #expect(runs.allSatisfy { $0.outcome == .pasted })
+    let got = try JSONCoding.decode(SessionSummary.self, from: sbd.sb("get", s.id, "--json"))
+    let listed = try JSONCoding.decode([SessionSummary].self, from: sbd.sb("ls", "--json"))
+    let rows = try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+    #expect(got.schedules?.first?.runs == runs)
+    #expect(listed.first { $0.id == s.id }?.schedules?.first?.runs == runs)
+    #expect(rows.first { $0.schedule.id == made.id }?.schedule.runs == runs)
+  }
+
+  /// The `schedule-ran` event's schedule is the schedule after the run, with its history.
+  @Test func theScheduleRanEventCarriesTheRuns() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick event")
+
+    for i in 1...2 { try fireOnce(sbd, s.id, made.id, count: i) }
+
+    let ran = try fire.scheduleRan(sbd, s.id)
+    try #require(ran.count == 2, "\(ran)")
+    let schedule = try #require(ran[1].data["schedule"])
+    let runs = try #require(try JSONCoding.convert(schedule, to: Schedule.self).runs)
+    #expect(runs.count == 2)
+    #expect(runs == (try fire.current(sbd, s.id, made.id)?.runs))
+  }
+
+  @Test func theHistorySurvivesAnSbdRestart() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick restart")
+    for i in 1...2 { try fireOnce(sbd, s.id, made.id, count: i) }
+    let before = try #require(try fire.current(sbd, s.id, made.id)?.runs)
+
+    sbd.stopSbd()
+    try sbd.startSbd()
+
+    #expect(try fire.current(sbd, s.id, made.id)?.runs == before)
+    #expect(before.count == 2)
+  }
+}
+
+/// `schedule ls --json` computes each row's status with `Schedule.hold`, the same function that decides which
+/// sessions `fireDueSchedules` skips. `overdue` is in `ScheduleFireRemoteTests`, because a held turn across more
+/// than 10 minutes of clock time is fragile.
+@Suite(.blocking(timeLimit: .seconds(120))) struct ScheduleStatusTests {
+  let fire = ScheduleFireTests()
+
+  /// A live idle session runs the loop on the tick that the clock move starts, so a running turn holds it.
+  @Test func aLoopDueDuringATurnIsDue() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick due")
+    try fire.holdATurn(sbd, s.id)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let status = try #require(try fire.status(sbd, made.id))
+    #expect(status.state == .due)
+    #expect(status.text.hasPrefix("due "), "\(status.text)")
+    #expect(status.text.hasSuffix("runs when the session is free"), "\(status.text)")
+    sbd.hold("report")
+  }
+
+  @Test func aLoopWhoseRunFailedIsFailedWithTheError() throws {
+    let sbd = try Instance()
+    let (s, made) = try fire.doomedLoop(sbd, every: "1m", "tick gone")
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+
+    let last = try fire.waitForRun(sbd, s.id, made.id)
+    try #require(last.outcome == .failed)
+    let status = try #require(try fire.status(sbd, made.id))
+    #expect(status.state == .failed)
+    #expect(status.text.hasPrefix("failed "), "\(status.text)")
+    #expect(status.text.contains(s.cwd), "\(status.text)")
+  }
+
+  /// Risk 2: the status says `held` exactly when the tick skips the session. The JSON and the text both say so,
+  /// and three more ticks send nothing.
+  @Test(arguments: [("done", "the session is marked done"), ("paused", "the session is paused")])
+  func aHeldLoopIsHeldAndSendsNothing(_ how: String, _ hold: String) throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick \(how)")
+    try fire.holdSession(sbd, s.id, how)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    let status = try #require(try fire.status(sbd, made.id))
+    let line = try fire.listedLine(sbd, made.id)
+    for _ in 0..<3 { try sbd.advanceClock(11_000) }
+    sleep(1)
+
+    #expect(status.state == .held)
+    #expect(status.text == "held: \(hold)")
+    #expect(line?.contains("held: \(hold)") == true, "\(String(describing: line))")
+    #expect(try fire.runs(sbd, s.id, "tick \(how)").isEmpty)
+    #expect(try fire.scheduleRan(sbd, s.id).isEmpty)
+  }
+
+  /// Risk 2's other side: a live session's loop that is `due` sends once when the session is free.
+  @Test func aDueLoopOnALiveSessionSendsOnceWhenTheSessionIsFree() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try fire.schedule(sbd, s.id, "tick live")
+    try fire.holdATurn(sbd, s.id)
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    let status = try #require(try fire.status(sbd, made.id))
+    sbd.hold("report")
+
+    #expect(status.state == .due)
+    try sbd.waitFor(s.id, "the reply to the run", timeout: 30) { $0.lastReply == "Done: tick live" }
+    sleep(2)
+    #expect(try fire.runs(sbd, s.id, "tick live").count == 1)
+    #expect(try fire.scheduleRan(sbd, s.id).count == 1)
+  }
+
+  /// `schedules` keeps its order on main: paused last, then `next`, then id. Only the Loops tab sorts attention
+  /// first. The failed loop's next run is two minutes after its run, past the 1m loop's.
+  @Test func aFailedLoopDoesNotMoveAheadOfALoopDueSooner() throws {
+    let sbd = try Instance()
+    let (s, failed) = try fire.doomedLoop(sbd, every: "2m", "tick gone")
+    try sbd.advanceClock(121_000)
+    try #require(try fire.waitForRun(sbd, s.id, failed.id).outcome == .failed)
+    let other = try sbd.new(name: "other")
+    let sooner = try fire.add(sbd, other.id, every: "1m", "sooner")
+
+    let rows = try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+
+    #expect(rows.map(\.schedule.id) == [sooner.schedule.id, failed.id])
+    #expect(rows.map { $0.status?.state } == [.active, .failed])
+  }
+}
+
+/// Risk 1: `run-schedule` only moves `next` to now. The next tick fires the schedule through
+/// `fireDueSchedules`, so the session hold and `Schedule.blocker` apply as for any due schedule. Each loop here
+/// runs every 30m, so only Run now makes it due.
+@Suite(.blocking(timeLimit: .seconds(120))) struct ScheduleRunNowTests {
+  static let thirtyMinutes: Int64 = 1_800_000
+  let fire = ScheduleFireTests()
+
+  func add(_ sbd: Instance, _ session: String, _ prompt: String) throws -> ScheduleRow {
+    try fire.add(sbd, session, every: "30m", prompt)
+  }
+
+  /// `sb schedule run <id> --json`.
+  func runNow(_ sbd: Instance, _ id: String) throws -> ScheduleRow {
+    try JSONCoding.decode(ScheduleRow.self, from: sbd.sb("schedule", "run", id, "--json"))
+  }
+
+  func requested(_ sbd: Instance, _ session: String) throws -> [Event] {
+    try sbd.events(session, kind: "schedule-run-requested")
+  }
+
+  /// The schedule with only its next run changed.
+  func onlyNextMoved(_ before: Schedule, _ after: Schedule) -> Bool {
+    var expected = before
+    expected.next = after.next
+    return after == expected
+  }
+
+  @Test func runNowReturnsADueRowWithOnlyTheNextRunMoved() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try add(sbd, s.id, "tick returned")
+
+    let r = try runNow(sbd, made.schedule.id)
+
+    let after = try sbd.now()
+    #expect(r.schedule.next <= after)
+    #expect(onlyNextMoved(made.schedule, r.schedule))
+    #expect(r.status?.state == .due)
+    #expect(r.session == s.id)
+  }
+
+  @Test func runNowOnAnIdleSessionSendsThePromptOnceAndStartsTheIntervalAgain() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try add(sbd, s.id, "tick now")
+    // sbd pastes only `pasteSettleSeconds` after SessionStart, so a run right after the first reply would be queued.
+    try sbd.advanceClock(2_000)
+
+    _ = try runNow(sbd, made.schedule.id)
+
+    try sbd.waitFor("the run's send", timeout: 10) { try fire.runs(sbd, s.id, "tick now").count == 1 }
+    let last = try fire.waitForRun(sbd, s.id, made.schedule.id)
+    let stored = try #require(try fire.current(sbd, s.id, made.schedule.id))
+    #expect(last.outcome == .pasted)
+    #expect(last.skipped == 0)
+    #expect(stored.next == last.t + ScheduleRunNowTests.thirtyMinutes)
+    try sbd.waitFor(s.id, "the reply to the run") { $0.lastReply == "Done: tick now" }
+    sleep(2)
+    #expect(try fire.runs(sbd, s.id, "tick now").count == 1)
+    #expect(try fire.scheduleRan(sbd, s.id).count == 1)
+    #expect(try requested(sbd, s.id).count == 1)
+  }
+
+  @Test func runNowDuringATurnSendsNothingUntilTheTurnEndsThenOnce() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try add(sbd, s.id, "tick after the turn")
+    try fire.holdATurn(sbd, s.id)
+
+    _ = try runNow(sbd, made.schedule.id)
+    sleep(2)
+
+    #expect(try fire.runs(sbd, s.id, "tick after the turn").isEmpty)
+    #expect(try fire.current(sbd, s.id, made.schedule.id)?.last == nil)
+    sbd.hold("report")
+    try sbd.waitFor(s.id, "the reply to the run", timeout: 30) { $0.lastReply == "Done: tick after the turn" }
+    sleep(2)
+    #expect(try fire.runs(sbd, s.id, "tick after the turn").count == 1)
+  }
+
+  /// An open card holds the run as a running turn does. The prompt goes in once, after the card closes.
+  @Test func runNowWithAnOpenCardSendsNothingUntilTheCardCloses() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(prompt: "perm touch x")
+    try sbd.waitFor(s.id, "the card") { !$0.cards.isEmpty }
+    let made = try add(sbd, s.id, "tick after the card")
+
+    let r = try runNow(sbd, made.schedule.id)
+    sleep(2)
+
+    #expect(r.status?.state == .due)
+    #expect(try fire.runs(sbd, s.id, "tick after the card").isEmpty)
+    #expect(try fire.current(sbd, s.id, made.schedule.id)?.last == nil)
+    try sbd.sb("allow", s.id)
+    try sbd.waitFor(s.id, "the reply to the run", timeout: 30) { $0.lastReply == "Done: tick after the card" }
+    sleep(2)
+    #expect(try fire.runs(sbd, s.id, "tick after the card").count == 1)
+  }
+
+  @Test func runNowResumesAStoppedSession() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    try sbd.passIdleStop(s.id)
+    let made = try add(sbd, s.id, "tick resumed")
+
+    _ = try runNow(sbd, made.schedule.id)
+
+    try sbd.waitFor(s.id, "the reply to the resumed run", timeout: 30) { $0.lastReply == "Done: tick resumed" }
+    #expect(sbd.stubArgs().last?.hasPrefix("--resume \(s.claudeSessionId) ") == true, "\(sbd.stubArgs())")
+    #expect(try fire.current(sbd, s.id, made.schedule.id)?.last?.outcome == .resumed)
+  }
+
+  /// A second run before the schedule fires, on the same tick or while a turn holds it, finds it due already.
+  /// It returns the row, records no second event, and the session gets one prompt.
+  @Test func twoRunsBeforeTheScheduleFiresSendOnePrompt() throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try add(sbd, s.id, "tick twice")
+    try fire.holdATurn(sbd, s.id)
+
+    let first = try runNow(sbd, made.schedule.id)
+    let second = try runNow(sbd, made.schedule.id)
+
+    #expect(second.schedule == first.schedule)
+    #expect(try requested(sbd, s.id).count == 1)
+    sbd.hold("report")
+    try sbd.waitFor(s.id, "the reply to the run", timeout: 30) { $0.lastReply == "Done: tick twice" }
+    sleep(2)
+    #expect(try fire.runs(sbd, s.id, "tick twice").count == 1)
+    #expect(try fire.scheduleRan(sbd, s.id).count == 1)
+  }
+
+  @Test func runNowRefusesAPausedScheduleAndKeepsItsNextRun() throws {
+    let sbd = try Instance()
+    let s = try sbd.new()
+    let made = try add(sbd, s.id, "tick paused")
+    try sbd.sb("schedule", "pause", made.schedule.id)
+    let paused = try fire.current(sbd, s.id, made.schedule.id)
+
+    let r = try sbd.run(["schedule", "run", made.schedule.id])
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("is paused. Resume it first"), "\(r.stderr)")
+    #expect(try fire.current(sbd, s.id, made.schedule.id) == paused)
+    #expect(try requested(sbd, s.id).isEmpty)
+  }
+
+  /// The tick would skip the session, so accepting the request would mislead.
+  @Test(arguments: [("done", "the session is marked done"), ("paused", "the session is paused")])
+  func runNowRefusesAHeldSessionWithTheReason(_ how: String, _ hold: String) throws {
+    let sbd = try Instance()
+    let s = try sbd.idleSession()
+    let made = try add(sbd, s.id, "tick \(how)")
+    try fire.holdSession(sbd, s.id, how)
+
+    let r = try sbd.run(["schedule", "run", made.schedule.id])
+    sleep(2)
+
+    #expect(r.status != 0)
+    #expect(r.stderr.contains("\(made.schedule.id) can't run, because \(hold)"), "\(r.stderr)")
+    #expect(try fire.current(sbd, s.id, made.schedule.id) == made.schedule)
+    #expect(try requested(sbd, s.id).isEmpty)
+    #expect(try fire.runs(sbd, s.id, "tick \(how)").isEmpty)
+  }
+
+  @Test func runNowNeedsAKnownIdOnTheNamedSession() throws {
+    let sbd = try Instance()
+    let owner = try sbd.new(name: "owner")
+    let other = try sbd.new(name: "other")
+    let made = try add(sbd, owner.id, "tick owned")
+
+    let unknown = try sbd.run(["schedule", "run", "rzzzzz"])
+    let missing = try sbd.run(["schedule", "run"])
+    let elsewhere = failure(
+      sbd, "run-schedule", ["schedule": .string(made.schedule.id), "session": .string(other.id)])
+
+    #expect(unknown.status != 0)
+    #expect(missing.status != 0)
+    #expect(elsewhere.contains("has no schedule \(made.schedule.id)"), "\(elsewhere)")
+    #expect(try fire.current(sbd, owner.id, made.schedule.id) == made.schedule)
+  }
+
+  // MARK: Group scope (Risk 7)
+
+  @Test func aScopedRunActsOnAMembersSchedule() throws {
+    let s = try ScheduleTests().scoped()
+
+    let ran = try s.call("run-schedule", ["schedule": .string(s.a.schedule.id)])
+
+    let now = try s.sbd.now()
+    #expect(ran.schedule.next <= now)
+  }
+
+  @Test func aScopedRunActsOnTheCallersOwnSchedule() throws {
+    let s = try ScheduleTests().scoped()
+
+    let ran = try s.call("run-schedule", ["schedule": .string(s.caller.schedule.id)])
+
+    let now = try s.sbd.now()
+    #expect(ran.schedule.next <= now)
+  }
+
+  @Test(arguments: ["b", "loose"])
+  func aScopedRunRefusesAScheduleOutsideTheGroup(_ which: String) throws {
+    let s = try ScheduleTests().scoped()
+    let target = which == "b" ? s.b : s.loose
+
+    let error = s.refusal("run-schedule", ["schedule": .string(target.schedule.id)])
+
+    #expect(error.contains("not in group"), "\(error)")
+    #expect(try s.stored(target) == [target.schedule])
+  }
+
+  @Test func aScopedRunRefusesAnUnknownId() throws {
+    let s = try ScheduleTests().scoped()
+
+    #expect(s.refusal("run-schedule", ["schedule": "rzzzzz"]) != "no error")
+  }
+
+  @Test func aScopedRunRefusesASessionThatLeftTheGroup() throws {
+    let s = try ScheduleTests().scoped()
+    _ = try s.sbd.client.call("group-move", ["sessions": [.string(s.a.session)], "ungrouped": true])
+
+    let error = s.refusal("run-schedule", ["schedule": .string(s.a.schedule.id)])
+
+    #expect(error.contains("not in group"), "\(error)")
+    #expect(try s.stored(s.a) == [s.a.schedule])
+  }
+}
+
+extension ScheduleFireRemoteTests {
+  /// Host sessions' schedules live in the Mac's sbd (Decision 9). With the link down, sbd can't read the
+  /// session's process, so the loop stays due with no turn running and turns overdue after its grace. A 1m loop's
+  /// grace is 10 minutes.
+  @Test func aHostSessionsLoopShowsItsStatusAndTurnsOverdueWhileTheLinkIsDown() throws {
+    let fire = ScheduleFireTests()
+    let sbd = try Instance.remote()
+    try sbd.makeBoxFolder()
+    let summary = try sbd.newOnHost("~/sb-box-repo", "--prompt", "hello")
+    let id = try sbd.id(of: summary)
+    let claudeSessionId = try #require(summary["claudeSessionId"]?.string)
+    try sbd.waitFor(id, "claude to run on the box") { $0.claudePid != nil }
+    try sbd.waitFor("the first turn's transcript on the box") { !sbd.boxTranscripts(claudeSessionId).isEmpty }
+    let made = try fire.add(sbd, id, every: "1m", "tick overdue").schedule
+    let manual = try fire.add(sbd, id, every: "30m", "tick manual").schedule
+    let rows = try JSONCoding.decode([ScheduleRow].self, from: sbd.sb("schedule", "ls", "--json"))
+    try sbd.dropLinkAndRefuse("ssh: connect to host mini.local port 22: Operation timed out")
+    // Run now takes a session whose link is down. The run waits for the link and never reads as held.
+    let ran = try JSONCoding.decode(ScheduleRow.self, from: sbd.sb("schedule", "run", manual.id, "--json"))
+
+    try sbd.advanceClock(61_000)
+    let due = try fire.status(sbd, made.id)
+    try sbd.advanceClock(10 * 60_000)
+    let overdue = try fire.status(sbd, made.id)
+    let manualLater = try fire.status(sbd, manual.id)
+
+    #expect(rows.first { $0.schedule.id == made.id }?.session == id)
+    #expect(rows.first { $0.schedule.id == made.id }?.status?.state == .active)
+    #expect(due?.state == .due)
+    #expect(overdue?.state == .overdue)
+    #expect(overdue?.text.hasPrefix("overdue by 10m") == true, "\(String(describing: overdue?.text))")
+    #expect(try sbd.events(id, "sent", text: "tick overdue").isEmpty)
+    #expect(ran.status?.state == .due)
+    #expect(manualLater?.state == .due)
+    #expect(try sbd.events(id, "sent", text: "tick manual").isEmpty)
+  }
+}

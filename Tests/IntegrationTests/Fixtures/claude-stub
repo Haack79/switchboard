@@ -33,6 +33,10 @@
 #                    Code sends no hook after Escape
 #   fail ...         ends the turn with StopFailure, as an API error does
 #   clear <uuid>     switches to another conversation, as /clear does
+#   context <n>      writes an assistant line of model claude-test whose
+#                    usage gives an input context of n tokens, as an API
+#                    call does, then replies "Context: <n>". The reply's line
+#                    carries no usage
 #   linger <n>       waits n s after SIGTERM before it exits. A second
 #                    SIGTERM does not restart the wait
 #   lag ...          waits 1 s before it reports the prompt, which keeps the
@@ -70,9 +74,29 @@
 #   a prompt that holds "Switchboard plan artifact task." plays the chat's
 #                    side of the task with a fake Artifact tool. See artifact
 #   reply <name>     replies with the text of $SB_HOME/<name>.md
+#   /compact ...     sends only SessionStart with source compact, as Claude
+#                    Code runs a built-in command with no UserPromptSubmit
+#                    and no turn
+#   /<command> ...   replies "Done: <prompt>". Its UserPromptSubmit goes
+#                    first, as Claude Code runs the hook before it writes the
+#                    prompt to the transcript. A hook answer whose decision is
+#                    block ends the turn there: no transcript line, no reply,
+#                    and no Stop, as Claude Code 2.1.318 does. A prompt that
+#                    holds " skill <name>" also calls the Skill tool for
+#                    the text after its last " skill " in its turn, as a skill
+#                    that loads another skill does, and replies "Denied:
+#                    <reason>" when its PreToolUse hook denies the call
+#   skill <name>     calls the Skill tool with {skill: <name>} and replies
+#                    "Skill <name>", or "Denied: <reason>" when the
+#                    PreToolUse hook answers a permissionDecision of deny. A
+#                    deny sends no PostToolUse. A block of its
+#                    UserPromptSubmit ends the turn as for /<command>
+#   subskill <name>  does the same from a subagent, whose PreToolUse carries
+#                    agent_id
 #   anything else    replies "Done: <prompt>"
 # `claude -p ...` is the summary call. It reads the prompt on stdin and prints
-# the JSON that claude prints with --output-format json: a decision with two
+# the JSON that claude prints with --output-format json, with 100 input, 20
+# output, 300 cache read, and 40 cache write tokens under the --model it got: a decision with two
 # options for a reply that holds "Postgres or SQLite", an approval with one for
 # "Want me to", and info otherwise. $SB_HOME/summary-answer.json, a fixture
 # that the test writes, replaces that answer. A reply that holds FAIL-SUMMARY
@@ -90,18 +114,71 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt whose first line is <session-name-request> is the
+# session name call. It is checked first, because the prompt it carries can
+# hold any tag below, but it can't come before that line. It writes each
+# argument with a NUL after it to $SB_HOME/session-name-args, replacing that
+# file, appends one line per call to $SB_HOME/session-name-calls.log, and
+# keeps the last prompt in $SB_HOME/session-name-input.txt. A prompt that
+# holds FAIL-NAME makes it exit 1, SLOW-NAME makes it exec sleep 30, and
+# BAD-NAME answers {"name":"Fix The Bug!"}. Anything else answers with
+# $SB_HOME/session-name-answer.json, else {"name":"stub-session-name"}, in
+# the same envelope.
+# A `claude -p` prompt in which <ci-log comes before any <session-reply> is
+# the CI reader's judge call. It is checked first. Each judge's prompt escapes
+# both tags in its data and names its own tag before the data, so the tag that
+# comes first names the judge. It appends the --model it
+# got as one line per call to $SB_HOME/ci-judge-calls.log, and keeps the last
+# prompt in $SB_HOME/ci-judge-input.txt. A prompt that holds FAIL-CI-JUDGE
+# makes it exit 1. Otherwise it prints $SB_HOME/ci-judge-answer.json, a
+# fixture that the test writes, or
+# {"cause":"real","message":"The tests failed."} when the file is missing, in
+# the same envelope.
+# A `claude -p` prompt that holds <session-reply> is the reply gate judge
+# call. It is checked next, because a session's reply can hold any other
+# tag. It appends the --model it got as one line per call to
+# $SB_HOME/judge-calls.log, and keeps the last prompt in
+# $SB_HOME/judge-input.txt. A prompt that holds FAIL-JUDGE makes it exit 1,
+# and SLOW-JUDGE makes it exec sleep 30. Otherwise it prints
+# $SB_HOME/judge-answer.json, a fixture that the test writes, or
+# {"answer":"unsure","question":"","reason":"stub"} when the file is missing,
+# in the same envelope. The default answer sends every merge question to the
+# Operator, as it does without the judge.
+# A `claude -p` prompt that holds <skill-file> is the skill classification
+# call. It is checked next, because a skill file can hold any tag below. It
+# writes each argument with a NUL after it to $SB_HOME/skill-classify-args,
+# replacing that file, and writes $CLAUDE_CONFIG_DIR, or nothing when that
+# variable is unset, to $SB_HOME/skill-classify-account. It appends the
+# skill's name, the text between <skill-name> and </skill-name>, as one line
+# per call to $SB_HOME/skill-classify-calls.log. It keeps the last prompt in
+# $SB_HOME/skill-classify-input.txt, and writes $SB_SESSION_ID, or unset when
+# that variable is unset, to $SB_HOME/skill-classify-session. A prompt that
+# holds FAIL-SKILL makes it exit 1, and SLOW-SKILL makes it exec sleep 30.
+# BAD-SKILL answers {"label":"maybe","reason":"x"}, LABEL-SAFE answers
+# {"label":"safe","reason":"It reads notes."}, and anything else answers
+# {"label":"work","reason":"It runs a pipeline."}, in the same envelope.
 # A `claude -p` prompt that holds <switchboard-state> is the quick ask call.
-# It is checked first, because the snapshot can hold <rows> or <pr-body>. It
+# It is checked next, because the snapshot can hold <rows> or <pr-body>. It
 # writes each argument with a NUL after it to $SB_HOME/quick-ask-args,
 # replacing that file, so a test can split the last call's arguments exactly.
 # It writes $CLAUDE_CONFIG_DIR to $SB_HOME/quick-ask-account. It appends one
 # line per call to $SB_HOME/quick-ask-calls.log, keeps the last prompt in
 # $SB_HOME/quick-ask-input.txt, and writes its pid to
 # $SB_HOME/quick-ask.pid. A prompt that holds FAIL-ASK makes it exit 1, and
-# SLOW-ASK makes it exec sleep 30, which keeps the pid. Otherwise it prints
+# SLOW-ASK makes it exec sleep 30, which keeps the pid. A prompt that holds
+# ERROR-ASK makes it print an error envelope with the same token counts and
+# exit 1, as claude does when the turn fails. Otherwise it prints
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
 # {"answer":"Nothing needs you."} when the file is missing, in the same
 # envelope.
+# A `claude -p` prompt that holds <candidate ref=" is the top-up pick call.
+# It is checked after the quick ask and before <rows> and <pr-body>, because
+# an issue body can hold those tags. It appends the arguments to
+# $SB_HOME/topup-calls.log and keeps the last prompt in
+# $SB_HOME/topup-input.txt. A prompt that holds SLOW-TOPUP makes it exec
+# sleep 30. Otherwise it prints $SB_HOME/topup-answer.json, a fixture that the
+# test writes, or {"picks":[],"skips":[]} when the file is missing, in the
+# same envelope.
 # `claude agents ...` prints $CLAUDE_CONFIG_DIR/agents.json, a fixture that
 # the test writes, or [] when it can't be read. It adds a row for each session
 # that is in the middle of an interrupt or a slow tool call, which are the
@@ -127,8 +204,9 @@
 # folder. See trust_dialog.
 # With STUB_HOOKS=off it runs no hooks, as when every hook fails.
 # Each run appends one record to $SB_HOME/stub-calls.log in one write:
-# CLAUDE_CONFIG_DIR, SSH_AUTH_SOCK and the arguments, split by tabs. A NUL
-# ends the record, because a prompt can hold a newline.
+# CLAUDE_CONFIG_DIR, SSH_AUTH_SOCK, CLAUDE_CODE_AUTO_COMPACT_WINDOW and the
+# arguments, split by tabs. A NUL ends the record, because a prompt can hold
+# a newline.
 # What the hooks print goes to $SB_HOME/hook-output.log. See answer.
 # Each decision that a PermissionRequest hook answers with goes to
 # $SB_HOME/permission-answers.log. See answered.
@@ -136,9 +214,77 @@
 # arrived, with the paste markers.
 
 args=("$@")
+# Prints the JSON that claude -p --output-format json prints for the structured output $1, with fixed token counts
+# under the model that --model named, as claude reports them.
+# Prints the --model that the call got, or haiku without one.
+model() {
+  local model=haiku i
+  for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --model ] && model=${args[i + 1]}; done
+  echo "$model"
+}
+envelope() {
+  jq -nc --argjson o "$1" --arg m "$(model)" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson),
+    structured_output: $o, usage: {input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 300,
+    cache_creation_input_tokens: 40}, modelUsage: {($m): {inputTokens: 100, outputTokens: 20,
+    cacheReadInputTokens: 300, cacheCreationInputTokens: 40}}}'
+}
 if [ "${1-}" = -p ]; then
   input=$(cat)
-  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes first.
+  if [[ $input == "<session-name-request>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/session-name-args"
+    echo "$$" >>"$SB_HOME/session-name-calls.log"
+    printf '%s' "$input" >"$SB_HOME/session-name-input.txt"
+    case $input in
+    *FAIL-NAME*) echo "naming failed" >&2 && exit 1 ;;
+    *SLOW-NAME*) exec sleep 30 ;;
+    *BAD-NAME*) out='{"name":"Fix The Bug!"}' ;;
+    *) out=$(cat "$SB_HOME/session-name-answer.json" 2>/dev/null) || out='{"name":"stub-session-name"}' ;;
+    esac
+    envelope "$out"
+    exit 0
+  fi
+  # Each judge's prompt names its own tag before its data, so the tag that comes first decides.
+  before_reply=${input%%"<session-reply>"*}
+  if [[ $before_reply == *"<ci-log"* ]]; then
+    model >>"$SB_HOME/ci-judge-calls.log"
+    printf '%s' "$input" >"$SB_HOME/ci-judge-input.txt"
+    [[ $input == *FAIL-CI-JUDGE* ]] && echo "CI judge failed" >&2 && exit 1
+    out=$(cat "$SB_HOME/ci-judge-answer.json" 2>/dev/null) || out='{"cause":"real","message":"The tests failed."}'
+    envelope "$out"
+    exit 0
+  fi
+  # A session's reply can hold any of the tags below, so this check comes next.
+  if [[ $input == *"<session-reply>"* ]]; then
+    model >>"$SB_HOME/judge-calls.log"
+    printf '%s' "$input" >"$SB_HOME/judge-input.txt"
+    case $input in
+    *FAIL-JUDGE*) echo "judge failed" >&2 && exit 1 ;;
+    *SLOW-JUDGE*) exec sleep 30 ;;
+    esac
+    out=$(cat "$SB_HOME/judge-answer.json" 2>/dev/null) || out='{"answer":"unsure","question":"","reason":"stub"}'
+    envelope "$out"
+    exit 0
+  fi
+  # A skill file can hold any of the tags below, so this check comes next.
+  if [[ $input == *"<skill-file>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/skill-classify-args"
+    printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/skill-classify-account"
+    name=${input#*<skill-name>}
+    name=${name%%</skill-name>*}
+    printf '%s\n' "$name" >>"$SB_HOME/skill-classify-calls.log"
+    printf '%s' "$input" >"$SB_HOME/skill-classify-input.txt"
+    printf '%s' "${SB_SESSION_ID-unset}" >"$SB_HOME/skill-classify-session"
+    case $input in
+    *FAIL-SKILL*) echo "skill failed" >&2 && exit 1 ;;
+    *SLOW-SKILL*) exec sleep 30 ;;
+    *BAD-SKILL*) out='{"label":"maybe","reason":"x"}' ;;
+    *LABEL-SAFE*) out='{"label":"safe","reason":"It reads notes."}' ;;
+    *) out='{"label":"work","reason":"It runs a pipeline."}' ;;
+    esac
+    envelope "$out"
+    exit 0
+  fi
+  # The quick ask's snapshot holds session text, which can hold <rows> or <pr-body>, so this check comes next.
   if [[ $input == *"<switchboard-state>"* ]]; then
     printf '%s\0' "$@" >"$SB_HOME/quick-ask-args"
     printf '%s' "${CLAUDE_CONFIG_DIR-}" >"$SB_HOME/quick-ask-account"
@@ -147,17 +293,33 @@ if [ "${1-}" = -p ]; then
     echo "$$" >"$SB_HOME/quick-ask.pid"
     case $input in
     *FAIL-ASK*) echo "ask failed" >&2 && exit 1 ;;
+    *ERROR-ASK*)
+      envelope '{}' | jq -c '.subtype = "error_during_execution" | .is_error = true | .result = "ask failed"
+        | del(.structured_output)'
+      exit 1
+      ;;
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
+    exit 0
+  fi
+  # An issue body in the top-up's candidates can hold <rows> or <pr-body>, so this check comes before those.
+  if [[ $input == *'<candidate ref="'* ]]; then
+    printf '%s\0' "${args[*]}" >>"$SB_HOME/topup-calls.log"
+    printf '%s' "$input" >"$SB_HOME/topup-input.txt"
+    [[ $input == *SLOW-TOPUP* ]] && exec sleep 30
+    # A test holds the pick on this FIFO while it changes sbd's sessions.
+    if [ -p "$SB_HOME/topup-gate" ]; then read -r _ <"$SB_HOME/topup-gate"; fi
+    out=$(cat "$SB_HOME/topup-answer.json" 2>/dev/null) || out='{"picks":[],"skips":[]}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<rows>"* ]]; then
     printf '%s\0' "${args[*]}" >>"$SB_HOME/plan-calls.log"
     printf '%s' "$input" >"$SB_HOME/plan-input.txt"
     out=$(cat "$SB_HOME/plan-answer.json" 2>/dev/null) || out='{"rows":[]}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   if [[ $input == *"<pr-body>"* ]]; then
@@ -165,7 +327,7 @@ if [ "${1-}" = -p ]; then
     printf '%s' "$input" >"$SB_HOME/pr-brief-input.txt"
     [[ $input == *FAIL-BRIEF* ]] && echo "brief failed" >&2 && exit 1
     out=$(cat "$SB_HOME/pr-brief-answer.json" 2>/dev/null) || out='{"summary":"It changes the code."}'
-    jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+    envelope "$out"
     exit 0
   fi
   printf '%s\0' "${args[*]}" >>"$SB_HOME/summary-calls.log"
@@ -186,10 +348,11 @@ if [ "${1-}" = -p ]; then
   *) out='{"title":"Read the reply","kind":"info","summary":"It finished.","options":[]}' ;;
   esac
   [ -f "$SB_HOME/summary-answer.json" ] && out=$(cat "$SB_HOME/summary-answer.json")
-  jq -nc --argjson o "$out" '{type: "result", subtype: "success", is_error: false, result: ($o | tojson), structured_output: $o}'
+  envelope "$out"
   exit 0
 fi
-printf '%s\t%s\t%s\0' "${CLAUDE_CONFIG_DIR-}" "${SSH_AUTH_SOCK-}" "${args[*]}" >>"$SB_HOME/stub-calls.log"
+printf '%s\t%s\t%s\t%s\0' "${CLAUDE_CONFIG_DIR-}" "${SSH_AUTH_SOCK-}" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW-}" "${args[*]}" \
+  >>"$SB_HOME/stub-calls.log"
 if [ "${1-}" = agents ]; then
   listed=$(cat "${CLAUDE_CONFIG_DIR-}/agents.json" 2>/dev/null || echo '[]')
   rows=("${CLAUDE_CONFIG_DIR:-$SB_HOME/claude}"/status/*)
@@ -271,6 +434,15 @@ reply_line() {
   mkdir -p "$project"
   jq -nc --arg t "$1" \
     '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: $t}]}}' >>"$project/$session.jsonl"
+}
+
+# usage_line <n>: appends an assistant line whose usage gives an input context of n tokens.
+usage_line() {
+  mkdir -p "$project"
+  jq -nc --argjson n "$1" \
+    '{type: "assistant", message: {model: "claude-test", role: "assistant", content: [],
+      usage: {input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: ($n - 1), output_tokens: 5}}}' \
+    >>"$project/$session.jsonl"
 }
 
 # hook <event> [json fields]
@@ -484,6 +656,8 @@ vars() {
 # It writes an additionalContext to the transcript as the attachment line
 # that Claude Code 2.1.318 writes.
 answer() {
+  # gated reads the last answer. It is set only when the hook runs in this shell, not in a pipeline's subshell.
+  last_answer=$1
   [ -z "$1" ] && return
   printf '%s\t%s\0' "$session" "$1" >>"$SB_HOME/hook-output.log"
   local context
@@ -628,6 +802,62 @@ asks() {
   event turn Stop | emit "$(vars "$1" "$reply")"
 }
 
+# skill_call <name> [agent]: calls the Skill tool for <name>, from the
+# subagent <agent> when it is given, and prints "Denied: <reason>" when the
+# PreToolUse hook denies the call, or nothing when it allows it. Like claude,
+# it writes the call's tool_use line to the transcript before PreToolUse, and
+# it sends PostToolUse only for a call that ran.
+skill_call() {
+  local fields
+  fields=$(jq -nc --arg n "$1" '{tool_name: "Skill", tool_input: {skill: $n}, tool_use_id: "s1"}')
+  [ -n "${2:-}" ] && fields=$(jq -c --arg a "$2" '. + {agent_id: $a, agent_type: "general-purpose"}' <<<"$fields")
+  mkdir -p "$project"
+  jq -nc --arg n "$1" \
+    '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "s1", name: "Skill", input: {skill: $n}}]}}' \
+    >>"$project/$session.jsonl"
+  last_answer=''
+  [ "${STUB_HOOKS-}" = off ] || answer "$(payload PreToolUse "$fields" | sh -c "$hook_cmd")"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$last_answer" 2>/dev/null)" = deny ]; then
+    echo "Denied: $(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"$last_answer")"
+    return
+  fi
+  hook PostToolUse "$(jq -c '. + {tool_response: {success: true}}' <<<"$fields")"
+}
+
+# gated <prompt>: plays a turn of a prompt that sbd's hooks may refuse: a
+# /<command>, skill <name>, or subskill <name>. See the list at the top.
+gated() {
+  local p=$1 reply denied
+  last_answer=''
+  emit "$(vars "$p" "")" < <(event turn UserPromptSubmit)
+  if [ "$(jq -r '.decision // empty' <<<"$last_answer" 2>/dev/null)" = block ]; then
+    printf 'UserPromptSubmit operation blocked by hook:\n%s\n' "$(jq -r '.reason // ""' <<<"$last_answer")"
+    status
+    return
+  fi
+  transcript "$p"
+  status
+  case $p in
+  skill\ *)
+    denied=$(skill_call "${p#skill }")
+    reply=${denied:-"Skill ${p#skill }"}
+    ;;
+  subskill\ *)
+    denied=$(skill_call "${p#subskill }" sub1)
+    reply=${denied:-"Skill ${p#subskill }"}
+    ;;
+  *\ skill\ *)
+    denied=$(skill_call "${p##* skill }")
+    reply=${denied:-"Done: $p"}
+    ;;
+  *) reply="Done: $p" ;;
+  esac
+  echo "⏺ $reply"
+  reply_line "$reply"
+  emit "$(vars "$p" "$reply")" < <(event turn Stop)
+  status
+}
+
 # artifact <prompt>: plays a Switchboard plan artifact task with a fake
 # Artifact tool, and prints the reply. The artifact whose URL ends in <id> is
 # the text in $SB_HOME/artifacts/<id>, and its version is the text in
@@ -725,6 +955,17 @@ turn() {
     awk 1 "$SB_HOME/skill-listing.jsonl" >>"$project/$session.jsonl"
   fi
   listed=1
+  case $p in
+  /compact*)
+    hook SessionStart '{"source":"compact"}'
+    echo "⏺ compacted"
+    return
+    ;;
+  /* | skill\ * | subskill\ *)
+    gated "$p"
+    return
+    ;;
+  esac
   transcript "$p"
   status
   case $p in
@@ -784,6 +1025,10 @@ turn() {
     transcript /clear
     echo "⏺ cleared, now $session"
     return
+    ;;
+  context\ *)
+    usage_line "${p#context }"
+    reply="Context: ${p#context }"
     ;;
   mcp\ *)
     url=$(jq -r --arg n "${p#mcp }" '.mcpServers[$n].url' "$mcp_config")

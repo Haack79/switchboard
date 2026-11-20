@@ -15,8 +15,22 @@ public struct WaitRequest: Codable, Equatable, Sendable {
   /// review or a queue change counts.
   public var since: String?
   public var note: String?
+  /// `resume`, `notify`, or the name of a `WaitAction.Kind`, which arms that action and resumes.
   public var then: String?
   public var by: String?
+  /// For `then` `report`, makes the report an Inbox item.
+  public var needsYou: Bool?
+
+  /// The action that `then` arms, or nil when `then` names none.
+  public var actionKind: WaitAction.Kind? { then.flatMap(WaitAction.Kind.init(rawValue:)) }
+
+  /// The refusal of a `then` that names nothing that a wait does.
+  public static func unknownThen(_ text: String) -> APIError {
+    let actions = WaitAction.Kind.allCases.map(\.rawValue)
+    return APIError(
+      "then is resume or notify, or an action (\(actions.dropLast().joined(separator: ", ")), or \(actions.last!)), "
+        + "not \(text)")
+  }
 
   /// Checks the arguments against the kind and builds the wait. The kind
   /// defaults to `manual`. A field that the kind doesn't use is refused.
@@ -38,8 +52,20 @@ public struct WaitRequest: Codable, Equatable, Sendable {
       id: id, kind: kind, who: who, service: service, note: trimmed?.isEmpty == false ? trimmed : nil,
       by: try Author(parsing: by), created: now, then: kind.defaultThen)
     if let then {
-      guard let value = Wait.Then(rawValue: then) else { throw APIError("then is resume or notify, not \(then)") }
-      wait.then = value
+      if let value = Wait.Then(rawValue: then) {
+        wait.then = value
+      } else if let action = WaitAction.Kind(rawValue: then) {
+        wait.action = WaitAction(kind: action, needsYou: needsYou == true ? true : nil)
+        wait.then = .resume
+      } else {
+        throw Self.unknownThen(then)
+      }
+    }
+    if needsYou == true && wait.action?.kind != .report {
+      throw APIError("needsYou makes a report an Inbox item, so it goes only with then report")
+    }
+    if wait.action?.kind == .report && wait.note == nil {
+      throw APIError("then report records the note as the report, so it needs a note")
     }
     if let since {
       guard let time = Wait.parseTime(since, now: now) else { throw APIError("can't read the time \(since)") }
@@ -71,6 +97,7 @@ public struct WaitRequest: Codable, Equatable, Sendable {
         wait.environment = try oneOf("environment", environment ?? "prod", Wait.environments) { $0 }
       }
     }
+    try wait.action?.requireShape(of: wait)
     return wait
   }
 
@@ -85,10 +112,12 @@ public struct WaitRequest: Codable, Equatable, Sendable {
 
 /// Whether sbd stores `wait` on the operator instead of `namedSession`, the session that the request named.
 /// It does when the wait resolves the same way there and only the recipient of the message changes:
-/// the named session is a Manager conversation, Claude set the wait, it resumes, `here` is not set, its
-/// resolution reads nothing of the waiter, and it is not a `session` wait on the operator, whose id is
-/// `operatorID`.
+/// the named session is a Manager conversation, Claude set the wait and it resumes or the wait has an action, `here`
+/// is not set, its resolution reads nothing of the waiter, and it is not a `session` wait on the operator, whose id
+/// is `operatorID`.
 public func handsOff(_ wait: Wait, namedSession: Session, here: Bool, operatorID: String?) -> Bool {
-  namedSession.kind == .manager && !here && wait.by == .claude && wait.then == .resume && !wait.readsWaiter
-    && (wait.session.map { $0.id != operatorID } ?? true)
+  let fromConversation = namedSession.kind == .manager && !here
+  let claudeResumeWait = wait.by == .claude && wait.then == .resume
+  let resolvesTheSameOnOperator = !wait.readsWaiter && (wait.session.map { $0.id != operatorID } ?? true)
+  return fromConversation && (claudeResumeWait || wait.action != nil) && resolvesTheSameOnOperator
 }
