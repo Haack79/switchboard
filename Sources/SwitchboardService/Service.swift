@@ -29,10 +29,14 @@ public final class Service {
     var pending: [QueuedMessage] = []
     /// When the tick first saw a running claude that no SessionStart reported.
     var unreportedSince: Int64?
-    /// When sbd last pasted a message or launched claude with a prompt. Until
+    /// The message that sbd last pasted or launched claude with. Until
     /// that prompt's UserPromptSubmit arrives, the session counts as busy, so
     /// a second message waits instead of landing in the first one's turn.
-    var inFlight: Int64?
+    /// A built-in command such as `/compact` sends no UserPromptSubmit. Its paste clears this once it lands.
+    /// `load` sets it from `SessionFacts.promptOnItsWaySince`, which the log keeps for a launch prompt and a paste.
+    var inFlight: InFlight?
+    /// Whether a message is queued for the session, or sbd pasted or launched one that claude has not confirmed.
+    var hasMessageOnItsWay: Bool { !pending.isEmpty || inFlight != nil }
     /// The text of the last message that a draft in claude's prompt box
     /// held. The log names each held message once.
     var heldText: String?
@@ -103,7 +107,7 @@ public final class Service {
   /// SessionStart leaves its queue for that next launch. A start that waits behind the live cap does count,
   /// because a send then only adds to the queue that the start delivers.
   func messageWaiting(_ e: Entry, now: Int64) -> Bool {
-    if let sent = e.inFlight {
+    if let sent = e.inFlight?.since {
       let starting = !e.facts.startedSinceLaunch && now - (e.facts.lastLaunch ?? 0) < Service.startingMs
       if starting || now - sent < Service.inFlightMs { return true }
     }
@@ -113,6 +117,21 @@ public final class Service {
 
   /// How long a message counts as in flight without its UserPromptSubmit.
   static let inFlightMs: Int64 = 10_000
+
+  /// A message that sbd pasted or launched claude with, which claude has not confirmed.
+  struct InFlight: Equatable {
+    /// When sbd started the paste or the launch. A paste's callback finds its own message by it.
+    let sent: Int64
+    /// When the message's in-flight window started. SessionStart moves it, because claude reads a launch's prompt
+    /// after SessionStart.
+    var since: Int64
+
+    init(_ t: Int64) {
+      sent = t
+      since = t
+    }
+  }
+
   /// How long a running claude with no SessionStart may run before the tick
   /// counts it as live, because its hook may have failed.
   static let unreportedMs: Int64 = 10_000
@@ -147,6 +166,9 @@ public final class Service {
   /// The sessions whose files `rm` or `cleanup` is removing. `requireStartable` and `livePlan` refuse them, so
   /// nothing launches one while its files go. `rm-queue` skips them.
   var removing: Set<String> = []
+  /// The wait and schedule ids that `manager-end` lets the removal of each conversation drop, as
+  /// `refuseConversationRemoval` reads them.
+  var endingDrops: [String: Set<String>] = [:]
   /// The sessions whose PR `review` is asking gh to request a review of.
   var requestingReview: Set<String> = []
   /// The drafts whose reply target a gh read is resolving, or whose unknown
@@ -360,8 +382,8 @@ public final class Service {
 
   public var tickSeconds: Double { config.tickSeconds }
 
-  /// Loads the sessions and rebuilds their facts and queued messages from the
-  /// event log. It records `delivered` or `delivery_unknown` for each message whose
+  /// Loads the sessions and rebuilds their facts, queued messages, and the prompts that claude has not submitted
+  /// from the event log. It records `delivered` or `delivery_unknown` for each message whose
   /// paste may have reached claude. Its last step queues the pastes of each
   /// running claude's queued messages on the state queue.
   public func load() throws {
@@ -378,6 +400,7 @@ public final class Service {
       var e = Entry(session: session)
       e.facts = replay.facts
       e.pending = replay.pending.map { QueuedMessage(text: $0) }
+      e.inFlight = replay.facts.promptOnItsWaySince.map(InFlight.init)
       e.events = replay.events
       entries[session.id] = e
       if !replay.uncertain.isEmpty { uncertain[session.id] = replay.uncertain }
@@ -502,6 +525,8 @@ public final class Service {
       return .success(try slashCommands(request.args))
     case "rm":
       return .success(try remove(request.args, caller: caller))
+    case "manager-end":
+      return .success(try managerEnd(request.args, caller: caller))
     case "cleanup":
       return .success(try cleanup(request.args, caller: caller))
     case "rm-done":
@@ -784,6 +809,8 @@ public final class Service {
       return try operatorReports(args)
     case "manager-pin":
       return try managerPin(args)
+    case "manager-hint":
+      return try managerHint(args)
     case "manager-model":
       return try managerModelRequest(args)
     case "rename":
@@ -944,7 +971,7 @@ public final class Service {
       checkFolderRule(session, payload)
       // claude reads a launch's prompt after SessionStart, and a slow start
       // can outlast the in-flight window. The window starts again here.
-      if entries[id]?.inFlight != nil { entries[id]?.inFlight = event.t }
+      entries[id]?.inFlight?.since = event.t
       // This claude takes the queued resume message, so the tick launches no other claude for the resume.
       entries[id]?.resumeLaunch = nil
       refreshSoon()
@@ -971,6 +998,7 @@ public final class Service {
       answer = managerSkillToolGate(id, payload, stamp: stamp) ?? answer
     case "Stop", "StopFailure":
       deliverPending(id, after: 0.5)
+      if session.kind == .manager { recordContext(id) }
     case "Notification" where payload["notification_type"]?.string == "idle_prompt":
       deliverPending(id, after: 0.5)
     default:
@@ -1333,13 +1361,17 @@ public final class Service {
       // The host's site is ready before the record is saved, so a host that dropped leaves no session behind.
       try site(for: session).requireReady()
     } else {
-      // After `configure`, which sets a chat's group.
+      // After `configure`, which sets a chat's group. `configure` may also set an account folder that no name resolves.
       session.claudeConfigDir =
-        try accountForNew(named: args.account, parent: session.parent, for: session) ?? activeAccount.folder
+        try accountForNew(named: args.account, parent: session.parent, for: session) ?? session.claudeConfigDir
+        ?? activeAccount.folder
     }
     entries[id] = Entry(session: session)
     try store.save(session)
     record(id, "created", ["cwd": .string(folder.cwd)])
+    if let parent = session.parent, entries[parent]?.session.kind == .manager {
+      record(parent, "child", ["child": .string(id)])
+    }
     if session.kind.showsAsChat { recordRead(id, 0) }
     try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
     try launch(id, prompt: args.prompt, trigger: .create)
@@ -1495,7 +1527,7 @@ public final class Service {
     entries[id]?.unreportedSince = nil
     // A claude that exits before SessionStart records no exit event. So only the next start can clear its armed bypass.
     entries[id]?.skillBypass = nil
-    entries[id]?.inFlight = prompt?.isEmpty == false ? nowMs() : nil
+    entries[id]?.inFlight = prompt?.isEmpty == false ? InFlight(nowMs()) : nil
     record(
       id, resume ? "resumed" : "started",
       [
@@ -1556,7 +1588,7 @@ public final class Service {
       let start = e.facts.lastStart
     else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
-    if let sent = e.inFlight, now - sent < Service.inFlightMs { return false }
+    if let sent = e.inFlight?.since, now - sent < Service.inFlightMs { return false }
     return now - start >= pasteSettleMs
   }
 
@@ -1648,7 +1680,7 @@ public final class Service {
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
           let startWait = max(0, pasteSettleMs - (now - start))
-          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0)) } ?? 0
+          let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0.since)) } ?? 0
           let wait = max(startWait, flightWait)
           if wait > 0 { deliverPending(id, after: Double(wait) / 1000 + 0.1) }
         }
@@ -1712,7 +1744,8 @@ public final class Service {
     let text = message.text
     let name = paneName(id, .claude)
     let parts = Attachments.split(text, folder: home.attachmentsFolder(id))
-    entries[id]?.inFlight = nowMs()
+    let pastedAt = nowMs()
+    entries[id]?.inFlight = InFlight(pastedAt)
     let site = try? site(of: id)
     let terminals = try? site?.terminals()
     pasteQueue.async { [self] in
@@ -1732,7 +1765,14 @@ public final class Service {
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
         waitAtGate("hold-delivered")
-        queue.async { self.record(id, "delivered", ["text": .string(text)]) }
+        queue.async {
+          self.record(id, "delivered", ["text": .string(text)])
+          // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
+          // A `/clear` or `/compact` can move the window with its SessionStart first, so this compares `sent`.
+          if SlashCommand.isBuiltIn(prompt: text), self.entries[id]?.inFlight?.sent == pastedAt {
+            self.entries[id]?.inFlight = nil
+          }
+        }
       } catch {
         logLine("can't paste into \(id): \(error)")
         queue.async {
@@ -1963,6 +2003,7 @@ public final class Service {
         whileIdle: whileIdle, scope: scope)
       return try release(check, stopped, scope.site)
     }
+    waitAtGate("hold-removal-forget")
     let notice = runner == .job ? released.keptMessage(entry.session.mention, remoteBranch: remoteBranch) : nil
     try forgetRemoved(entry.session, released, resolving: resolving, for: runner, notice: notice, at: site)
     return released
@@ -2010,6 +2051,7 @@ public final class Service {
       if let refusal = busyRefusal(id) { throw refusal }
       // `forgetSession` checks again, because a wait can land on the operator while its panes stop.
       try refuseOperatorRemoval(id)
+      try refuseConversationRemoval(id)
       try checkTodos(id, resolving: removalResolving(id, resolving, for: runner))
       return RemovalSubject(
         session: entry.session, pr: entry.facts.pr, sharedWith: sharedSession(entry.session),
@@ -2820,11 +2862,7 @@ public final class Service {
         facts: facts, created: s.created, pause: s.pause)
       if s.runsClaude { out.issues = Issues.shown(set: s.issue, pr: facts.pr, branch: e.branch) }
     }
-    if s.kind == .manager {
-      out.pinned = s.pinned
-      // Last, because the archive rule reads the rest of the summary.
-      if Conversations.isArchived(out, now: nowMs()) { out.activity?.archived = true }
-    }
+    if s.kind == .manager { addConversationFields(to: &out, e, facts) }
     return out
   }
 

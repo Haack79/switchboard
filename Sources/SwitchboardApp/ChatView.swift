@@ -83,11 +83,7 @@ private struct ChatHeader: View {
       Spacer()
       SessionAccountControl(session: session)
       if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
-      if session.kind == .manager {
-        Button("New Task", systemImage: "plus") { model.openNewSession(parent: session.id) }
-          .help("Start a session that this conversation follows")
-          .fixedSize()
-      }
+      if session.kind == .manager { ManagerHeaderControls(session: session) }
       Toggle("Terminal", isOn: $model.showingTerminal)
         .toggleStyle(.button)
         .help("Show the Claude terminal and shell in place of the messages")

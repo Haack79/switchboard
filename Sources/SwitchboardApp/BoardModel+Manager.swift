@@ -28,4 +28,18 @@ extension BoardModel {
           .sorted { ($0.since, $0.id) > ($1.since, $1.id) }
       })
   }
+
+  /// Ends the conversation, opens a new one in its place, and selects it. `drop` names the conversation's own
+  /// waits, pause condition, and schedules that the user saw in the confirmation. sbd refuses the end when the
+  /// conversation holds an id that `drop` does not name, and the refusal shows in the error banner.
+  func endConversation(_ s: SessionSummary, drop: [String]) {
+    perform("manager-end", ["session": .string(s.id), "new": true, "drop": .array(drop.map(JSON.string))]) { value in
+      if let id = value["started"]?["id"]?.string { self.selectUnlisted(id) }
+    }
+  }
+
+  /// Hides the conversation's end hint until the hint's key changes, as when another spawned session reaches Done.
+  func dismissEndHint(_ id: String) {
+    perform("manager-hint", ["session": .string(id), "dismiss": true])
+  }
 }
