@@ -894,6 +894,8 @@ check_boarddrag() {
   wait_for 5 selection_is "$a" || fail "a click did not select the draggable card of $a: $(app board-selection)"
   posted drag-control || fail "the app could not drag the control view: $result"
   if ! wait_for 5 more_drags_than 0; then
+    control=$(app drags)
+    [ "$control" = 0 ] || fail "the app did not report its drag sessions after the control drag: $control"
     end_app
     save_shots
     echo "skip: boarddrag (this SwiftUI starts no drag session from posted mouse events)"

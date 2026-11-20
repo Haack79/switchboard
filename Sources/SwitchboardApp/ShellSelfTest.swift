@@ -27,11 +27,13 @@ import SwiftUI
 /// the middle of the second. With `card`, the drag starts at the middle of the first card. The three report
 /// `posted on` the hit view's type and send their events over the next half second. `board-selection` reports the
 /// selected ids, sorted and joined by commas, or `none`. `drag-control` adds a draggable text view outside the
-/// Board to the window and drags it the same way. `drags` reports how many drag sessions the views under the
-/// commands' drags started.
+/// Board to the window, drags it the same way, and also reports `posted on`. `drags` reports how many drag
+/// sessions have started since launch from the view each drag pressed or one of its superviews.
 @MainActor
 enum ShellSelfTest {
   static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
+  /// `board-drag` hides this view so that it can't take a card drag.
+  private static var dragControl: NSView?
 
   static func start(_ model: BoardModel) {
     guard let folder else { return }
@@ -138,6 +140,7 @@ enum ShellSelfTest {
       guard let card = boardCard(rest) else { return "no card" }
       return press(at: NSPoint(x: card.midX, y: card.minY - 4))
     case "board-drag":
+      dragControl?.isHidden = true
       let args = rest.split(separator: " ").map(String.init)
       // Scrolling the second card into view can move the first, so both frames are read after both scrolls.
       guard args.count >= 2, boardCard(args[1]) != nil, let from = boardCard(args[0]),
@@ -154,6 +157,7 @@ enum ShellSelfTest {
       let control = NSHostingView(rootView: Text(verbatim: "drag control").padding(20).draggable("drag control"))
       control.frame = NSRect(x: frameView.bounds.midX - 80, y: frameView.bounds.midY - 30, width: 160, height: 60)
       frameView.addSubview(control, positioned: .above, relativeTo: nil)
+      dragControl = control
       frameView.layoutSubtreeIfNeeded()
       let start = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
       return drag(from: start, to: NSPoint(x: start.x + 100, y: start.y + 100), flags: [])
