@@ -1042,8 +1042,16 @@ import Testing
     let heard = try sbd.count("sent", of: parent.id)
     let op = try idleOperator(sbd)
     try ask(sbd, op, about: kid.id)
-    let sent = try sbd.waitFor(
-      "the parent hears the ask", fetch: { try sbd.count("sent", of: parent.id) }, until: { $0 > heard })
+    try sbd.waitFor(kid.id, "the ask on the child") { $0.state == .needsYou }
+    // sbd holds parent notices while an MCP server starts, and the operator's server starts here, so the notice can
+    // take tens of seconds. Each read of every event takes sbd's state queue, so the poll waits between reads.
+    var sent = heard
+    try sbd.waitFor("the parent hears the ask", timeout: 60) {
+      sent = try sbd.count("sent", of: parent.id)
+      if sent > heard { return true }
+      Thread.sleep(forTimeInterval: 0.5)
+      return false
+    }
 
     sbd.stopSbd()
     try sbd.startSbd()
