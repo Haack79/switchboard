@@ -20,7 +20,7 @@ See [The Inbox](docs/inbox.md).
 
 The Board puts each session's task in a column: In progress, Waiting, In review, Approved, or Merging. It has a lane per repo or per group. A card says what it waits on, such as a reviewer or CI, and offers the next step, such as Merge, Nudge, or a request to merge main in.
 
-![The Board, with lanes for three repos and cards in the In progress, Waiting, In review, Approved, and Merging columns](docs/images/board.png)
+![The Board, with lanes for four repos and cards in the In progress, Waiting, In review, Approved, and Merging columns](docs/images/board.png)
 
 See [Sessions](docs/sessions.md#the-board).
 
@@ -34,7 +34,7 @@ See [Groups](docs/groups.md) and [The Manager](docs/manager.md).
 
 ### Usage across Claude accounts
 
-The toolbar shows the active account's 5-hour and weekly usage. The account menu lists every signed-in account with its sessions and limits, and a click makes it the account for new sessions. A session keeps its account until you move it.
+The toolbar's gauge button names the active account and its 5-hour and weekly usage in its tooltip, and opens the account menu. The menu lists every signed-in account with its sessions and limits, and a click makes it the account for new sessions. A session keeps its account until you move it.
 
 ![The account menu, listing three Claude accounts with their session counts and their 5-hour and weekly usage](docs/images/accounts.png)
 

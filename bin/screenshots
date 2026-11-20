@@ -50,8 +50,9 @@ for b in Switchboard sbd sb; do [ -x "$bin/$b" ] || { echo "no $b in $bin" >&2; 
 
 width=1440 height=900
 domain=SwitchboardShot
-# Fixtures/reap ends a home's processes only for a path of this shape, because a Unix socket path can't exceed
-# 103 bytes. owner.pid lets a later test run's reap clean up after a run that was killed before its trap ran.
+# Fixtures/reap ends a home's processes only for a path of this shape. A Unix socket path can't exceed 103 bytes,
+# so the home stays short. owner.pid lets a later test run's reap clean up after a run that was killed before
+# its trap ran.
 home=$(mktemp -d /tmp/sbt.XXXXXX)
 echo $$ >"$home/owner.pid"
 cleanup() {
@@ -112,7 +113,7 @@ for name in "${wanted[@]}"; do
   case $name in
   hero) shot hero SB_INBOX=sdecid && fit hero ;;
   inbox-permission) shot inbox-permission SB_INBOX=sperm1 && fit inbox-permission ;;
-  board) shot board SB_BOARD_CLICK=none && fit board ;;
+  board) shot board SB_BOARD_SELECT= && fit board ;;
   group-chat) shot group-chat SB_SELECT="$chat" && fit group-chat ;;
   accounts) shot accounts SB_ACCOUNTS=open && fit accounts ;;
   session-panel)
