@@ -68,6 +68,24 @@ import Testing
     #expect((try? host.checkedPanes())?["a"]?.pid == pid)
   }
 
+  /// A tmux server that started before the hyperlinks feature existed never rereads tmux.conf, so starting sbd
+  /// again adds the feature to it, once.
+  @Test(.enabled(if: findExecutable("tmux") != nil), .timeLimit(.minutes(1)))
+  func startingAgainAddsHyperlinksToARunningServerOnce() throws {
+    let tmux = try #require(findExecutable("tmux"))
+    var template = Array("/tmp/sbh.XXXXXX".utf8CString)
+    let dir = String(cString: try #require(mkdtemp(&template)))
+    let first = try TerminalHost(home: Home(path: dir), config: Config())
+    defer { stop(first) }
+    let old = try runCommand(tmux, ["-S", first.socket, "-f", "/dev/null", "new-session", "-d", "sleep 60"])
+    #expect(old.status == 0, "\(old.stderr)")
+    #expect(try !first.run(["show-options", "-s", "terminal-features"]).contains("hyperlinks"))
+    _ = try TerminalHost(home: Home(path: dir), config: Config())
+    let again = try TerminalHost(home: Home(path: dir), config: Config())
+    let features = try again.run(["show-options", "-s", "terminal-features"])
+    #expect(features.components(separatedBy: "hyperlinks").count == 2)
+  }
+
   @Test(.enabled(if: findExecutable("tmux") != nil), .timeLimit(.minutes(1)))
   func createStartsADeadPaneAgain() throws {
     let host = try host()

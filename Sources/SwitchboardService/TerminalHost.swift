@@ -91,7 +91,19 @@ final class TerminalHost {
       ["set-environment", "-g"] + (baseEnv[key].map { [key, $0] } ?? ["-u", key])
     }
     _ = try? run(Array(commands.joined(separator: [";"])))
+    enableHyperlinks()
   }
+
+  /// tmux reads tmux.conf only when its server starts, so a server that predates the hyperlinks feature never
+  /// reads it. This adds the feature to such a running server once. A client that attaches afterwards gets it.
+  private func enableHyperlinks() {
+    guard let features = try? run(["show-options", "-s", "terminal-features"]),
+      !features.contains(Self.hyperlinksFeature)
+    else { return }
+    _ = try? run(["set-option", "-s", "-a", "terminal-features", ",\(Self.hyperlinksFeature)"])
+  }
+
+  static let hyperlinksFeature = "xterm-256color:hyperlinks"
 
   /// The server's options. The panes have no status line, because the app
   /// draws its own window chrome. There is no prefix key, so Ctrl-B reaches
@@ -112,7 +124,7 @@ final class TerminalHost {
     set -s extended-keys on
     set -g default-terminal "xterm-256color"
     set -g set-clipboard on
-    set -as terminal-features ",xterm-256color:hyperlinks"
+    set -as terminal-features ",\(hyperlinksFeature)"
 
     """
 
