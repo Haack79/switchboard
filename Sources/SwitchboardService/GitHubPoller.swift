@@ -811,12 +811,18 @@ final class GitHubPoller {
       }
     }
     var changed = false
+    let branchHasNoPR =
+      t.branch.key != nil
+      && (t.branch.lookedUp != nil || readable(t.branch.key, for: t.host) == nil)
+      && (readable(t.transcript.link, for: t.host) == nil || t.transcript.lookedUp)
     if let id = t.prId {
       if let comments = prs[id]?.comments, let shown = shown(id, last: s.facts.pr) {
         let kept = keptComments(comments)
-        if let owner = service.prOwner(of: shown, besides: s.id), s.facts.pr?.id != shown.id {
-          // One live session owns a PR. The session that holds it keeps it, and this one shows no PR.
-          if s.facts.prOwner != owner {
+        if s.facts.pr?.id != shown.id, let owner = service.prOwner(of: shown.id, besides: s.id) {
+          // Another live session owns this PR and keeps it. This session shows no PR.
+          let dropsPR = s.facts.pr != nil
+          if dropsPR { event(s.id, "pr", ["pr": .null, "comments": []]) }
+          if dropsPR || s.facts.prOwner != owner {
             event(s.id, "pr-owned", ["owner": .string(owner)])
             changed = true
           }
@@ -827,12 +833,7 @@ final class GitHubPoller {
           changed = true
         }
       }
-    } else if let pr = s.facts.pr,
-      !mayRead(pr.repo, for: t.host)
-        || (t.branch.key != nil
-          && (t.branch.lookedUp != nil || readable(t.branch.key, for: t.host) == nil)
-          && (readable(t.transcript.link, for: t.host) == nil || t.transcript.lookedUp))
-    {
+    } else if let pr = s.facts.pr, !mayRead(pr.repo, for: t.host) || branchHasNoPR {
       // GitHub answered that the branch has no PR. A branch or link in a repo
       // that `mayRead` refuses counts as one with no PR, because the poller
       // never looks it up. Without a branch, as in a folder outside git, the
@@ -840,6 +841,10 @@ final class GitHubPoller {
       // PR in a repo that `mayRead` refuses. An older sbd can record one, and
       // so can sbd while the host's `repos` still listed the repo.
       event(s.id, "pr", ["pr": .null, "comments": []])
+      changed = true
+    } else if s.facts.pr == nil, s.facts.prOwner != nil, branchHasNoPR {
+      // The session left the PR that another session owns, so the owner no longer applies.
+      event(s.id, "pr-owned", ["owner": .null])
       changed = true
     }
     return changed

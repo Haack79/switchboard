@@ -3,14 +3,11 @@ import SwitchboardCore
 import os
 
 extension Service {
-  /// The id of the live session other than `id` whose PR is `pr`, or nil when no other session holds it. It takes the
-  /// state queue.
-  func prOwner(of pr: PullRequest, besides id: String) -> String? {
+  /// The id of the live session other than `id` whose PR has the node id `prId`, or nil when no other session owns it.
+  /// It takes the state queue.
+  func prOwner(of prId: String, besides id: String) -> String? {
     queue.sync {
-      entries.values.first { e in
-        e.session.id != id && !e.session.done
-          && e.facts.pr.map { $0.number == pr.number && Dependencies.sameRepo($0.repo, pr.repo) } == true
-      }?.session.id
+      entries.values.first { $0.session.id != id && !$0.session.done && $0.facts.pr?.id == prId }?.session.id
     }
   }
 

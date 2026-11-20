@@ -148,6 +148,13 @@ extension FakeGitHub {
     #expect(after.prOwnedBy == "owner")
     #expect(try sbd.get(owner.id).pr?.number == 18303)
     #expect(try sbd.get(owner.id).prOwnedBy == nil)
+    try sbd.poll(all: true)
+    #expect(try sbd.events(second.id).filter { $0.kind == "pr-owned" }.count == 1)
+    try sbd.sb("done", owner.id)
+    try sbd.poll(all: true)
+    let released = try sbd.get(second.id)
+    #expect(released.pr?.number == 18303)
+    #expect(released.prOwnedBy == nil)
   }
 
   @Test func showsEachPRRuleAsThePRChanges() throws {
