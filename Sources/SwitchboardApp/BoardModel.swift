@@ -198,6 +198,8 @@ final class BoardModel: ObservableObject {
   @Published var itemContexts: [String: ItemContext] = [:]
   /// Each chat's last messages, by session id, read while its pane shows.
   @Published var chatLogs: [String: [ChatMessage]] = [:]
+  /// The loop run whose prompt a chat shows, set by the run's Show Reply link.
+  @Published var chatJump: ChatJump?
   /// The messages sent to each chat that its log does not hold yet, by session id. The chat shows them below its log.
   @Published var pendingChat: [String: [PendingChatMessage]] = [:]
   /// Each Manager conversation's last `manager-mcp` answer, by session id, read while its pane shows.
@@ -1216,6 +1218,7 @@ final class BoardModel: ObservableObject {
     if let pending {
       pendingChat[id, default: []].removeAll(where: \.failed)
       pendingChat[id, default: []].append(pending)
+      releaseChatJump(id)
     }
     perform(
       "send", args,
@@ -1593,10 +1596,22 @@ final class BoardModel: ObservableObject {
   /// Reads the session's chat messages from its transcript, which can be large, so off the main thread.
   func loadChatLog(_ session: String) {
     let send = send
+    let jumpSent = chatJump.flatMap { $0.session == session ? $0.sent : nil }
+    var request: [String: JSON] = ["session": .string(session)]
+    if let jumpSent { request["sent"] = .number(Double(jumpSent)) }
+    let args = request
     poller.async {
-      let messages = try? JSONCoding.convert(
-        send("chat-log", ["session": .string(session)]), to: [ChatMessage].self)
+      let answer = try? JSONCoding.convert(send("chat-log", args), to: [ChatMessage].self)
       Task { @MainActor in
+        // A read that started before the current jump would replace the log that the jump's row points into.
+        if let current = self.chatJump, current.session == session, current.sent != jumpSent { return }
+        var messages = answer
+        if let jumpSent, let answer {
+          let read = ChatJump.reading(answer, sent: jumpSent)
+          messages = read.log
+          // The user may have left the chat while sbd answered.
+          if self.chatJump?.session == session, self.chatJump?.found != read.found { self.chatJump?.found = read.found }
+        }
         // A failed first read shows an empty log, so the pane stops showing that it is loading.
         if let messages = messages ?? (self.chatLogs[session] == nil ? [] : nil), self.chatLogs[session] != messages {
           self.chatLogs[session] = messages
