@@ -975,9 +975,8 @@ public final class Service {
       // This claude takes the queued resume message, so the tick launches no other claude for the resume.
       entries[id]?.resumeLaunch = nil
       refreshSoon()
-      // A message that arrived while claude was starting waits until claude
-      // has drawn its prompt. 1.5 s covers the redraws that Phase 0 measured.
-      deliverPending(id, after: 1.5)
+      // A message that arrived while claude was starting waits until claude has drawn its prompt.
+      deliverPending(id, after: config.pasteSettleSeconds)
       if stamp == nil, let account = managerSkillAccount(id) { refreshManagerSkills(account: account) }
       if let text = startDigest(id, source: payload["source"]?.string) {
         record(id, "digest", ["text": .string(text)])
@@ -1585,7 +1584,7 @@ public final class Service {
   }
 
   /// Whether claude sits at its prompt, ready for a paste: this launch's
-  /// claude reported SessionStart at least 1.5 s ago, no turn runs, and no
+  /// claude reported SessionStart at least `pasteSettleSeconds` ago, no turn runs, and no
   /// message is on its way. A claude that shows a dialog at startup, such as
   /// the workspace trust dialog, has not reported SessionStart. A paused session takes no paste.
   private func readyForPaste(_ id: String, now: Int64) -> Bool {
@@ -1594,8 +1593,10 @@ public final class Service {
     else { return false }
     if let launch = e.facts.lastLaunch, start < launch { return false }
     if let sent = e.inFlight?.since, now - sent < Service.inFlightMs { return false }
-    return now - start >= 1500
+    return now - start >= pasteSettleMs
   }
+
+  private var pasteSettleMs: Int64 { Int64(config.pasteSettleSeconds * 1000) }
 
   /// `by` is who wrote the message, which the `sent` event records. With `launchesWithPrompt` false, a stopped
   /// claude starts without a prompt and gets the message as a paste, which
@@ -1695,7 +1696,7 @@ public final class Service {
   }
 
   /// Pastes the oldest queued message after `delay`, if claude is ready for
-  /// it. When claude is idle but its SessionStart is under 1.5 s old, or a
+  /// it. When claude is idle but its SessionStart is under `pasteSettleSeconds` old, or a
   /// message is still in flight, this tries again when that wait ends.
   /// Otherwise the next SessionStart or end of a turn tries again.
   func deliverPending(_ id: String, after delay: Double) {
@@ -1711,7 +1712,7 @@ public final class Service {
       let now = nowMs()
       guard readyForPaste(id, now: now) else {
         if e.facts.live, !e.facts.turnRunning, let start = e.facts.lastStart, start >= (e.facts.lastLaunch ?? 0) {
-          let startWait = max(0, 1500 - (now - start))
+          let startWait = max(0, pasteSettleMs - (now - start))
           let flightWait = e.inFlight.map { max(0, Service.inFlightMs - (now - $0.since)) } ?? 0
           let wait = max(startWait, flightWait)
           if wait > 0 { deliverPending(id, after: Double(wait) / 1000 + 0.1) }
@@ -1904,7 +1905,7 @@ public final class Service {
   }
 
   /// Stops the claude of each session that `pick` returns on the state queue.
-  /// Then it waits off the queue up to 5 s for the Claude pane of each such
+  /// Then it waits off the queue up to `stopWaitSeconds` for the Claude pane of each such
   /// session on this Mac to die. `claudeState` reads a session as stopped only
   /// once its pane is dead, so a request that follows sees each such claude
   /// stopped, unless the pane outlived the wait. A session on a host gets no
@@ -1926,7 +1927,7 @@ public final class Service {
     }
     if !panes.isEmpty {
       let terminals = mac.terminals()
-      pollFor5Seconds { panes.allSatisfy { terminals.isDead($0) != false } }
+      poll(seconds: config.stopWaitSeconds) { panes.allSatisfy { terminals.isDead($0) != false } }
     }
     return picked
   }
@@ -2672,12 +2673,12 @@ public final class Service {
   private func settle(_ id: String) {
     let name = paneName(id, .claude)
     guard let terminals = queue.sync(execute: { try? site(of: id).terminals() }) else { return }
-    pollFor5Seconds { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
+    poll(seconds: 5) { queue.sync(execute: { entries[id]?.facts.live ?? true }) || terminals.isDead(name) != false }
   }
 
-  /// Checks `done` every 50 ms until it returns true, or for at most 5 s.
-  private func pollFor5Seconds(_ done: () -> Bool) {
-    let deadline = Date().addingTimeInterval(5)
+  /// Checks `done` every 50 ms until it returns true, or for at most `seconds`.
+  private func poll(seconds: Double, _ done: () -> Bool) {
+    let deadline = Date().addingTimeInterval(seconds)
     while !done(), Date() < deadline { usleep(50_000) }
   }
 

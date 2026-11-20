@@ -5,8 +5,7 @@ import Testing
 extension Instance {
   /// A private sbd whose poller asks `github`, with the stub gh. Polls run
   /// only when a test asks, unless `pollSeconds` starts the poller's timer.
-  /// These tests need no fast process checks, so sbd ticks once a second
-  /// instead of running ps five times a second. `extra` adds other config keys.
+  /// `extra` adds other config keys.
   static func withGitHub(
     _ github: FakeGitHub, pollSeconds: Double = 0, config extra: [String: JSON] = [:]
   ) throws -> Instance {
@@ -14,8 +13,7 @@ extension Instance {
       "github": [
         "gh": .string("\(FakeGitHub.fixtures)/gh-stub"), "url": .string(github.url),
         "pollSeconds": .number(pollSeconds),
-      ],
-      "tickSeconds": 1,
+      ]
     ]
     return try Instance(config: config.merging(extra) { $1 })
   }
