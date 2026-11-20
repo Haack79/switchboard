@@ -19,6 +19,12 @@ import Testing
     var received: [URL] = []
     view.openSessionLink = { received.append($0) }
     view.requestOpenLink(source: view, link: "Switchboard://session/swb_pknjy", params: [:])
-    #expect(received.count == 1)
+    #expect(received == [URL(string: "switchboard://session/swb_pknjy")!])
+  }
+
+  @Test func leavesOtherLinksToTheSystem() {
+    #expect(ThemedTerminalView.sessionLinkURL("https://example.com/switchboard") == nil)
+    #expect(ThemedTerminalView.sessionLinkURL("switchboardx://session/swb_pknjy") == nil)
+    #expect(ThemedTerminalView.sessionLinkURL("not a url") == nil)
   }
 }

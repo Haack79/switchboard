@@ -139,4 +139,21 @@ private final class RecordingMachine: Machine, @unchecked Sendable {
     let error = #expect(throws: APIError.self) { try host.run(["failing"]) }
     #expect(error?.description == "tmux failing: no such command")
   }
+
+  /// tmux drops a program's OSC 8 links unless the outer terminal has the hyperlinks feature, and a dropped link
+  /// can't be clicked in the app. The config is real tmux input here, so a tmux that rejects the line fails the test.
+  @Test(.enabled(if: findExecutable("tmux") != nil))
+  func theConfigPassesOSC8LinksThrough() throws {
+    let tmux = try #require(findExecutable("tmux"))
+    let dir = "/tmp/sb-\(getpid())-links"
+    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: dir) }
+    try TerminalHost.configText.write(toFile: "\(dir)/c", atomically: true, encoding: .utf8)
+    let socket = "\(dir)/s"
+    defer { _ = try? runCommand(tmux, ["-S", socket, "kill-server"]) }
+    let started = try runCommand(tmux, ["-S", socket, "-f", "\(dir)/c", "new-session", "-d", "sleep 30"])
+    #expect(started.status == 0, "\(started.stderr)")
+    let features = try runCommand(tmux, ["-S", socket, "show-options", "-s", "terminal-features"])
+    #expect(features.stdout.contains("xterm-256color:hyperlinks"))
+  }
 }

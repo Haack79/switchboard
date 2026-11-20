@@ -68,8 +68,17 @@ final class ThemedTerminalView: LocalProcessTerminalView {
   /// Launch Services delivering the URL back to this process.
   @MainActor var openSessionLink: (URL) -> Void = { LinkInbox.shared.receive($0) }
 
+  /// The session link a clicked `link` names, with the scheme in lowercase, or nil for any other link.
+  static func sessionLinkURL(_ link: String) -> URL? {
+    guard var parts = URLComponents(string: link), parts.scheme?.lowercased() == SessionLink.scheme else {
+      return nil
+    }
+    parts.scheme = SessionLink.scheme
+    return parts.url
+  }
+
   override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-    if let url = URL(string: link), url.scheme?.lowercased() == SessionLink.scheme {
+    if let url = Self.sessionLinkURL(link) {
       openSessionLink(url)
     } else {
       super.requestOpenLink(source: source, link: link, params: params)

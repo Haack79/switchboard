@@ -97,7 +97,7 @@ final class TerminalHost {
   /// draws its own window chrome. There is no prefix key, so Ctrl-B reaches
   /// Claude Code, and no key splits a pane or opens copy mode. focus-events
   /// and extended-keys pass focus reports and extended keys through to Claude
-  /// Code, as Ghostty does. A pane whose program exits keeps its last screen
+  /// Code, as Ghostty does. The hyperlinks feature passes a program's OSC 8 links to the app, which opens them. A pane whose program exits keeps its last screen
   /// until sbd starts it again.
   static let configText = """
     set -g status off
@@ -112,6 +112,7 @@ final class TerminalHost {
     set -s extended-keys on
     set -g default-terminal "xterm-256color"
     set -g set-clipboard on
+    set -as terminal-features ",xterm-256color:hyperlinks"
 
     """
 
