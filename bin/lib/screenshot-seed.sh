@@ -30,22 +30,20 @@ case " $* " in
 esac
 exit 0
 STUB
-  # tmux runs pane commands through the configured shell, which must pass its arguments through.
-  printf '#!/bin/sh\nexec /bin/sh "$@"\n' >"$home/bin/shell"
-  chmod +x "$home/bin/claude" "$home/bin/shell"
+  chmod +x "$home/bin/claude"
 
   start_usage_server
 
-  jq -n --arg home "$home" --argjson port "$(cat "$home/usage.port")" '{
-    claude: "\($home)/bin/claude", shell: "\($home)/bin/shell", env: {CLAUDE_CONFIG_DIR: "\($home)/.claude-work"},
-    claudeConfigDirs: ["\($home)/.claude-work", "\($home)/.claude-personal", "\($home)/.claude-oss"],
+  jq -n --arg home "$home" --arg account "$CLAUDE_CONFIG_DIR" --argjson port "$(cat "$home/usage.port")" '{
+    claude: "\($home)/bin/claude", shell: "/bin/sh", env: {CLAUDE_CONFIG_DIR: $account},
+    claudeConfigDirs: ($ARGS.positional | map("\($home)/.claude-\(.)")),
     worktreeRoot: "\($home)/worktrees", repoRoots: ["\($home)/dev"],
     followupsFile: "\($home)/followups.md", idleStopSeconds: 86400, snapshotEvery: 0,
     github: {pollSeconds: 0, gh: "/usr/bin/false", url: "http://127.0.0.1:9"},
     depot: {enabled: false}, docket: {pollSeconds: 0, path: "/usr/bin/false"}, trunk: {path: "/usr/bin/false"},
     usage: {url: "http://127.0.0.1:\($port)/api/oauth/usage", pollSeconds: 0, keychain: false},
     triage: {enabled: false}
-  }' >"$home/config.json"
+  }' --args "${accounts[@]}" >"$home/config.json"
 
   local r
   for r in payments-api search-service platform-tools web-app; do
@@ -66,7 +64,7 @@ start_usage_server() {
     def limits($s; $w): {limits: [
       {kind: "session", percent: $s, severity: "normal", resets_at: $soon},
       {kind: "weekly_all", percent: $w, resets_at: $later}]};
-    {"token-work": limits(42; 61), "token-personal": limits(8; 23), "token-oss": limits(0; 4)}' >"$home/usage.json"
+    {work: limits(42; 61), personal: limits(8; 23), oss: limits(0; 4)} | with_entries(.key |= "token-\(.)")' >"$home/usage.json"
   cat >"$home/usage.py" <<'PY'
 import http.server, json, sys
 usage = json.load(open(sys.argv[1]))
@@ -108,6 +106,7 @@ session() { # id name repo branch group-or-empty minutes-ago account
       done: false, waits: [], notes: [], claudeConfigDir: $acct, autoMode: true, shellClosed: true}
      + (if $g == "" then {} else {group: $g, placedByHand: true} end)')
   echo "INSERT INTO sessions VALUES ($(q "$1"), $(q "$json"));" >>"$sql"
+  seeded=$((seeded + 1))
   event "$1" "$6" created '{}'
   event "$1" "$6" started '{}'
 }
@@ -127,12 +126,12 @@ pr() { # session minutes-ago repo number title branch extra-json
       checks: "SUCCESS", reviewDecisionRead: true, reviewRequests: [], author: "dev", createdAt: $created} + $x)}')"
 }
 approved() { # minutes-ago
-  jq -cn --arg at "$(iso "$1")" '{reviewDecision: "APPROVED",
-    verdicts: [{author: "dana", state: "APPROVED", submittedAt: $at}], reviews: [{author: "dana", state: "APPROVED", submittedAt: $at}]}'
+  jq -cn --arg at "$(iso "$1")" '{author: "dana", state: "APPROVED", submittedAt: $at} as $review
+    | {reviewDecision: "APPROVED", verdicts: [$review], reviews: [$review]}'
 }
 
 seed_db() {
-  sql=$home/seed.sql
+  sql=$home/seed.sql seeded=0
   cat >"$sql" <<'SQL'
 CREATE TABLE sessions (id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL, t INTEGER NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL);
@@ -143,7 +142,6 @@ SQL
   group gpaymt Payments 600
   group gsrchx Search 500
 
-  # Payments
   session spaya2 "Retry declined card charges" payments-api retry-declined-charges gpaymt 90
   prompt spaya2 88 "Retry declined card charges with exponential backoff"
   tool spaya2 3 Bash '{"command": "swift test --filter ChargeRetryTests"}'
@@ -159,7 +157,6 @@ SQL
   reply spayc4 300 "Opened PR #415. CI is green."
   pr spayc4 45 payments-api 415 "Round currency only at display time" currency-rounding "$(approved 45)"
 
-  # Search
   session swait1 "Typo-tolerant product search" search-service typo-tolerant-search gsrchx 120
   prompt swait1 118 "Make product search tolerate typos"
   reply swait1 12 "Pushed the trigram index to PR #4812. CI is running, and I'll pick it up when the checks finish."
@@ -174,7 +171,6 @@ SQL
   pr ssrch4 20 search-service 212 "Show facet counts next to filters" facet-counts \
     "$(approved 60 | jq -c '. + {mergeQueue: true, inMergeQueue: true}')"
 
-  # Ungrouped
   session sdecid "Rate limits for the public API" web-app api-rate-limits "" 150
   prompt sdecid 148 "Add rate limits to the public API"
   reply sdecid 6 "The limiter works in staging. Before I open the PR I need three calls from you: where to keep the counters, what limit to start with, and how to tell clients they hit it."
@@ -200,7 +196,7 @@ held_hook() { # session tool input-json
   jq -nc --arg t "$home/transcripts/$1.jsonl" --arg tool "$2" --argjson input "$3" \
     '{hook_event_name: "PermissionRequest", session_id: "seed", transcript_path: $t,
       permission_mode: "default", tool_name: $tool, tool_input: $input, cwd: "/tmp"}' |
-    SB_SESSION_ID="$1" "$home/bin/sb" hook >/dev/null 2>&1 &
+    SB_SESSION_ID="$1" sb hook >/dev/null 2>&1 &
 }
 
 # Writes a transcript of user and assistant turns, one per argument, alternating from the user, and points the
@@ -210,20 +206,20 @@ transcript() { # session text…
   shift
   : >"$file"
   for text in "$@"; do
-    if [ "$role" = user ]; then
-      jq -nc --arg t "$text" --arg at "$(iso "$minutes")" '{type: "user", message: {content: $t}, timestamp: $at}' >>"$file"
-      role=assistant
-    else
-      jq -nc --arg t "$text" --arg at "$(iso "$minutes")" \
-        '{type: "assistant", message: {content: [{type: "text", text: $t}]}, timestamp: $at}' >>"$file"
-      role=user
-    fi
+    jq -nc --arg role "$role" --arg t "$text" --arg at "$(iso "$minutes")" \
+      '{type: $role, message: {content: (if $role == "user" then $t else [{type: "text", text: $t}] end)}, timestamp: $at}' \
+      >>"$file"
+    if [ "$role" = user ]; then role=assistant; else role=user; fi
     minutes=$((minutes - 3))
   done
   jq -nc --arg t "$file" '{hook_event_name: "SessionStart", transcript_path: $t}' | SB_SESSION_ID="$id" sb hook
 }
 
 seed_live() {
+  # A session that sbd can't decode drops out of every image without an error, so a short count fails here.
+  local listed
+  listed=$(sb ls --json | jq '[.[] | select(.kind == "work")] | length')
+  [ "$listed" -eq "$seeded" ] || { echo "sbd lists $listed of the $seeded seeded sessions" >&2; return 1; }
   sb account use work >/dev/null
   sb usage >/dev/null
 

@@ -58,7 +58,7 @@ See [Live cap and auto-continue](docs/live-cap.md).
 
 ## Quick start
 
-On a Mac with macOS 14 or later, Xcode, `tmux`, `gh` signed in, and Claude Code signed in:
+On a Mac with macOS 14 or later, Xcode 26 or later, `tmux`, `gh` signed in, and Claude Code signed in:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/haacked/switchboard/main/bin/bootstrap | bash
@@ -103,4 +103,4 @@ Everything in the app also works from `sb`, and every command takes `--json`. Se
 - [How it works](docs/how-it-works.md)
 - [Develop](docs/develop.md)
 
-**Status:** v0.1, a first version to try. It runs sessions, shows which need you, stops idle ones, keeps follow-ups that haven't started, and tracks each session's GitHub PR and its Depot CI run. Waits on a time, another session, a PR's checks, reviews, approval, or merge, or a PostHog deploy resolve themselves. Messages can carry dropped or pasted images. It groups sessions, sends one message to a group, and reads and updates plan documents attached to a group, with model-written status updates that wait for your approval. Each group can have a chat, a Claude session that manages only that group's sessions. The design plan is in `~/dev/haacked/notes/Dev/repositories/haacked/switchboard/plans/switchboard.md`, and v0.1's scope is in `plans/v0.1-app.md` next to it.
+**Status:** v0.1, a first version to try. See [Develop](docs/develop.md) for what it covers and where the design plan lives.
