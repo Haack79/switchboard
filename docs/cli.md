@@ -5,6 +5,7 @@ Everything in the app also works from `sb`, and every command takes `--json`:
 ```
 sb new ~/dev/myrepo --branch haacked/fix-thing --prompt "Fix the flaky test in foo_test.py"
 sb new ~/dev/myrepo --worktree --name "Fix the flaky test"   # names the branch itself
+sb new ~/dev/myrepo --worktree --prompt "Fix the login redirect"  # a model renames it, e.g. to fix-login-redirect, once it answers
 sb new '~/dev/myrepo' --host devbox --branch haacked/fix-thing  # runs it on the remote host devbox of config.json; the quotes keep ~ for the host
 sb spawn --repo PostHog/posthog --branch haacked/flag-cache --prompt "Cache flag lookups."
 sb spawn --repo PostHog/posthog --host devbox --branch haacked/flag-cache --prompt "Cache flag lookups."  # on devbox, in a worktree of the checkout that devbox's repos name

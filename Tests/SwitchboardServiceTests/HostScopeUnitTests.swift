@@ -47,7 +47,7 @@ private func withSessions(
   _ body: (Service) throws -> Void
 ) throws {
   // A request that a missing guard lets through runs no claude or tmux on this Mac.
-  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true"]
+  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true", "sessionNames": ["enabled": false]]
   try withHostService(hosts: hosts, config: config, sbPath: sbPath) { service, _ in
     service.queue.sync {
       service.hostEventWindowMs = windowMs
@@ -390,7 +390,7 @@ private func withReadySessions(_ body: (Service, BoxFacts, _ roots: [String]) th
   let root = try makeShortTempFolder()
   defer { try? FileManager.default.removeItem(atPath: root) }
   try makeCheckout("\(root)/n")
-  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true"]
+  let config: [String: JSON] = ["claude": "/usr/bin/true", "tmux": "/usr/bin/true", "sessionNames": ["enabled": false]]
   try withReadyService(host: ["repos": ["o/n": .string("\(root)/n")]], config: config) { bench, service, facts in
     let cwd = "\(facts.home)/work"
     try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)

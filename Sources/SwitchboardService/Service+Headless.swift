@@ -7,11 +7,16 @@ extension Service {
   /// The environment of a turn under a Claude account. With `session`, the
   /// turn takes the session's pane environment and account. Without one, it
   /// takes `config.env`. `account` overrides either. The turn is not a
-  /// session, so it gets no session id.
-  func headlessEnv(session: String?, account: ClaudeAccount?) -> [String: String] {
-    var env = ProcessInfo.processInfo.environment
+  /// session, so it gets no session id. `base` is sbd's own environment.
+  func headlessEnv(
+    session: String?, account: ClaudeAccount?, base: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: String] {
+    var env = base
     if let session {
-      env.merge(paneEnv(session)) { $1 }
+      let pane = paneEnv(session)
+      env.merge(pane) { $1 }
+      // A pane of the default account has no CLAUDE_CONFIG_DIR, and sbd's own value must not stand in for it.
+      if entries[session]?.session.host == nil, pane["CLAUDE_CONFIG_DIR"] == nil { env["CLAUDE_CONFIG_DIR"] = nil }
     } else {
       for (key, value) in config.env { env[key] = value.expandingTilde }
       env["SB_HOME"] = home.path
