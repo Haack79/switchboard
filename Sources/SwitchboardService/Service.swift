@@ -1622,7 +1622,8 @@ public final class Service {
     from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> Delivery {
     try deliver(
-      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere,
+      extra: extra
     ).delivery
   }
 
@@ -1635,7 +1636,7 @@ public final class Service {
   /// As `send`, but it also returns the message's `sent` event.
   func deliver(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
