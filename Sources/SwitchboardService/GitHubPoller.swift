@@ -818,7 +818,7 @@ final class GitHubPoller {
     if let id = t.prId {
       if let comments = prs[id]?.comments, let shown = shown(id, last: s.facts.pr) {
         let kept = keptComments(comments)
-        if s.facts.pr?.id != shown.id, let owner = service.prOwner(of: shown.id, besides: s.id) {
+        if s.facts.pr?.id != shown.id, let owner = service.prOwner(of: shown.id, besides: s.id, onHost: t.host) {
           // Another live session owns this PR and keeps it. This session shows no PR.
           let dropsPR = s.facts.pr != nil
           if dropsPR { event(s.id, "pr", ["pr": .null, "comments": []]) }

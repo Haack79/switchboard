@@ -3,11 +3,14 @@ import SwitchboardCore
 import os
 
 extension Service {
-  /// The id of the live session other than `id` whose PR has the node id `prId`, or nil when no other session owns it.
-  /// It takes the state queue.
-  func prOwner(of prId: String, besides id: String) -> String? {
+  /// The id of the live session on `host` other than `id` whose PR has the node id `prId`, or nil when no other session
+  /// on that host owns it. Sessions on another host never count, because a remote caller may not read them. It takes
+  /// the state queue.
+  func prOwner(of prId: String, besides id: String, onHost host: String?) -> String? {
     queue.sync {
-      entries.values.first { $0.session.id != id && !$0.session.done && $0.facts.pr?.id == prId }?.session.id
+      entries.values.first {
+        $0.session.id != id && $0.session.host == host && !$0.session.done && $0.facts.pr?.id == prId
+      }?.session.id
     }
   }
 
