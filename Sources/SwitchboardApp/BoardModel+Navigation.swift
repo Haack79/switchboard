@@ -123,6 +123,23 @@ extension BoardModel {
     if terminalFocus == id { terminalFocus = nil }
   }
 
+  /// Shows the session's chat scrolled to the run's prompt. It selects the session by id and never sends
+  /// `operator`, which would start a stopped operator.
+  func openRunReply(_ session: SessionSummary, _ run: Schedule.Run) {
+    guard LoopRow.linksReply(session, run), let sent = run.sent else { return }
+    navigate {
+      chatJump = ChatJump(session: session.id, sent: sent)
+      showingTerminal = false
+      showInSidebar(session)
+    }
+  }
+
+  /// Ends the jump into the session's chat, so its log reads the newest messages and follows the last one again.
+  /// A jump into another session stays.
+  func releaseChatJump(_ session: String) {
+    if chatJump?.session == session { chatJump = nil }
+  }
+
   /// The session whose terminal view shows now, where ⇧⌘E reveals the Message Claude field. The Board and a
   /// pane that shows a chat's messages or an Inbox summary have no terminal view.
   var messageFieldTarget: SessionSummary? {

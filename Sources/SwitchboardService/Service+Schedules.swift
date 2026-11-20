@@ -315,8 +315,8 @@ extension Service {
     var ran = schedule
     let run: Schedule.Run
     do {
-      let delivery = try send(id, text, by: .sbd, trigger: .schedule)
-      run = Schedule.Run(t: now, outcome: .init(delivery), skipped: skipped)
+      let delivered = try deliver(id, text, by: .sbd, trigger: .schedule)
+      run = Schedule.Run(t: now, outcome: .init(delivered.delivery), skipped: skipped, sent: delivered.sent.id)
     } catch {
       logLine("can't run schedule \(schedule.id) of \(id): \(error)")
       run = Schedule.Run(t: now, outcome: .failed, skipped: skipped, error: "\(error)")

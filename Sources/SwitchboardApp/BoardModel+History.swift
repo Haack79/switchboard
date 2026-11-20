@@ -84,6 +84,10 @@ extension BoardModel {
     change()
     navigating = false
     record(mode)
+    // Going straight from one chat to another updates the chat view in place, so the view can't end the jump.
+    if let jump = chatJump, location != NavLocation(place: .session(jump.session), terminal: false) {
+      chatJump = nil
+    }
   }
 
   /// Clears the selection when it is one of `ids`, because those sessions are gone. The user did not
