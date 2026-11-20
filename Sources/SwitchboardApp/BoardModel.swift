@@ -254,6 +254,9 @@ final class BoardModel: ObservableObject {
   @Published var deciding: Set<String> = []
   /// sbd's refusal of the last decision request, by session. The card shows it.
   @Published var decisionErrors: [String: String] = [:]
+  /// The step that each session's step view shows, by session id, with the ref of the list that the step belongs
+  /// to. Nil shows the first unanswered decision.
+  @Published private(set) var decisionSteps: [String: DecisionStepEntry] = [:]
   /// sbd's refusal of the last Clear wait, by session. The wait panel shows it.
   @Published var waitErrors: [String: String] = [:]
   /// The waits, as `<session>/<wait>`, whose Clear wait sbd has not answered. Their buttons stay disabled, so a
@@ -781,7 +784,7 @@ final class BoardModel: ObservableObject {
       let open = Set(list.flatMap { $0.cards.map(\.id) })
       drafts = drafts.filter { open.contains($0.key) }
       messageDrafts.prune(
-        keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.otherAnswerKeys(list))
+        keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.decisionKeys(list))
           .union(MessageDrafts.replyKeys(list)))
       if !sameShown(allSessions, list) { allSessions = list }
       // After the new list, so that the filter change reads each session's group from the same poll as the groups.
@@ -1498,6 +1501,20 @@ final class BoardModel: ObservableObject {
       "session": .string(session), "options": .array(picks.map(JSON.string)), "ref": .string(ref),
     ]
     perform("choose", args, finally: { self.choosing.remove(key) })
+  }
+
+  /// The step set for the list with `ref`. A list with another ref has no step, so a new list starts on its first
+  /// unanswered decision.
+  func decisionStep(session: String, ref: String) -> DecisionStep? {
+    decisionSteps[session].flatMap { $0.ref == ref ? $0.step : nil }
+  }
+
+  /// Sets the step for the list with `ref`. A write for a list that the session no longer shows is dropped, because
+  /// `DecisionStepView` sets the step after sbd accepts an answer, and the list can change in the meantime.
+  func setDecisionStep(_ step: DecisionStep?, session: String, ref: String) {
+    guard allSessions.first(where: { $0.id == session })?.stepList?.ref == ref else { return }
+    let entry = step.map { DecisionStepEntry(ref: ref, step: $0) }
+    if decisionSteps[session] != entry { decisionSteps[session] = entry }
   }
 
   /// Answers one decision of the list whose ref the user saw. `answered`

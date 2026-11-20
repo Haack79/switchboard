@@ -7,6 +7,11 @@ enum DecisionStep: Hashable {
   case review
 }
 
+struct DecisionStepEntry: Equatable {
+  var ref: String
+  var step: DecisionStep
+}
+
 /// What the user answers a decision with. `options` holds 1-based option numbers.
 enum DecisionReply: Equatable, Sendable {
   case options([Int])

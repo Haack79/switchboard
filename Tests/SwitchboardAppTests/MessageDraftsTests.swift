@@ -488,6 +488,87 @@ import Testing
     #expect(MessageDrafts.replyKeys([s]).isEmpty)
   }
 
+  // MARK: decisionKeys(_:)
+
+  /// A session whose item carries yes-or-no decisions with `numbers` under `ref`. sbd has opened no list for it.
+  func deciding(_ id: String, ref: String = "summary:1", _ numbers: [Int]) -> SessionSummary {
+    var s = needsItem(id)
+    s.triage?.ref = ref
+    s.triage?.decisions = numbers.map {
+      PendingDecision(
+        number: $0, header: "Header \($0)", question: "Question \($0)?",
+        options: [PendingDecision.Option(label: "Yes"), PendingDecision.Option(label: "No")])
+    }
+    return s
+  }
+
+  @Test func decisionKeysNameEachDecisionOfTheItemsList() {
+    #expect(
+      MessageDrafts.decisionKeys([deciding("s1", [1, 2, 3])]) == [
+        "decision:s1/summary:1/1/other", "decision:s1/summary:1/2/other", "decision:s1/summary:1/3/other",
+      ])
+  }
+
+  /// The reply's numbers need not run 1, 2, 3.
+  @Test func decisionKeysUseTheDecisionsOwnNumbers() {
+    #expect(
+      MessageDrafts.decisionKeys([deciding("s1", [3, 7, 9])]) == [
+        "decision:s1/summary:1/3/other", "decision:s1/summary:1/7/other", "decision:s1/summary:1/9/other",
+      ])
+  }
+
+  /// Once the first answer opens the list, the open list's ref and decisions name the keys, not the item's.
+  @Test func decisionKeysFollowTheOpenListOverTheItem() {
+    var s = deciding("s1", ref: "summary:2", [1, 2, 3])
+    s.decisions = DecisionList(
+      decisions: deciding("s1", [4, 5]).triage!.decisions, ref: "summary:1",
+      answers: [DecisionAnswer(number: 4, labels: ["Yes"])])
+
+    #expect(MessageDrafts.decisionKeys([s]) == ["decision:s1/summary:1/4/other", "decision:s1/summary:1/5/other"])
+  }
+
+  @Test func decisionKeysLeaveOutAnItemWhoseAnswersSbdSent() {
+    var s = deciding("s1", [1, 2, 3])
+    s.decisionsSent = true
+
+    #expect(MessageDrafts.decisionKeys([s]).isEmpty)
+  }
+
+  /// One decision shows no step view, so it has no Other answer field.
+  @Test func decisionKeysLeaveOutAnItemWithASingleDecision() {
+    #expect(MessageDrafts.decisionKeys([deciding("s1", [1])]).isEmpty)
+  }
+
+  @Test func decisionKeysOfASessionWithoutAnItemAreEmpty() {
+    var s = needsItem("s1")
+    s.triage = nil
+
+    #expect(MessageDrafts.decisionKeys([s]).isEmpty)
+  }
+
+  /// A group chat keeps its message draft under `group:<id>`. Its decision keys still name the session.
+  @Test func decisionKeysOfAGroupChatNameTheSessionNotTheGroup() {
+    var s = deciding("c1", [1, 2])
+    s.chat = "g1"
+    s.kind = .chat
+
+    #expect(MessageDrafts.decisionKeys([s]) == ["decision:c1/summary:1/1/other", "decision:c1/summary:1/2/other"])
+  }
+
+  @Test func decisionKeysCoverEverySession() {
+    let keys = MessageDrafts.decisionKeys([deciding("s1", [1, 2]), deciding("s2", ref: "stop:9", [1, 2])])
+
+    #expect(
+      keys == [
+        "decision:s1/summary:1/1/other", "decision:s1/summary:1/2/other", "decision:s2/stop:9/1/other",
+        "decision:s2/stop:9/2/other",
+      ])
+  }
+
+  @Test func decisionKeysOfNoSessionsAreEmpty() {
+    #expect(MessageDrafts.decisionKeys([]).isEmpty)
+  }
+
   // MARK: saveNow() and loading
 
   @Test(arguments: [

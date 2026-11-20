@@ -48,8 +48,8 @@ final class MessageDrafts {
     "decision:\(session)/\(ref)/\(decision)/other"
   }
 
-  /// The Other answer keys of every decision that the sessions show.
-  static func otherAnswerKeys(_ sessions: [SessionSummary]) -> Set<String> {
+  /// The draft keys of every decision that the sessions show.
+  static func decisionKeys(_ sessions: [SessionSummary]) -> Set<String> {
     Set(
       sessions.flatMap { s in
         s.shownDecisions.map { list in
