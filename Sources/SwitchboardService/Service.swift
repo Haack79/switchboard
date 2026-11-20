@@ -2779,7 +2779,9 @@ public final class Service {
           entries[id]?.unreportedSince = nil
           // Exit typed in the terminal, a stop, or a crash ends claude at the trust dialog.
           if let card = entries[id]?.facts.trustCard { closeTrust(card) }
-          if live { record(id, "exited") }
+          // sbd records `exited` for a claude that dies before its SessionStart while its launch prompt is pending.
+          // Without the event, the session reads Working until `launchPromptWindowMs` passes.
+          if live || entries[id]?.facts.launchPromptPending(now: now) == true { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
           // unless a resume came while it ran. These launches come at most
