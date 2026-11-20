@@ -203,7 +203,7 @@ extension Instance {
   func aSessionInTheInboxLeavesItWhenPaused(_ prompt: String, _ state: AttentionState) throws {
     let sbd = try Instance()
     let s = try sbd.new(prompt: prompt)
-    try sbd.waitFor(s.id, "\(state.title)") { $0.state == state && $0.claudePid != nil }
+    try sbd.waitFor(s.id, "\(state.title)") { $0.lastReply != nil && $0.state == state && $0.claudePid != nil }
     try #require(try sbd.triage().contains { $0.id == s.id }, "the session never reached the Inbox")
 
     try sbd.pauseJSON(s.id)
@@ -608,7 +608,7 @@ extension Instance {
     let pauseMark = try sbd.lastEventId(parent.id)
 
     let kid = try sbd.childOf(parent.id, name: "kid")
-    try sbd.waitFor(kid.id, "the child to need you") { $0.state == .needsYou }
+    try sbd.waitForReply(kid)
     try sbd.tickThrice()
 
     #expect(try !sbd.events(parent.id, after: pauseMark).contains { $0.kind == "sent" })

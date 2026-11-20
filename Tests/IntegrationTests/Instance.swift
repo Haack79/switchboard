@@ -348,6 +348,14 @@ final class Instance {
     return s
   }
 
+  /// Waits for the reply to the prompt that the session launched with.
+  /// A session launched with a prompt shows Needs you before claude takes the prompt.
+  /// The state alone can therefore match before the reply.
+  @discardableResult
+  func waitForReply(_ s: SessionSummary) throws -> SessionSummary {
+    try waitFor(s.id, "\(s.name)'s reply") { $0.lastReply != nil && $0.state == .needsYou }
+  }
+
   func get(_ id: String) throws -> SessionSummary { try client.session(id) }
 
   /// Attaches a control-mode tmux client to the session's Claude pane, which
