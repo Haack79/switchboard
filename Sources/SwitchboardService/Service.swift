@@ -1660,8 +1660,8 @@ public final class Service {
   }
 
   /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
-  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
-  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a conversation gets them, because
+  /// `chat-log` reads only conversations. A size that a host did not answer leaves both out. A missing transcript reads as
   /// size 0.
   private func resumeMark(_ id: String) -> [String: JSON] {
     guard let session = entries[id]?.session, session.kind.isConversation else { return [:] }

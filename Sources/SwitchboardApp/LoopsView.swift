@@ -185,4 +185,3 @@ private struct LoopDetail: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 }
-

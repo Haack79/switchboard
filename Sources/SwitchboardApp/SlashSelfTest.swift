@@ -39,6 +39,7 @@ enum SlashSelfTest {
     let text = { (DraftSelfTest.draft(model, session)?.text ?? "").debugDescription }
     func sent() async -> Bool {
       for _ in 0..<120 where DraftSelfTest.draft(model, session)?.isEmpty == false { await pause() }
+      log("hidden after send: \(model.revealedMessageField != session)")
       return await reveal()
     }
     guard await reveal() else { return }

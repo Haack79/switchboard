@@ -471,7 +471,6 @@ check_shell() {
   remember_claude "$work"
   app ctrl-d >/dev/null
   closes "$work" "Ctrl-D"
-  app show-terminal >/dev/null
   app select "$manager" >/dev/null
   sleep 3
   app select "$work" >/dev/null
@@ -750,6 +749,7 @@ check_slash() {
   field_logged slashtest "$view" 'down, tab: "/probe-cmd-user-only " open false focused true cursor at end true'
   field_logged slashtest "$view" 'return on /probe-d: "/probe-default " open false'
   field_logged slashtest "$view" 'return again: ""'
+  field_logged slashtest "$view" 'hidden after send: true'
   field_logged slashtest "$view" 'enter on /probe-d: "/probe-default " open false focused true'
   field_logged slashtest "$view" 'enter again: ""'
   field_logged slashtest "$view" "exact name: open true rows probe-user-only"
