@@ -193,14 +193,15 @@ struct ContentView: View {
     }
     .sheet(isPresented: isPickingSnoozeTime) {
       if let id = model.pickingSnoozeTime {
-        SnoozePicker(
-          session: id, apply: { model.snooze(id, until: $0) }, close: { model.pickingSnoozeTime = nil }
+        UntilPicker(
+          session: id, verb: "Snooze", apply: { model.snooze(id, until: $0) },
+          close: { model.pickingSnoozeTime = nil }
         ).environmentObject(model)
       }
     }
     .sheet(isPresented: isPickingPauseTime) {
       if let id = model.pickingPauseTime {
-        SnoozePicker(
+        UntilPicker(
           session: id, verb: "Pause", apply: { model.pause(id, until: $0) },
           close: { model.pickingPauseTime = nil }
         ).environmentObject(model)

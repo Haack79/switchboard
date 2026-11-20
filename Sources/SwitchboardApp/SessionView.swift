@@ -287,6 +287,8 @@ struct SessionView: View {
         }
         if session.canPause {
           PauseMenuItems(id: session.id)
+            .fixedSize()
+            .help("Stop claude until you resume it, or until a time you pick.")
         }
         Button(session.markedDone ? "Not Done" : "Done") { model.setDone(session.id, !session.markedDone) }
           .help(

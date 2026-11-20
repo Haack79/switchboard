@@ -45,13 +45,13 @@ struct SnoozeMenuItems: View {
 
 /// The sheet of Pick a Time…, which snoozes or pauses the session until a date and time that the user picks.
 /// `verb` is "Snooze" or "Pause", and `close` clears the model's record of the open sheet.
-struct SnoozePicker: View {
+struct UntilPicker: View {
   @EnvironmentObject var model: BoardModel
   let session: String
-  var verb = "Snooze"
-  var apply: (Date) -> Void
-  var close: () -> Void
-  @State private var until = SnoozePicker.nextFullHour(after: Date())
+  let verb: String
+  let apply: (Date) -> Void
+  let close: () -> Void
+  @State private var until = UntilPicker.nextFullHour(after: Date())
 
   static func nextFullHour(after now: Date) -> Date {
     let hour = Calendar.current.dateInterval(of: .hour, for: now)!.start
@@ -65,7 +65,7 @@ struct SnoozePicker: View {
       Text("\(verb) \(name) until").font(.headline)
       DatePicker("Until", selection: $until, in: Date()..., displayedComponents: [.date, .hourAndMinute])
         .labelsHidden()
-      // The Snooze button turns off once the picked time passes, even while the sheet sits open.
+      // The confirm button turns off once the picked time passes, even while the sheet sits open.
       TimelineView(.periodic(from: .now, by: 1)) { context in
         HStack {
           Spacer()

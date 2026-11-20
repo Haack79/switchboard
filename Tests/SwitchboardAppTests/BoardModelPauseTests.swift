@@ -37,7 +37,7 @@ import Testing
 
     #expect(sent.op == "pause")
     #expect(sent.args["session"] == "s1")
-    #expect(sent.args["until"] == .string(ISO8601DateFormatter().string(from: until)))
+    #expect(sent.args["until"] == "2027-01-15T08:00:00Z")
     #expect(sent.args["group"] == nil)
   }
 
