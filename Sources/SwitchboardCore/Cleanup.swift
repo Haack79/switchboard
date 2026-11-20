@@ -55,7 +55,7 @@ public enum BuildOutput {
   public static func contains(_ path: String, also: Set<String> = []) -> Bool {
     let parts = path.split(separator: "/").map(String.init)
     guard let name = parts.last else { return false }
-    if let first = parts.first, topLevelFolders.contains(first) { return true }
+    if topLevelFolders.contains(parts[0]) { return true }
     if names.contains(name) || extensions.contains((name as NSString).pathExtension) { return true }
     return parts.contains(where: also.contains) || parts.dropLast().contains(where: toolFolders.contains)
   }
