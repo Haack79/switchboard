@@ -81,7 +81,14 @@ func tool(_ name: String, _ input: [String: JSON], id: String? = nil, agent: Str
       event("UserPromptSubmit", 3, ["prompt": "fix it"]),
       event("Stop", 4, ["last_assistant_message": "Done."]),
     ])
+    #expect(!f.launchPromptPending(now: 5))
     #expect(Attention.evaluate(session(), f, now: 5).state != .working)
+  }
+
+  @Test func aFirstMessagePastedIntoABareSessionReadsWorking() {
+    let f = facts([event("started", 1), event("SessionStart", 2), event("pasting", 3, ["text": "fix it"])])
+    #expect(
+      Attention.evaluate(session(), f, now: 4) == Verdict(state: .working, reason: "starting with its first prompt"))
   }
 
   @Test func aTrustDialogExitComesBeforeAPendingLaunchPrompt() {
