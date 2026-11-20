@@ -297,6 +297,11 @@ public enum Transcript {
       where: machine.exists)
   }
 
+  /// Whether the transcript at `path` is the one of the claude conversation `conversation`.
+  public static func isFile(_ path: String, of conversation: String) -> Bool {
+    (path as NSString).lastPathComponent == "\(conversation).jsonl"
+  }
+
   /// Reads the transcript from the end, because transcripts reach 24 MB.
   public static func tail(_ path: String, on machine: any Machine) -> TranscriptTail {
     var tail = TranscriptTail()
@@ -304,14 +309,50 @@ public enum Transcript {
     return tail
   }
 
-  /// The main conversation's last `limit` messages that have text, oldest first.
-  public static func messages(_ path: String, limit: Int, on machine: any Machine) -> [ChatMessage] {
-    var messages: [ChatMessage] = []
-    eachLineFromEnd(path, on: machine) { line in
-      if let message = message(line) { messages.append(message) }
-      return messages.count >= limit
+  /// How far from the end of a transcript `messages` looks for a mark.
+  public static let markSearchBytes: UInt64 = 8 << 20
+
+  /// The main conversation's last `limit` messages that have text, oldest first. With `mark`, it also reads
+  /// back to the mark's start and sets `sent` on the marked message. That message is the one user message of the
+  /// main conversation that starts inside the mark and records the mark's text. When the mark holds no such
+  /// message, or more than one, nothing is marked.
+  /// When the walk passes `markSearchBytes` before it reaches the mark's start, nothing is marked. The answer is
+  /// the newest `limit` messages, or more when the marked message is older, back to and including it.
+  public static func messages(
+    _ path: String, limit: Int, mark: SentMark? = nil, on machine: any Machine
+  ) -> [ChatMessage] {
+    // `prefix` traps on a negative length, and a client can send any limit.
+    let limit = max(1, limit)
+    guard let end = machine.size(path) else { return [] }
+    var found: [(message: ChatMessage, offset: UInt64)] = []
+    var reached = mark == nil
+    var gaveUp = false
+    var stopped = false
+    let complete = eachLineFromEnd(path, before: end, on: machine) { line, offset in
+      if let message = message(line) { found.append((message, offset)) }
+      if let mark, !reached {
+        if offset < mark.from {
+          reached = true
+        } else if offset + markSearchBytes < end {
+          gaveUp = true
+        }
+      }
+      stopped = found.count >= limit && (reached || gaveUp)
+      return stopped
     }
-    return messages.reversed()
+    var messages = found.map(\.message)
+    // A walk that read to the start of the file read every line of the mark.
+    if let mark, !gaveUp, reached || (complete && !stopped) {
+      let before = mark.before ?? .max
+      let matches = found.indices.filter { i in
+        found[i].offset >= mark.from && found[i].offset < before && found[i].message.records(mark.text)
+      }
+      if matches.count == 1 {
+        messages[matches[0]].sent = mark.sent
+        return messages.prefix(max(limit, matches[0] + 1)).reversed()
+      }
+    }
+    return messages.prefix(limit).reversed()
   }
 
   /// Whether a user message of the main conversation that holds `text` starts
@@ -337,6 +378,14 @@ public enum Transcript {
   static func eachLineFromEnd(
     _ path: String, before end: UInt64? = nil, on machine: any Machine, _ body: (Data) -> Bool
   ) -> Bool {
+    eachLineFromEnd(path, before: end, on: machine) { line, _ in body(line) }
+  }
+
+  /// As `eachLineFromEnd` above, but `body` also gets the byte offset in the file where the line starts.
+  @discardableResult
+  static func eachLineFromEnd(
+    _ path: String, before end: UInt64? = nil, on machine: any Machine, _ body: (Data, UInt64) -> Bool
+  ) -> Bool {
     guard var offset = end ?? machine.size(path) else { return false }
     var size: UInt64 = 1 << 16
     // The start of the chunk after the current one, up to its first newline.
@@ -348,10 +397,11 @@ public enum Transcript {
       offset -= count
       size = min(size * 2, 1 << 22)
       guard let chunk = machine.read(path, from: offset, count: Int(count)) else { return false }
-      var lines = (chunk + rest).split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+      let joined = chunk + rest
+      var lines = joined.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
       rest = offset > 0 ? Data(lines.removeFirst()) : Data()
       for line in lines.reversed() where !line.isEmpty {
-        if body(Data(line)) { return true }
+        if body(Data(line), offset + UInt64(line.startIndex - joined.startIndex)) { return true }
       }
     }
     return true
