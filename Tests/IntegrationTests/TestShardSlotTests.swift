@@ -500,8 +500,13 @@ private struct WarningCase: Sendable, CustomTestStringConvertible {
   }
 
   /// shard-plan runs the integration suites in the parts before the last. It
-  /// runs CoreTests and MeasureTests in the last part only.
-  @Test(arguments: [("1/2", ["AlphaTests", "BetaTests"]), ("2/2", ["CoreTests", "MeasureTests"])])
+  /// runs CoreTests and MeasureTests in the last part only. With --shards 2
+  /// and 3 parts, Alpha and Beta fill part 1's two shards, so part 2 runs
+  /// nothing and passes.
+  @Test(arguments: [
+    ("1/2", ["AlphaTests", "BetaTests"]), ("2/2", ["CoreTests", "MeasureTests"]),
+    ("1/3", ["AlphaTests", "BetaTests"]), ("2/3", []), ("3/3", ["CoreTests", "MeasureTests"]),
+  ])
   func aPartRunsOnlyThatPartsShards(_ part: String, _ expected: [String]) throws {
     let rig = try ShardRig()
     defer { rig.stop() }
