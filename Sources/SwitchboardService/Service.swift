@@ -1,5 +1,6 @@
 import Foundation
 import SwitchboardCore
+import os
 
 /// sbd's state and operations. Every change runs on `queue`, so requests,
 /// hooks, and the stop rule see one consistent state. Work that takes long,
@@ -44,6 +45,9 @@ public final class Service {
     /// pastes, so a held message keeps one retry timer however many messages
     /// queue behind it.
     var deliveryGeneration = 0
+    /// The fallback name while the call that names the session has not answered. A rename clears it. An answer
+    /// applies only while the session still has this name, so a late answer can't replace a name that someone chose.
+    var pendingName: String?
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
@@ -154,6 +158,13 @@ public final class Service {
   var ciReads: Set<String> = []
   /// Runs wait actions, one at a time, off the state queue.
   let followThroughQueue = DispatchQueue(label: "sbd.follow-through")
+  /// Runs top-ups, one at a time, off the state queue.
+  let topupQueue = DispatchQueue(label: "sbd.topup")
+  /// The schedules whose top-up runs on `topupQueue`. The tick skips them, so they stay due until the top-up ends.
+  var topupsInFlight: Set<String> = []
+  /// The operator settings that `operatorSettings` last read, with config.json's modification date at that read.
+  /// The lock guards it, because the follow-through and top-up queues read the settings too.
+  let operatorSettingsRead = OSAllocatedUnfairLock<(stamp: Date?, settings: OperatorSettings)?>(initialState: nil)
   /// Runs the CI reader, one read at a time, off the state queue. A judge call there never delays a due merge on
   /// `followThroughQueue`.
   let ciReaderQueue = DispatchQueue(label: "sbd.ci-reader")
@@ -193,7 +204,9 @@ public final class Service {
   /// a folder in no git repo, with the time of the lookup. A folder stays in
   /// its repo, and sbd keeps a checkout that it found. A folder outside git
   /// can become a repo. sbd reads such a folder again after `checkoutRetryMs`.
-  var checkouts: [SitePath: (path: String?, readMs: Int64)] = [:]
+  /// `failed` marks a lookup that couldn't read the folder, such as a folder
+  /// that is gone, which also stores a nil path.
+  var checkouts: [SitePath: (path: String?, readMs: Int64, failed: Bool)] = [:]
   /// The folders whose checkout a lookup off the queue is reading.
   var checkoutLookups: Set<SitePath> = []
   /// The main checkout that names the auto-memory folder of each local session folder in a git repo, or nil
@@ -202,8 +215,9 @@ public final class Service {
   var memoryCheckouts: [String: String?] = [:]
   /// The owner/name that the origin remote of each checkout names on GitHub,
   /// or nil when it names none, with the time of the lookup. sbd reads a
-  /// checkout without one again after `checkoutRetryMs`.
-  var repositories: [SitePath: (repository: String?, readMs: Int64)] = [:]
+  /// checkout without one again after `checkoutRetryMs`. `failed` marks a
+  /// lookup where git couldn't read the checkout, which also stores nil.
+  var repositories: [SitePath: (repository: String?, readMs: Int64, failed: Bool)] = [:]
   /// The checkouts whose origin a lookup off the queue is reading.
   var repositoryLookups: Set<SitePath> = []
   /// Each session's folded skill listing and the transcript it was read
@@ -252,6 +266,14 @@ public final class Service {
     let jobs = OperationQueue()
     jobs.name = "sbd.skills"
     jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the calls that name new sessions, apart from `triageJobs`, so names and turn summaries don't wait on each
+  /// other.
+  let nameJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.session-names"
+    jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
   /// Runs the scans of the accounts' skill folders, one at a time.
@@ -549,6 +571,17 @@ public final class Service {
           install(fresh)
           return try approveWait(request.args, caller: caller)
         })
+    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
+      // A top-up's caller check reads the client's panes, so it takes a new snapshot.
+      let checksCaller =
+        (request.op == "schedule" && request.args["gate"] != nil)
+        || (request.op == "edit-schedule" && queue.sync { editsGatedSchedule(request.args) })
+      let fresh = checksCaller ? buildSnapshot() : nil
+      return try .success(
+        prepared(request, origin: origin) {
+          install(fresh)
+          return try scheduleRequest(request.op, request.args, origin: origin, caller: caller)
+        })
     case "wait", "clear-wait", "resolve-wait":
       // An action's check reads the client's panes, so it takes a new snapshot.
       let arms =
@@ -791,8 +824,6 @@ public final class Service {
       return try chatReadRequest(args)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
-    case "schedule", "schedules", "remove-schedule", "pause-schedule", "edit-schedule", "run-schedule":
-      return try scheduleRequest(op, args)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":
@@ -816,8 +847,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseRename(id, to: name)
-      try update(id) { $0.name = name }
+      try renameSession(id, to: name)
       return try JSON(encoding: summary(id, for: origin))
     case "parent":
       return try parentRequest(args, origin: origin)
@@ -1154,10 +1184,20 @@ public final class Service {
     }
     if checkoutLookups.insert(folder).inserted {
       DispatchQueue.global().async { [self] in
-        // The first worktree that git lists is the main checkout.
-        let main = (try? worktreeEntries(folder.path, at: site))?.first.flatMap { try? site.realPath($0.path) }
+        let main: String?
+        let failed: Bool
+        do {
+          // The first worktree that git lists is the main checkout.
+          main = try worktreeEntries(folder.path, at: site).first.flatMap { try? site.realPath($0.path) }
+          failed = main == nil
+        } catch {
+          // git exits 128 for a folder outside any repo, a folder that is gone, a broken gitdir, and a repo of another
+          // owner. Only a folder outside any repo is a read. Only git's message for that folder has this prefix.
+          main = nil
+          failed = !"\(error)".contains("not a git repository (or any")
+        }
         queue.async { [self] in
-          checkouts[folder] = (main, nowMs())
+          checkouts[folder] = (main, nowMs(), failed)
           checkoutLookups.remove(folder)
         }
       }
@@ -1182,10 +1222,13 @@ public final class Service {
     }
     if repositoryLookups.insert(key).inserted {
       DispatchQueue.global().async { [self] in
-        let url = try? gitOutput(checkout, ["config", "--get", "remote.origin.url"], at: site)
+        let result = try? site.machine.run(site.git(), ["-C", checkout, "remote", "get-url", "origin"])
+        let url = result?.status == 0 ? result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         let repository = url.flatMap(GitHub.repo(remoteURL:))
+        // git exits 2 when the checkout has no origin remote, and 128 when it can't read the checkout.
+        let failed = result.map { $0.status != 0 && $0.status != 2 } ?? true
         queue.async { [self] in
-          repositories[key] = (repository, nowMs())
+          repositories[key] = (repository, nowMs(), failed)
           repositoryLookups.remove(key)
         }
       }
@@ -1193,12 +1236,25 @@ public final class Service {
     return nil
   }
 
+  /// The owner/name of the session's checkout, or nil until sbd has read both.
+  func repository(of s: Session) -> String? {
+    checkout(s).flatMap { repository($0, of: s) }
+  }
+
   /// Whether sbd has read the session's checkout and, when it has one, the
-  /// checkout's origin remote.
+  /// checkout's origin remote. A lookup that failed counts as a read.
   func repositoryRead(_ s: Session, checkout: String?) -> Bool {
     let site = self.site(for: s)
     if let checkout { return repositories[SitePath(checkout, at: site)] != nil }
     return checkouts[SitePath(s.cwd, at: site)] != nil
+  }
+
+  /// Whether a lookup read the session's checkout and, when it has one, the checkout's origin remote, and neither
+  /// lookup failed.
+  func repositoryKnown(_ s: Session, checkout: String?) -> Bool {
+    let site = self.site(for: s)
+    if let checkout { return repositories[SitePath(checkout, at: site)]?.failed == false }
+    return checkouts[SitePath(s.cwd, at: site)]?.failed == false
   }
 
   func lockedError(_ path: String) -> APIError {
@@ -1242,7 +1298,13 @@ public final class Service {
   /// `args.host` is a host of config.json, or nil for this Mac. `origin` is the machine that asked, which `create`
   /// checks the parent against.
   func startSession(_ args: NewSession, origin: RequestOrigin) throws -> SessionSummary {
-    if let host = args.host { return try startSession(args, onHost: host, origin: origin) }
+    // Before either path sets an auto branch, which would read as a branch that the caller chose.
+    let namingPrompt =
+      args.name == nil && (args.branch ?? "").isEmpty
+        && !(args.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? args.prompt : nil
+    if let host = args.host {
+      return try startSession(args, onHost: host, origin: origin, namingPrompt: namingPrompt)
+    }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
     // An unknown group, an unknown account, an account that differs from
@@ -1261,6 +1323,7 @@ public final class Service {
       // The launch reads the cached checkout, so git doesn't run on the state queue.
       if let main { memoryCheckouts[folder.cwd] = main }
       let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
       // The session's creation time keeps the repo in its place in the list after the session is removed.
       if let main { try? store.remember(repo: main, used: summary.created ?? nowMs()) }
       return summary
@@ -1270,7 +1333,8 @@ public final class Service {
   /// Starts a session on a remote host. The folder is absolute or starts with `~`, and the host resolves it.
   /// It waits for the host, makes the folder and worktree there off the state queue, and reads the host's
   /// panes and processes before it creates the session.
-  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin) throws
+  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin, namingPrompt: String?)
+    throws
     -> SessionSummary
   {
     let site = try remoteSite(host)
@@ -1298,7 +1362,9 @@ public final class Service {
     let read = try readSnapshot(onHost: host)
     return try queue.sync {
       install(read, onHost: host)
-      return try create(args, folder, origin: origin)
+      let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
+      return summary
     }
   }
 
@@ -1383,6 +1449,14 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+  }
+
+  /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
+  /// then leaves the name alone. It runs on the state queue.
+  func renameSession(_ id: String, to name: String) throws {
+    try refuseRename(id, to: name)
+    try update(id) { $0.name = name }
+    entries[id]?.pendingName = nil
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it
@@ -2733,7 +2807,9 @@ public final class Service {
           entries[id]?.unreportedSince = nil
           // Exit typed in the terminal, a stop, or a crash ends claude at the trust dialog.
           if let card = entries[id]?.facts.trustCard { closeTrust(card) }
-          if live { record(id, "exited") }
+          // sbd records `exited` for a claude that dies before its SessionStart while its launch prompt is pending.
+          // Without the event, the session reads Working until `launchPromptWindowMs` passes.
+          if live || entries[id]?.facts.launchPromptPending(now: now) == true { record(id, "exited") }
           // A message sent while claude exited waits in `pending` for a launch.
           // A claude that dies before its SessionStart isn't launched again,
           // unless a resume came while it ran. These launches come at most
@@ -2764,6 +2840,7 @@ public final class Service {
         checkFailedCI(now: now)
         fireDueSchedules(now: now)
       }
+      armTopupMerges()
       rotateOperatorIfDue(now: now)
       deferDueQuestions(now: now)
       expireGroupMessages(now: now)

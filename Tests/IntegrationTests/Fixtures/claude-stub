@@ -114,6 +114,16 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt whose first line is <session-name-request> is the
+# session name call. It is checked first, because the prompt it carries can
+# hold any tag below, but it can't come before that line. It writes each
+# argument with a NUL after it to $SB_HOME/session-name-args, replacing that
+# file, appends one line per call to $SB_HOME/session-name-calls.log, and
+# keeps the last prompt in $SB_HOME/session-name-input.txt. A prompt that
+# holds FAIL-NAME makes it exit 1, SLOW-NAME makes it exec sleep 30, and
+# BAD-NAME answers {"name":"Fix The Bug!"}. Anything else answers with
+# $SB_HOME/session-name-answer.json, else {"name":"stub-session-name"}, in
+# the same envelope.
 # A `claude -p` prompt in which <ci-log comes before any <session-reply> is
 # the CI reader's judge call. It is checked first. Each judge's prompt escapes
 # both tags in its data and names its own tag before the data, so the tag that
@@ -161,6 +171,14 @@
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
 # {"answer":"Nothing needs you."} when the file is missing, in the same
 # envelope.
+# A `claude -p` prompt that holds <candidate ref=" is the top-up pick call.
+# It is checked after the quick ask and before <rows> and <pr-body>, because
+# an issue body can hold those tags. It appends the arguments to
+# $SB_HOME/topup-calls.log and keeps the last prompt in
+# $SB_HOME/topup-input.txt. A prompt that holds SLOW-TOPUP makes it exec
+# sleep 30. Otherwise it prints $SB_HOME/topup-answer.json, a fixture that the
+# test writes, or {"picks":[],"skips":[]} when the file is missing, in the
+# same envelope.
 # `claude agents ...` prints $CLAUDE_CONFIG_DIR/agents.json, a fixture that
 # the test writes, or [] when it can't be read. It adds a row for each session
 # that is in the middle of an interrupt or a slow tool call, which are the
@@ -212,6 +230,19 @@ envelope() {
 }
 if [ "${1-}" = -p ]; then
   input=$(cat)
+  if [[ $input == "<session-name-request>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/session-name-args"
+    echo "$$" >>"$SB_HOME/session-name-calls.log"
+    printf '%s' "$input" >"$SB_HOME/session-name-input.txt"
+    case $input in
+    *FAIL-NAME*) echo "naming failed" >&2 && exit 1 ;;
+    *SLOW-NAME*) exec sleep 30 ;;
+    *BAD-NAME*) out='{"name":"Fix The Bug!"}' ;;
+    *) out=$(cat "$SB_HOME/session-name-answer.json" 2>/dev/null) || out='{"name":"stub-session-name"}' ;;
+    esac
+    envelope "$out"
+    exit 0
+  fi
   # Each judge's prompt names its own tag before its data, so the tag that comes first decides.
   before_reply=${input%%"<session-reply>"*}
   if [[ $before_reply == *"<ci-log"* ]]; then
@@ -270,6 +301,17 @@ if [ "${1-}" = -p ]; then
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
+    envelope "$out"
+    exit 0
+  fi
+  # An issue body in the top-up's candidates can hold <rows> or <pr-body>, so this check comes before those.
+  if [[ $input == *'<candidate ref="'* ]]; then
+    printf '%s\0' "${args[*]}" >>"$SB_HOME/topup-calls.log"
+    printf '%s' "$input" >"$SB_HOME/topup-input.txt"
+    [[ $input == *SLOW-TOPUP* ]] && exec sleep 30
+    # A test holds the pick on this FIFO while it changes sbd's sessions.
+    if [ -p "$SB_HOME/topup-gate" ]; then read -r _ <"$SB_HOME/topup-gate"; fi
+    out=$(cat "$SB_HOME/topup-answer.json" 2>/dev/null) || out='{"picks":[],"skips":[]}'
     envelope "$out"
     exit 0
   fi
