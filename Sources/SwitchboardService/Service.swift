@@ -1605,8 +1605,7 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      let mark = trigger == .schedule ? resumeMark(id) : [:]
-      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra.merging(mark) { $1 })
+      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra.merging(resumeMark(id)) { $1 })
       try startClaude(id, prompt: text, trigger: trigger)
       if runHere { armSkillBypass(id, text) }
       return SentMessage(delivery: .resumed, sent: sent)
@@ -1624,9 +1623,9 @@ public final class Service {
     }
   }
 
-  /// The conversation and the transcript's size before a loop run launches claude with its prompt, which
-  /// `chat-log` uses to find the prompt. Only a session that shows as a chat gets them, because no other kind
-  /// links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
+  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
   /// size 0.
   private func resumeMark(_ id: String) -> [String: JSON] {
     guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }

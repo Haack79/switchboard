@@ -157,6 +157,35 @@ import Testing
     #expect(olderAt < newerAt)
   }
 
+  /// A user's message that relaunches the chat with the same text ends the run's mark, so the run keeps its link.
+  @Test func aSendThatRelaunchesTheChatWithTheSamePromptEndsTheRunsMark() throws {
+    let sbd = try Instance()
+    let c = try chats.idleConversation(sbd)
+    try sbd.sb("stop", c.id)
+    try sbd.waitFor(c.id, "the stop") { $0.claudePid == nil && !$0.live }
+    let made = try fire.schedule(sbd, c.id, "tick again")
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    let run = try fire.waitForRun(sbd, c.id, made.id)
+    try #require(run.outcome == .resumed, "\(run)")
+    try sbd.waitFor(c.id, "the reply to the run", timeout: 30) { $0.lastReply == "Done: tick again" }
+
+    try sbd.sb("stop", c.id)
+    try sbd.waitFor(c.id, "the second stop") { $0.claudePid == nil && !$0.live }
+    try sbd.sb("send", c.id, "tick again")
+    try sbd.waitFor("the sent copy", timeout: 30) { try fire.prompts(sbd, c.id, "tick again").count == 2 }
+    try sbd.waitFor("the reply to the send", timeout: 30) {
+      try chatLog(sbd, c.id).filter { $0.role == .assistant && $0.text == "Done: tick again" }.count == 2
+    }
+    let send = try #require(try fire.prompts(sbd, c.id, "tick again").last)
+    let stored = try #require(try sbd.events(c.id).last { $0.kind == "sent" && $0.id < send.id })
+    #expect(stored.data["delivery"]?.string == "resumed", "\(stored)")
+
+    let sent = try #require(run.sent, "\(run)")
+    let log = try chatLog(sbd, c.id, sent: sent)
+    let at = try markedPrompt(log, sent, "tick again")
+    #expect(at < (log.lastIndex { $0.role == .user && $0.text == "tick again" } ?? -1))
+  }
+
   /// Decision 8: only a session that shows as a chat measures its transcript for a resumed run.
   @Test func aWorkSessionsResumedRunHasASentIdAndNoMark() throws {
     let sbd = try Instance()
