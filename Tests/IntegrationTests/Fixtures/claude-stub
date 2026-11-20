@@ -114,6 +114,16 @@
 # envelope. A prompt that holds FAIL-BRIEF makes it exit 1. It appends the
 # arguments to $SB_HOME/pr-brief-calls.log and not to summary-calls.log, and
 # keeps the last prompt in $SB_HOME/pr-brief-input.txt.
+# A `claude -p` prompt whose first line is <session-name-request> is the
+# session name call. It is checked first, because the prompt it carries can
+# hold any tag below, but it can't come before that line. It writes each
+# argument with a NUL after it to $SB_HOME/session-name-args, replacing that
+# file, appends one line per call to $SB_HOME/session-name-calls.log, and
+# keeps the last prompt in $SB_HOME/session-name-input.txt. A prompt that
+# holds FAIL-NAME makes it exit 1, SLOW-NAME makes it exec sleep 30, and
+# BAD-NAME answers {"name":"Fix The Bug!"}. Anything else answers with
+# $SB_HOME/session-name-answer.json, else {"name":"stub-session-name"}, in
+# the same envelope.
 # A `claude -p` prompt in which <ci-log comes before any <session-reply> is
 # the CI reader's judge call. It is checked first. Each judge's prompt escapes
 # both tags in its data and names its own tag before the data, so the tag that
@@ -212,6 +222,19 @@ envelope() {
 }
 if [ "${1-}" = -p ]; then
   input=$(cat)
+  if [[ $input == "<session-name-request>"* ]]; then
+    printf '%s\0' "$@" >"$SB_HOME/session-name-args"
+    echo "$$" >>"$SB_HOME/session-name-calls.log"
+    printf '%s' "$input" >"$SB_HOME/session-name-input.txt"
+    case $input in
+    *FAIL-NAME*) echo "naming failed" >&2 && exit 1 ;;
+    *SLOW-NAME*) exec sleep 30 ;;
+    *BAD-NAME*) out='{"name":"Fix The Bug!"}' ;;
+    *) out=$(cat "$SB_HOME/session-name-answer.json" 2>/dev/null) || out='{"name":"stub-session-name"}' ;;
+    esac
+    envelope "$out"
+    exit 0
+  fi
   # Each judge's prompt names its own tag before its data, so the tag that comes first decides.
   before_reply=${input%%"<session-reply>"*}
   if [[ $before_reply == *"<ci-log"* ]]; then

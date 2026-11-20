@@ -120,6 +120,8 @@ final class Instance {
       "triage": ["systemPrompt": ""],
       // Nor do they expect --permission-mode auto. AutoModeTests turn it on.
       "autoMode": false,
+      // An unnamed session keeps its fallback name and makes no naming call. SessionNameTests turn it on.
+      "sessionNames": ["enabled": false],
       // Tests that start many sessions don't expect sbd to stop the idle ones.
       "liveCap": 50,
       // The removal job starts a queued session at once, so a test that waits for a removal does not wait out the

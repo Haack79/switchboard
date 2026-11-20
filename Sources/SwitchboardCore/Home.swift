@@ -175,6 +175,7 @@ public struct Config: Codable, Equatable, Sendable {
   public var quickAsk = QuickAskSettings()
   public var `operator` = OperatorSettings()
   public var managerSkills = ManagerSkillSettings()
+  public var sessionNames = SessionNameSettings()
   public var manager = ManagerSettings()
   public var recheck = RecheckSettings()
   /// Where the Issues view reads issues from, the team, and the Start presets.
@@ -188,7 +189,7 @@ public struct Config: Codable, Equatable, Sendable {
     case testClock, machineLog, hostWaitSeconds, mcpServers, ssh, hosts, repos, repoRoots, branchPrefix, followupsFile,
       cleanupDeletes, supacode, removalDelaySeconds, conversationHintTokens
     case claudeConfigDirs, github, depot, trunk, snapshotEvery, triage, autoContinue, usage, docket, planUpdates,
-      quickAsk, managerSkills
+      quickAsk, managerSkills, sessionNames
     case manager
     case issues, `operator`
     case recheck = "recheckSeconds"
@@ -280,6 +281,7 @@ public struct Config: Codable, Equatable, Sendable {
     planUpdates = try c.decodeIfPresent(PlanUpdateSettings.self, forKey: .planUpdates) ?? d.planUpdates
     quickAsk = try c.decodeIfPresent(QuickAskSettings.self, forKey: .quickAsk) ?? d.quickAsk
     managerSkills = try c.decodeIfPresent(ManagerSkillSettings.self, forKey: .managerSkills) ?? d.managerSkills
+    sessionNames = try c.decodeIfPresent(SessionNameSettings.self, forKey: .sessionNames) ?? d.sessionNames
     manager = try c.decodeIfPresent(ManagerSettings.self, forKey: .manager) ?? d.manager
     recheck = try c.decodeIfPresent(RecheckSettings.self, forKey: .recheck) ?? d.recheck
     `operator` = try c.decodeIfPresent(OperatorSettings.self, forKey: .operator) ?? d.operator
