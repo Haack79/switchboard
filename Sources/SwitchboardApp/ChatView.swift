@@ -123,9 +123,6 @@ private struct ChatMessages: View {
           } else if messages.isEmpty && pending.isEmpty {
             Text(emptyText).foregroundStyle(.secondary)
           }
-          if jump?.found == .missing {
-            Text("Can't find this run's prompt in this chat's transcript.").font(.caption).foregroundStyle(.secondary)
-          }
           ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
             ChatBubble(message: message, marked: index == jump?.row).id(index)
           }
@@ -136,10 +133,25 @@ private struct ChatMessages: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
+      // The notice sits outside the scroll content, so it stays in view while the chat follows the bottom.
+      .safeAreaInset(edge: .top) {
+        if jump?.found == .missing {
+          Text("Can't find this run's prompt in this chat's transcript.").font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.background)
+        }
+      }
       // The scroll follows the last message, because the count stops changing once the log is full.
       .onChange(of: messages.last, initial: true) { scrollToBottom(proxy) }
       .onChange(of: pending) { scrollToBottom(proxy) }
-      // Rows are keyed by index, so each answer to a jump's read gives the row again.
+      // A missing prompt leaves the log as it was, so no change of the last message scrolls the chat.
+      .onChange(of: jump?.found) { _, found in
+        if found == .missing { scrollToBottom(proxy) }
+      }
+      // Rows are keyed by index, and a later read can move the prompt to another index, so the view scrolls
+      // again whenever the index changes.
       .onChange(of: jump?.row, initial: true) { _, row in
         guard let row else { return }
         proxy.scrollTo(row, anchor: .top)

@@ -131,6 +131,32 @@ import Testing
     _ = try markedPrompt(try chatLog(sbd, c.id, sent: sent), sent, "tick resumed")
   }
 
+  /// A loop slower than the idle stop resumes claude with each run's prompt, so no `pasting` follows a run. The next
+  /// run's launch ends the earlier run's mark, so each run marks its own copy.
+  @Test func eachOfTwoResumedRunsMarksItsOwnCopyOfThePrompt() throws {
+    let sbd = try Instance()
+    let c = try chats.idleConversation(sbd)
+    let made = try fire.schedule(sbd, c.id, "tick slow")
+    for count in 1...2 {
+      try sbd.sb("stop", c.id)
+      try sbd.waitFor(c.id, "the stop") { $0.claudePid == nil && !$0.live }
+      try sbd.advanceClock(ScheduleFireTests.pastDue)
+      try sbd.waitFor("run \(count)", timeout: 30) {
+        try fire.current(sbd, c.id, made.id)?.runs?.count == count
+          && fire.prompts(sbd, c.id, "tick slow").count == count
+      }
+      try sbd.waitFor(c.id, "the reply to run \(count)", timeout: 30) { $0.lastReply == "Done: tick slow" }
+    }
+
+    let runs = try #require(try fire.current(sbd, c.id, made.id)?.runs)
+    try #require(runs.map(\.outcome) == [.resumed, .resumed], "\(runs)")
+    let newer = try #require(runs[0].sent, "\(runs)")
+    let older = try #require(runs[1].sent, "\(runs)")
+    let olderAt = try markedPrompt(try chatLog(sbd, c.id, sent: older), older, "tick slow")
+    let newerAt = try markedPrompt(try chatLog(sbd, c.id, sent: newer), newer, "tick slow")
+    #expect(olderAt < newerAt)
+  }
+
   /// Decision 8: only a session that shows as a chat measures its transcript for a resumed run.
   @Test func aWorkSessionsResumedRunHasASentIdAndNoMark() throws {
     let sbd = try Instance()

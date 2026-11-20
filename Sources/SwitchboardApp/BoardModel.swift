@@ -1588,18 +1588,18 @@ final class BoardModel: ObservableObject {
   /// Reads the session's chat messages from its transcript, which can be large, so off the main thread.
   func loadChatLog(_ session: String) {
     let send = send
-    let jump = chatJump.flatMap { $0.session == session ? $0.sent : nil }
+    let jumpSent = chatJump.flatMap { $0.session == session ? $0.sent : nil }
     var request: [String: JSON] = ["session": .string(session)]
-    if let jump { request["sent"] = .number(Double(jump)) }
+    if let jumpSent { request["sent"] = .number(Double(jumpSent)) }
     let args = request
     poller.async {
       let answer = try? JSONCoding.convert(send("chat-log", args), to: [ChatMessage].self)
       Task { @MainActor in
         // A read that started before the current jump would replace the log that the jump's row points into.
-        if let current = self.chatJump, current.session == session, current.sent != jump { return }
+        if let current = self.chatJump, current.session == session, current.sent != jumpSent { return }
         var messages = answer
-        if let jump, let answer {
-          let read = ChatJump.reading(answer, sent: jump)
+        if let jumpSent, let answer {
+          let read = ChatJump.reading(answer, sent: jumpSent)
           messages = read.log
           // The user may have left the chat while sbd answered.
           if self.chatJump?.session == session, self.chatJump?.found != read.found { self.chatJump?.found = read.found }

@@ -314,12 +314,15 @@ public enum Transcript {
 
   /// The main conversation's last `limit` messages that have text, oldest first. With `mark`, it also reads
   /// back to the mark's start and sets `sent` on the marked message. That message is the one user message of the
-  /// main conversation that starts inside the mark and records the mark's text. When the mark holds no such message, or more than one, nothing is marked.
+  /// main conversation that starts inside the mark and records the mark's text. When the mark holds no such
+  /// message, or more than one, nothing is marked.
   /// When the walk passes `markSearchBytes` before it reaches the mark's start, nothing is marked. The answer is
   /// the newest `limit` messages, or more when the marked message is older, back to and including it.
   public static func messages(
     _ path: String, limit: Int, mark: SentMark? = nil, on machine: any Machine
   ) -> [ChatMessage] {
+    // `prefix` traps on a negative length, and a client can send any limit.
+    let limit = max(1, limit)
     guard let end = machine.size(path) else { return [] }
     var found: [(message: ChatMessage, offset: UInt64)] = []
     var reached = mark == nil
@@ -339,7 +342,7 @@ public enum Transcript {
     }
     var messages = found.map(\.message)
     // A walk that read to the start of the file read every line of the mark.
-    if let mark, reached || (complete && !stopped) {
+    if let mark, !gaveUp, reached || (complete && !stopped) {
       let before = mark.before ?? .max
       let matches = found.indices.filter { i in
         found[i].offset >= mark.from && found[i].offset < before && found[i].message.records(mark.text)

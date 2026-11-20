@@ -416,6 +416,20 @@ import Testing
     #expect(read == fixture.plain(limit: 3))
   }
 
+  /// Tool output holds no messages, so the walk passes the budget before it holds `limit` messages.
+  @Test func aMarkFartherThanMarkSearchBytesBehindLinesWithNoMessagesMarksNothing() throws {
+    let output = Line.toolResult(String(repeating: "x", count: 8_000))
+    let filler = Array(repeating: output, count: (Self.budget + (1 << 16)) / 8_000 + 1)
+    let fixture = try Fixture(
+      [Line.user("Hello."), Line.user(Self.prompt), Line.reply(to: Self.prompt)] + filler + Self.later)
+    defer { fixture.remove() }
+    try #require(fixture.offsets[1] + UInt64(Self.budget) < fixture.size)
+
+    let read = fixture.read(limit: 50, mark: Self.mark(from: fixture.offsets[1]))
+
+    #expect(read == fixture.plain(limit: 50))
+  }
+
   @Test func aMarkWithinMarkSearchBytesOfTheEndIsMarked() throws {
     let before = Line.filler(bytes: 1 << 20)
     let fixture = try Fixture(
@@ -496,6 +510,16 @@ import Testing
     let read = fixture.read(limit: limit, mark: nil)
 
     #expect(read == Array(fixture.forwardScan().suffix(limit)))
+  }
+
+  /// A socket client can send any limit, and `prefix` traps on a negative length.
+  @Test(arguments: [-1, 0])
+  func aLimitBelowOneReadsAsALimitOfOne(_ limit: Int) throws {
+    let fixture = try Fixture([Line.user("Hello."), Line.user(Self.prompt), Line.reply(to: Self.prompt)])
+    defer { fixture.remove() }
+
+    #expect(fixture.plain(limit: limit) == fixture.plain(limit: 1))
+    #expect(fixture.read(limit: limit, mark: Self.mark(from: fixture.size)) == fixture.plain(limit: 1))
   }
 
   /// An older app and `sb … --log --json` read the same JSON as before, with no `sent` key.

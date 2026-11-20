@@ -46,7 +46,7 @@ import Testing
   @Test func onePastingThatNamesTheRunGivesItsOffsetAndConversation() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500))
   }
@@ -54,7 +54,7 @@ import Testing
   @Test func aRequeuedPasteStartsTheMarkAtTheLastPastingAndItDoesNotEndTheMark() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: Self.run, bytes: 700)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 700))
   }
@@ -66,7 +66,7 @@ import Testing
       Self.pasting(13, sent: 99, bytes: 900),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 700, before: 900))
   }
@@ -77,7 +77,7 @@ import Testing
       Self.pasting(11, sent: 99, bytes: 500, text: "Mine."), Self.pasting(12, sent: Self.run, bytes: 700),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 700))
   }
@@ -89,7 +89,7 @@ import Testing
       Self.pasting(13, sent: Self.run, bytes: 700),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 700))
   }
@@ -97,7 +97,7 @@ import Testing
   @Test func aPastingWithNoTranscriptBytesStartsTheMarkAtZero() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: nil)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 0))
   }
@@ -106,19 +106,19 @@ import Testing
   func aPastingThatNamesTheRunStartsTheMarkWhateverTheDelivery(_ delivery: Delivery) {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(delivery: delivery), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(delivery: delivery), later: pastings, text: Self.prompt)
 
     #expect(mark?.from == 500)
   }
 
   @Test func aResumedRunWithNoPastingTakesItsMarkFromItsSentEvent() {
-    let mark = SentMark.of(sent: Self.resumed(), pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(), later: [], text: Self.prompt)
 
     #expect(mark == Self.mark(from: 300))
   }
 
   @Test func aResumedRunIntoANewTranscriptStartsTheMarkAtZero() {
-    let mark = SentMark.of(sent: Self.resumed(bytes: 0), pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(bytes: 0), later: [], text: Self.prompt)
 
     #expect(mark == Self.mark(from: 0))
   }
@@ -127,15 +127,61 @@ import Testing
   @Test func aResumedRunFollowedByAPastingWithNoSentEndsTheMarkThere() {
     let pastings = [Self.pasting(11, sent: nil, bytes: 450)]
 
-    let mark = SentMark.of(sent: Self.resumed(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 300, before: 450))
+  }
+
+  /// A loop slower than the idle stop launches claude with each run's prompt, so no `pasting` follows the run.
+  @Test func theNextResumedRunInTheSameConversationEndsTheMark() {
+    let next = Self.sent(
+      11, delivery: .resumed, ["conversation": "c1", "transcript_bytes": .number(700)])
+
+    let mark = SentMark.of(sent: Self.resumed(), later: [next], text: Self.prompt)
+
+    #expect(mark == Self.mark(from: 300, before: 700))
+  }
+
+  @Test func aPastedRunEndsAtTheNextResumedRun() {
+    let later = [
+      Self.pasting(11, sent: Self.run, bytes: 500),
+      Self.sent(12, delivery: .resumed, ["conversation": "c1", "transcript_bytes": .number(900)]),
+    ]
+
+    let mark = SentMark.of(sent: Self.sent(), later: later, text: Self.prompt)
+
+    #expect(mark == Self.mark(from: 500, before: 900))
+  }
+
+  /// A launch in another conversation, or one that recorded no start, wrote nothing to this conversation's file
+  /// that the mark can bound.
+  @Test(arguments: [
+    ["conversation": "c2", "transcript_bytes": .number(700)] as [String: JSON],
+    ["conversation": "c1"],
+    [:],
+  ])
+  func aResumedRunThatCannotBoundTheMarkLeavesItOpen(_ extra: [String: JSON]) {
+    let next = Self.sent(11, delivery: .resumed, extra)
+
+    let mark = SentMark.of(sent: Self.resumed(), later: [next], text: Self.prompt)
+
+    #expect(mark == Self.mark(from: 300))
+  }
+
+  /// A queued or pasted message's `sent` event comes before its `pasting`, which ends the mark instead.
+  @Test(arguments: [Delivery.queued, .pasted])
+  func aSentEventThatDidNotLaunchClaudeLeavesTheMarkOpen(_ delivery: Delivery) {
+    let next = Self.sent(11, delivery: delivery, ["conversation": "c1", "transcript_bytes": .number(700)])
+
+    let mark = SentMark.of(sent: Self.resumed(), later: [next], text: Self.prompt)
+
+    #expect(mark == Self.mark(from: 300))
   }
 
   @Test func aResumedRunThatAPastingAlsoNamesTakesItsMarkFromThePasting() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 800, conversation: "c2")]
 
-    let mark = SentMark.of(sent: Self.resumed(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 800, conversation: "c2"))
   }
@@ -145,7 +191,7 @@ import Testing
   @Test func aLaterPastingInTheSameConversationEndsTheMark() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: 99, bytes: 900)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500, before: 900))
   }
@@ -155,7 +201,7 @@ import Testing
       Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: 99, bytes: 40, conversation: "c2"),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500))
   }
@@ -168,7 +214,7 @@ import Testing
       Self.pasting(13, sent: 99, bytes: 900),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500, before: 900))
   }
@@ -179,7 +225,7 @@ import Testing
       Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: 99, bytes: 900, conversation: nil),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500, before: 900))
   }
@@ -187,7 +233,7 @@ import Testing
   @Test func aLaterPastingWithNoSentEndsTheMark() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: nil, bytes: 900)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500, before: 900))
   }
@@ -199,7 +245,7 @@ import Testing
       Self.pasting(13, sent: 99, bytes: 1_200),
     ]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark?.before == 900)
   }
@@ -207,7 +253,7 @@ import Testing
   @Test func aLaterPastingWithNoTranscriptBytesEndsTheMarkAtZero() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500), Self.pasting(12, sent: 99, bytes: nil)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == Self.mark(from: 500, before: 0))
   }
@@ -218,7 +264,7 @@ import Testing
   @Test func theMarkCarriesTheTextItIsGivenAndTheSentEventsId() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: "Check the deploy.")
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: "Check the deploy.")
 
     #expect(mark?.text == "Check the deploy.")
     #expect(mark?.sent == Self.run)
@@ -228,7 +274,7 @@ import Testing
 
   @Test(arguments: [Delivery.queued, .pasted])
   func aRunWithNoPastingYetGetsNoMark(_ delivery: Delivery) {
-    let mark = SentMark.of(sent: Self.sent(delivery: delivery), pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(delivery: delivery), later: [], text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -238,7 +284,7 @@ import Testing
   func aRunWhoseOnlyPastingNamesNoSentGetsNoMark(_ delivery: Delivery) {
     let pastings = [Self.pasting(11, sent: nil, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(delivery: delivery), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(delivery: delivery), later: pastings, text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -246,7 +292,7 @@ import Testing
   @Test func aRunWhoseOnlyPastingNamesAnotherRunGetsNoMark() {
     let pastings = [Self.pasting(11, sent: 99, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -256,20 +302,20 @@ import Testing
   func aSentEventThatIsNotResumedIsNotItsOwnStart(_ delivery: Delivery) {
     let event = Self.sent(delivery: delivery, ["conversation": "c1", "transcript_bytes": 300])
 
-    let mark = SentMark.of(sent: event, pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: event, later: [], text: Self.prompt)
 
     #expect(mark == nil)
   }
 
   /// A work session's resumed run, and a resumed run whose host did not answer the size read, record no mark.
   @Test func aResumedRunWithNoConversationGetsNoMark() {
-    let mark = SentMark.of(sent: Self.resumed(conversation: nil), pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(conversation: nil), later: [], text: Self.prompt)
 
     #expect(mark == nil)
   }
 
   @Test func aResumedRunWithNoTranscriptBytesGetsNoMark() {
-    let mark = SentMark.of(sent: Self.resumed(bytes: nil), pastings: [], text: Self.prompt)
+    let mark = SentMark.of(sent: Self.resumed(bytes: nil), later: [], text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -277,7 +323,7 @@ import Testing
   @Test func aPastingThatNamesTheRunButNoConversationGivesNoMark() {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500, conversation: nil)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -286,7 +332,7 @@ import Testing
   func anEventOfAnotherKindGetsNoMark(_ kind: String) {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(kind: kind), pastings: pastings, text: Self.prompt)
+    let mark = SentMark.of(sent: Self.sent(kind: kind), later: pastings, text: Self.prompt)
 
     #expect(mark == nil)
   }
@@ -296,13 +342,13 @@ import Testing
   func anEmptyTextGetsNoMark(_ text: String) {
     let pastings = [Self.pasting(11, sent: Self.run, bytes: 500)]
 
-    let mark = SentMark.of(sent: Self.sent(), pastings: pastings, text: text)
+    let mark = SentMark.of(sent: Self.sent(), later: pastings, text: text)
 
     #expect(mark == nil)
   }
 
   @Test func anEmptyTextGetsNoMarkOnAResumedRun() {
-    let mark = SentMark.of(sent: Self.resumed(), pastings: [], text: "")
+    let mark = SentMark.of(sent: Self.resumed(), later: [], text: "")
 
     #expect(mark == nil)
   }

@@ -100,8 +100,8 @@ extension Service {
     guard let event = try store.event(id: sent), event.session == id, event.kind == "sent",
       let text = event.data["text"]?.string
     else { return nil }
-    let pastings = try store.events(since: sent, session: id, kinds: ["pasting"])
-    return SentMark.of(sent: event, pastings: pastings, text: pastedText(text, id))
+    let later = try store.events(since: sent, session: id, kinds: ["pasting", "sent"])
+    return SentMark.of(sent: event, later: later, text: pastedText(text, id))
   }
 
   /// The session that `manager`, `session`, or `group` names, as `chat-log`

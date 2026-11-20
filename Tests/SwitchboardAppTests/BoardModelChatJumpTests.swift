@@ -289,6 +289,20 @@ private struct JumpState: Equatable {
     #expect(model.chatJump == ChatJump(session: "m", sent: 7))
   }
 
+  /// Reads `m` for a jump, and opens a run's reply in chat `c` before sbd answers.
+  @Test func anAnswerForAJumpInAnotherChatLeavesFoundAlone() async {
+    let model = model()
+    let hold = DispatchSemaphore(value: 0)
+    stub(model, hold: hold)
+    model.chatJump = ChatJump(session: "m", sent: 1)
+    model.loadChatLog("m")
+    model.openRunReply(chatItem("c", group: "g1"), run(sent: 9))
+    hold.signal()
+    await settle { model.chatLogs["m"] != nil }
+
+    #expect(model.chatJump == ChatJump(session: "c", sent: 9))
+  }
+
   // MARK: Releasing the jump
 
   @Test func releaseChatJumpClearsItsOwnSessionsJump() {
