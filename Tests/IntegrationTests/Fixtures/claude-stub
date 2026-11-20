@@ -171,6 +171,14 @@
 # $SB_HOME/quick-ask-answer.json, a fixture that the test writes, or
 # {"answer":"Nothing needs you."} when the file is missing, in the same
 # envelope.
+# A `claude -p` prompt that holds <candidate ref=" is the top-up pick call.
+# It is checked after the quick ask and before <rows> and <pr-body>, because
+# an issue body can hold those tags. It appends the arguments to
+# $SB_HOME/topup-calls.log and keeps the last prompt in
+# $SB_HOME/topup-input.txt. A prompt that holds SLOW-TOPUP makes it exec
+# sleep 30. Otherwise it prints $SB_HOME/topup-answer.json, a fixture that the
+# test writes, or {"picks":[],"skips":[]} when the file is missing, in the
+# same envelope.
 # `claude agents ...` prints $CLAUDE_CONFIG_DIR/agents.json, a fixture that
 # the test writes, or [] when it can't be read. It adds a row for each session
 # that is in the middle of an interrupt or a slow tool call, which are the
@@ -293,6 +301,17 @@ if [ "${1-}" = -p ]; then
     *SLOW-ASK*) exec sleep 30 ;;
     esac
     out=$(cat "$SB_HOME/quick-ask-answer.json" 2>/dev/null) || out='{"answer":"Nothing needs you."}'
+    envelope "$out"
+    exit 0
+  fi
+  # An issue body in the top-up's candidates can hold <rows> or <pr-body>, so this check comes before those.
+  if [[ $input == *'<candidate ref="'* ]]; then
+    printf '%s\0' "${args[*]}" >>"$SB_HOME/topup-calls.log"
+    printf '%s' "$input" >"$SB_HOME/topup-input.txt"
+    [[ $input == *SLOW-TOPUP* ]] && exec sleep 30
+    # A test holds the pick on this FIFO while it changes sbd's sessions.
+    if [ -p "$SB_HOME/topup-gate" ]; then read -r _ <"$SB_HOME/topup-gate"; fi
+    out=$(cat "$SB_HOME/topup-answer.json" 2>/dev/null) || out='{"picks":[],"skips":[]}'
     envelope "$out"
     exit 0
   fi

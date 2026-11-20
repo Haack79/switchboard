@@ -1,5 +1,6 @@
 import Foundation
 import SwitchboardCore
+import os
 
 /// Wait actions: when an action wait's condition is met, sbd runs the action with its checks on
 /// `followThroughQueue`, off the state queue, and records the result. Anything that needs judgment goes to the
@@ -19,17 +20,23 @@ extension Service {
     case judgment(question: String, approval: MergeGuard.Approval? = nil, reply: String? = nil)
   }
 
-  /// config.json's `operator` settings, read again on each use so that an edit takes effect without a restart. A
-  /// config.json that doesn't decode allows no merges and keeps the hold timing that sbd started with.
+  /// config.json's `operator` settings. sbd reads them again when config.json's modification date changes, so an
+  /// edit takes effect without a restart. A config.json that doesn't decode allows no merges and keeps the hold
+  /// timing that sbd started with.
   var operatorSettings: OperatorSettings {
+    let stamp = try? FileManager.default.attributesOfItem(atPath: home.config)[.modificationDate] as? Date
+    if let read = operatorSettingsRead.withLock({ $0 }), read.stamp == stamp { return read.settings }
+    let settings: OperatorSettings
     do {
-      return try home.readConfig().operator
+      settings = try home.readConfig().operator
     } catch {
       logLine("ignoring \(home.config) for operator settings: \(error)")
-      var settings = config.operator
-      settings.mergeRepos = []
-      return settings
+      var fallback = config.operator
+      fallback.mergeRepos = []
+      settings = fallback
     }
+    operatorSettingsRead.withLock { $0 = (stamp, settings) }
+    return settings
   }
 
   /// Marks the action running, stores it, and runs it on `followThroughQueue`.
