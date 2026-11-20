@@ -45,6 +45,9 @@ public final class Service {
     /// pastes, so a held message keeps one retry timer however many messages
     /// queue behind it.
     var deliveryGeneration = 0
+    /// The fallback name while the call that names the session has not answered. A rename clears it. An answer
+    /// applies only while the session still has this name, so a late answer can't replace a name that someone chose.
+    var pendingName: String?
     /// When the tick last saw a background job under claude. A job sends no
     /// hooks while it runs, so the idle wait counts from here too.
     var lastJobSeen: Int64 = 0
@@ -263,6 +266,14 @@ public final class Service {
     let jobs = OperationQueue()
     jobs.name = "sbd.skills"
     jobs.maxConcurrentOperationCount = 1
+    return jobs
+  }()
+  /// Runs the calls that name new sessions, apart from `triageJobs`, so names and turn summaries don't wait on each
+  /// other.
+  let nameJobs: OperationQueue = {
+    let jobs = OperationQueue()
+    jobs.name = "sbd.session-names"
+    jobs.maxConcurrentOperationCount = 2
     return jobs
   }()
   /// Runs the scans of the accounts' skill folders, one at a time.
@@ -836,8 +847,7 @@ public final class Service {
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
-      try refuseRename(id, to: name)
-      try update(id) { $0.name = name }
+      try renameSession(id, to: name)
       return try JSON(encoding: summary(id, for: origin))
     case "parent":
       return try parentRequest(args, origin: origin)
@@ -1288,7 +1298,13 @@ public final class Service {
   /// `args.host` is a host of config.json, or nil for this Mac. `origin` is the machine that asked, which `create`
   /// checks the parent against.
   func startSession(_ args: NewSession, origin: RequestOrigin) throws -> SessionSummary {
-    if let host = args.host { return try startSession(args, onHost: host, origin: origin) }
+    // Before either path sets an auto branch, which would read as a branch that the caller chose.
+    let namingPrompt =
+      args.name == nil && (args.branch ?? "").isEmpty
+        && !(args.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? args.prompt : nil
+    if let host = args.host {
+      return try startSession(args, onHost: host, origin: origin, namingPrompt: namingPrompt)
+    }
     var args = args
     args.branch = branch(of: args, repo: (args.path as NSString).standardizingPath, at: mac)
     // An unknown group, an unknown account, an account that differs from
@@ -1307,6 +1323,7 @@ public final class Service {
       // The launch reads the cached checkout, so git doesn't run on the state queue.
       if let main { memoryCheckouts[folder.cwd] = main }
       let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
       // The session's creation time keeps the repo in its place in the list after the session is removed.
       if let main { try? store.remember(repo: main, used: summary.created ?? nowMs()) }
       return summary
@@ -1316,7 +1333,8 @@ public final class Service {
   /// Starts a session on a remote host. The folder is absolute or starts with `~`, and the host resolves it.
   /// It waits for the host, makes the folder and worktree there off the state queue, and reads the host's
   /// panes and processes before it creates the session.
-  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin) throws
+  private func startSession(_ args: NewSession, onHost host: String, origin: RequestOrigin, namingPrompt: String?)
+    throws
     -> SessionSummary
   {
     let site = try remoteSite(host)
@@ -1344,7 +1362,9 @@ public final class Service {
     let read = try readSnapshot(onHost: host)
     return try queue.sync {
       install(read, onHost: host)
-      return try create(args, folder, origin: origin)
+      let summary = try create(args, folder, origin: origin)
+      queueSessionName(summary.id, prompt: namingPrompt, worktree: args.worktree == true)
+      return summary
     }
   }
 
@@ -1433,6 +1453,14 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+  }
+
+  /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
+  /// then leaves the name alone. It runs on the state queue.
+  func renameSession(_ id: String, to name: String) throws {
+    try refuseRename(id, to: name)
+    try update(id) { $0.name = name }
+    entries[id]?.pendingName = nil
   }
 
   /// The session as `sessionMention` writes it, with its live name, else the name that sbd recorded when it

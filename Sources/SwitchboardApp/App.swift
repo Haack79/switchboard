@@ -136,7 +136,7 @@ struct SwitchboardApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
-    if BackgroundLaunch.applies(to: ProcessInfo.processInfo.environment) {
+    if BackgroundLaunch.isRunning {
       BackgroundLaunch.start()
     } else {
       // A build-folder executable has no Info.plist, so it starts as a
