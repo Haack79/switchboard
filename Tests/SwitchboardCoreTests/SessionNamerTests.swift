@@ -106,8 +106,12 @@ extension SessionNamerTests {
     @Test func aRefusalDoesNotQuoteTheAnswer() {
       let answer = "Fix the login redirect on the settings page"
 
-      #expect(throws: (any Error).self) { try SessionNamer.validate(answer) }
-      do { _ = try SessionNamer.validate(answer) } catch { #expect(!"\(error)".contains("login")) }
+      do {
+        _ = try SessionNamer.validate(answer)
+        Issue.record("validate accepted \(answer)")
+      } catch {
+        #expect(!"\(error)".contains("login"))
+      }
     }
 
     @Test func exactly40CharactersIsAccepted() throws {
