@@ -1032,11 +1032,11 @@ private func text(_ answer: Response) -> String {
     }
   }
 
-  // MARK: Notices to a parent on the host
+  // MARK: The digest of a parent on the host
 
   /// mini's `m1` started `m2`, whose PR is in an unlisted repo, and `m3`, whose PR is in a listed one.
   @Test(.timeLimit(.minutes(1)))
-  func aParentOnTheHostHearsOnlyOfItsChildrensListedPRs() throws {
+  func aParentOnTheHostSeesOnlyItsChildrensListedPRsInItsDigest() throws {
     try withSessions(hosts: listedHosts) { service in
       service.queue.sync {
         for id in ["m2", "m3"] {
@@ -1048,16 +1048,9 @@ private func text(_ answer: Response) -> String {
       try service.givePR("m2", listed: false)
       try service.givePR("m3", listed: true)
 
-      let unsent = service.queue.sync { () -> [String] in
-        service.notifyParents(now: nowMs())
-        return (service.parentNotices.unsent["m1"] ?? []).map(\.text)
-      }
-      let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
-        $0.data["text"]?.string
-      }
-      let heard = (sent + unsent).joined(separator: "\n")
+      let heard = service.queue.sync { service.digest("m1", now: nowMs()) ?? "" }
 
-      #expect(heard.contains("m3 (m3) opened PR #77"), "\(heard)")
+      #expect(heard.contains("m3 (m3): opened PR #77"), "\(heard)")
       for mark in unlistedMarks { #expect(!heard.contains(mark), "\(heard)") }
     }
   }
@@ -1086,15 +1079,9 @@ private func text(_ answer: Response) -> String {
       try give(78)
       service.queue.sync { service.seedParentMarks(now: nowMs()) }
       try give(77)
-      let heard = service.queue.sync { () -> [String] in
-        service.notifyParents(now: nowMs())
-        return (service.parentNotices.unsent["m1"] ?? []).map(\.text)
-      }
-      let sent = try service.logged().filter { $0.session == "m1" && $0.kind == "sent" }.compactMap {
-        $0.data["text"]?.string
-      }
+      let heard = service.queue.sync { service.digest("m1", now: nowMs()) ?? "" }
 
-      #expect(!(sent + heard).joined(separator: "\n").contains("opened PR #77"), "\(sent + heard)")
+      #expect(!heard.contains("opened PR #77"), "\(heard)")
     }
   }
 

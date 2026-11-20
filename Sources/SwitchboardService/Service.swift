@@ -2850,7 +2850,6 @@ public final class Service {
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
       pollDocketsIfDue(now: now)
-      notifyParents(now: now)
       applyMCPChanges(now: now)
       autoContinueSessions(now: now)
       pruneActivityIfDue(now: now)
@@ -2906,7 +2905,7 @@ public final class Service {
       markedDone: s.done)
     out.url = SessionLink.url(for: id).absoluteString
     // `prNumbers` keeps no repo, so a host could read the number of an earlier PR in a repo that it may not read.
-    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip notices a parent already got.
+    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip PRs that a parent already heard about.
     if origin == .mac {
       out.startBranch = BranchSwitch.startBranch(s, facts)
       let earlier = facts.earlierPRNumbers

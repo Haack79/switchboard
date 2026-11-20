@@ -11,7 +11,7 @@ public enum LaunchTrigger: String, Codable, Sendable, CaseIterable {
   case resume
   case create
   case followup
-  /// A notice to a parent that sessions it started changed.
+  /// A notice to a parent that sessions it started changed. sbd no longer sends one, but older logs hold it.
   case notice
   case wait
   case dependency
