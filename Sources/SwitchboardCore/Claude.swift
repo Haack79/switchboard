@@ -337,6 +337,14 @@ public enum Transcript {
   static func eachLineFromEnd(
     _ path: String, before end: UInt64? = nil, on machine: any Machine, _ body: (Data) -> Bool
   ) -> Bool {
+    eachLineFromEnd(path, before: end, on: machine) { line, _ in body(line) }
+  }
+
+  /// As `eachLineFromEnd` above, but `body` also gets the byte offset in the file where the line starts.
+  @discardableResult
+  static func eachLineFromEnd(
+    _ path: String, before end: UInt64? = nil, on machine: any Machine, _ body: (Data, UInt64) -> Bool
+  ) -> Bool {
     guard var offset = end ?? machine.size(path) else { return false }
     var size: UInt64 = 1 << 16
     // The start of the chunk after the current one, up to its first newline.
@@ -348,10 +356,11 @@ public enum Transcript {
       offset -= count
       size = min(size * 2, 1 << 22)
       guard let chunk = machine.read(path, from: offset, count: Int(count)) else { return false }
-      var lines = (chunk + rest).split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+      let joined = chunk + rest
+      var lines = joined.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
       rest = offset > 0 ? Data(lines.removeFirst()) : Data()
       for line in lines.reversed() where !line.isEmpty {
-        if body(Data(line)) { return true }
+        if body(Data(line), offset + UInt64(line.startIndex - joined.startIndex)) { return true }
       }
     }
     return true
