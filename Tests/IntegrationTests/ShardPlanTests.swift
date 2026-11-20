@@ -71,9 +71,7 @@ private let measure = "IntegrationTests.MeasureTests/m()"
 
     let r = try plan(
       ["2", "2"],
-      weights: [
-        (30, "IntegrationTests.FxATests"), (20, "IntegrationTests.FxBTests"), (10, "IntegrationTests.FxCTests"),
-      ],
+      weights: [(30, "IntegrationTests.FxATests"), (20, "IntegrationTests.FxBTests"), (10, "IntegrationTests.FxCTests")],
       tests: tests)
 
     #expect(r.status == 0, "\(r.stderr)")
