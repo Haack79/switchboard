@@ -269,7 +269,7 @@ private func verdict(_ f: SessionFacts) -> Verdict { Attention.evaluate(session(
 
   @Test(arguments: [
     ".env", "notes/", "frontend/.env.local", "my-node_modules/", "target.txt", ".idea/", "", "build/notes.txt",
-    "dist/.env", "pkg/.notes/", "pkg/.notes/a.md", ".notes.md", ".notes-old/",
+    "dist/.env", "pkg/.notes/", "pkg/.notes/a.md", ".notes", ".notes.md", ".notes-old/",
   ])
   func otherIgnoredPathsAreNot(_ path: String) {
     #expect(!BuildOutput.contains(path))

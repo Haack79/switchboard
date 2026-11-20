@@ -51,11 +51,11 @@ public enum BuildOutput {
 
   /// Whether a path that `git status --ignored=matching` lists is build
   /// output: its last component is on the list or in `also`, or a folder
-  /// above it is a tool's folder or in `also`, or its first component is a top-level folder.
+  /// above it is a tool's folder or in `also`, or its first component is a top-level folder. A path that is only that name is a file, because git lists a folder with a trailing slash.
   public static func contains(_ path: String, also: Set<String> = []) -> Bool {
     let parts = path.split(separator: "/").map(String.init)
     guard let name = parts.last else { return false }
-    if topLevelFolders.contains(parts[0]) { return true }
+    if topLevelFolders.contains(parts[0]) && path != parts[0] { return true }
     if names.contains(name) || extensions.contains((name as NSString).pathExtension) { return true }
     return parts.contains(where: also.contains) || parts.dropLast().contains(where: toolFolders.contains)
   }

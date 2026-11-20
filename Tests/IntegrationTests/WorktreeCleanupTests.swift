@@ -501,6 +501,13 @@ private func tmuxHas(_ t: Terminals, _ target: String) throws -> Bool {
     #expect(!FileManager.default.fileExists(atPath: s.cwd))
   }
 
+  @Test func refusesAnIgnoredFileNamedDotNotes() throws {
+    try refusesAReadySession([".notes"]) { _, repo, s in
+      try ".notes\n".write(toFile: "\(repo)/.git/info/exclude", atomically: true, encoding: .utf8)
+      try "mine".write(toFile: "\(s.cwd)/.notes", atomically: true, encoding: .utf8)
+    }
+  }
+
   @Test(arguments: ["--assume-unchanged", "--skip-worktree"])
   func refusesAChangeThatGitStatusSkips(_ flag: String) throws {
     try refusesAReadySession(["git status skips"]) { sbd, _, s in
