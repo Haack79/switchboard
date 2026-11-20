@@ -12,7 +12,8 @@ struct PlanProposalList: View {
       VStack(alignment: .leading, spacing: 8) {
         ForEach(proposals) { PlanProposalCard(proposal: $0) }
       }
-      .padding(Design.listInset / 2)
+      .padding(.horizontal, Design.listInset / 2)
+      .padding(.vertical, 8)
     }
     .frame(maxHeight: 320)
     .fixedSize(horizontal: false, vertical: true)

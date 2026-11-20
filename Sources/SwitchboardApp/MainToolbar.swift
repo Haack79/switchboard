@@ -25,7 +25,7 @@ extension View {
       toolbar {
         NavHistoryControls()
         ToolbarItem(placement: .navigation) { ViewPicker() }
-        ToolbarItem { SessionFilterMenu() }
+        ToolbarItem(placement: .navigation) { SessionFilterMenu() }
         AccountItems()
         ToolbarItem { ImportButton() }
         ToolbarItem { NewSessionButton() }
