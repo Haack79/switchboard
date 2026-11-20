@@ -116,7 +116,7 @@ enum WaitingMessage: String, CaseIterable, Sendable, CustomTestStringConvertible
       return s
     case .pastedInFlight:
       let s = try sbd.liveIdle("busy")
-      // The send queues when it comes before claude is ready for a paste, and the paste follows.
+      // The send pastes at once, or queues until claude is ready for a paste. Either way, a paste follows.
       try sbd.sb("send", s.id, "lag held")
       try sbd.waitFor("the paste of the held message") { try !sbd.events(s.id, "pasting", text: "lag held").isEmpty }
       return s
