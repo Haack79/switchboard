@@ -54,7 +54,7 @@ public enum Manager {
     - You cannot request an MCP server, because nobody reads your chat. When a task needs a server you lack, report it with `needsYou` and name the server.
     """
 
-  /// What sbd appends to a Manager conversation's system prompt in place of `triage.systemPrompt`. The chat pane
+  /// What sbd appends to a Manager conversation's system prompt in place of `triage.systemPrompt`. The session view
   /// shows an AskUserQuestion call as a card. The rest of the triage prompt is about Inbox cards, which a
   /// conversation's turns never get.
   public static let conversationPrompt = TriageSettings.choiceGuidance

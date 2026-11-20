@@ -39,5 +39,8 @@ struct ManagerStatusStrip: View {
     .foregroundStyle(.secondary)
     .padding(.horizontal, 10)
     .padding(.bottom, 8)
+    // `changed` reads the conversation's log. The task's id leaves out lastActivity, which every tool call changes.
+    // The log reloads only when the reply or the state changes.
+    .task(id: "\(session.lastReply?.count ?? 0)/\(session.state)/\(session.since)") { model.loadChatLog(session.id) }
   }
 }

@@ -8,8 +8,8 @@ import SwiftUI
 /// `click close` clicks the × on the Shell pane's label with mouse events at the button's place in the
 /// window. `click open` clicks Open Shell on the Claude pane's label the same way. SwiftUI builds no
 /// accessibility elements without an assistive app, so the test can't press a button by its label.
-/// `menu <menu> <item>` runs a menu item. `show-terminal` shows the terminals of a chat pane or an Inbox item,
-/// as their Terminal toggle does. `select <session>` selects a session. `type <text>` types the text and
+/// `menu <menu> <item>` runs a menu item. `show-terminal` shows the terminals of an Inbox item, as its Terminal
+/// toggle does. `select <session>` selects a session. `type <text>` types the text and
 /// Return into the shell pane. `ctrl-d` types Ctrl-D there. `panes` reports how many terminals the window
 /// shows. `cmd-w` sends ⌘W to the menu bar and reports the menu item that owns ⌘W. `nav-keys` sends each of
 /// `NavShortcuts` to the menu bar as a US keyboard types it, and reports the title of the menu item that ran.

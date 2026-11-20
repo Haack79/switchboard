@@ -549,8 +549,8 @@ public enum ManagerSkillGate {
   /// a shell reads as one word, unlike a name that can hold spaces.
   public static func promptReason(skill: String, session: String) -> String {
     "Switchboard blocked /\(skill) in this Manager conversation. /\(skill) is a work skill, and a Manager rereads "
-      + "everything it loads on every later turn. Start a session for it instead: in Switchboard's chat pane, "
-      + "send it again and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
+      + "everything it loads on every later turn. Start a session for it instead: send it again from the "
+      + "conversation's Message Claude field in Switchboard (⇧⌘E) and pick Spawn a session with this, or run sb spawn --repo <owner/name> --branch <branch> "
       + "--prompt \"/\(skill) …\". To run it here once, pick Run here anyway, or run sb send \(session) "
       + "--run-here \"/\(skill) …\" in a terminal. sb manager skills lists the labels."
   }

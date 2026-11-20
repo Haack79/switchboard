@@ -1354,6 +1354,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // A conversation shows Claude's terminal alone. The user opens its shell on demand.
+    if session.kind.isConversation { session.shellClosed = true }
     // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
     if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
@@ -1373,8 +1375,10 @@ public final class Service {
     if let parent = session.parent, entries[parent]?.session.kind == .manager {
       record(parent, "child", ["child": .string(id)])
     }
-    if session.kind.showsAsChat { recordRead(id, 0) }
-    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    if session.kind.isConversation { recordRead(id, 0) }
+    if session.shellClosed != true {
+      try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    }
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
@@ -2800,7 +2804,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
+    if s.kind.isConversation { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {

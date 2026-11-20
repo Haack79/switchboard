@@ -88,12 +88,13 @@ extension SentRequests {
 }
 
 /// A model whose `send` records every request. sbd refuses a request with the message that `refuse` returns, and
-/// answers the rest with null. `perform`'s trailing refresh reads through the client, so it never shows here.
+/// answers the rest with null. `perform`'s trailing refresh reads through the client, so it never shows here. The
+/// model applies `list` when it is given.
 @MainActor
-func recordingModel(refuse: @escaping @Sendable (String, [String: JSON]) -> String? = { _, _ in nil })
-  -> (BoardModel, SentRequests)
-{
-  let model = offlineModel()
+func recordingModel(
+  _ list: [SessionSummary]? = nil, refuse: @escaping @Sendable (String, [String: JSON]) -> String? = { _, _ in nil }
+) -> (BoardModel, SentRequests) {
+  let model = list.map { appliedModel($0) } ?? offlineModel()
   let sent = SentRequests()
   model.send = { op, args in
     sent.append(op, args)
@@ -153,6 +154,27 @@ func chatItem(_ id: String, group: String, state: AttentionState = .needsYou) ->
   s.chat = group
   s.kind = .chat
   return s
+}
+
+/// The operator, with the newest activity of any session. One that needs you has an open prompt, which is what
+/// `ChatMark` reads.
+func operatorItem(_ id: String = "op", state: AttentionState = .needsYou) -> SessionSummary {
+  var s = needsItem(id, manager: true, state: state)
+  s.openPrompt = state == .needsYou
+  s.kind = .operator
+  s.name = Manager.operatorName
+  s.lastActivity = 1_000
+  return s
+}
+
+/// A work session `a`, a group chat `c`, a Manager conversation `m`, and the operator `op`.
+var everyKind: [SessionSummary] {
+  [needsItem("a"), chatItem("c", group: "g1"), needsItem("m", manager: true), operatorItem()]
+}
+
+/// The session in `everyKind` whose id is `id`.
+func everyKindSession(_ id: String) throws -> SessionSummary {
+  try #require(everyKind.first { $0.id == id })
 }
 
 /// The chat of group `group`, which waits on card `card` of `kind`.

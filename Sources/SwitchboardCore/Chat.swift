@@ -78,7 +78,7 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     case user
     case assistant
 
-    /// The name of the speaker, as a chat shows it.
+    /// The name of the speaker, as `sb chat --log` prints it.
     public var label: String { self == .user ? "You" : "Claude" }
   }
 
@@ -109,24 +109,5 @@ public struct ChatMessage: Codable, Equatable, Sendable {
       }
     }
     return nil
-  }
-
-  /// The `/name args` that the user typed, when the message is the line Claude Code writes for a slash
-  /// command. The line is a run of `<command-…>` elements in no fixed order, so the parser reads each by its tag.
-  public var slashCommand: String? {
-    guard role == .user else { return nil }
-    var rest = text.trimmingCharacters(in: .whitespacesAndNewlines)[...]
-    var elements: [Substring: String] = [:]
-    // An element's text may mention another tag, so the scan skips each element whole.
-    while rest.hasPrefix("<command-"), let tagEnd = rest.firstIndex(of: ">") {
-      let tag = rest[rest.index(after: rest.startIndex)..<tagEnd]
-      let start = rest.index(after: tagEnd)
-      guard let close = rest.range(of: "</\(tag)>", range: start..<rest.endIndex) else { break }
-      elements[tag] = rest[start..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-      rest = rest[close.upperBound...].drop(while: \.isWhitespace)
-    }
-    guard let name = elements["command-name"], !name.isEmpty else { return nil }
-    guard let args = elements["command-args"], !args.isEmpty else { return name }
-    return "\(name) \(args)"
   }
 }

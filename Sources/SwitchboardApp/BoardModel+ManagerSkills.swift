@@ -50,10 +50,10 @@ extension BoardModel {
     workSkillOffers[session] = nil
   }
 
-  /// Sends the draft past the gate once, and empties it once sbd accepts it. `then` runs after that.
-  func runHereAnyway(_ session: String, draft: MessageField.Draft, then: (() -> Void)? = nil) {
+  /// Sends the draft past the gate once, and empties it and hides the field once sbd accepts it.
+  func runHereAnyway(_ session: String, draft: MessageField.Draft) {
     dismissOffer(session)
-    draft.submit(session, to: self, runHere: true, then: then)
+    draft.submit(session, to: self, runHere: true) { self.hideMessageFieldIfEmpty(session, draft: draft) }
   }
 
   /// Opens New Session with the offer's text as the prompt, the conversation as the parent, and the repository

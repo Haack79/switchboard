@@ -905,6 +905,18 @@ import Testing
     #expect(try decode(SessionSummary.self, sbd.sb("manager", "--json")).id == fresh)
   }
 
+  /// The app sends `new` to replace the conversation. The replacement opens on Claude's terminal alone, even after
+  /// the app and `sb open` ask for its terminals.
+  @Test func theConversationThatEndReplacesStartsWithTheShellClosed() throws {
+    let sbd = try Instance()
+    let c = try conversation(sbd)
+
+    let answer = try sbd.client.call("manager-end", ["session": .string(c.id), "new": true])
+
+    #expect(answer["started"]?["shellClosed"] == true, "\(answer.text)")
+    try sbd.expectShellAbsent(try started(answer))
+  }
+
   @Test func newWithANameNamesTheNewConversation() throws {
     let sbd = try Instance()
     let c = try conversation(sbd)
