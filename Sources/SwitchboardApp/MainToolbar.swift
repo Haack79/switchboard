@@ -13,13 +13,7 @@ extension View {
         ToolbarSpacer(.fixed)
         ToolbarItem { ViewPicker() }
         ToolbarSpacer(.flexible)
-        ToolbarItem { SessionFilterMenu() }
-        ToolbarSpacer(.fixed)
-        AccountItems()
-        ToolbarSpacer(.fixed)
-        ToolbarItem { ImportButton() }
-        ToolbarSpacer(.fixed)
-        ToolbarItem { NewSessionButton() }
+        TrailingItems()
       }
     } else {
       toolbar {
@@ -31,6 +25,21 @@ extension View {
         ToolbarItem { NewSessionButton() }
       }
     }
+  }
+}
+
+/// The filter, the Manager and account, Import, and New Session, with a gap between each group. They sit in their own
+/// `ToolbarContent` because the macOS 26 SDK's toolbar builder takes at most 10 items in one block.
+@available(macOS 26, *)
+private struct TrailingItems: ToolbarContent {
+  var body: some ToolbarContent {
+    ToolbarItem { SessionFilterMenu() }
+    ToolbarSpacer(.fixed)
+    AccountItems()
+    ToolbarSpacer(.fixed)
+    ToolbarItem { ImportButton() }
+    ToolbarSpacer(.fixed)
+    ToolbarItem { NewSessionButton() }
   }
 }
 
