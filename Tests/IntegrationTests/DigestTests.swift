@@ -57,7 +57,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, kind)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply != nil && $0.state == .needsYou }
     // Five ticks, each of which would send a notice.
     Thread.sleep(forTimeInterval: 1)
     #expect(try sbd.sbdMessages(p.id).isEmpty)
@@ -93,7 +93,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .manager)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply != nil && $0.state == .needsYou }
     try prompt(sbd, p, "what changed")
     #expect(contexts(sbd, p).last?.contains("kid (\(kid.id))") == true)
     let heard = contexts(sbd, p).count
@@ -137,7 +137,7 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .chat)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply != nil && $0.state == .needsYou }
     try prompt(sbd, p, "what changed")
     #expect(contexts(sbd, p).contains { $0.contains("kid (\(kid.id))") })
 
@@ -152,7 +152,7 @@ import Testing
     let p = try parent(sbd, kind)
     let other = try sbd.new(prompt: "hello", name: "other")
     if kind == .chat { _ = try sbd.sb("group", "move", other.id, "--to", "Flags") }
-    try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    try sbd.waitFor(other.id, "the other's reply") { $0.lastReply != nil && $0.state == .needsYou }
     let given = contexts(sbd, p).count
     let digests = try sbd.events(p.id, kind: "digest").count
 
@@ -166,9 +166,9 @@ import Testing
     let sbd = try Instance()
     let p = try parent(sbd, .manager)
     let other = try sbd.new(prompt: "hello", name: "other")
-    try sbd.waitFor(other.id, "the other's reply") { $0.state == .needsYou }
+    try sbd.waitFor(other.id, "the other's reply") { $0.lastReply != nil && $0.state == .needsYou }
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    try sbd.waitFor(kid.id, "the kid's reply") { $0.state == .needsYou }
+    try sbd.waitFor(kid.id, "the kid's reply") { $0.lastReply != nil && $0.state == .needsYou }
 
     try prompt(sbd, p, "what changed")
 
@@ -185,7 +185,9 @@ import Testing
     _ = try sbd.sb("group", "move", inFlags.id, "--to", "Flags")
     _ = try sbd.sb("group", "add", "--json", "Docs", inDocs.id)
     let kid = try child(sbd, of: p, name: "kid", prompt: "one")
-    for s in [inFlags, inDocs, kid] { try sbd.waitFor(s.id, "the reply") { $0.state == .needsYou } }
+    for s in [inFlags, inDocs, kid] {
+      try sbd.waitFor(s.id, "the reply") { $0.lastReply != nil && $0.state == .needsYou }
+    }
 
     try prompt(sbd, p, "what changed")
 
