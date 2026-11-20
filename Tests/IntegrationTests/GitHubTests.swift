@@ -134,6 +134,22 @@ extension FakeGitHub {
     #expect(try sbd.events(s.id).filter { $0.kind == "pr" }.count == 1)
   }
 
+  @Test func refusesToLinkAPRThatAnotherLiveSessionOwns() throws {
+    let github = try FakeGitHub()
+    let sbd = try Instance.withGitHub(github)
+    let branch = "haacked/cdp-dlq-runbook-lookup-step"
+    let owner = try sbd.session(in: "PostHog/charts", branch: branch, name: "owner")
+    try sbd.poll()
+    #expect(try sbd.get(owner.id).pr?.number == 18303)
+    let second = try sbd.session(in: "PostHog/charts", branch: branch, folder: "second", name: "second")
+    try sbd.poll(all: true)
+    let after = try sbd.get(second.id)
+    #expect(after.pr == nil)
+    #expect(after.prOwnedBy == "owner")
+    #expect(try sbd.get(owner.id).pr?.number == 18303)
+    #expect(try sbd.get(owner.id).prOwnedBy == nil)
+  }
+
   @Test func showsEachPRRuleAsThePRChanges() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withGitHub(github)
