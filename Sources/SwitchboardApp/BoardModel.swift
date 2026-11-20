@@ -147,7 +147,7 @@ final class BoardModel: ObservableObject {
   @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil || loopEditor != nil
+      || pickingSnoozeTime != nil || pickingPauseTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -222,6 +222,8 @@ final class BoardModel: ObservableObject {
   @Published var snoozing: Set<String> = []
   /// The session whose snooze end the Pick a Time… sheet asks for.
   @Published var pickingSnoozeTime: String?
+  /// The session whose pause end the Pick a Time… sheet of the Pause menu asks for.
+  @Published var pickingPauseTime: String?
   /// Follow-ups whose start is on its way to sbd. Their Start buttons stay
   /// disabled until sbd replies, because making a worktree can take seconds.
   @Published var starting: Set<String> = []

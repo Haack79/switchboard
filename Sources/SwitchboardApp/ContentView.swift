@@ -75,6 +75,10 @@ struct ContentView: View {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
   }
 
+  private var isPickingPauseTime: Binding<Bool> {
+    Binding(get: { model.pickingPauseTime != nil }, set: { if !$0 { model.pickingPauseTime = nil } })
+  }
+
   private var isEditingLoop: Binding<Bool> {
     Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
   }
@@ -188,7 +192,19 @@ struct ContentView: View {
       DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
     .sheet(isPresented: isPickingSnoozeTime) {
-      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+      if let id = model.pickingSnoozeTime {
+        SnoozePicker(
+          session: id, apply: { model.snooze(id, until: $0) }, close: { model.pickingSnoozeTime = nil }
+        ).environmentObject(model)
+      }
+    }
+    .sheet(isPresented: isPickingPauseTime) {
+      if let id = model.pickingPauseTime {
+        SnoozePicker(
+          session: id, verb: "Pause", apply: { model.pause(id, until: $0) },
+          close: { model.pickingPauseTime = nil }
+        ).environmentObject(model)
+      }
     }
     .sheet(isPresented: isEditingLoop) {
       if let request = model.loopEditor {

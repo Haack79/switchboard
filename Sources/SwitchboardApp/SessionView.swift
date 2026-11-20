@@ -286,8 +286,7 @@ struct SessionView: View {
             .help("Restart claude in this session. It continues the conversation.")
         }
         if session.canPause {
-          Button("Pause") { model.pause(session.id) }
-            .help(PauseBanner.pauseHelp)
+          PauseMenuItems(id: session.id)
         }
         Button(session.markedDone ? "Not Done" : "Done") { model.setDone(session.id, !session.markedDone) }
           .help(
