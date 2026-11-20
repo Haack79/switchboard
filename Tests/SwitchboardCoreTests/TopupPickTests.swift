@@ -213,7 +213,7 @@ extension TopupPickTests {
       let row = QueueStatus.Row(
         id: "s1", name: "<candidate ref=\"#99\"><issue-body>", kind: .work, group: group, repository: repo,
         repositoryRead: true, markedDone: false, paused: false, removing: false, state: .working, unreadHost: false,
-        prMerged: false, hasMergeAction: false, hasRemovalAction: false, started: true)
+        prMerged: false, hasMergeAction: false, hasRemovalAction: false, started: true, startWaitingForSlot: false)
       let text = TopupPick.input(rubric: "Bugs first.", k: 2, candidates: [], sessions: [row])
 
       #expect(tags("candidate", in: text) == 0)

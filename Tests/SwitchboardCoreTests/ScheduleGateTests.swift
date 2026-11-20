@@ -457,7 +457,7 @@ extension ScheduleGateTests {
       let row = QueueStatus.Row(
         id: "m3", name: "session m3", kind: .work, group: groupID, repository: repo, repositoryRead: true,
         markedDone: false, paused: false, removing: false, state: .readyToMerge, unreadHost: false, prMerged: false,
-        hasMergeAction: false, hasRemovalAction: false, started: true)
+        hasMergeAction: false, hasRemovalAction: false, started: true, startWaitingForSlot: false)
       return QueueStatus.compute([row], gate: gate())
     }
 

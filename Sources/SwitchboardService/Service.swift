@@ -1182,9 +1182,10 @@ public final class Service {
           main = try worktreeEntries(folder.path, at: site).first.flatMap { try? site.realPath($0.path) }
           failed = main == nil
         } catch {
-          // git refuses a folder outside any repo and a folder that is gone with the same exit status.
+          // git exits 128 for a folder outside any repo, a folder that is gone, a broken gitdir, and a repo of another
+          // owner. Only a folder outside any repo is a read. Only git's message for that folder has this prefix.
           main = nil
-          failed = !site.machine.isFolder(folder.path)
+          failed = !"\(error)".contains("not a git repository (or any")
         }
         queue.async { [self] in
           checkouts[folder] = (main, nowMs(), failed)

@@ -761,6 +761,37 @@ final class TopupBench {
     #expect(after.last == nil, "the failed top-up recorded a run: \(after)")
   }
 
+  /// A schedule that the user pauses while the judge runs sends no fallback when the judge's answer fails, because
+  /// the fallback asks the Operator to do the work that the user stopped.
+  @Test func aScheduleTheUserPausesDuringAFailedPickSendsNoFallback() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache")])
+    try bench.answer(picks: ["#999"])
+    let armed = try arm(bench, target: 1)
+    let release = try bench.holdPick()
+    defer { release() }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("the held pick", timeout: 30) { bench.judgeCalls() == 1 }
+    try sbd.sb("schedule", "pause", armed.schedule.id)
+    release()
+
+    let line =
+      "not sending the fallback of schedule \(armed.schedule.id) of \(armed.op.id), because the schedule is paused"
+    try sbd.waitFor("the dropped fallback", timeout: 60) {
+      let log = (try? String(contentsOfFile: sbd.home.log, encoding: .utf8)) ?? ""
+      let sent = try sbd.sbdMessages(armed.op.id, after: armed.mark)
+      return log.contains(line) || !sent.isEmpty
+    }
+    sleep(1)
+    #expect(try sbd.sbdMessages(armed.op.id, after: armed.mark).isEmpty)
+    let after = try #require(try fire.current(sbd, armed.op.id, armed.schedule.id))
+    #expect(after.last == nil, "the paused schedule recorded a run: \(after)")
+    #expect(try sessions(sbd, onIssue: 12).isEmpty)
+  }
+
   // MARK: The re-check before each spawn (Decision 40)
 
   /// A top-up whose every pick the re-check refuses records a started check with no sessions and sends nothing,
@@ -866,6 +897,35 @@ final class TopupBench {
     #expect(gate.last?.skipped.map(\.ref) == ["followup:\(f.id)"], "\(String(describing: gate.last))")
     let after = try sbd.get(f.id)
     #expect(after.waitsToStart && after.markedDone, "\(after)")
+  }
+
+  /// A session that needs attention and joins the group while the judge runs opens the gate, so the top-up starts
+  /// nothing and leaves the session to the Operator's next tick.
+  @Test func aPickAfterASessionThatNeedsAttentionJoinsTheGroupIsSkipped() throws {
+    let bench = try TopupBench()
+    let sbd = bench.sbd
+    try bench.learnViewer()
+    try bench.serve(issues: [Self.issue(12, "Fix the cache")])
+    try bench.answer(picks: ["#12"])
+    let armed = try arm(bench, target: 1)
+    let release = try bench.holdPick()
+    defer { release() }
+
+    try sbd.advanceClock(ScheduleFireTests.pastDue)
+    try sbd.waitFor("the held pick", timeout: 30) { bench.judgeCalls() == 1 }
+    let finished = try sbd.session(in: Self.repo, branch: "haacked/finished", folder: "finished", name: "finished")
+    try sbd.waitFor(finished.id, "sbd's read of the repository") { $0.repository == Self.repo }
+    try sbd.sb("done", finished.id)
+    try sbd.waitFor(finished.id, "Done") { $0.state == .done }
+    try gateTests.move(sbd, finished.id, into: armed.group)
+    release()
+
+    let gate = try waitForCheck(sbd, armed, .started)
+    #expect(gate.last?.started == [], "\(String(describing: gate.last))")
+    let skip = try #require(gate.last?.skipped.first { $0.ref == "#12" }, "\(String(describing: gate.last))")
+    #expect(skip.reason.hasPrefix("the gate opened: "), "\(skip)")
+    #expect(skip.reason.contains(finished.id), "\(skip)")
+    #expect(try sessions(sbd, onIssue: 12).isEmpty)
   }
 
   /// A session that joins the group while sbd reads the issues counts toward the target, so the top-up skips the picks past the target.

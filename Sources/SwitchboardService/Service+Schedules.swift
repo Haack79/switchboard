@@ -258,7 +258,8 @@ extension Service {
         removing: s.removal?.holdsSession == true,
         state: Attention.evaluate(s, e.facts, now: now, stateOf: lastState).state, unreadHost: e.facts.unread != nil,
         prMerged: e.facts.pr?.state == .merged, hasMergeAction: subjects.merging.contains(s.id),
-        hasRemovalAction: subjects.removing.contains(s.id), started: !s.waitsToStart)
+        hasRemovalAction: subjects.removing.contains(s.id), started: !s.waitsToStart,
+        startWaitingForSlot: e.queuedSince != nil && !e.pending.isEmpty)
     }.sorted { $0.id < $1.id }
   }
 

@@ -212,15 +212,16 @@ extension Service {
   }
 
   /// Why a pick can't start now, or nil when it can: the group has reached its target, counting the sessions that
-  /// this top-up started, a session or an open PR covers the issue now, or the follow-up is no longer a candidate.
-  /// It runs on the state queue.
+  /// this top-up started, a session needs attention or sbd can't read one, a session or an open PR covers the issue
+  /// now, or the follow-up is no longer a candidate. It runs on the state queue.
   private func pickRefusal(
     _ candidate: TopupCandidates.Candidate, gate: Schedule.Gate, openPRs: [TopupCandidates.OpenPR], started: [String]
   ) -> String? {
-    // A session that this top-up started may not count yet, because sbd reads its repository after it starts.
-    let rows = queueRows(subjects: actionSubjects(), gate: gate)
-    let active = Set(QueueStatus.compute(rows, gate: gate).counted.map(\.id)).union(started)
-    if active.count >= gate.target { return "the group has its target of \(gate.target) active sessions" }
+    if let refusal = QueueStatus.startRefusal(
+      queueRows(subjects: actionSubjects(), gate: gate), gate: gate, started: started)
+    {
+      return refusal
+    }
     switch candidate {
     case .issue(let issue):
       let fresh = TopupCandidates.build(
@@ -290,13 +291,17 @@ extension Service {
 
   /// Sends the schedule's fallback message with the failure on its first line, and records the run with a failed
   /// check that lists `skips`. When the session isn't free, it saves the failed check, sends nothing, and records no
-  /// run, so the next due time tries again. It runs off the state queue.
+  /// run, so the next due time tries again. When `scheduleRefusal` refuses the schedule, it sends and saves nothing.
+  /// It runs off the state queue.
   private func fallBack(
     _ id: String, _ scheduleID: String, gate: Schedule.Gate, status: QueueStatus, skipped: Int, failure: String,
     skips: [Schedule.Gate.Skip] = []
   ) {
     logLine("the top-up of schedule \(scheduleID) of \(id) failed: \(failure)")
     queue.sync {
+      if let refusal = scheduleRefusal(id, scheduleID) {
+        return logLine("not sending the fallback of schedule \(scheduleID) of \(id), because \(refusal)")
+      }
       guard let e = entries[id], let schedule = e.session.schedules?.first(where: { $0.id == scheduleID }) else {
         return
       }

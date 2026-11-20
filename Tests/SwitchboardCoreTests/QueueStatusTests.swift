@@ -16,13 +16,13 @@ private func row(
   _ id: String = "s1", state: AttentionState = .working, kind: SessionKind = .work, group rowGroup: String? = group,
   repository: String? = repo, repositoryRead: Bool? = nil, markedDone: Bool = false, paused: Bool = false,
   removing: Bool = false, unreadHost: Bool = false, prMerged: Bool = false, hasMergeAction: Bool = false,
-  hasRemovalAction: Bool = false, started: Bool = true
+  hasRemovalAction: Bool = false, started: Bool = true, startWaitingForSlot: Bool = false
 ) -> QueueStatus.Row {
   QueueStatus.Row(
     id: id, name: "session \(id)", kind: kind, group: rowGroup, repository: repository,
     repositoryRead: repositoryRead ?? (repository != nil), markedDone: markedDone, paused: paused, removing: removing,
     state: state, unreadHost: unreadHost, prMerged: prMerged, hasMergeAction: hasMergeAction,
-    hasRemovalAction: hasRemovalAction, started: started)
+    hasRemovalAction: hasRemovalAction, started: started, startWaitingForSlot: startWaitingForSlot)
 }
 
 private func queueStatus(_ rows: [QueueStatus.Row], target: Int = 3) -> QueueStatus {
@@ -98,6 +98,27 @@ extension QueueStatusTests {
 
     @Test func aMergedPRWithARemovalActionDoesNotCount() {
       #expect(queueStatus([row(state: .waiting, prMerged: true, hasRemovalAction: true)]).counted.isEmpty)
+    }
+
+    /// A start whose message waits behind the live cap has no first prompt yet, so it reads Needs you until a slot
+    /// frees.
+    @Test(arguments: [AttentionState.needsYou, .notStarted])
+    func aStartWaitingForASlotCounts(_ state: AttentionState) {
+      let s = queueStatus([row(state: state, startWaitingForSlot: true)], target: 1)
+
+      #expect(s.counted.map(\.id) == ["s1"], "\(state)")
+      #expect(s.decision == .gated, "\(state)")
+    }
+
+    @Test func aStartWaitingForASlotMarkedDonePausedRemovedOrMergedDoesNotCount() {
+      let rows = [
+        row("a", state: .needsYou, markedDone: true, startWaitingForSlot: true),
+        row("b", state: .needsYou, paused: true, startWaitingForSlot: true),
+        row("c", state: .needsYou, removing: true, startWaitingForSlot: true),
+        row("d", state: .needsYou, prMerged: true, hasRemovalAction: true, startWaitingForSlot: true),
+      ]
+
+      #expect(queueStatus(rows).counted.isEmpty)
     }
 
     @Test func eachActiveRowCountsOnce() {
@@ -415,6 +436,45 @@ extension QueueStatusTests {
       let lines = queueStatus([row("u9", repository: nil)]).lines
 
       #expect(lines.joined(separator: "\n").contains("session u9"))
+    }
+  }
+}
+
+// MARK: - The re-check before each start
+
+extension QueueStatusTests {
+  @Suite struct StartRefusal {
+    @Test func aShortGroupAllowsAStart() {
+      #expect(QueueStatus.startRefusal([row("a")], gate: gate(target: 2), started: []) == nil)
+    }
+
+    @Test func theSessionsThatTheTopupStartedCountTowardTheTarget() {
+      let refusal = QueueStatus.startRefusal([row("a")], gate: gate(target: 2), started: ["new"])
+
+      #expect(refusal == "the group has its target of 2 active sessions")
+    }
+
+    @Test func aStartedSessionCountsOnceWhenItsRowCountsToo() {
+      #expect(QueueStatus.startRefusal([row("new")], gate: gate(target: 2), started: ["new"]) == nil)
+    }
+
+    /// sbd reads the repository of a session after it starts, so its row is unknown at first.
+    @Test func anUnknownRowOfAStartedSessionDoesNotRefuse() {
+      let unread = row("new", state: .needsYou, repository: nil)
+
+      #expect(QueueStatus.startRefusal([unread], gate: gate(target: 2), started: ["new"]) == nil)
+    }
+
+    @Test func anUnknownRowRefuses() {
+      let refusal = QueueStatus.startRefusal([row("a", unreadHost: true)], gate: gate(target: 2), started: [])
+
+      #expect(refusal?.hasPrefix("the gate opened: ") == true, "\(String(describing: refusal))")
+    }
+
+    @Test func aRowThatNeedsAttentionRefuses() {
+      let refusal = QueueStatus.startRefusal([row("a", state: .done)], gate: gate(target: 2), started: [])
+
+      #expect(refusal?.hasPrefix("the gate opened: ") == true, "\(String(describing: refusal))")
     }
   }
 }

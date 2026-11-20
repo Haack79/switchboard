@@ -161,11 +161,14 @@ public struct QueueStatus: Equatable, Sendable {
     public var hasRemovalAction: Bool
     /// False for a follow-up that waits to start.
     public var started: Bool
+    /// The session's start waits for a free slot under the live cap, and a message waits for that start. The message
+    /// runs once a slot frees, so the session's state may read Needs you until then.
+    public var startWaitingForSlot: Bool
 
     public init(
       id: String, name: String, kind: SessionKind, group: String?, repository: String?, repositoryRead: Bool,
       markedDone: Bool, paused: Bool, removing: Bool, state: AttentionState, unreadHost: Bool, prMerged: Bool,
-      hasMergeAction: Bool, hasRemovalAction: Bool, started: Bool
+      hasMergeAction: Bool, hasRemovalAction: Bool, started: Bool, startWaitingForSlot: Bool
     ) {
       self.id = id
       self.name = name
@@ -182,6 +185,7 @@ public struct QueueStatus: Equatable, Sendable {
       self.hasMergeAction = hasMergeAction
       self.hasRemovalAction = hasRemovalAction
       self.started = started
+      self.startWaitingForSlot = startWaitingForSlot
     }
 
     var label: String { sessionMention(name: name, id: id) }
@@ -249,13 +253,24 @@ public struct QueueStatus: Equatable, Sendable {
   }
 
   private static func counts(_ row: Row) -> Bool {
-    !row.markedDone && !row.paused && !row.removing && !row.prMerged
-      && ![.done, .needsYou, .notStarted].contains(row.state)
+    guard !row.markedDone && !row.paused && !row.removing && !row.prMerged else { return false }
+    return row.startWaitingForSlot || ![.done, .needsYou, .notStarted].contains(row.state)
   }
 
   public var decision: Decision {
     if !reasons.isEmpty { return .open(reasons: reasons) }
     return counted.count >= target ? .gated : .topup(k: target - counted.count)
+  }
+
+  /// Why a top-up that has started the sessions `started` can't start one more, or nil when it can. It counts each
+  /// started session as active and leaves its row out, because sbd may not have read its repository yet.
+  public static func startRefusal(_ rows: [Row], gate: Schedule.Gate, started: [String]) -> String? {
+    let full = "the group has its target of \(gate.target) active sessions"
+    switch compute(rows.filter { !started.contains($0.id) }, gate: gate).decision {
+    case .open(let reasons): return "the gate opened: \(reasons.joined(separator: "; "))"
+    case .gated: return full
+    case .topup(let k): return started.count < k ? nil : full
+    }
   }
 
   /// The status that the fallback message starts with.
