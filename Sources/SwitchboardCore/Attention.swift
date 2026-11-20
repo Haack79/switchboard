@@ -196,6 +196,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The decisions that the user started to answer, from the first answer
   /// until a submit or a discard.
   public var decisionList: DecisionList?
+  /// The ask whose turn has not ended, from its `decision_asked` until that turn's Stop.
+  public var clarifying: Clarifying?
+  /// The first ask about a decision of the open list, while that list is open and fresh. `Attention.rules`
+  /// returns its verdict and `Triage.liveItem` its item, so the clarifying turns change neither.
+  var heldAsk: DecisionAsk?
   /// What sbd found for each draft's reply target.
   public var draftReplies = DraftReplyFacts()
   /// The ref of the item whose decisions the last accepted submit sent.
@@ -570,6 +575,9 @@ public struct Verdict: Equatable, Sendable {
   public var overdueWaits: [String] = []
   /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
   public var removalFailed = false
+  /// True for the verdict that the session had when the user first asked about a decision of the open list.
+  /// No later layer of `evaluate` changes it.
+  public var savedAtAsk = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -620,7 +628,7 @@ public enum Attention {
     let verdict = unheld(session, facts, now: now, stateOf: stateOf)
     // A held verdict is Waiting. The hold comes after `readyForReview`, which would turn it into Ready for review.
     // While sbd can't read the host, the hold must not move the kept state either.
-    return facts.unread != nil ? verdict : requested(verdict, facts, now: now)
+    return facts.unread != nil || verdict.savedAtAsk ? verdict : requested(verdict, facts, now: now)
   }
 
   /// The verdict without the hold of the user's request, which a new
@@ -634,7 +642,7 @@ public enum Attention {
     if session.kind != .work { facts.pr = nil }
     let verdict = rules(session, facts, now: now, stateOf: stateOf)
     // A PR that became ready while sbd can't read the host must not move the kept state.
-    if facts.unread != nil { return verdict }
+    if facts.unread != nil || verdict.savedAtAsk { return verdict }
     return readyForReview(verdict, facts) ?? verdict
   }
 
@@ -677,6 +685,13 @@ public enum Attention {
         state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
     }
     if let v = openPromptVerdict(facts) { return v }
+    if let ask = facts.heldAsk {
+      // A clarifying turn would read Working and then take its reply's state, which would drop the Inbox item,
+      // fire a banner, and notify the parent.
+      var v = Verdict(state: ask.verdict.state, reason: ask.verdict.reason)
+      v.savedAtAsk = true
+      return v
+    }
     if let v = reportVerdict(session, facts) { return v }
     if let v = finishedPR(session, facts, now: now) { return v }
     if facts.turnRunning {

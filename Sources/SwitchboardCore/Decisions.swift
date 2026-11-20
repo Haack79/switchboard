@@ -110,22 +110,44 @@ public struct DecisionList: Codable, Equatable, Sendable {
   public var stale: Bool
   /// The decisions of a later item, which the open list keeps out of the Inbox.
   public var newer: [PendingDecision]
+  /// The user's questions about single decisions, oldest first, each with the session's answer.
+  public var exchanges: [DecisionExchange]
 
   public init(
     decisions: [PendingDecision], ref: String, answers: [DecisionAnswer] = [], stale: Bool = false,
-    newer: [PendingDecision] = []
+    newer: [PendingDecision] = [], exchanges: [DecisionExchange] = []
   ) {
     self.decisions = decisions
     self.ref = ref
     self.answers = answers
     self.stale = stale
     self.newer = newer
+    self.exchanges = exchanges
+  }
+
+  /// A list that an older sbd wrote has no exchanges.
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    decisions = try c.decode([PendingDecision].self, forKey: .decisions)
+    ref = try c.decode(String.self, forKey: .ref)
+    answers = try c.decode([DecisionAnswer].self, forKey: .answers)
+    stale = try c.decode(Bool.self, forKey: .stale)
+    newer = try c.decode([PendingDecision].self, forKey: .newer)
+    exchanges = try c.decodeIfPresent([DecisionExchange].self, forKey: .exchanges) ?? []
   }
 
   public func answer(_ number: Int) -> DecisionAnswer? { answers.first { $0.number == number } }
 
   /// The numbers of the decisions without an answer.
   public var unanswered: [Int] { decisions.map(\.number).filter { answer($0) == nil } }
+
+  /// Ends the pending exchange of the ask with the session's reply or with an error.
+  mutating func close(ask askId: String, reply: String? = nil, error: String? = nil) {
+    guard let i = exchanges.firstIndex(where: { $0.askId == askId && $0.pending }) else { return }
+    exchanges[i].pending = false
+    exchanges[i].reply = reply
+    exchanges[i].error = error
+  }
 
   mutating func record(_ answer: DecisionAnswer) {
     guard decisions.contains(where: { $0.number == answer.number }) else { return }
@@ -164,6 +186,57 @@ public struct DecisionList: Codable, Equatable, Sendable {
   }
 }
 
+/// A question that the user asked the session about one decision of the open list, and how it ended.
+public struct DecisionExchange: Codable, Equatable, Sendable {
+  public var askId: String
+  /// The number of the decision that the question is about.
+  public var number: Int
+  /// The user's question.
+  public var text: String
+  /// The last message of the turn that the question started.
+  public var reply: String?
+  /// Why the ask ended without a reply.
+  public var error: String?
+  /// True until the reply or an error arrives.
+  public var pending: Bool
+}
+
+/// The turn that a question about a decision starts: the turn of the next prompt that is the message sbd sent
+/// for the ask. It ends at that turn's Stop.
+public struct Clarifying: Codable, Equatable, Sendable {
+  public var askId: String
+  public var number: Int
+  /// The message that sbd sent for the ask.
+  public var message: String
+  /// True once claude reported the message as a prompt.
+  public var started: Bool
+}
+
+/// The data of a `decision_asked` event. `verdict` and `item` are what the session showed when the user asked.
+struct DecisionAsk: Codable, Equatable, Sendable {
+  var ref: String
+  var number: Int
+  var askId: String
+  var text: String
+  var message: String
+  var verdict: SavedVerdict
+  var item: SavedItem
+
+  struct SavedVerdict: Codable, Equatable, Sendable {
+    var state: AttentionState
+    var reason: String
+    /// The session's `stateSince` at the ask.
+    var since: Int64
+  }
+
+  struct SavedItem: Codable, Equatable, Sendable {
+    var title: String
+    var summary: String
+    var kind: TriageKind
+    var ref: String
+  }
+}
+
 extension Array where Element == PendingDecision {
   /// Whether the decisions make a list that the user answers one at a time.
   /// A lone decision does not.
@@ -186,8 +259,11 @@ extension SessionSummary {
 }
 
 extension SessionFacts {
-  /// The decision events build the open list. None of them changes the
-  /// verdict. A new prompt makes the open list stale.
+  static let unansweredAsk = "The turn ended without an answer."
+
+  /// The decision events build the open list. Only an ask changes the
+  /// verdict, through `heldAsk`. A new prompt makes the open list stale,
+  /// unless it starts the clarifying turn.
   mutating func applyDecisions(_ event: Event) {
     switch event.kind {
     case "decisions_opened":
@@ -195,6 +271,7 @@ extension SessionFacts {
         let decisions = try? JSONCoding.convert(raw, to: [PendingDecision].self)
       else { return }
       decisionList = DecisionList(decisions: decisions, ref: ref)
+      clarifying = nil
     case "decision_answered":
       guard let answer = try? JSONCoding.convert(event.data, to: DecisionAnswer.self), answer.isValid else { return }
       decisionList?.record(answer)
@@ -203,13 +280,29 @@ extension SessionFacts {
       submittedDecisionsMessage = event.data["message"]?.string
       decisionsDelivery = DecisionsDelivery(Delivery(of: event))
       decisionList = nil
+      clarifying = nil
     case "decisions_discarded":
       decisionList = nil
+      clarifying = nil
+    case "decision_asked":
+      applyAsk(event)
+    case "decision_clarified":
+      guard let askId = event.data["askId"]?.string else { break }
+      decisionList?.close(ask: askId, error: event.data["error"]?.string ?? Self.unansweredAsk)
+      if clarifying?.askId == askId { clarifying = nil }
     case "UserPromptSubmit":
-      decisionList?.stale = true
+      applyPromptToList(event.data["prompt"]?.string ?? "")
+    case "Stop" where !event.fromSubagent:
+      guard let ask = clarifying, ask.started else { break }
+      let reply = event.data["last_assistant_message"]?.string ?? ""
+      decisionList?.close(
+        ask: ask.askId, reply: reply.isEmpty ? nil : reply, error: reply.isEmpty ? Self.unansweredAsk : nil)
+      clarifying = nil
     default:
       break
     }
+    // The hold lasts while the list that the user asked from is open and fresh.
+    if decisionList?.stale != false || decisionList?.ref != heldAsk?.ref { heldAsk = nil }
     guard let message = submittedDecisionsMessage, event.data["text"]?.string == message else { return }
     switch (event.kind, decisionsDelivery) {
     case ("delivered", .sending): decisionsDelivery = .delivered
@@ -217,6 +310,36 @@ extension SessionFacts {
     case ("sent", .unknown): decisionsDelivery = DecisionsDelivery(Delivery(of: event))
     default: break
     }
+  }
+}
+
+extension SessionFacts {
+  /// Records an ask about a decision of the open, fresh list that the event names. An ask while another one is
+  /// pending records nothing, because only one clarifying turn can be matched to its reply. The first ask of a
+  /// hold saves the verdict and the item that the hold keeps.
+  private mutating func applyAsk(_ event: Event) {
+    guard clarifying == nil, let ask = try? JSONCoding.convert(event.data, to: DecisionAsk.self),
+      let list = decisionList, list.ref == ask.ref, !list.stale
+    else { return }
+    if heldAsk == nil { heldAsk = ask }
+    decisionList?.exchanges.append(
+      DecisionExchange(askId: ask.askId, number: ask.number, text: ask.text, pending: true))
+    clarifying = Clarifying(askId: ask.askId, number: ask.number, message: ask.message, started: false)
+  }
+
+  /// The prompt that is the ask's message starts the clarifying turn and leaves the list fresh. Any other prompt
+  /// makes the list stale, and it ends a clarifying turn that never stopped with an error.
+  private mutating func applyPromptToList(_ prompt: String) {
+    if var ask = clarifying, !ask.started, InboxRequest.isPrompt(prompt, of: ask.message) {
+      ask.started = true
+      clarifying = ask
+      return
+    }
+    if let ask = clarifying, ask.started {
+      decisionList?.close(ask: ask.askId, error: Self.unansweredAsk)
+      clarifying = nil
+    }
+    decisionList?.stale = true
   }
 }
 
