@@ -94,7 +94,7 @@ extension Service {
   func claudeAccount(of id: String) -> SessionAccount {
     if let host = entries[id]?.session.host { return .host(host) }
     if let e = entries[id], let path = e.facts.transcriptPath,
-      (path as NSString).lastPathComponent == "\(e.session.claudeSessionId).jsonl"
+      Transcript.isFile(path, of: e.session.claudeSessionId)
     {
       let projects = ((path as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent as NSString
       if projects.lastPathComponent == "projects" {

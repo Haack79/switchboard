@@ -1565,7 +1565,7 @@ public final class Service {
   /// session's last SessionStart named. For a session on a host, this reads nothing of the state queue.
   func transcriptFile(_ session: Session, named: String?, on machine: any Machine) throws -> String? {
     guard session.started else { return nil }
-    if let path = named, (path as NSString).lastPathComponent == "\(session.claudeSessionId).jsonl" {
+    if let path = named, Transcript.isFile(path, of: session.claudeSessionId) {
       return machine.exists(path) ? path : nil
     }
     return Transcript.find(
@@ -1605,13 +1605,29 @@ public final class Service {
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
     from: String? = nil, runHere: Bool = false
   ) throws -> Delivery {
+    try deliver(
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+    ).delivery
+  }
+
+  /// How `deliver` handled a message, and the `sent` event it stored.
+  struct SentMessage {
+    var delivery: Delivery
+    var sent: Event
+  }
+
+  /// As `send`, but it also returns the message's `sent` event.
+  func deliver(
+    _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
+    from: String? = nil, runHere: Bool = false
+  ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
     let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
-      return .queued
+      return SentMessage(delivery: .queued, sent: sent)
     }
     let now = nowMs()
     // Claude Code does not attach the images of a prompt that starts it, so
@@ -1622,32 +1638,45 @@ public final class Service {
     {
       // startClaude's checks come before `sent` is stored, so a start that they refuse stores no message.
       _ = try requireStartable(id)
-      try recordSent(id, text, .resumed, by: by, from: from, extra: extra)
+      let sent = try recordSent(id, text, .resumed, by: by, from: from, extra: extra.merging(resumeMark(id)) { $1 })
       try startClaude(id, prompt: text, trigger: trigger)
       if runHere { armSkillBypass(id, text) }
-      return .resumed
+      return SentMessage(delivery: .resumed, sent: sent)
     } else if case .running = claudeState(id), entries[id]!.pending.isEmpty, readyForPaste(id, now: now) {
       let sent = try recordSent(id, text, .pasted, by: by, from: from, extra: extra)
       paste(id, QueuedMessage(text: text, sent: sent))
-      return .pasted
+      return SentMessage(delivery: .pasted, sent: sent)
     } else {
       // A stopped session launches without a prompt when older messages wait,
       // the message has images, the live cap is full, or another start is
       // queued. Its messages arrive in order after SessionStart.
       if claudeState(id) == .stopped { try launch(id, prompt: nil, trigger: trigger) }
-      try queueMessage(id, text, by: by, from: from, extra: extra)
-      return .queued
+      let sent = try queueMessage(id, text, by: by, from: from, extra: extra)
+      return SentMessage(delivery: .queued, sent: sent)
     }
+  }
+
+  /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
+  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// size 0.
+  private func resumeMark(_ id: String) -> [String: JSON] {
+    guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }
+    let size: UInt64
+    do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
+    return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
   }
 
   /// Adds the message to the session's queue. The `sent` event lets a
   /// restart of sbd rebuild the queue.
+  @discardableResult
   func queueMessage(_ id: String, _ text: String, by: MessageAuthor, from: String? = nil, extra: [String: JSON] = [:])
-    throws
+    throws -> Event
   {
     let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra)
     entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
     deliverPending(id, after: 0.2)
+    return sent
   }
 
   /// `extra` adds fields to the event, such as `held`.
@@ -1720,13 +1749,18 @@ public final class Service {
     }
   }
 
+  /// The text that claude gets for a message to the session `id`, without the paths of its images.
+  func pastedText(_ text: String, _ id: String) -> String {
+    Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text
+  }
+
   /// The messages with the `pasting` event of each. It runs on the state queue.
   func uncertainPastes(_ id: String, _ texts: [String]) throws -> [UncertainPaste] {
     var pastings = try store.events(session: id).filter { $0.kind == "pasting" }
     return texts.map { text in
       let pasting = pastings.lastIndex { $0.data["text"]?.string == text }.map { pastings.remove(at: $0) }
       return UncertainPaste(
-        text: text, pasted: Attachments.split(text, folder: home.attachmentsFolder(id))?.text ?? text,
+        text: text, pasted: pastedText(text, id),
         started: pasting != nil, transcript: pasting?.data["transcript"]?.string,
         offset: UInt64(pasting?.data["transcript_bytes"]?.int ?? 0))
     }
@@ -1809,21 +1843,16 @@ public final class Service {
     }
     var data: [String: JSON] = ["text": .string(message.text)]
     do {
-      if let session = entries[id]?.session {
-        // A restart looks for the message after this size, so a size that a host did not answer must not
-        // read as a missing transcript.
-        let named = entries[id]?.facts.transcriptPath
-        let found: (path: String, size: UInt64)? = try site(for: session).confirmed("the transcript size of \(id)") {
-          guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
-          else { return nil }
-          return (path, size)
-        }
-        if let found {
-          data["transcript"] = .string(found.path)
-          data["transcript_bytes"] = .number(Double(found.size))
-        }
+      // A restart looks for the message after this size, so a size that a host did not answer must not
+      // read as a missing transcript.
+      if let found = try transcriptSize(id) {
+        data["transcript"] = .string(found.path)
+        data["transcript_bytes"] = .number(Double(found.size))
       }
+      // `chat-log` finds a run's prompt from the last `pasting` that names its `sent` event.
+      if let conversation = entries[id]?.session.claudeSessionId { data["conversation"] = .string(conversation) }
       if let sent = message.sent {
+        data["sent"] = .number(Double(sent.id))
         guard let row = try store.event(id: sent.id), row.session == id, row.t == sent.t, row.kind == "sent",
           row.data["text"] == sent.data["text"]
         else {
@@ -1839,6 +1868,18 @@ public final class Service {
       logLine("can't start a paste into \(id): \(error)")
       requeue(id, message)
       return false
+    }
+  }
+
+  /// The session's transcript and its size in bytes, or nil when the session or its transcript is missing. It
+  /// throws when the session's host did not answer the read.
+  func transcriptSize(_ id: String) throws -> (path: String, size: UInt64)? {
+    guard let session = entries[id]?.session else { return nil }
+    let named = entries[id]?.facts.transcriptPath
+    return try site(for: session).confirmed("the transcript size of \(id)") {
+      guard let path = (try? transcriptFile(session, named: named, on: $0)) ?? nil, let size = $0.size(path)
+      else { return nil }
+      return (path, size)
     }
   }
 
