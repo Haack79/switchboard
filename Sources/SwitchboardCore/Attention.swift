@@ -305,7 +305,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       lastResumeTrigger = event.kind == "resumed" ? d["trigger"]?.string.flatMap(LaunchTrigger.init) : nil
       exitedAtTrust = false
       hookSinceLaunch = false
-      promptOnItsWaySince = lastLaunchPrompt?.isEmpty == false ? event.t : nil
+      promptOnItsWaySince =
+        lastLaunchPrompt.map { !$0.isEmpty && !SlashCommand.isBuiltIn(prompt: $0) } == true ? event.t : nil
       permissionMode = d["permission_mode"]?.string
     case "imported":
       // The transcript's last line, not the import, is the session's last activity.

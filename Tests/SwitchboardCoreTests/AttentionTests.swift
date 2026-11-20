@@ -91,6 +91,12 @@ func tool(_ name: String, _ input: [String: JSON], id: String? = nil, agent: Str
       Attention.evaluate(session(), f, now: 4) == Verdict(state: .working, reason: "starting with its first prompt"))
   }
 
+  @Test(arguments: ["started", "resumed"]) func aBuiltInCommandAsTheLaunchPromptLeavesNothingPending(_ kind: String) {
+    let f = facts([event(kind, 1, ["prompt": "/compact"]), event("SessionStart", 2)])
+    #expect(!f.launchPromptPending(now: 3))
+    #expect(Attention.evaluate(session(), f, now: 3) == Verdict(state: .needsYou, reason: "give it a first prompt"))
+  }
+
   @Test func aTrustDialogExitComesBeforeAPendingLaunchPrompt() {
     var f = facts([event("started", 1, ["prompt": "fix it"])])
     f.exitedAtTrust = true
