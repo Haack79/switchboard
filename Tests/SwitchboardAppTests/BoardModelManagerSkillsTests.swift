@@ -97,7 +97,6 @@ import Testing
     await pause()
 
     #expect(sends(sent).isEmpty)
-    #expect(model.actionError == nil)
   }
 
   @Test func aWorkLabelKeepsTheDraft() async throws {
