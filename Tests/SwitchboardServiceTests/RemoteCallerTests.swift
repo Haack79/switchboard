@@ -301,7 +301,7 @@ private func withBench(scripts: Bool = true, _ body: (SiteBench) throws -> Void)
       let local = localSession("mac", cwd: "\(home.path)/repo")
       let remote = remoteSession("box", cwd: local.cwd)
       service.queue.sync {
-        service.checkouts[SitePath(local.cwd, at: service.mac)] = ("/main/checkout", nowMs())
+        service.checkouts[SitePath(local.cwd, at: service.mac)] = ("/main/checkout", nowMs(), false)
 
         #expect(service.checkout(local) == "/main/checkout")
         #expect(service.checkout(remote) == nil)
@@ -317,7 +317,7 @@ private func withBench(scripts: Bool = true, _ body: (SiteBench) throws -> Void)
       let local = localSession("mac", cwd: "\(home.path)/repo")
       let remote = remoteSession("box", cwd: local.cwd)
       service.queue.sync {
-        service.checkouts[SitePath(remote.cwd, at: service.site(for: remote))] = (nil, nowMs())
+        service.checkouts[SitePath(remote.cwd, at: service.site(for: remote))] = (nil, nowMs(), false)
 
         #expect(service.checkout(remote) == nil)
         #expect(service.checkoutLookups.isEmpty, "the host's folder was read less than a minute ago")
