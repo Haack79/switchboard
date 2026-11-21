@@ -128,7 +128,8 @@ private struct IssueListHeader: View {
       .help("Choose the sources, your team, and the start preset")
       .accessibilityLabel("Issue sources")
     }
-    .padding(8)
+    .padding(.horizontal, Design.listInset)
+    .padding(.vertical, 8)
   }
 }
 
@@ -412,7 +413,8 @@ private struct IssueSkeleton: View {
       }
     }
     .redacted(reason: .placeholder)
-    .padding(16)
+    .padding(.horizontal, Design.listInset)
+    .padding(.vertical, 16)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .accessibilityLabel("Loading issues")
   }

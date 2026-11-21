@@ -210,8 +210,9 @@ public enum InboxItems: Sendable {
   /// sessions it manages, and those sessions have their own items. A reply
   /// waits on the user's next message in the conversation's own view.
   case blockingPrompts
-  /// A blocking prompt, then the open `needsYou` reports, then the wait rule's Needs you. The operator's
-  /// replies and `sb summary set` cards never reach the Inbox, because nobody reads its chat.
+  /// A blocking prompt, then an exit at the trust dialog, then an open permission or question dialog, then the
+  /// asks that no other session owns, then a `notify` outcome, then the overdue waits that no other session owns.
+  /// The operator's replies and `sb summary set` cards never reach the Inbox, because nobody sees its chat.
   case operatorItems
 }
 
@@ -345,6 +346,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var docket: DocketSummary?
   /// gh's error from the last failed merge of the PR's head commit.
   public var mergeError: String?
+  /// The name of the session that owns the PR this session works on. sbd shows no PR on this session while that
+  /// session owns it.
+  public var prOwnedBy: String?
   /// True when the user acknowledged the session's Inbox item, which moves
   /// it to Waiting until its reason changes or a new turn starts.
   /// For the operator it is also true while an undo would reopen the reports that the acknowledgment closed.

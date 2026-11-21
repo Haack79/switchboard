@@ -29,7 +29,7 @@ enum MainView: CaseIterable {
     }
   }
 
-  /// The key that, with ⌘, shows the view from the Session menu.
+  /// The key that, with ⌘, shows the view from the View menu.
   var shortcutKey: Character {
     switch self {
     case .inbox: "1"
@@ -113,6 +113,8 @@ final class BoardModel: ObservableObject {
   /// The repositories that the New Session sheet offers, most recently used first. It is nil until sbd answers.
   @Published var knownRepos: [KnownRepo]?
   @Published var showingSearch = false
+  /// The text in the sidebar's search field. The sidebar lists only the work sessions that it matches.
+  @Published var sidebarQuery = ""
   /// The Done session whose delete the confirmation dialog in ContentView asks about, as the
   /// board showed it when the user asked. The dialog's message and request both read this value.
   @Published var confirmingDelete: SessionSummary?
@@ -147,7 +149,7 @@ final class BoardModel: ObservableObject {
   @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil || loopEditor != nil
+      || pickingSnoozeTime != nil || pickingPauseTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -177,7 +179,7 @@ final class BoardModel: ObservableObject {
   @Published var revealedMessageField: String?
   /// The session whose Message Claude field takes keyboard focus when it shows. The field clears it.
   @Published var messageFieldFocus: String?
-  /// The Board's open cards as it last drew them. BoardView keeps it current. The Session menu's ⌘T state and
+  /// The Board's open cards as it last drew them. BoardView keeps it current. The Go menu's ⌘T state and
   /// the Board's ring read it, so a change redraws them.
   @Published var boardGrid = BoardGrid(lanes: [])
   /// The right pane of the Inbox shows the session's terminals instead of its summary.
@@ -222,6 +224,8 @@ final class BoardModel: ObservableObject {
   @Published var snoozing: Set<String> = []
   /// The session whose snooze end the Pick a Time… sheet asks for.
   @Published var pickingSnoozeTime: String?
+  /// The session whose pause end the Pick a Time… sheet of the Pause menu asks for.
+  @Published var pickingPauseTime: String?
   /// Follow-ups whose start is on its way to sbd. Their Start buttons stay
   /// disabled until sbd replies, because making a worktree can take seconds.
   @Published var starting: Set<String> = []
@@ -333,6 +337,8 @@ final class BoardModel: ObservableObject {
   }
   /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
   @Published var loopSessionFilter: String?
+  /// The Operator's work, newest first, as the Loops view's Background Activity lists it.
+  @Published var backgroundActivity: [BackgroundActivity.Entry] = []
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -599,9 +605,15 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
-  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
-  var operatorSession: SessionSummary? {
-    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  /// The operator. It reads every listed session, because the filter can hide the operator.
+  var operatorSession: SessionSummary? { Self.operatorSession(in: allSessions) }
+
+  /// The operator among `sessions`, or nil before sbd first creates it. With more than one, it is the oldest, as in
+  /// sbd.
+  static func operatorSession(in sessions: [SessionSummary]) -> SessionSummary? {
+    sessions.filter { !$0.isBeingRemoved && $0.kind == .operator }.min {
+      ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id)
+    }
   }
 
   /// A state's sessions in the sidebar, each one followed by its children.
@@ -633,13 +645,31 @@ final class BoardModel: ObservableObject {
   /// The sidebar's groups, in state order, without empty ones. The Manager has
   /// its own row above the groups, so a session it started is top level, like
   /// one with no parent. A session whose parent is another session nests under
-  /// that parent while both are in the same group.
-  var sidebarGroups: [SidebarGroup] {
-    let listed = workBoard
-    return AttentionState.allCases.compactMap { state in
+  /// that parent while both are in the same group. It lists only the work sessions that `sidebarQuery` matches.
+  var sidebarGroups: [SidebarGroup] { Self.sidebarGroups(sidebarSessions) }
+
+  /// `listed` grouped by state, as the sidebar groups its rows.
+  static func sidebarGroups(_ listed: [SessionSummary]) -> [SidebarGroup] {
+    AttentionState.allCases.compactMap { state in
       let group = listed.filter { $0.state == state }
       return group.isEmpty ? nil : SidebarGroup(state: state, rows: SessionTree.rows(group))
     }
+  }
+
+  /// The work sessions that `sidebarQuery` matches, in `workBoard` order. A blank query matches every one.
+  private var sidebarSessions: [SessionSummary] {
+    let listed = workBoard
+    guard !sidebarQuery.allSatisfy(\.isWhitespace) else { return listed }
+    let matched = Set(SessionSearch.rank(listed, query: sidebarQuery).map(\.id))
+    return listed.filter { matched.contains($0.id) }
+  }
+
+  /// True when the sidebar's search field hides every work session that the filters show.
+  var sidebarQueryHidesAll: Bool { !workBoard.isEmpty && sidebarSessions.isEmpty }
+
+  /// True when the filters show `session` but the sidebar's search field hides its row.
+  func sidebarQueryHides(_ session: SessionSummary) -> Bool {
+    workBoard.contains { $0.id == session.id } && !sidebarSessions.contains { $0.id == session.id }
   }
 
   var triage: [SessionSummary] { Triage.order(sessions) }
@@ -663,10 +693,10 @@ final class BoardModel: ObservableObject {
 
   var selected: SessionSummary? { board.first { $0.id == selection } }
 
-  /// True while the sidebar has no rows and sbd answers. It is false when the filters hide every work session,
-  /// because the sidebar then shows `FilterHidesAll` instead.
+  /// True while the sidebar has no rows and sbd answers. It is false when the filters or the search field hide
+  /// every work session, because the sidebar then says so instead.
   var sidebarIsEmpty: Bool {
-    sidebarGroups.isEmpty && managers.isEmpty && unreachable == nil && !filterHidesAllWork
+    workBoard.isEmpty && managers.isEmpty && unreachable == nil && !filterHidesAllWork
   }
 
   /// The main view while no session is selected, else nil.
@@ -778,7 +808,7 @@ final class BoardModel: ObservableObject {
       drafts = drafts.filter { open.contains($0.key) }
       messageDrafts.prune(
         keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.otherAnswerKeys(list))
-          .union(MessageDrafts.replyKeys(list)))
+          .union(MessageDrafts.replyKeys(list)).union(MessageDrafts.operatorAnswerKeys(list)))
       if !sameShown(allSessions, list) { allSessions = list }
       // After the new list, so that the filter change reads each session's group from the same poll as the groups.
       if let groups { applyGroups(groups) }
@@ -1679,6 +1709,13 @@ final class BoardModel: ObservableObject {
 
   func messageDraft(for session: SessionSummary) -> MessageField.Draft {
     messageDrafts.draft(for: MessageDrafts.key(for: session))
+  }
+
+  /// The draft of the Inbox field on `session`. On an Operator question it is the answer's own draft, which the
+  /// session view and the chat pane never show. The answer is dropped, not sent to claude, once the question closes.
+  func inboxDraft(for session: SessionSummary) -> MessageField.Draft {
+    guard MessageField.Draft.answersOperator(ref: session.triage?.ref) else { return messageDraft(for: session) }
+    return messageDrafts.draft(for: MessageDrafts.operatorAnswerKey(session: session.id))
   }
 
   /// What the user typed as the Other answer to one decision and has not sent.
