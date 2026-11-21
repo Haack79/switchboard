@@ -38,6 +38,14 @@ final class BoardGeometry {
 
   func recordLaneHeader(_ lane: String, _ frame: CGRect) { laneHeaders[lane] = frame }
 
+  /// Removes the frame of a lane header view that went away. A second view can draw the same lane, and SwiftUI
+  /// may report its frame before the first view disappears. It removes the frame only when the departing view
+  /// wrote the stored frame.
+  func dropLaneHeader(_ lane: String, ifStill frame: CGRect?) {
+    guard let frame, laneHeaders[lane] == frame else { return }
+    laneHeaders[lane] = nil
+  }
+
   /// Stores the frame that a card view reports. It cancels a pending removal of that card's frame.
   func record(_ id: String, _ frame: CGRect) {
     frames[id] = frame

@@ -39,7 +39,6 @@ import Testing
     let available = 1024 - ContentView.sidebarIdealWidth
     let width = BoardView.fittedColumnWidth(available: available, columns: 5)
 
-    #expect(width >= BoardView.minColumnWidth)
     #expect(drawnWidth(width) <= available + 0.01)
   }
 

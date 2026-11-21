@@ -655,11 +655,7 @@ struct BoardView: View {
                   VStack(alignment: .leading, spacing: 8) {
                     LaneHeader(title: lane.title, group: lane.group, count: lane.cells.joined().count)
                       .frame(width: rowWidth, alignment: .leading)
-                      .onGeometryChange(for: CGRect.self) {
-                        $0.frame(in: .named(Self.contentSpace))
-                      } action: {
-                        boardGeometry.recordLaneHeader(lane.id, $0)
-                      }
+                      .modifier(LaneHeaderFrame(geometry: boardGeometry, lane: lane.id))
                     HStack(alignment: .top, spacing: Self.columnSpacing) {
                       ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
                         VStack(spacing: 8) {
@@ -811,6 +807,25 @@ private struct LaneDrop: ViewModifier {
   }
 }
 
+/// Writes a lane header's frame to `geometry` and removes it when the header view goes away.
+private struct LaneHeaderFrame: ViewModifier {
+  let geometry: BoardGeometry
+  let lane: String
+  /// The last frame this view wrote to `geometry`.
+  @State private var recordedFrame: CGRect?
+
+  func body(content: Content) -> some View {
+    content
+      .onGeometryChange(for: CGRect.self) {
+        $0.frame(in: .named(BoardView.contentSpace))
+      } action: {
+        recordedFrame = $0
+        geometry.recordLaneHeader(lane, $0)
+      }
+      .onDisappear { geometry.dropLaneHeader(lane, ifStill: recordedFrame) }
+  }
+}
+
 /// A lane's header above its row of columns. A group lane also shows the group's
 /// description, its chat, and its plans' Follow up rows and pending updates.
 private struct LaneHeader: View {
@@ -822,7 +837,7 @@ private struct LaneHeader: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       WrappingRow(spacing: 8) {
-        Text(title).fontWeight(.semibold).lineLimit(1)
+        Text(title).fontWeight(.semibold).lineLimit(1).accessibilityAddTraits(.isHeader)
         if let group {
           Button {
             model.openNewSession(group: group.id)

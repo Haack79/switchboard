@@ -725,4 +725,33 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
 
     #expect(geometry.frames["a"] == Self.old)
   }
+
+  @Test func aLaneTheBoardNoLongerDrawsLosesItsHeaderFrame() {
+    let geometry = BoardGeometry()
+    geometry.recordLaneHeader("kept", Self.old)
+    geometry.recordLaneHeader("gone", Self.new)
+
+    geometry.keepFrames([], lanes: ["kept"])
+
+    #expect(geometry.laneHeaders == ["kept": Self.old])
+  }
+
+  @Test func aLaneHeaderThatGoesAwayLosesItsFrame() {
+    let geometry = BoardGeometry()
+    geometry.recordLaneHeader("lane", Self.old)
+
+    geometry.dropLaneHeader("lane", ifStill: Self.old)
+
+    #expect(geometry.laneHeaders["lane"] == nil)
+  }
+
+  /// A second view that draws the same lane can report its header frame before the first view goes away.
+  @Test func aLaneHeaderThatAnotherViewRedrewKeepsTheNewFrame() {
+    let geometry = BoardGeometry()
+    geometry.recordLaneHeader("lane", Self.new)
+
+    geometry.dropLaneHeader("lane", ifStill: Self.old)
+
+    #expect(geometry.laneHeaders["lane"] == Self.new)
+  }
 }
