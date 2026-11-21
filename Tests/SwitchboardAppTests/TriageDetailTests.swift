@@ -120,6 +120,19 @@ import Testing
     #expect(link.head == nil)
   }
 
+  /// A narrow header drops the branch, so the link's help names it.
+  @Test func helpNamesTheBranchWhenItIsTheFoldersBranch() throws {
+    let link = try #require(TriageDetail.prLink(for: session(branch: "haacked/x", head: "haacked/x")))
+
+    #expect(link.help.hasSuffix(". The PR's branch is haacked/x."))
+  }
+
+  @Test func helpNamesBothBranchesWhenTheyDiffer() throws {
+    let link = try #require(TriageDetail.prLink(for: session(branch: "haacked/x-v2", head: "haacked/x")))
+
+    #expect(link.help.hasSuffix(". The PR's branch is haacked/x. This folder is on haacked/x-v2."))
+  }
+
   @Test func linkHasNoHeadWhenThePRDoesNotNameOne() throws {
     let link = try #require(TriageDetail.prLink(for: session(branch: "haacked/x-v2", head: "")))
 

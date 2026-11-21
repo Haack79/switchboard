@@ -45,7 +45,8 @@ struct TriageDetail: View {
     let head = pr.otherBranch(than: session.branch)
     var help = pr.line
     if !pr.title.isEmpty { help += " · \(pr.repo): \(pr.title)" }
-    if let head { help += ". The PR's branch is \(head). This folder is on \(session.branch ?? "another branch")." }
+    if let prBranch = pr.head, !prBranch.isEmpty { help += ". The PR's branch is \(prBranch)." }
+    if head != nil { help += " This folder is on \(session.branch ?? "another branch")." }
     return BarLink(
       label: pr.numberLabel, help: help, status: pr.status.rawValue, url: url, owners: pr.codeOwners, head: head)
   }
