@@ -1435,8 +1435,7 @@ public final class Service {
     configure(&session)
     // A conversation shows Claude's terminal alone. The user opens its shell on demand.
     if session.kind.isConversation { session.shellClosed = true }
-    // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
-    if session.model == nil, session.kind != .manager { session.model = config.model }
+    session.model = SessionModel.stored(kind: session.kind, requested: session.model, workModel: config.model)
     if session.kind != .operator { try refuseOperatorName(session.name) }
     if let host = session.host {
       guard session.kind == .work else { throw APIError("the Manager and a chat run on this Mac, not on \(host)") }
@@ -1576,7 +1575,7 @@ public final class Service {
     } else {
       args += ["--settings", "\(try site(for: session).sbFolder())/claude-settings.json"]
     }
-    if let model = Manager.launchModel(for: session.kind, stored: session.model, managerModel: managerModel) {
+    if let model = SessionModel.launch(kind: session.kind, stored: session.model, coordinatorModel: managerModel) {
       args += ["--model", model]
     }
     if local { args += config.claudeArgs }

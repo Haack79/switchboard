@@ -63,22 +63,6 @@ import Testing
     #expect(c.model == nil)
   }
 
-  // MARK: Launch model
-
-  @Test(arguments: [SessionKind.work, .manager, .chat, .operator])
-  func aStoredModelWinsForEveryKind(_ kind: SessionKind) {
-    #expect(Manager.launchModel(for: kind, stored: "opus", managerModel: "haiku") == "opus")
-  }
-
-  @Test func aManagerConversationWithoutAStoredModelRunsTheManagerModel() {
-    #expect(Manager.launchModel(for: .manager, stored: nil, managerModel: "haiku") == "haiku")
-  }
-
-  @Test(arguments: [SessionKind.work, .chat, .operator])
-  func anyOtherKindWithoutAStoredModelRunsClaudesDefault(_ kind: SessionKind) {
-    #expect(Manager.launchModel(for: kind, stored: nil, managerModel: "haiku") == nil)
-  }
-
   // MARK: Model names
 
   @Test(arguments: ["", " ", "a b", "a\tb", " haiku", "haiku\n", "a\u{00A0}b", "-p", "--model"])
