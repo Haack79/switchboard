@@ -120,11 +120,20 @@ final class GitHubPoller {
     /// made brings them back.
     var hidden: Set<String> = []
 
+    /// The session's open PR while its branch has a different PR. A session works on one PR, so it keeps the first
+    /// one until that PR closes. `record` sets it.
+    var pinnedPRId: String?
+
+    /// The PR that the session shows: the pinned PR, else the candidate.
+    var prId: String? { pinnedPRId ?? candidatePRId }
+
     /// The branch's PR comes first, then the transcript's.
-    var prId: String? { readIds.first { !hidden.contains($0) } }
+    var candidatePRId: String? {
+      [branch.prId, transcript.prId, recordedPRId].compactMap { $0 }.first { !hidden.contains($0) }
+    }
 
     /// The PRs that the poller reads for the session, hidden ones included.
-    var readIds: [String] { [branch.prId, transcript.prId, recordedPRId].compactMap { $0 } }
+    var readIds: [String] { [pinnedPRId, branch.prId, transcript.prId, recordedPRId].compactMap { $0 } }
   }
 
   /// The folder's branch and its PR.
@@ -792,6 +801,19 @@ final class GitHubPoller {
   private func record(_ s: Watched, all: Bool, now: Int64) -> Bool {
     guard var t = tracked[s.id] else { return false }
     defer { tracked[s.id] = t }
+    t.pinnedPRId = nil
+    if let held = s.facts.pr, held.state == .open, let other = t.branch.prId, other != held.id,
+      t.candidatePRId == other
+    {
+      t.pinnedPRId = held.id
+    }
+    if t.pinnedPRId != nil {
+      if let number = t.branch.prId.flatMap({ prs[$0]?.pr.number }), number != s.facts.refusedPR {
+        event(s.id, "pr-refused", ["number": .number(Double(number))])
+      }
+    } else if s.facts.refusedPR != nil, s.facts.pr?.state != .open || t.branch.prId == s.facts.pr?.id {
+      event(s.id, "pr-refused", ["number": .null])
+    }
     if let name = t.branch.name, name != s.branch { event(s.id, "branch", ["branch": .string(name)]) }
     if let pr = t.prId.flatMap({ prs[$0]?.pr }) ?? s.facts.pr, pr.state != .open,
       s.facts.cleanedUp == nil,

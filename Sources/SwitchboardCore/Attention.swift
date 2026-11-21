@@ -124,6 +124,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// The id of the live session that owns the PR this session works on, when sbd refused to link it here. A `pr`
   /// event clears it.
   public var prOwner: String?
+  /// The number of the PR on the folder's branch that sbd refused to show, because the session keeps its first PR.
+  public var refusedPR: Int?
   /// The number of every PR that the session has had, including one that
   /// dropped out since.
   public var prNumbers: Set<Int> = []
@@ -420,6 +422,8 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       if let id = d["agent_id"]?.string { subagents.insert(id) }
     case "SubagentStop":
       if let id = d["agent_id"]?.string { subagents.remove(id) }
+    case "pr-refused":
+      refusedPR = d["number"]?.int
     case "pr-owned":
       prOwner = d["owner"]?.string
     case "pr":
