@@ -168,12 +168,30 @@ private func grace() async { try? await Task.sleep(nanoseconds: 300_000_000) }
   @Test(arguments: [["backlog", "icebox"], []] as [[String]])
   func saveSendsTheBacklogLabels(_ backlog: [String]) async {
     let sent = await firstRequest { model in
-      model.saveIssueSettings(labels: ["team/billing"], people: ["ana-m"], backlog: backlog, defaultPreset: nil)
+      model.saveIssueSettings(
+        labels: ["team/billing"], people: ["ana-m"], backlog: backlog, defaultPreset: nil
+      ) { _ in }
     }
 
     #expect(sent.op == "issues-settings")
     #expect(sent.args["backlog"] == .array(backlog.map(JSON.string)))
     #expect(sent.args["labels"] == .array(["team/billing"]))
+  }
+
+  /// Settings ▸ Issues is its own window, so a refusal reaches the pane and not the main window's banner.
+  @Test(arguments: ["issues-settings", "issues-source-rm"])
+  func aRefusedSaveOrRemoveReachesDoneAndNotTheBanner(_ op: String) async {
+    let (model, _) = recordingModel { sent, _ in sent == op ? "config.json is not a JSON object" : nil }
+    var refusal: String?? = nil
+    if op == "issues-settings" {
+      model.saveIssueSettings(labels: [], people: [], backlog: [], defaultPreset: nil) { refusal = .some($0) }
+    } else {
+      model.removeIssueSource(IssueSource(name: "acme/ledger")) { refusal = .some($0) }
+    }
+    await settle { refusal != nil }
+
+    #expect(refusal == .some("config.json is not a JSON object"))
+    #expect(model.actionError == nil)
   }
 
   /// A label set from `sb issues team` or config.json can hold a comma. A field that still shows the loaded text

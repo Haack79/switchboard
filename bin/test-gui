@@ -849,6 +849,16 @@ check_settings() {
   shows() { [ "$(app where)" = "session(\"$1\")" ]; }
   settings_is() { [ "$(app settings)" = "$1" ]; }
 
+  # The gear's path opens Settings from a closed window, so it fails when MenuBarLabel doesn't register the opener.
+  SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
+  app_pid=$!
+  wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
+  settings_is hidden || fail "the Settings window shows before the gear: $(app settings)"
+  result=$(app open-settings issues)
+  [ "$result" = opened ] || fail "the app could not open Settings at Issues: $result"
+  wait_for 10 settings_is "shown issues" || fail "the gear's path did not show Settings at Issues: $(app settings)"
+  end_app
+
   SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
   app_pid=$!
   wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
@@ -857,9 +867,6 @@ check_settings() {
   # The hidden test app may not refresh a menu item's state, so an enabled Settings… that owns ⌘, also counts.
   [[ $result == ", ran Settings…" || $result == *"(Settings… is enabled)" ]] || fail "⌘, did not run Settings…: $result"
   wait_for 10 settings_is "shown general" || fail "⌘, did not show Settings at General: $(app settings)"
-  result=$(app open-settings issues)
-  [ "$result" = opened ] || fail "the app could not open Settings at Issues: $result"
-  wait_for 10 settings_is "shown issues" || fail "Settings did not switch to Issues: $(app settings)"
   end_app
   save_shots
   echo "ok: settings (⌘, runs Settings…, the window shows General, the gear's path shows Issues)"

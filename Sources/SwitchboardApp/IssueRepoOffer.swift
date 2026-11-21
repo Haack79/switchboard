@@ -47,7 +47,7 @@ struct IssueRepoOffer: View {
     .announcesRefusal(addError)
     .onChange(of: labelFocused) { labelFocusChanged(labelFocused) }
     // Settings ▸ Issues removes the offer once every repository is a source. The removed view's onChange never
-    // reports the lost focus, and the sheet's Add and Save buttons would not take Return.
+    // reports the lost focus, and the pane's Add and Save buttons would not take Return.
     .onDisappear { labelFocusChanged(false) }
   }
 

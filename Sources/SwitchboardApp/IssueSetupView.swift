@@ -15,7 +15,10 @@ struct IssueSetupView: View {
   @State private var name = ""
   @State private var label = ""
   @State private var person = ""
-  @State private var addError: String?
+  /// sbd's refusal of the last add or remove of a source.
+  @State private var sourceError: String?
+  /// sbd's refusal of the last save.
+  @State private var saveError: String?
   @State private var adding = false
   @State private var labels = ""
   @State private var people = ""
@@ -43,7 +46,8 @@ struct IssueSetupView: View {
               Text(filterText(source)).foregroundStyle(.secondary)
               Spacer()
               Button {
-                model.removeIssueSource(source)
+                sourceError = nil
+                model.removeIssueSource(source) { sourceError = $0 }
               } label: {
                 Image(systemName: "minus.circle")
               }
@@ -73,7 +77,7 @@ struct IssueSetupView: View {
               .disabled(!canAdd || adding)
               .keyboardShortcut(returnOwner == .add ? .defaultAction : nil)
           }
-          if let problem = addProblem ?? addError {
+          if let problem = addProblem ?? sourceError {
             Text(problem).font(.caption).foregroundStyle(.red)
           } else {
             Text(
@@ -83,7 +87,7 @@ struct IssueSetupView: View {
           }
         }
         .padding(4)
-        .announcesRefusal(addError)
+        .announcesRefusal(sourceError)
       }
       GroupBox("My Team") {
         VStack(alignment: .leading, spacing: 6) {
@@ -106,11 +110,15 @@ struct IssueSetupView: View {
           .help("Presets are prompt templates under issues.presets in config.json")
       }
       HStack {
+        if let saveError {
+          Text(saveError).font(.caption).foregroundStyle(.red)
+        }
         Spacer()
         Button("Save") { save() }
           .disabled(!hasChanges)
           .keyboardShortcut(returnOwner == .save ? .defaultAction : nil)
       }
+      .announcesRefusal(saveError)
     }
     .padding(20)
     .frame(width: 600)
@@ -156,8 +164,16 @@ struct IssueSetupView: View {
     let team = IssueTeam(
       labels: Self.list(labels, loaded: loaded?.team.labels), people: Self.list(people, loaded: loaded?.team.people),
       backlog: Self.list(backlog, loaded: loaded?.team.backlog))
+    let previous = loaded
+    saveError = nil
+    // A refusal puts the old loaded values back, so the fields count as changed and Save works again.
     model.saveIssueSettings(
-      labels: team.labels, people: team.people, backlog: team.backlog, defaultPreset: defaultPreset)
+      labels: team.labels, people: team.people, backlog: team.backlog, defaultPreset: defaultPreset
+    ) { error in
+      guard let error else { return }
+      saveError = error
+      loaded = previous
+    }
     show(Loaded(team: team, preset: defaultPreset))
   }
 
@@ -184,10 +200,10 @@ struct IssueSetupView: View {
 
   private func add() {
     adding = true
-    addError = nil
+    sourceError = nil
     model.addIssueSources([trimmedName], label: label, person: person) { error in
       adding = false
-      addError = error
+      sourceError = error
       if error == nil {
         name = ""
         label = ""

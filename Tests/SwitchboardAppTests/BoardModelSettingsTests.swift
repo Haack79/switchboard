@@ -146,12 +146,17 @@ private final class TabBox {
     let (model, sent) = model(Sbd(refusing: write.op))
 
     write.run(model)
-    await settle { model.settingsError != nil && rereads(sent, after: write.op) }
+    await settle {
+      model.settingsError != nil && rereads(sent, after: write.op) && model.liveCap == 7
+        && model.defaultAutoMode == false
+    }
     await pause()
 
     #expect(model.settingsError?.contains(Self.refusal) == true)
     #expect(model.actionError == nil)
     #expect(rereads(sent, after: write.op))
+    #expect(model.liveCap == 7)
+    #expect(model.defaultAutoMode == false)
   }
 
   @Test(arguments: SettingsWrite.allCases)

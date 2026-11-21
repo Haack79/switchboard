@@ -91,6 +91,8 @@ struct GeneralSettings: View {
     .fixedSize(horizontal: false, vertical: true)
     .announcesRefusal(model.settingsError)
     .onAppear { model.loadSettings() }
+    // A read while sbd was down left the cap and the toggle disabled.
+    .onChange(of: offline) { if !offline { model.loadSettings() } }
   }
 }
 
