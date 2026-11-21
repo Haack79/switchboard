@@ -208,6 +208,15 @@ public struct DecisionExchange: Codable, Equatable, Sendable {
   public var error: String?
   /// True until the reply or an error arrives.
   public var pending: Bool
+
+  public init(askId: String, number: Int, text: String, reply: String? = nil, error: String? = nil, pending: Bool) {
+    self.askId = askId
+    self.number = number
+    self.text = text
+    self.reply = reply
+    self.error = error
+    self.pending = pending
+  }
 }
 
 /// The turn that a question about a decision starts: the turn of the next prompt that is the message sbd sent
@@ -229,10 +238,10 @@ public struct DecisionAsk: Codable, Equatable, Sendable {
   var text: String
   var message: String
   var verdict: SavedVerdict
-  var item: SavedItem
+  var item: TriageItem
 
   public init(
-    ref: String, number: Int, askId: String, text: String, message: String, verdict: SavedVerdict, item: SavedItem
+    ref: String, number: Int, askId: String, text: String, message: String, verdict: SavedVerdict, item: TriageItem
   ) {
     self.ref = ref
     self.number = number
@@ -250,22 +259,6 @@ public struct DecisionAsk: Codable, Equatable, Sendable {
     public init(state: AttentionState, reason: String) {
       self.state = state
       self.reason = reason
-    }
-  }
-
-  public struct SavedItem: Codable, Equatable, Sendable {
-    var title: String
-    var summary: String
-    var kind: TriageKind
-    var source: TriageSource
-    var ref: String
-
-    public init(_ item: TriageItem) {
-      title = item.title
-      summary = item.summary
-      kind = item.kind
-      source = item.source
-      ref = item.ref
     }
   }
 
@@ -351,8 +344,15 @@ extension SessionFacts {
     default:
       break
     }
-    // The hold lasts while the list that the user asked from is open and fresh.
-    if decisionList?.stale != false || decisionList?.ref != heldAsk?.ref { heldAsk = nil }
+    // The hold lasts while the list that the user asked from is open and fresh. After a submit of that list, it
+    // lasts until the next prompt or a discard. The item then keeps the sent decisions that Resend needs.
+    if let held = heldAsk {
+      let open = decisionList.map { !$0.stale && $0.ref == held.ref } ?? false
+      let sent =
+        decisionList == nil && submittedDecisionsRef == held.ref && event.kind != "UserPromptSubmit"
+        && event.kind != "decisions_discarded"
+      if !open && !sent { heldAsk = nil }
+    }
     guard let message = submittedDecisionsMessage, event.data["text"]?.string == message else { return }
     switch (event.kind, decisionsDelivery) {
     case ("delivered", .sending): decisionsDelivery = .delivered

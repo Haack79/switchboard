@@ -442,15 +442,21 @@ enum InsideClaudeCode: String, CaseIterable, CustomStringConvertible {
     let s = try sbd.decisionSession()
     try sbd.answerThreeDecisions(s.id)
     sbd.holdPrompts()
-    try sbd.askNoWait(s.id)
+    let waiting = Outcome.detached { try sbd.runAsk(s.id, more: ["--timeout", "20"]) }
+    try sbd.waitFor("the ask") { try sbd.count("decision_asked", of: s.id) == 1 }
     try sbd.startClarifyingTurn(s.id)
     try #require(try sbd.exchanges(s.id).first?.pending == true)
 
     try end.run(sbd, s.id)
 
     let exchange = try #require(try sbd.waitForClosedAsk(s.id).first)
-    #expect(exchange.error?.isEmpty == false)
+    let error = try #require(exchange.error, "the ask closed without an error")
+    #expect(!error.isEmpty)
     #expect(exchange.reply == nil)
+    try #require(waiting.done.wait(timeout: .now() + 40) == .success, "sb decide --ask is still waiting")
+    let asked = try #require(try waiting.result?.get())
+    #expect(asked.status != 0, "\(text(asked))")
+    #expect(asked.stderr.contains("got no answer: \(error)"), "\(asked.stderr)")
     let submit = try sbd.run(["decide", s.id, "--submit"], timeout: 30)
     #expect(submit.status == 0, "\(text(submit))")
     #expect(try sbd.count("decisions_submitted", of: s.id) == 1)

@@ -503,7 +503,8 @@ public enum Triage {
   private static func item(_ facts: SessionFacts, _ verdict: Verdict, live: TriageItem?) -> TriageItem? {
     guard var item = live else { return nil }
     if let list = facts.decisionList, item.source != .card { item.decisions = list.decisions }
-    if !verdict.removalFailed { addReplyAsk(facts, to: &item) }
+    // The last reply of a held item comes from the clarifying turn, which the hold hides.
+    if !verdict.removalFailed, !verdict.savedAtAsk { addReplyAsk(facts, to: &item) }
     for i in item.drafts.indices {
       // Only the session's own card names a target. The model's summary reads text that can quote PR comments.
       if item.source == .session {
@@ -545,8 +546,8 @@ public enum Triage {
     guard AttentionState.inbox.contains(verdict.state) else { return nil }
     var item: TriageItem
     if verdict.savedAtAsk, let ask = facts.heldAsk {
-      item = TriageItem(
-        title: ask.item.title, kind: ask.item.kind, summary: ask.item.summary, source: ask.item.source, ref: ask.ref)
+      item = ask.item
+      item.ref = ask.ref
     } else if let card = facts.cards.first {
       item = cardItem(card)
       item.ref = card.ref

@@ -21,12 +21,6 @@ import Testing
     case stopped
   }
 
-  func exchange(pending: Bool) throws -> DecisionExchange {
-    var fields: [String: JSON] = ["askId": "ask-1", "number": 2, "text": "why not B?", "pending": .bool(pending)]
-    if !pending { fields["reply"] = "B would break the public API." }
-    return try JSONCoding.convert(JSON.object(fields), to: DecisionExchange.self)
-  }
-
   /// Session "a" at `step` of an ask that holds `state`, with the three decisions under ref `session:5`.
   func snapshot(_ state: AttentionState, _ step: Step) throws -> SessionSummary {
     var s = needsItem("a", state: state)
@@ -42,14 +36,14 @@ import Testing
       s.lastActivity = 1_000
     case .asked:
       s.lastActivity = 1_100
-      exchanges = [try exchange(pending: true)]
+      exchanges = [decisionExchange("ask-1", about: 2, pending: true)]
     case .prompted:
       s.lastActivity = 1_200
-      exchanges = [try exchange(pending: true)]
+      exchanges = [decisionExchange("ask-1", about: 2, pending: true)]
     case .stopped:
       s.lastActivity = 1_300
       s.lastReply = "B would break the public API."
-      exchanges = [try exchange(pending: false)]
+      exchanges = [decisionExchange("ask-1", about: 2, reply: "B would break the public API.", pending: false)]
     }
     s.decisions = DecisionList(decisions: decisions, ref: "session:5", exchanges: exchanges)
     return s

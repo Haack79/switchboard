@@ -56,13 +56,6 @@ func decide(_ a: Args) {
   )
 }
 
-/// The events that can close a question about a decision: the end of its turn, a prompt that ends it, and a change
-/// of the list. `sb decide --ask` reads the list again after each one.
-private let askEndKinds = [
-  "Stop", "StopFailure", "idle", "Notification", "skill_blocked", "answered", "UserPromptSubmit", "SessionEnd",
-  "stopped", "exited", "delivery_unknown", "decisions_opened", "decisions_submitted", "decisions_discarded",
-]
-
 /// `sb decide <session> --ask <n> <question>` sends the question about decision n, waits for the session's reply,
 /// and prints it. `--no-wait` prints the ask's id instead. A question to a session is the user's to ask, so it
 /// refuses inside Claude Code.
@@ -77,11 +70,6 @@ private func askAboutDecision(_ a: Args, _ id: String) {
   let session = JSON.string(id)
   // The list that the user asks about, so a question never lands in a list that replaced it.
   let shown = decode(call("decisions", ["session": session]), as: DecisionList.self)
-  // The cursor starts before the question, so it reads every event that can close it.
-  var cursor = EventCursor(since: nil, session: id, kinds: askEndKinds)
-  if wait {
-    do { _ = try cursor.next(limit: 1) } catch { die("\(error)") }
-  }
   let result = call(
     "decision-ask",
     [
@@ -100,14 +88,10 @@ private func askAboutDecision(_ a: Args, _ id: String) {
       guard let reply = exchange.reply else { die("question \(askId) got no answer: \(exchange.error ?? "")") }
       return a.json ? printJSON(["askId": .string(askId), "reply": .string(reply)]) : print(reply.printable)
     }
-    var events: [Event] = []
-    while events.isEmpty {
-      if Date() > deadline {
-        die("no answer to question \(askId) after \(Int(timeout)) s. sb decide \(id) shows it when it comes")
-      }
-      usleep(useconds_t(max(0.05, min(0.5, deadline.timeIntervalSinceNow)) * 1_000_000))
-      do { events = try cursor.next() } catch { die("\(error)") }
+    if Date() > deadline {
+      die("no answer to question \(askId) after \(Int(timeout)) s. sb decide \(id) shows it when it comes")
     }
+    usleep(useconds_t(max(0.05, min(0.5, deadline.timeIntervalSinceNow)) * 1_000_000))
   }
 }
 

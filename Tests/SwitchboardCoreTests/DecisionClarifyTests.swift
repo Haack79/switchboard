@@ -65,14 +65,14 @@ private func track(_ f: inout SessionFacts, _ events: [Event], session s: Sessio
 
 /// The facts of a turn that ended at `start`, whose card holds three
 /// decisions, with the list opened at the first answer.
-private func openList(_ start: ClarifyStart) throws -> SessionFacts {
+private func openList(_ start: ClarifyStart, card: JSON = decisionSummaryJSON) throws -> SessionFacts {
   var f = SessionFacts()
   let v = track(
     &f,
     [
       Event(id: 1, session: "s1", t: 0, kind: "UserPromptSubmit", data: ["prompt": "plan it"]),
       stop(2, 10, start.reply),
-      Event(id: 3, session: "s1", t: 20, kind: Triage.sessionEvent, data: decisionSummaryJSON),
+      Event(id: 3, session: "s1", t: 20, kind: Triage.sessionEvent, data: card),
       decisionsOpened(4, ref: listRef),
     ])
   try #require(v.state == start.state, "the start reads \(v.state) \(v.reason)")
@@ -90,17 +90,14 @@ private func current(_ f: SessionFacts, now: Int64) throws -> SavedVerdict {
 private func decisionAsked(
   _ id: Int64, t: Int64, ref: String = listRef, askId: String = "ask-1", number: Int = askNumber,
   text: String = askText, message: String = askMessage, verdict: SavedVerdict, item: TriageItem
-) -> Event {
+) throws -> Event {
   Event(
     id: id, session: "s1", t: t, kind: "decision_asked",
     data: [
       "ref": .string(ref), "number": .number(Double(number)), "askId": .string(askId), "text": .string(text),
       "message": .string(message),
       "verdict": ["state": .string(verdict.state.rawValue), "reason": .string(verdict.reason)],
-      "item": [
-        "title": .string(item.title), "summary": .string(item.summary), "kind": .string(item.kind.rawValue),
-        "source": .string(item.source.rawValue), "ref": .string(item.ref),
-      ],
+      "item": try JSON(encoding: item),
     ])
 }
 
@@ -128,13 +125,13 @@ private struct Asked {
   var verdict: SavedVerdict
   var item: TriageItem
 
-  init(_ start: ClarifyStart) throws {
-    var f = try openList(start)
+  init(_ start: ClarifyStart, card: JSON = decisionSummaryJSON) throws {
+    var f = try openList(start, card: card)
     let verdict = try current(f, now: 300)
     let snapshot = try #require(
       Triage.item(f, Attention.evaluate(session(), f, now: 300), kind: .work), "the open list has no item")
     try #require(snapshot.ref == listRef)
-    track(&f, [decisionAsked(5, t: 300, verdict: verdict, item: snapshot)])
+    track(&f, [try decisionAsked(5, t: 300, verdict: verdict, item: snapshot)])
     facts = f
     self.verdict = verdict
     item = snapshot
@@ -212,7 +209,7 @@ private struct Asked {
     other.ref = "stop:11"
     let otherVerdict = SavedVerdict(state: .waiting, reason: "waits on something else", since: 999)
 
-    track(&a.facts, [decisionAsked(12, t: 400, askId: "ask-2", number: 3, verdict: otherVerdict, item: other)])
+    track(&a.facts, [try decisionAsked(12, t: 400, askId: "ask-2", number: 3, verdict: otherVerdict, item: other)])
 
     #expect(try a.now(400) == a.verdict)
     let live = try #require(Triage.liveItem(a.facts, Attention.evaluate(session(), a.facts, now: 400)))
@@ -243,19 +240,40 @@ private struct Asked {
     #expect(v.state == .working, "\(v.state) \(v.reason)")
   }
 
-  /// Closing the list ends the hold, and the clarifying reply decides the state.
-  @Test(arguments: ["decisions_submitted", "decisions_discarded"])
-  func closingTheListEndsTheHold(_ kind: String) throws {
+  /// Discarding the list ends the hold. The clarifying reply then decides the state.
+  @Test func discardingTheListEndsTheHold() throws {
     let start = ClarifyStart.needsYou
     var a = try Asked(start)
     a.clarify(start)
-    let data: JSON = kind == "decisions_submitted" ? ["message": "My decisions", "ref": .string(listRef)] : [:]
 
-    let v = track(&a.facts, [Event(id: 12, session: "s1", t: 400, kind: kind, data: data)])
+    let v = track(&a.facts, [Event(id: 12, session: "s1", t: 400, kind: "decisions_discarded", data: [:])])
 
     let own = Attention.replyVerdict(start.clarifyingReply)
     #expect(v.state == own.state, "\(v.state) \(v.reason)")
     #expect(v.reason == own.reason)
+  }
+
+  /// A submit keeps the hold until the next prompt. Until then, the item keeps the sent decisions that Resend needs.
+  /// The clarifying reply gets no summary.
+  @Test(arguments: ClarifyStart.allCases)
+  func aSubmitKeepsTheHoldUntilTheNextPrompt(_ start: ClarifyStart) throws {
+    var a = try Asked(start)
+    a.clarify(start)
+    let submit = Event(
+      id: 12, session: "s1", t: 400, kind: "decisions_submitted",
+      data: ["message": "My decisions", "ref": .string(listRef)])
+
+    let held = track(&a.facts, [submit])
+
+    #expect(try a.now(400) == a.verdict)
+    #expect(held.savedAtAsk)
+    #expect(Triage.itemAndDecisions(a.facts, held, kind: .work).decisionsSent)
+    #expect(!Triage.needsSummary(a.facts, held))
+
+    let after = track(&a.facts, [promptEvent(13, t: 410, "My decisions")])
+
+    #expect(a.facts.heldAsk == nil)
+    #expect(!after.savedAtAsk)
   }
 
   /// A permission card during the clarifying turn outranks the hold.
@@ -324,7 +342,7 @@ extension DecisionClarifyVerdictTests {
     let item = try #require(Triage.item(f, Attention.evaluate(session(), f, now: 300), kind: .work))
     let saved = SavedVerdict(state: .waiting, reason: "waits on CI", since: f.stateSince)
 
-    track(&f, [decisionAsked(5, t: 300, verdict: saved, item: item), try prEvent(301, samplePR())])
+    track(&f, [try decisionAsked(5, t: 300, verdict: saved, item: item), try prEvent(301, samplePR())])
 
     try #require(f.pr?.ready == true)
     let v = Attention.evaluate(session(), f, now: 301)
@@ -475,7 +493,7 @@ extension DecisionClarifyVerdictTests {
 
     track(
       &a.facts,
-      [decisionAsked(12, t: 400, askId: "ask-2", number: 3, text: "Why both?", verdict: a.verdict, item: a.item)])
+      [try decisionAsked(12, t: 400, askId: "ask-2", number: 3, text: "Why both?", verdict: a.verdict, item: a.item)])
 
     let exchanges = try #require(a.facts.decisionList?.exchanges)
     #expect(exchanges.map(\.askId) == ["ask-1", "ask-2"])
@@ -539,7 +557,7 @@ extension DecisionClarifyListTests {
   @Test func anAskWhileAnotherIsPendingRecordsNothing() throws {
     var a = try Asked(.needsYou)
 
-    track(&a.facts, [decisionAsked(6, t: 301, askId: "ask-2", number: 3, verdict: a.verdict, item: a.item)])
+    track(&a.facts, [try decisionAsked(6, t: 301, askId: "ask-2", number: 3, verdict: a.verdict, item: a.item)])
 
     #expect(a.facts.clarifying?.askId == "ask-1")
     #expect(a.facts.decisionList?.exchanges.map(\.askId) == ["ask-1"])
@@ -551,7 +569,7 @@ extension DecisionClarifyListTests {
     let saved = try current(f, now: 300)
     let item = try #require(Triage.item(f, Attention.evaluate(session(), f, now: 300), kind: .work))
 
-    track(&f, [decisionAsked(5, t: 300, ref: "stop:2", verdict: saved, item: item)])
+    track(&f, [try decisionAsked(5, t: 300, ref: "stop:2", verdict: saved, item: item)])
 
     #expect(f.clarifying == nil)
     #expect(f.decisionList?.exchanges.isEmpty == true)
@@ -559,7 +577,10 @@ extension DecisionClarifyListTests {
 
     track(
       &f,
-      [promptEvent(6, t: 310, "go on"), stop(7, 320, "Done."), decisionAsked(8, t: 330, verdict: saved, item: item)])
+      [
+        promptEvent(6, t: 310, "go on"), stop(7, 320, "Done."),
+        try decisionAsked(8, t: 330, verdict: saved, item: item),
+      ])
 
     #expect(f.clarifying == nil)
     #expect(f.decisionList?.exchanges.isEmpty == true)
@@ -806,6 +827,22 @@ enum SilentTurnEnd: String, CaseIterable, Sendable, CustomTestStringConvertible 
 // MARK: The item
 
 @Suite struct DecisionClarifyItemTests {
+  /// The item after the clarifying Stop keeps the card's callouts and drafts.
+  @Test func theSnapshotKeepsTheCardsCalloutsAndDrafts() throws {
+    var card = try #require(decisionSummaryJSON.object)
+    card["callouts"] = [["kind": "warning", "title": "Drops events_old", "body": "The migration deletes the table."]]
+    card["drafts"] = [["label": "Reply", "text": "Thanks, fixed."]]
+    var a = try Asked(.needsYou, card: .object(card))
+    try #require(a.item.callouts.count == 1, "the card's callout is missing before the ask")
+    try #require(a.item.drafts.count == 1, "the card's draft is missing before the ask")
+    a.clarify(.needsYou)
+
+    let built = try #require(Triage.item(a.facts, Attention.evaluate(session(), a.facts, now: 400), kind: .work))
+
+    #expect(built.callouts == a.item.callouts)
+    #expect(built.drafts.map(\.text) == a.item.drafts.map(\.text))
+  }
+
   /// Test 6. After the clarifying Stop the item is the snapshot from the ask,
   /// with the list's ref and decisions.
   @Test(arguments: ClarifyStart.allCases)

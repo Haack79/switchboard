@@ -21,8 +21,10 @@ extension DecisionList {
   }
 
   /// Why Ask is off, or nil. The answers, Submit, and Discard show `pendingAskReason`, which is sbd's refusal.
+  /// sbd also refuses an ask about a stale list.
   var askOffReason: String? {
-    pendingAsk.map { "The session is still answering your question about decision \($0)" }
+    if let pendingAsk { return "The session is still answering your question about decision \(pendingAsk)" }
+    return stale ? "The session took a turn since these decisions. Send your question as a message instead" : nil
   }
 }
 
@@ -67,7 +69,9 @@ struct DecisionThread: View {
           .accessibilityLabel("Ask the session about decision \(decision)")
           .accessibilityHint(reason ?? "")
       }
-      if let reason { PendingAskNote(reason: reason) }
+      if let reason {
+        PendingAskNote(reason: reason, systemImage: list.pendingAsk == nil ? "info.circle" : "hourglass")
+      }
       Text(Self.caption).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -116,9 +120,10 @@ struct DecisionThread: View {
 /// Why a control of the step view is off while a question about a decision waits for its answer.
 struct PendingAskNote: View {
   let reason: String
+  var systemImage = "hourglass"
 
   var body: some View {
-    Label("\(reason).", systemImage: "hourglass").font(.callout).foregroundStyle(.secondary)
+    Label("\(reason).", systemImage: systemImage).font(.callout).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
   }
 }

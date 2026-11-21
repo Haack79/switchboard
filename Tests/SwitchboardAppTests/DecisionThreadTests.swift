@@ -5,18 +5,12 @@ import Testing
 
 @testable import SwitchboardApp
 
-/// An exchange as sbd reports it in `decisions.exchanges`. `DecisionExchange` has no public memberwise init, so the
-/// tests decode it as the app does.
+/// An exchange as sbd reports it in `decisions.exchanges`.
 func decisionExchange(
   _ askId: String, about number: Int, text: String = "why not B?", reply: String? = nil, error: String? = nil,
   pending: Bool
-) throws -> DecisionExchange {
-  var fields: [String: JSON] = [
-    "askId": .string(askId), "number": .number(Double(number)), "text": .string(text), "pending": .bool(pending),
-  ]
-  if let reply { fields["reply"] = .string(reply) }
-  if let error { fields["error"] = .string(error) }
-  return try JSONCoding.convert(JSON.object(fields), to: DecisionExchange.self)
+) -> DecisionExchange {
+  DecisionExchange(askId: askId, number: number, text: text, reply: reply, error: error, pending: pending)
 }
 
 /// An open list of decisions 1 to 3 under `session:1` with `exchanges`.
@@ -24,16 +18,16 @@ private func list(_ exchanges: [DecisionExchange] = [], numbers: [Int] = [1, 2, 
   DecisionList(decisions: numbers.map(yesNoDecision), ref: "session:1", exchanges: exchanges)
 }
 
-private func answered(_ askId: String, about number: Int) throws -> DecisionExchange {
-  try decisionExchange(askId, about: number, reply: "Because \(askId).", pending: false)
+private func answered(_ askId: String, about number: Int) -> DecisionExchange {
+  decisionExchange(askId, about: number, reply: "Because \(askId).", pending: false)
 }
 
-private func pending(_ askId: String, about number: Int) throws -> DecisionExchange {
-  try decisionExchange(askId, about: number, pending: true)
+private func pending(_ askId: String, about number: Int) -> DecisionExchange {
+  decisionExchange(askId, about: number, pending: true)
 }
 
-private func failed(_ askId: String, about number: Int) throws -> DecisionExchange {
-  try decisionExchange(askId, about: number, error: "The turn ended without an answer.", pending: false)
+private func failed(_ askId: String, about number: Int) -> DecisionExchange {
+  decisionExchange(askId, about: number, error: "The turn ended without an answer.", pending: false)
 }
 
 // MARK: Ask drafts
@@ -78,7 +72,7 @@ private func failed(_ askId: String, about number: Int) throws -> DecisionExchan
   /// can differ from the list, so the open list must keep the draft.
   @Test func aRefreshKeepsTheAskDraftOfTheOpenList() throws {
     var s = listed("a", ref: "summary:2")
-    s.decisions = list([try pending("q-1", about: 1)])
+    s.decisions = list([pending("q-1", about: 1)])
     let model = appliedModel([s])
     model.askDraft(session: "a", ref: "session:1", decision: 2).text = "why not B?"
 
@@ -157,26 +151,26 @@ private func failed(_ askId: String, about number: Int) throws -> DecisionExchan
 
 @Suite struct DecisionThreadExchanges {
   @Test func aDecisionsExchangesAreOnlyTheOnesAboutIt() throws {
-    let l = list([try answered("q-1", about: 2), try answered("q-2", about: 1), try pending("q-3", about: 2)])
+    let l = list([answered("q-1", about: 2), answered("q-2", about: 1), pending("q-3", about: 2)])
 
     #expect(l.exchanges(about: 2).map(\.askId) == ["q-1", "q-3"])
   }
 
   @Test func aDecisionsExchangesKeepTheListsOrder() throws {
-    let l = list([try answered("q-9", about: 3), try answered("q-1", about: 3), try answered("q-5", about: 3)])
+    let l = list([answered("q-9", about: 3), answered("q-1", about: 3), answered("q-5", about: 3)])
 
     #expect(l.exchanges(about: 3).map(\.askId) == ["q-9", "q-1", "q-5"])
   }
 
   @Test func aDecisionWithoutQuestionsHasNoExchanges() throws {
-    let l = list([try answered("q-1", about: 2)])
+    let l = list([answered("q-1", about: 2)])
 
     #expect(l.exchanges(about: 1).isEmpty)
   }
 
   /// The reply's numbers need not run 1, 2, 3, so the helper matches the decision's number, not its position.
   @Test func exchangesMatchTheDecisionsNumberNotItsPosition() throws {
-    let l = list([try answered("q-1", about: 7), try answered("q-2", about: 2)], numbers: [3, 7, 9])
+    let l = list([answered("q-1", about: 7), answered("q-2", about: 2)], numbers: [3, 7, 9])
 
     #expect(l.exchanges(about: 7).map(\.askId) == ["q-1"])
   }
@@ -186,29 +180,29 @@ private func failed(_ askId: String, about number: Int) throws -> DecisionExchan
 
 @Suite struct DecisionThreadDots {
   @Test func aDecisionWithoutQuestionsHasNoMark() throws {
-    #expect(list([try answered("q-1", about: 2)]).threadMarks[1] == nil)
+    #expect(list([answered("q-1", about: 2)]).threadMarks[1] == nil)
   }
 
   @Test func aDecisionWithAnAnsweredQuestionShowsASpeechMark() throws {
-    #expect(list([try answered("q-1", about: 2)]).threadMarks[2] == .asked)
+    #expect(list([answered("q-1", about: 2)]).threadMarks[2] == .asked)
   }
 
   /// A question that ended without a reply is still a question the user asked, and its error shows in the thread.
   @Test func aDecisionWhoseOnlyQuestionFailedShowsASpeechMark() throws {
-    #expect(list([try failed("q-1", about: 2)]).threadMarks[2] == .asked)
+    #expect(list([failed("q-1", about: 2)]).threadMarks[2] == .asked)
   }
 
   @Test func theDecisionWithThePendingQuestionShowsASpinner() throws {
-    #expect(list([try pending("q-1", about: 2)]).threadMarks[2] == .answering)
+    #expect(list([pending("q-1", about: 2)]).threadMarks[2] == .answering)
   }
 
   /// The spinner wins over the speech mark while the decision's newest question waits.
   @Test func aDecisionWithAnAnsweredAndAPendingQuestionShowsASpinner() throws {
-    #expect(list([try answered("q-1", about: 2), try pending("q-2", about: 2)]).threadMarks[2] == .answering)
+    #expect(list([answered("q-1", about: 2), pending("q-2", about: 2)]).threadMarks[2] == .answering)
   }
 
   @Test func onlyTheDecisionAskedAboutShowsTheSpinner() throws {
-    let l = list([try answered("q-1", about: 1), try pending("q-2", about: 2)])
+    let l = list([answered("q-1", about: 1), pending("q-2", about: 2)])
 
     #expect(l.threadMarks[1] == .asked)
     #expect(l.threadMarks[3] == nil)
@@ -231,20 +225,20 @@ enum PendingAskReason: CaseIterable, Sendable {
 
   @Test(arguments: PendingAskReason.allCases)
   func aPendingQuestionTurnsOffTheControlWithAReasonNamingItsDecision(_ reason: PendingAskReason) throws {
-    let l = list([try pending("q-1", about: 2)])
+    let l = list([pending("q-1", about: 2)])
 
     #expect(reason.of(l)?.contains("decision 2") == true)
   }
 
   /// The step view shows sbd's own refusal, so the user reads the same reason whether the button or sbd stops them.
   @Test func submitAnswerAndDiscardShowSbdsRefusal() throws {
-    let l = list([try pending("q-1", about: 2)])
+    let l = list([pending("q-1", about: 2)])
 
     #expect(l.pendingAskReason == Self.refusal(2))
   }
 
   @Test func askSaysTheSessionIsStillAnswering() throws {
-    let l = list([try pending("q-1", about: 2)])
+    let l = list([pending("q-1", about: 2)])
 
     #expect(l.askOffReason == "The session is still answering your question about decision 2")
   }
@@ -256,7 +250,7 @@ enum PendingAskReason: CaseIterable, Sendable {
 
   @Test(arguments: PendingAskReason.allCases)
   func answeredQuestionsLeaveTheControlOn(_ reason: PendingAskReason) throws {
-    let l = list([try answered("q-1", about: 1), try answered("q-2", about: 3)])
+    let l = list([answered("q-1", about: 1), answered("q-2", about: 3)])
 
     #expect(reason.of(l) == nil)
   }
@@ -264,13 +258,13 @@ enum PendingAskReason: CaseIterable, Sendable {
   /// sbd closes an ask with an error when its turn ends without a Stop, so Submit works again.
   @Test(arguments: PendingAskReason.allCases)
   func aQuestionThatEndedWithAnErrorLeavesTheControlOn(_ reason: PendingAskReason) throws {
-    #expect(reason.of(list([try failed("q-1", about: 2)])) == nil)
+    #expect(reason.of(list([failed("q-1", about: 2)])) == nil)
   }
 
   /// The reason names the pending question's decision, not the first or the last exchange's.
   @Test(arguments: PendingAskReason.allCases)
   func theReasonNamesThePendingQuestionsDecisionAmongOthers(_ reason: PendingAskReason) throws {
-    let l = list([try answered("q-1", about: 3), try pending("q-2", about: 2), try answered("q-3", about: 1)])
+    let l = list([answered("q-1", about: 3), pending("q-2", about: 2), answered("q-3", about: 1)])
 
     #expect(reason.of(l)?.contains("decision 2") == true)
     #expect(reason.of(l)?.contains("decision 3") == false)
@@ -279,7 +273,7 @@ enum PendingAskReason: CaseIterable, Sendable {
 
   /// The decision's number names it, as sbd's refusal does, not its position in the list.
   @Test func theReasonUsesTheDecisionsNumber() throws {
-    let l = list([try pending("q-1", about: 9)], numbers: [3, 7, 9])
+    let l = list([pending("q-1", about: 9)], numbers: [3, 7, 9])
 
     #expect(l.pendingAskReason == Self.refusal(9))
   }
@@ -288,9 +282,18 @@ enum PendingAskReason: CaseIterable, Sendable {
   /// decision 1 and the Ask field on decision 1.
   @Test(arguments: PendingAskReason.allCases)
   func aPendingQuestionAboutAnotherDecisionStillTurnsOffTheControl(_ reason: PendingAskReason) throws {
-    let l = list([try pending("q-1", about: 3)])
+    let l = list([pending("q-1", about: 3)])
 
     #expect(reason.of(l)?.contains("decision 3") == true)
+  }
+
+  /// sbd refuses an ask about a stale list, so Ask is off with the reason. The answers and Submit stay on.
+  @Test func aStaleListTurnsOffAskOnly() {
+    var l = list()
+    l.stale = true
+
+    #expect(l.askOffReason == "The session took a turn since these decisions. Send your question as a message instead")
+    #expect(l.pendingAskReason == nil)
   }
 }
 

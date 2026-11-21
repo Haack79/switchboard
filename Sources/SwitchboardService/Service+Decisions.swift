@@ -44,16 +44,16 @@ extension Service {
         ? "\(s.name) already got your answers to these decisions" : "\(s.name) has no open decision list")
   }
 
-  /// Refuses a change to the list while its submit sends it, so the message that goes out is the list that sbd
-  /// closes. It refuses while a question about one of its decisions is pending too, because the reply can change
+  /// Refuses a change to the list while sbd sends a message about it, so the message that goes out is the list that
+  /// sbd closes. It refuses while a question about one of its decisions is pending too, because the reply can change
   /// the user's answers.
   private func refuseListChange(_ id: String) throws {
-    guard !submittingDecisions.contains(id) else { throw sendingDecisions(id) }
+    guard !sendingAboutDecisions.contains(id) else { throw sendingDecisions(id) }
     if let reason = entries[id]!.facts.decisionList?.pendingAskReason { throw APIError(reason) }
   }
 
   private func sendingDecisions(_ id: String) -> APIError {
-    APIError("\(entries[id]!.session.name) is sending these decisions")
+    APIError("\(entries[id]!.session.name) is still sending your last message about these decisions")
   }
 
   /// Refuses a request whose `ref` names a list other than `list`, the one that the session shows now.
@@ -113,7 +113,7 @@ extension Service {
       }
       try refuseListChange(id)
       return (id, message)
-    } _: { id, message, send in
+    } body: { id, message, send in
       let delivery = try send()
       if let list = entries[id]?.facts.decisionList {
         try recordStored(
@@ -141,7 +141,7 @@ extension Service {
       case (.delivered, _): throw APIError("nothing to resend: \(name) got your answers")
       default: throw APIError("nothing to resend: \(name) has no submitted answers")
       }
-    } _: { _, _, send in
+    } body: { _, _, send in
       ["delivery": .string(try send().rawValue)]
     }
   }
@@ -154,7 +154,7 @@ extension Service {
     sendDecisions(by: .sbd) {
       let id = try lookup(args)
       return (id, try askable(id, args).message)
-    } _: { id, _, send in
+    } body: { id, _, send in
       // The session can take a turn while `prepared` reads the processes, so the checks run again here.
       let (list, decision, text, message) = try askable(id, args)
       let e = entries[id]!
@@ -169,7 +169,7 @@ extension Service {
       }
       let ask = DecisionAsk(
         ref: list.ref, number: decision.number, askId: askId, text: text, message: message,
-        verdict: .init(state: e.facts.lastState ?? verdict.state, reason: verdict.reason), item: .init(item))
+        verdict: .init(state: e.facts.lastState ?? verdict.state, reason: verdict.reason), item: item)
       try recordStored(id, "decision_asked", try JSON(encoding: ask))
       _ = try send()
       return ["askId": .string(askId)]
@@ -206,7 +206,7 @@ extension Service {
   }
 
   /// Runs `check` and claims the session's send in one block of the state queue. `check` returns the session and
-  /// the message, or throws the reason that sbd refuses the request. The session stays in `submittingDecisions`
+  /// the message, or throws the reason that sbd refuses the request. The session stays in `sendingAboutDecisions`
   /// from that block until the send ends, so no change to the list comes between the check and the send.
   ///
   /// Then it runs `body` in one block of the state queue and one store transaction. `body` calls the function that
@@ -216,14 +216,14 @@ extension Service {
   /// `body` returns.
   private func sendDecisions(
     by: MessageAuthor, _ check: () throws -> (id: String, message: String),
-    _ body: (_ id: String, _ message: String, _ send: () throws -> Delivery) throws -> JSON
+    body: (_ id: String, _ message: String, _ send: () throws -> Delivery) throws -> JSON
   ) -> Response {
     let id: String
     let message: String
     do {
       (id, message) = try queue.sync {
         let checked = try check()
-        guard submittingDecisions.insert(checked.id).inserted else { throw sendingDecisions(checked.id) }
+        guard sendingAboutDecisions.insert(checked.id).inserted else { throw sendingDecisions(checked.id) }
         return checked
       }
     } catch {
@@ -238,7 +238,7 @@ extension Service {
             let result = try store.transaction {
               try body(id, message) { try send(id, message, by: by, launchesWithPrompt: false, trigger: .decision) }
             }
-            submittingDecisions.remove(id)
+            sendingAboutDecisions.remove(id)
             return result
           } catch {
             // The log kept none of the writes, so the session's state goes back to match it.
@@ -249,7 +249,7 @@ extension Service {
         })
     } catch {
       // `prepared` can refuse before the block runs, as for a session that is being deleted.
-      queue.sync { _ = submittingDecisions.remove(id) }
+      queue.sync { _ = sendingAboutDecisions.remove(id) }
       return .failure("\(error)")
     }
   }

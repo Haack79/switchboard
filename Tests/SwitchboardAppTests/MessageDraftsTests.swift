@@ -536,7 +536,7 @@ import Testing
     var s = deciding("s1", [1, 2])
     s.decisions = DecisionList(
       decisions: s.triage!.decisions, ref: "summary:1",
-      exchanges: [try decisionExchange("q-1", about: 2, pending: true)])
+      exchanges: [decisionExchange("q-1", about: 2, pending: true)])
 
     #expect(MessageDrafts.decisionKeys([s]) == keys("s1", "summary:1", [1, 2]))
   }
