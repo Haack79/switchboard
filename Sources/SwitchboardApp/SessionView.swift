@@ -261,14 +261,16 @@ struct SessionView: View {
           SessionAccountControl(session: session)
           if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
           if session.kind == .manager { ManagerHeaderControls(session: session) }
-          Text(
-            [RepoLabels.label(for: session), session.branch, session.cwd].compactMap { $0 }.joined(separator: " · ")
-          )
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .textSelection(.enabled)
+          if let repo = RepoLabels.label(for: session) {
+            Text(repo).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+              .help("The repo this session works in")
+          }
+          Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
         }
       }
       Spacer()
