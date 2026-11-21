@@ -121,6 +121,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var pr: PullRequest?
   /// When the `pr` event that set `pr` was recorded.
   public var prRead: Int64?
+  /// The id of the live session that owns the PR this session works on, when sbd refused to link it here. A `pr`
+  /// event clears it.
+  public var prOwner: String?
+  /// The number of the PR on the folder's branch that sbd refused to show, because the session keeps its first PR.
+  public var refusedPR: Int?
   /// The number of every PR that the session has had, including one that
   /// dropped out since.
   public var prNumbers: Set<Int> = []
@@ -430,7 +435,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       if let id = d["agent_id"]?.string { subagents.insert(id) }
     case "SubagentStop":
       if let id = d["agent_id"]?.string { subagents.remove(id) }
+    case "pr-refused":
+      refusedPR = d["number"]?.int
+    case "pr-owned":
+      prOwner = d["owner"]?.string
     case "pr":
+      prOwner = nil
       let next = d["pr"].flatMap { try? JSONCoding.convert($0, to: PullRequest.self) }
       noteBoard(from: pr, to: next, at: event.t)
       pr = next
