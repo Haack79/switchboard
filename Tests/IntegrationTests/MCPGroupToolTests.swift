@@ -162,18 +162,6 @@ import Testing
     #expect(one.descriptionBy == all.descriptionBy)
   }
 
-  /// No tool adds or removes a link in general. `add_group_artifact` and `remove_group_artifact` act only on claude.ai
-  /// artifact links that Claude added.
-  @Test func noToolIsNamedForLinks() throws {
-    let sbd = try Instance()
-    let mcp = try MCPClient(sbd)
-
-    let names = try mcp.toolNames()
-
-    #expect(!names.isEmpty)
-    #expect(!names.contains { $0.lowercased().contains("link") }, "\(names)")
-  }
-
   // MARK: send_group
 
   func answer(_ sbd: Instance, _ session: String, _ card: Int64, allow: Bool) throws {

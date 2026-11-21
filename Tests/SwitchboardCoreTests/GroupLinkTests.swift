@@ -318,4 +318,17 @@ import Testing
 
     #expect(merged.links?.count == (added ? 2 : 1))
   }
+
+  /// A merge keeps your titled link over Claude's link to the same artifact, in either direction.
+  @Test(arguments: [false, true])
+  func absorbingKeepsYourLinkOverClaudesLinkToTheSameArtifact(_ yoursInKept: Bool) {
+    let yours = link("l1", artifactShortURL + "#top", title: "Tracker")
+    let claudes = link("l2", artifactShortURL, by: .claude)
+
+    let merged = group("g1", "Flags", links: [yoursInKept ? yours : claudes]).absorbing(
+      group("g2", "Docs", links: [yoursInKept ? claudes : yours]), now: 30)
+
+    #expect(merged.links?.map(\.title) == ["Tracker"])
+    #expect(merged.links?.map(\.by) == [.you])
+  }
 }

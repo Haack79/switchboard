@@ -103,14 +103,21 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// `other`'s becomes a note at `now` by its author, so no text is lost.
   /// This group keeps its account and never takes `other`'s. It adds
   /// `other`'s kept artifact rows after its own, and `other`'s links after
-  /// its own, leaving out each link that `addLink` refuses.
+  /// its own, leaving out each link that `addLink` refuses. A link of yours
+  /// replaces Claude's link to the same artifact, so the merge keeps your title.
   public func absorbing(_ other: SessionGroup, now: Int64) -> SessionGroup {
     var kept = keeping(other.keptArtifacts ?? [])
     for var note in other.notes {
       if kept.notes.contains(where: { $0.id == note.id }) { note.id = shortId("n", taken: kept.notes.map(\.id)) }
       kept.notes.append(note)
     }
-    for link in other.links ?? [] { kept.addLink(link) }
+    for link in other.links ?? [] {
+      guard !kept.addLink(link), link.by == .you,
+        let claudes = kept.links?.first(where: { $0.by == .claude && $0.target == link.target })
+      else { continue }
+      _ = kept.removeLink(id: claudes.id)
+      kept.addLink(link)
+    }
     if kept.description == nil {
       if let theirs = other.description {
         kept.describe(theirs, by: other.descriptionBy)

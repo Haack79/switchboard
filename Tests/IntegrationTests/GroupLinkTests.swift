@@ -635,6 +635,17 @@ import Testing
     #expect(try sbd.groupArtifacts(g.id) == nil)
   }
 
+  @Test func rmByYouOfAClaudeLinkRemovesIt() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    let id = try sbd.addGroupLink(group: "Flags", url: artifactPageURL, by: .claude)
+
+    _ = try linkRm(sbd, "Flags", id)
+
+    #expect(try sbd.groupLinks(g.id).isEmpty)
+    #expect(try sbd.groupArtifacts(g.id) == nil)
+  }
+
   @Test func aRawRmByClaudeOfAUsersLinkIsRefusedAndKeepsIt() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")

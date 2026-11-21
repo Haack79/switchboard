@@ -184,11 +184,11 @@ extension SessionFacts {
 /// A group's artifact list.
 public enum GroupArtifacts {
   /// The rows of the live members, the group's chat, the group's kept rows, and the group's links, one per
-  /// artifact, newest `updated` first and then by URL. Rows that name the same artifact merge. When the set holds a
-  /// row that a session recorded, those rows alone give every field but `link`: the row with the latest `updated`
+  /// artifact, newest `updated` first and then by URL. Rows that name the same artifact merge. When any row in the
+  /// set came from a session, the session rows give every field but `link`: the row with the latest `updated`
   /// gives the URL, title, and session, `published` is the earliest, and the merged row is removed when its latest
-  /// removal is at or after its latest update. A set of link rows only is the row of the earliest link. `link` is
-  /// the id of the set's earliest link. The result does not depend on the order of the rows.
+  /// removal is at or after its latest update. When every row came from a link, the merged row is the earliest
+  /// link's row. `link` is the id of the set's earliest link. The result does not depend on the order of the rows.
   public static func list(_ rows: [GroupArtifact]) -> [GroupArtifact] {
     components(rows).map(merge).newestFirst
   }
