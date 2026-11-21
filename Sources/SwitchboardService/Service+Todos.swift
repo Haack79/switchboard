@@ -121,6 +121,7 @@ extension Service {
     removedNames[id] = session.name
     if let removed { markAddressedIssues(removed) }
     entries[id] = nil
+    forgetChild(id)
     slashListings[id] = nil
     hostEvents[id] = nil
     pruneDeclinedSuggestions()

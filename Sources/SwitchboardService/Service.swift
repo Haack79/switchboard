@@ -1031,9 +1031,9 @@ public final class Service {
         break
       }
       try nameConversation(id, prompt: payload["prompt"]?.string)
-      let digestText = digest(id, now: event.t)
+      // A host's hook answer never reaches claude, so a host session keeps its digest and its replies unheard.
+      let digestText = stamp == nil ? digest(id, now: event.t) : nil
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
-      // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
     case "PreToolUse":
@@ -2871,7 +2871,6 @@ public final class Service {
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
       pollDocketsIfDue(now: now)
-      notifyParents(now: now)
       applyMCPChanges(now: now)
       autoContinueSessions(now: now)
       pruneActivityIfDue(now: now)
@@ -2927,7 +2926,7 @@ public final class Service {
       markedDone: s.done)
     out.url = SessionLink.url(for: id).absoluteString
     // `prNumbers` keeps no repo, so a host could read the number of an earlier PR in a repo that it may not read.
-    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip notices a parent already got.
+    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip PRs that a parent already heard about.
     if origin == .mac {
       out.startBranch = BranchSwitch.startBranch(s, facts)
       let earlier = facts.earlierPRNumbers
