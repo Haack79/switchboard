@@ -384,4 +384,21 @@ private func work(
     #expect(model.sidebarQuery == "login")
     #expect(model.selection == "c")
   }
+
+  /// The org filter and the query both hide the session. Revealing it widens the filter, and the query clears.
+  @Test func revealingASessionThatTheFilterAndTheQueryHideClearsTheQuery() {
+    let model = orgFilterModel(OrgFilter(keys: ["acme"]))
+    var login = orgSession("a", "acme/a")
+    login.name = "login"
+    var billing = orgSession("b", "other/b")
+    billing.name = "billing"
+    model.apply(.success([login, billing]), followups: nil)
+    model.sidebarQuery = "login"
+
+    model.reveal("b")
+
+    #expect(model.selection == "b")
+    #expect(model.sidebarQuery == "")
+    #expect(model.sidebarOrder.contains("b"))
+  }
 }

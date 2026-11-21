@@ -35,12 +35,11 @@ extension BoardModel {
   /// section opens, and the search field clears when its query hides the session. The archive opens for an
   /// archived conversation.
   func showInSidebar(_ session: SessionSummary) {
-    if session.kind == .work {
-      collapsed.remove(session.state)
-      if sidebarQueryHides(session) { sidebarQuery = "" }
-    }
+    if session.kind == .work { collapsed.remove(session.state) }
     if session.activity?.archived == true { showingArchive = true }
     selection = session.id
+    // Setting `selection` widens a filter that hides the session. The query check has to read the widened filter.
+    if session.kind == .work, sidebarQueryHides(session) { sidebarQuery = "" }
     // A list focus request would take keyboard focus from an open sheet's fields.
     if !presentingSheet { requestListFocus() }
   }
