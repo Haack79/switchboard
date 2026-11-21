@@ -140,6 +140,10 @@ private func commentNode(_ id: String, _ author: String?, _ createdAt: String) -
     #expect(!words.contains("updatedAt"))
   }
 
+  @Test func theStatusQueryReadsThePRsCommitCount() {
+    #expect(GitHub.statusQuery.contains("commits(last: 1) { totalCount"))
+  }
+
   /// GitHub answers a field it couldn't resolve, such as for a token without
   /// Contents read, with null and an error. That null is not an answer.
   @Test(arguments: [
