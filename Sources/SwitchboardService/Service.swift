@@ -438,7 +438,7 @@ public final class Service {
       if entries[id]?.session.host == nil { try settleUncertain(id, texts) } else { unsettled[id] = texts }
     }
     markInterruptedPosts()
-    // Replay gives no session its Operator items. The parent marks must include them, or the next tick tells each
+    // Replay gives no session its Operator items. The parent marks must include them, or the next digest tells each
     // parent again about an ask that it already heard about.
     syncOperatorItems()
     seedParentMarks(now: nowMs())
