@@ -56,6 +56,10 @@ struct TriageDetail: View {
               FailedRemovalActions(session: session)
               reply
             } else if let item = session.triage {
+              if item.source == .report {
+                Label("From background follow-through", systemImage: "gearshape.2")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
               DecisionCard(session: session, item: item, step: $step)
             } else {
               working
@@ -75,7 +79,7 @@ struct TriageDetail: View {
           StartButton(session: session).padding(8)
         } else if session.runsClaude {
           MessageField(
-            session: session.id, draft: model.messageDraft(for: session),
+            session: session.id, draft: model.inboxDraft(for: session),
             shortcut: KeyboardShortcut(.return, modifiers: [.command]), ref: session.triage?.ref
           )
           .padding(8)

@@ -602,7 +602,7 @@ extension Instance {
     #expect(try sbd.launchEvents(s.id, after: mark).isEmpty)
   }
 
-  @Test func aPausedParentHearsOfItsChildOnlyAfterTheResumeMessage() throws {
+  @Test func aPausedParentHearsOfItsChildOnlyInTheDigestAfterTheResume() throws {
     let sbd = try Instance()
     let parent = try sbd.pausedStopped("p")
     let pauseMark = try sbd.lastEventId(parent.id)
@@ -615,10 +615,13 @@ extension Instance {
     #expect(try sbd.launchEvents(parent.id, after: pauseMark).isEmpty)
     let mark = try sbd.lastEventId(parent.id)
     try sbd.sb("resume", parent.id)
-    let prompts = try sbd.waitForPrompts(parent.id, after: mark, count: 2)
+    let prompts = try sbd.waitForPrompts(parent.id, after: mark, count: 1)
     #expect(prompts.first == defaultResume)
-    #expect(prompts.dropFirst().first?.contains("kid (\(kid.id)) needs you") == true, "\(prompts)")
-    #expect(try sbd.sbdMessages(parent.id).filter { $0.data["text"]?.string?.contains(kid.id) == true }.count == 1)
+    try sbd.sb("send", parent.id, "what changed")
+    try sbd.waitFor("the digest", timeout: 30) {
+      try sbd.events(parent.id, after: mark).contains { $0.kind == "digest" }
+    }
+    #expect(try sbd.sbdMessages(parent.id).filter { $0.data["text"]?.string?.contains(kid.id) == true }.isEmpty)
   }
 
   // MARK: The live cap

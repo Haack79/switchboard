@@ -6,7 +6,7 @@ import SwitchboardCore
 struct MessageField: View {
   @EnvironmentObject var model: BoardModel
   let session: String
-  /// From `BoardModel.messageDraft(for:)`, so that the text survives a switch to another view.
+  /// From `BoardModel.messageDraft(for:)` or `inboxDraft(for:)`, so that the text survives a switch to another view.
   @ObservedObject var draft: Draft
   var shortcut: KeyboardShortcut?
   /// The ref of the Inbox item that the field answers, so sbd can hold the session while it works on the
@@ -68,7 +68,8 @@ struct MessageField: View {
 
   private var field: some View {
     let slash = slash
-    return TextField("Message Claude…", text: $draft.text, axis: .vertical)
+    let prompt = Draft.answersOperator(ref: ref) ? "Answer background follow-through…" : "Message Claude…"
+    return TextField(prompt, text: $draft.text, axis: .vertical)
       .textFieldStyle(.roundedBorder)
       .focused($focused)
       .onChange(of: focused) { focus.held = focused }

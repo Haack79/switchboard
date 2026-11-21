@@ -1302,21 +1302,26 @@ enum PausedShape: String, CaseIterable, Sendable, CustomTestStringConvertible {
   }
 }
 
-/// The operator's report verdict. It nests under `TriageOperatorTests`, so
-/// that suite's filter runs it.
+/// The operator's ask verdict for reports that sbd could not route to another session. It nests under
+/// `TriageOperatorTests`, so that suite's filter runs it.
 extension TriageOperatorTests {
   @Suite struct ReportVerdicts {
+    /// The operator's verdict with no Manager conversation, so its open reports and waits stay on it.
     func verdict(_ events: [Event], waits: [Wait] = []) -> Verdict {
-      Attention.evaluate(operatorSession(waits: waits), facts(events), now: 1000)
+      let s = operatorSession(waits: waits)
+      return Attention.evaluate(s, opRouted(s, facts(events)), now: 1000)
     }
 
     @Test func anOpenReportPutsTheOperatorInNeedsYouWithItsText() {
       let v = verdict(opIdle + [opReport(10, "PR #12 is green. Merge it?")])
 
-      #expect(v == Verdict(state: .needsYou, reason: "PR #12 is green. Merge it?"))
+      #expect(v == Verdict(state: .needsYou, reason: "Operator: PR #12 is green. Merge it?"))
     }
 
-    @Test(arguments: [(2, "b (and 1 more)"), (3, "c (and 2 more)"), (4, "d (and 3 more)")] as [(Int, String)])
+    @Test(
+      arguments: [
+        (2, "Operator: b (and 1 more)"), (3, "Operator: c (and 2 more)"), (4, "Operator: d (and 3 more)"),
+      ] as [(Int, String)])
     func severalOpenReportsGiveTheLatestTextAndTheCountOfTheRest(_ count: Int, _ reason: String) {
       let texts = ["a", "b", "c", "d"].prefix(count)
       let reports = texts.enumerated().map { opReport(Int64(10 + $0.offset), $0.element) }
@@ -1329,18 +1334,18 @@ extension TriageOperatorTests {
     @Test func aClosedReportLeavesTheCount() {
       let v = verdict(opIdle + [opReport(10, "a"), opAck(11), opReport(12, "b")])
 
-      #expect(v == Verdict(state: .needsYou, reason: "b"))
+      #expect(v == Verdict(state: .needsYou, reason: "Operator: b"))
     }
 
     @Test func aReportWithoutNeedsYouGivesNoReportVerdict() {
       let v = verdict(opIdle + [opReport(10, "Removed the kid's worktree.", needsYou: false)])
 
-      #expect(v.reason != "Removed the kid's worktree.")
+      #expect(!v.reason.contains("Removed the kid's worktree."))
     }
 
-    /// What the operator holds besides its report, which the report verdict comes before.
+    /// What the operator holds besides its report, which the ask verdict comes before.
     enum Beside: CaseIterable, Sendable {
-      case openWait, overdueWait, notifyOutcome, questionReply, offerReply, informationalReply, noPrompt
+      case openWait, overdueWait, notifyOutcome, questionReply, offerReply, informationalReply, noPrompt, runningTurn
 
       func events() throws -> [Event] {
         switch self {
@@ -1349,6 +1354,7 @@ extension TriageOperatorTests {
         case .questionReply: [opPrompt(1, "go"), stop(2, 2, proseQuestion)]
         case .offerReply: [opPrompt(1, "go"), stop(2, 2, "I removed the worktree. Want me to top up the queue?")]
         case .noPrompt: []
+        case .runningTurn: [opPrompt(1, "go")]
         }
       }
 
@@ -1361,42 +1367,44 @@ extension TriageOperatorTests {
       }
     }
 
-    @Test(arguments: Beside.allCases) func theReportVerdictComesBeforeTheWaitAndReplyVerdicts(_ beside: Beside) throws {
+    @Test(arguments: Beside.allCases)
+    func theAskVerdictComesBeforeTheWorkingWaitAndReplyVerdicts(_ beside: Beside) throws {
       let without = verdict(try beside.events(), waits: beside.waits)
-      try #require(without.reason != "Merge it?")
+      try #require(without.reason != "Operator: Merge it?")
 
       let v = verdict(try beside.events() + [opReport(10, "Merge it?")], waits: beside.waits)
 
-      #expect(v == Verdict(state: .needsYou, reason: "Merge it?"))
+      #expect(v == Verdict(state: .needsYou, reason: "Operator: Merge it?"))
     }
 
     @Test func aReportMadeAfterTheUsersMessageStillWins() {
       let v = verdict(opIdle + [opUserSent(9, "go on")] + opTurn(10, "go on") + [opReport(20, "Merge it?")])
 
-      #expect(v == Verdict(state: .needsYou, reason: "Merge it?"))
+      #expect(v == Verdict(state: .needsYou, reason: "Operator: Merge it?"))
     }
 
-    @Test func aReportClosedByTheUsersMessageGivesTheReplyVerdictAgain() {
+    @Test func aReportClosedByTheUsersMessageLeavesTheOperatorIdle() {
       let v = verdict(opIdle + [opReport(10, "Merge it?"), opUserSent(11, "yes")] + opTurn(12, "yes"))
 
-      #expect(v == Attention.replyVerdict("Done: yes"))
+      #expect(v == Verdict(state: .waiting, reason: "idle"))
     }
 
-    @Test func aReportClosedByAckGivesTheWaitVerdictAgain() {
+    @Test func aReportClosedByAckGivesTheHeldWaitVerdictAgain() {
       let v = verdict(opIdle + [opReport(10, "Merge it?"), opAck(11)], waits: [overdueWait])
 
-      #expect(v.state == .needsYou)
-      #expect(v.reason == overdueWait.overdueLine)
+      #expect(
+        v == Verdict(state: .needsYou, reason: "Background follow-through still waits: \(overdueWait.overdueLine)"))
+      #expect(v.fromOperator)
     }
 
-    /// Only the operator has a report verdict. Another kind gives the same verdict with or without the reports.
+    /// Report events route nothing on their own. Another kind gives the same verdict with or without them.
     @Test(arguments: [SessionKind.work, .manager, .chat]) func anotherKindIgnoresReports(_ kind: SessionKind) {
       let events = opIdle + [opReport(10, "Merge it?")]
 
       let v = Attention.evaluate(kindSession(kind), facts(events), now: 1000)
 
       #expect(v == Attention.evaluate(kindSession(kind), facts(opIdle), now: 1000))
-      #expect(v.reason != "Merge it?")
+      #expect(!v.reason.contains("Merge it?"))
     }
   }
 }

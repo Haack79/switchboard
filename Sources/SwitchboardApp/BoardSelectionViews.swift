@@ -168,24 +168,28 @@ struct BoardScrollAnchor: NSViewRepresentable {
   func updateNSView(_ view: NSView, context: Context) { geometry.anchor = view }
 }
 
-/// Makes a card draggable onto a lane. A selected card drags the whole selection.
+/// Makes a card draggable onto a lane. A selected card drags the whole selection. Apply it to a Button's label,
+/// not to the Button, because SwiftUI starts no drag from a Button.
 struct CardDrag: ViewModifier {
   @EnvironmentObject var model: BoardModel
   let id: String
   let enabled: Bool
 
+  @ViewBuilder
   func body(content: Content) -> some View {
-    let ids = model.boardActionIDs(for: id)
-    if !enabled {
-      content
-    } else if ids.count > 1 {
-      content.draggable(BoardDrag.payload(ids)) {
-        Label("\(ids.count) sessions", systemImage: "square.stack")
-          .padding(8)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    if enabled {
+      let ids = model.boardActionIDs(for: id)
+      if ids.count > 1 {
+        content.draggable(BoardDrag.payload(ids)) {
+          Label("\(ids.count) sessions", systemImage: "square.stack")
+            .padding(8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+      } else {
+        content.draggable(id)
       }
     } else {
-      content.draggable(id)
+      content
     }
   }
 }

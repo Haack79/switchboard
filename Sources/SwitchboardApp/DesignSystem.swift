@@ -8,6 +8,9 @@ enum Design {
   /// The ring of a highlighted session. Accent is the selection and focus color, so the ring uses the attention color.
   static let highlight = AttentionState.needsYou.color
   static let highlightRingWidth: CGFloat = 2.5
+  /// The leading and trailing inset of the text and controls in a list pane: its header row, its section headers, and
+  /// its rows' content. The Board pads its lanes by the same amount, so every main view starts its content at one x.
+  static let listInset: CGFloat = 16
 }
 
 /// How large a `pill` badge draws.
