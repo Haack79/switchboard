@@ -97,7 +97,8 @@ enum HostCLI {
     ]
     env["SB_SESSION_ID"] = session
     env["CLAUDECODE"] = claudecode
-    env["SB_PROMPTS_DIR"] = promptsFolder
+    // The sandbox grants the real path, and it denies reading a link on the way to it.
+    env["SB_PROMPTS_DIR"] = promptsFolder.map { resolvedPath($0) ?? $0 }
     return env
   }
 
