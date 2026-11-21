@@ -1029,35 +1029,30 @@ import Testing
     #expect(try sbd.get(op.id).state != .needsYou)
   }
 
-  /// A restart reads the ask into the child's item before it seeds the parent's mark, so the parent hears it once.
+  /// A restart reads the ask into the child's item before it seeds the parent's mark, so the parent's digest reports
+  /// the ask once.
   @Test func restartingSbdDoesNotTellAParentAgainAboutAnAskItHeard() throws {
     let sbd = try Instance()
-    let managers = ManagerTests()
-    let parent = try managers.idle(sbd, name: "p")
-    let kid = try managers.child(sbd, of: parent.id, name: "kid", prompt: "slow 60")
+    let digests = DigestTests()
+    let parent = try digests.parent(sbd, .work)
+    // The child's turn lasts until the report file exists, so the restart seeds the mark while the turn runs. Without
+    // the ask, the seed would read the child as working.
+    let kid = try digests.child(sbd, of: parent, name: "kid", prompt: "slow held")
+    defer { FileManager.default.createFile(atPath: "\(sbd.home.path)/report", contents: nil) }
     try sbd.waitFor(kid.id, "the child's turn") { $0.state == .working }
-    // sbd ticks every 0.2 s. The wait lets a tick record the child as working before the ask.
-    try sbd.restart(setting: "tickSeconds", to: 0.2)
-    sleep(2)
-    let heard = try sbd.count("sent", of: parent.id)
     let op = try idleOperator(sbd)
     try ask(sbd, op, about: kid.id)
     try sbd.waitFor(kid.id, "the ask on the child") { $0.state == .needsYou }
-    // sbd holds parent notices while an MCP server starts, and the operator's server starts here, so the notice can
-    // take tens of seconds. Each read of every event takes sbd's state queue, so the poll waits between reads.
-    var sent = heard
-    try sbd.waitFor("the parent hears the ask", timeout: 60) {
-      sent = try sbd.count("sent", of: parent.id)
-      if sent > heard { return true }
-      Thread.sleep(forTimeInterval: 0.5)
-      return false
-    }
+    try digests.prompt(sbd, parent, "first")
+    let heard = digests.contexts(sbd, parent)
+    try #require(heard.last?.contains("- kid (\(kid.id)): needs you") == true, "\(heard)")
 
     sbd.stopSbd()
     try sbd.startSbd()
-    sleep(2)
+    try digests.prompt(sbd, parent, "second")
 
-    #expect(try sbd.count("sent", of: parent.id) == sent)
+    #expect(digests.contexts(sbd, parent).count == heard.count)
+    #expect(try sbd.sbdMessages(parent.id).isEmpty)
   }
 
   @Test func anAcknowledgedAskStaysClosedAfterARestart() throws {
