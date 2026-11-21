@@ -726,16 +726,6 @@ private func board(clicking clicks: [(String, BoardClick)]) -> BoardModel {
     #expect(geometry.frames["a"] == Self.old)
   }
 
-  @Test func aLaneTheBoardNoLongerDrawsLosesItsHeaderFrame() {
-    let geometry = BoardGeometry()
-    geometry.recordLaneHeader("kept", Self.old)
-    geometry.recordLaneHeader("gone", Self.new)
-
-    geometry.keepFrames([], lanes: ["kept"])
-
-    #expect(geometry.laneHeaders == ["kept": Self.old])
-  }
-
   @Test func aLaneHeaderThatGoesAwayLosesItsFrame() {
     let geometry = BoardGeometry()
     geometry.recordLaneHeader("lane", Self.old)

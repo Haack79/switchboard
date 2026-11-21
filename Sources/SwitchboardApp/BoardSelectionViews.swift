@@ -30,11 +30,7 @@ final class BoardGeometry {
     }
   }
 
-  /// Removes the frames of cards and lane headers that the Board no longer draws.
-  func keepFrames(_ ids: Set<String>, lanes: Set<String>) {
-    frames = frames.filter { ids.contains($0.key) }
-    laneHeaders = laneHeaders.filter { lanes.contains($0.key) }
-  }
+  func keepFrames(_ ids: Set<String>) { frames = frames.filter { ids.contains($0.key) } }
 
   func recordLaneHeader(_ lane: String, _ frame: CGRect) { laneHeaders[lane] = frame }
 

@@ -614,7 +614,7 @@ struct BoardView: View {
     cards(layout)
       .onChange(of: layout.grid, initial: true) {
         model.boardGrid = layout.grid
-        boardGeometry.keepFrames(Set((layout.cards + layout.done).map(\.id)), lanes: Set(layout.lanes.map(\.id)))
+        boardGeometry.keepFrames(Set((layout.cards + layout.done).map(\.id)))
       }
   }
 
@@ -655,7 +655,10 @@ struct BoardView: View {
                   VStack(alignment: .leading, spacing: 8) {
                     LaneHeader(title: lane.title, group: lane.group, count: lane.cells.joined().count)
                       .frame(width: rowWidth, alignment: .leading)
-                      .modifier(LaneHeaderFrame(geometry: boardGeometry, lane: lane.id))
+                      .modifier(
+                        BoardFrameReport(
+                          record: { boardGeometry.recordLaneHeader(lane.id, $0) },
+                          drop: { boardGeometry.dropLaneHeader(lane.id, ifStill: $0) }))
                     HStack(alignment: .top, spacing: Self.columnSpacing) {
                       ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
                         VStack(spacing: 8) {
@@ -807,11 +810,11 @@ private struct LaneDrop: ViewModifier {
   }
 }
 
-/// Writes a lane header's frame to `geometry` and removes it when the header view goes away.
-private struct LaneHeaderFrame: ViewModifier {
-  let geometry: BoardGeometry
-  let lane: String
-  /// The last frame this view wrote to `geometry`.
+/// Passes the view's frame in `BoardView.contentSpace` to `record`. When the view goes away, it passes the last
+/// frame it recorded to `drop`.
+struct BoardFrameReport: ViewModifier {
+  let record: (CGRect) -> Void
+  let drop: (CGRect?) -> Void
   @State private var recordedFrame: CGRect?
 
   func body(content: Content) -> some View {
@@ -820,9 +823,9 @@ private struct LaneHeaderFrame: ViewModifier {
         $0.frame(in: .named(BoardView.contentSpace))
       } action: {
         recordedFrame = $0
-        geometry.recordLaneHeader(lane, $0)
+        record($0)
       }
-      .onDisappear { geometry.dropLaneHeader(lane, ifStill: recordedFrame) }
+      .onDisappear { drop(recordedFrame) }
   }
 }
 
@@ -1136,8 +1139,6 @@ struct HolderBadge: View {
 struct BoardCard: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.boardGeometry) private var boardGeometry
-  /// The last frame this view wrote to `boardGeometry`.
-  @State private var recordedFrame: CGRect?
   let session: SessionSummary
   /// The Board has keyboard focus on this card, so it draws a ring.
   var keyboardFocused = false
@@ -1276,13 +1277,10 @@ struct BoardCard: View {
         .padding(6)
       }
     }
-    .onGeometryChange(for: CGRect.self) {
-      $0.frame(in: .named(BoardView.contentSpace))
-    } action: {
-      recordedFrame = $0
-      boardGeometry?.record(s.id, $0)
-    }
-    .onDisappear { boardGeometry?.dropFrame(s.id, ifStill: recordedFrame) }
+    .modifier(
+      BoardFrameReport(
+        record: { boardGeometry?.record(s.id, $0) }, drop: { boardGeometry?.dropFrame(s.id, ifStill: $0) })
+    )
     // The ring draws 5 pt outside the card. The column's 8 pt spacing alone would let two rings overlap.
     .padding(.vertical, s.isHighlighted ? 2 : 0)
   }
