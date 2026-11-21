@@ -438,7 +438,7 @@ public final class Service {
       if entries[id]?.session.host == nil { try settleUncertain(id, texts) } else { unsettled[id] = texts }
     }
     markInterruptedPosts()
-    // Replay gives no session its Operator items. The parent marks must include them, or the next tick tells each
+    // Replay gives no session its Operator items. The parent marks must include them, or the next digest tells each
     // parent again about an ask that it already heard about.
     syncOperatorItems()
     seedParentMarks(now: nowMs())
@@ -2969,6 +2969,7 @@ public final class Service {
     out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
+    out.prOwnedBy = facts.prOwner.flatMap { entries[$0]?.session.name }
     if verdict.acknowledged { out.acknowledged = true }
     if s.highlighted == true { out.highlighted = true }
     if verdict.requested { out.requested = true }
