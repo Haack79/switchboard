@@ -53,12 +53,6 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
-  private var viewChoice: Binding<MainView?> {
-    Binding(
-      get: { model.selected == nil ? model.mainView : nil },
-      set: { if let view = $0 { model.show(view) } })
-  }
-
   private var isConfirmingDelete: Binding<Bool> {
     Binding(get: { model.confirmingDelete != nil }, set: { if !$0 { model.confirmingDelete = nil } })
   }
@@ -73,6 +67,10 @@ struct ContentView: View {
 
   private var isPickingSnoozeTime: Binding<Bool> {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
+  }
+
+  private var isPickingPauseTime: Binding<Bool> {
+    Binding(get: { model.pickingPauseTime != nil }, set: { if !$0 { model.pickingPauseTime = nil } })
   }
 
   private var isEditingLoop: Binding<Bool> {
@@ -125,43 +123,7 @@ struct ContentView: View {
       } message: { offer in
         Text(model.sessionNames.replacingIDs(in: offer.message))
       }
-    }
-    .toolbar {
-      ToolbarItem(placement: .navigation) { NavHistoryControls() }
-      ToolbarItem(placement: .navigation) {
-        // The Loops count changes with the time alone, while sbd's `ls` answer stays the same.
-        TimelineView(.everyMinute) { _ in
-          let now = nowMs()
-          // No segment is selected while a session shows.
-          Picker("View", selection: viewChoice) {
-            ForEach(MainView.allCases, id: \.self) { view in
-              Text(Self.viewLabel(view.title, model.viewCount(view, now: now))).tag(MainView?.some(view))
-            }
-          }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .help("Show the Inbox (⌘1), the Board (⌘2), Issues (⌘3), or Loops (⌘4)")
-        }
-      }
-      ToolbarItem(placement: .navigation) { SessionFilterMenu() }
-      ToolbarItem { ManagerButton() }
-      ToolbarItem { AccountMenu() }
-      ToolbarItem {
-        Button {
-          model.showingImport = true
-        } label: {
-          Label("Import Sessions", systemImage: "square.and.arrow.down")
-        }
-        .help("Import Claude sessions that run outside Switchboard (⇧⌘I)")
-      }
-      ToolbarItem {
-        Button {
-          model.openNewSession()
-        } label: {
-          Label("New Session", systemImage: "plus")
-        }
-        .help("Start a session (⌘N)")
-      }
+      .mainToolbar()
     }
     .removingToolbarTitle()
     .confirmationDialog(
@@ -188,7 +150,20 @@ struct ContentView: View {
       DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
     .sheet(isPresented: isPickingSnoozeTime) {
-      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+      if let id = model.pickingSnoozeTime {
+        UntilPicker(
+          session: id, verb: "Snooze", apply: { model.snooze(id, until: $0) },
+          close: { model.pickingSnoozeTime = nil }
+        ).environmentObject(model)
+      }
+    }
+    .sheet(isPresented: isPickingPauseTime) {
+      if let id = model.pickingPauseTime {
+        UntilPicker(
+          session: id, verb: "Pause", apply: { model.pause(id, until: $0) },
+          close: { model.pickingPauseTime = nil }
+        ).environmentObject(model)
+      }
     }
     .sheet(isPresented: isEditingLoop) {
       if let request = model.loopEditor {
@@ -244,7 +219,6 @@ struct Sidebar: View {
     let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
-      OperatorRow(activeAccount: activeAccount)
       if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
       ForEach(groups) { group in
         let state = group.state
@@ -314,7 +288,7 @@ struct Sidebar: View {
     } message: { move in
       Text(move.message)
     }
-    // A sixth toolbar item pushes New Session into the overflow menu at the minimum window width, so search
+    // Another toolbar item would push New Session into the overflow menu at the minimum window width, so search
     // sits here. It looks like a search field, and the panel holds the real one.
     .safeAreaInset(edge: .top) {
       Button {
@@ -597,7 +571,7 @@ struct BoardView: View {
   static let minColumnWidth: CGFloat = 165
   static let maxColumnWidth: CGFloat = 280
   static let columnSpacing: CGFloat = 12
-  static let boardPadding: CGFloat = 16
+  static let boardPadding = Design.listInset
   static var legacyScrollerWidth: CGFloat { NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) }
 
   /// How wide each column draws in a Board `width` points wide with `columns` columns. The columns fill the width

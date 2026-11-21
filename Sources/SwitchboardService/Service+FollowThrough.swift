@@ -299,7 +299,7 @@ extension Service {
           let text = wait.judgmentMessage(
             question: question, holder: Wait.SessionTarget(id: holder, name: session.name),
             byOperator: session.kind == .operator, approvable: approval != nil, reply: reply)
-          _ = try send(holder, text, by: .sbd, trigger: .wait)
+          _ = try send(holder, text, by: .sbd, trigger: .wait, extra: handedFromData(holder, wait))
         } catch {
           logLine("can't ask about wait \(waitId) of \(holder): \(error)")
           holdAfterFailure(holder, waitId, question)
@@ -673,7 +673,9 @@ extension Service {
       let op = try ensureOperator()
       if try store.operatorReport(wait: wait.id, session: op) == nil {
         let about = wait.actionSubject.flatMap { entries[$0.id] == nil ? nil : $0.id }
-        try recordReport(wait.note ?? "", needsYou: wait.action?.needsYou == true, about: about, on: op, wait: wait.id)
+        try recordReport(
+          wait.note ?? "", needsYou: wait.action?.needsYou == true, about: about, on: op, wait: wait.id,
+          handedFrom: wait.handedFrom?.id)
       }
       return .done(result: "reported", detail: "Recorded the report", reports: false)
     }

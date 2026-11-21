@@ -147,7 +147,7 @@ final class BoardModel: ObservableObject {
   @Published var savingLoop = false
   var presentingSheet: Bool {
     newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
-      || pickingSnoozeTime != nil || loopEditor != nil
+      || pickingSnoozeTime != nil || pickingPauseTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
     newSession = NewSessionRequest(group: group, parent: parent)
@@ -222,6 +222,8 @@ final class BoardModel: ObservableObject {
   @Published var snoozing: Set<String> = []
   /// The session whose snooze end the Pick a Time… sheet asks for.
   @Published var pickingSnoozeTime: String?
+  /// The session whose pause end the Pick a Time… sheet of the Pause menu asks for.
+  @Published var pickingPauseTime: String?
   /// Follow-ups whose start is on its way to sbd. Their Start buttons stay
   /// disabled until sbd replies, because making a worktree can take seconds.
   @Published var starting: Set<String> = []
@@ -333,6 +335,8 @@ final class BoardModel: ObservableObject {
   }
   /// The session whose loops the Loops view lists, by id. Nil lists every shown session's loops.
   @Published var loopSessionFilter: String?
+  /// The Operator's work, newest first, as the Loops view's Background Activity lists it.
+  @Published var backgroundActivity: [BackgroundActivity.Entry] = []
   /// Plan proposals whose Apply or Reject is on its way to sbd. Applying
   /// writes to GitHub, so their buttons stay off until sbd replies.
   @Published var answeringProposals: Set<String> = []
@@ -599,9 +603,15 @@ final class BoardModel: ObservableObject {
   /// The Manager conversation that the toolbar star names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
-  /// The operator, or nil before sbd first creates it. With more than one, it is the oldest, as in sbd.
-  var operatorSession: SessionSummary? {
-    sessions.filter { $0.kind == .operator }.min { ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id) }
+  /// The operator. It reads every listed session, because the filter can hide the operator.
+  var operatorSession: SessionSummary? { Self.operatorSession(in: allSessions) }
+
+  /// The operator among `sessions`, or nil before sbd first creates it. With more than one, it is the oldest, as in
+  /// sbd.
+  static func operatorSession(in sessions: [SessionSummary]) -> SessionSummary? {
+    sessions.filter { !$0.isBeingRemoved && $0.kind == .operator }.min {
+      ($0.created ?? 0, $0.id) < ($1.created ?? 0, $1.id)
+    }
   }
 
   /// A state's sessions in the sidebar, each one followed by its children.
@@ -778,7 +788,7 @@ final class BoardModel: ObservableObject {
       drafts = drafts.filter { open.contains($0.key) }
       messageDrafts.prune(
         keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.otherAnswerKeys(list))
-          .union(MessageDrafts.replyKeys(list)))
+          .union(MessageDrafts.replyKeys(list)).union(MessageDrafts.operatorAnswerKeys(list)))
       if !sameShown(allSessions, list) { allSessions = list }
       // After the new list, so that the filter change reads each session's group from the same poll as the groups.
       if let groups { applyGroups(groups) }
@@ -1679,6 +1689,13 @@ final class BoardModel: ObservableObject {
 
   func messageDraft(for session: SessionSummary) -> MessageField.Draft {
     messageDrafts.draft(for: MessageDrafts.key(for: session))
+  }
+
+  /// The draft of the Inbox field on `session`. On an Operator question it is the answer's own draft, which the
+  /// session view and the chat pane never show. The answer is dropped, not sent to claude, once the question closes.
+  func inboxDraft(for session: SessionSummary) -> MessageField.Draft {
+    guard MessageField.Draft.answersOperator(ref: session.triage?.ref) else { return messageDraft(for: session) }
+    return messageDrafts.draft(for: MessageDrafts.operatorAnswerKey(session: session.id))
   }
 
   /// What the user typed as the Other answer to one decision and has not sent.

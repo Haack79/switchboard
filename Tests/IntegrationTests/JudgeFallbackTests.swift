@@ -325,7 +325,8 @@ extension JudgeFallbackTests {
   }
 
   /// Decision 36: the subject leaves Ready to merge and comes back at the same head with the same reply. The run
-  /// that follows re-parks the `ask` without a second judge call or a second report.
+  /// that follows re-parks the `ask` without a second judge call or a second report. The ask shows on the subject
+  /// and holds it in Needs you, so the user acknowledges it first.
   @Test func aSecondRunAtTheSameHeadAndReplyCallsTheJudgeOnce() throws {
     let github = try FakeGitHub()
     let sbd = try instance(github)
@@ -334,6 +335,9 @@ extension JudgeFallbackTests {
     let wait = try arm(sbd, s)
     _ = try reportsOnceOneExists(sbd)
     try follow.waitForStatus(sbd, wait, .awaitingJudgment)
+    try sbd.waitFor(s.id, "the ask on the subject") { $0.state == .needsYou && $0.triage?.source == .report }
+    try sbd.sb("ack", s.id)
+    try sbd.waitFor(s.id, "Ready to merge after the ack") { $0.state == .readyToMerge }
     let reads = sbd.ghLiveReads().count
     let approved = github.pr(Self.number)
 
@@ -373,9 +377,10 @@ extension JudgeFallbackTests {
     try follow.waitForStatus(sbd, wait, .awaitingJudgment)
 
     try sbd.sb("send", s.id, Self.newPrompt)
-    try sbd.waitFor(s.id, "the new reply", timeout: 30) {
-      $0.lastReply == "Done: \(Self.newPrompt)" && $0.state == .readyToMerge
-    }
+    try sbd.waitFor(s.id, "the new reply", timeout: 30) { $0.lastReply == "Done: \(Self.newPrompt)" }
+    // The judge's question stays on the subject until the user answers or acknowledges it.
+    try sbd.sb("ack", s.id)
+    try sbd.waitFor(s.id, "Ready to merge after the ack", timeout: 30) { $0.state == .readyToMerge }
     try follow.tick(sbd, 2)
 
     try waitForJudgeCalls(sbd, 2)

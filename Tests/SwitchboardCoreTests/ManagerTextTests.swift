@@ -267,3 +267,48 @@ extension ManagerTextTests {
     #expect(Chat.guide.contains("`full: true`"), "\(Chat.guide)")
   }
 }
+
+/// The Operator prompt, the Manager guide, and the MCP `report` tool say where the Operator's questions and work
+/// show now that the Operator has no sidebar row or chat (#410).
+extension ManagerTextTests {
+  @Test(arguments: [
+    "Nobody sees your chat. The user sees only your reports and the Background Activity list.",
+    "When a question is about one session, pass that session as `session` (`--session S`), because the user answers on that session's Inbox item.",
+    "Without `session`, the question goes to the conversation that handed you the work.",
+    "The user's answer reaches you as a message that starts with `About <name>:`, where <name> is the session or conversation whose Inbox item showed the question.",
+    "If no Inbox item could show the question, the answer arrives without that start.",
+  ])
+  func theOperatorPromptSaysWhereItsQuestionsAndAnswersGo(_ sentence: String) {
+    #expect(Manager.operatorPrompt.contains(sentence), "\(Manager.operatorPrompt)")
+  }
+
+  @Test func theOperatorPromptNoLongerSaysNobodyReadsItsChat() {
+    #expect(!Manager.operatorPrompt.lowercased().contains("reads your chat"), "\(Manager.operatorPrompt)")
+  }
+
+  @Test(arguments: [
+    "The operator works in the background.",
+    "Its questions show as Inbox items on the session they are about, or on the conversation that handed it the work.",
+    "Its work shows in the Loops tab's Background Activity list.",
+  ])
+  func theManagerGuideSaysTheOperatorWorksInTheBackground(_ sentence: String) throws {
+    let section = try Self.guideSection("## What changed")
+    #expect(section.contains(sentence), "\(section)")
+  }
+
+  @Test(arguments: [
+    "It shows as an Inbox item on the session that `session` names. Without `session`, it shows on the conversation that handed the operator the work.",
+    "It stays open until the user answers it or acknowledges it there.",
+    "Every report shows in the Loops tab's Background Activity list.",
+  ])
+  func theReportToolSaysWhereAReportShows(_ sentence: String) throws {
+    let report = try #require(MCPToolServer.allTools.first { $0.name == "report" })
+    #expect(report.description.contains(sentence), "\(report.description)")
+  }
+
+  @Test func theReportToolKeepsItsSchema() throws {
+    let report = try #require(MCPToolServer.allTools.first { $0.name == "report" })
+    #expect(Set(report.properties.keys) == ["text", "needsYou", "session"])
+    #expect(report.required == ["text"])
+  }
+}
