@@ -29,7 +29,7 @@ enum MainView: CaseIterable {
     }
   }
 
-  /// The key that, with ⌘, shows the view from the Session menu.
+  /// The key that, with ⌘, shows the view from the View menu.
   var shortcutKey: Character {
     switch self {
     case .inbox: "1"
@@ -177,7 +177,7 @@ final class BoardModel: ObservableObject {
   @Published var revealedMessageField: String?
   /// The session whose Message Claude field takes keyboard focus when it shows. The field clears it.
   @Published var messageFieldFocus: String?
-  /// The Board's open cards as it last drew them. BoardView keeps it current. The Session menu's ⌘T state and
+  /// The Board's open cards as it last drew them. BoardView keeps it current. The Go menu's ⌘T state and
   /// the Board's ring read it, so a change redraws them.
   @Published var boardGrid = BoardGrid(lanes: [])
   /// The right pane of the Inbox shows the session's terminals instead of its summary.
