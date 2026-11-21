@@ -1,6 +1,6 @@
 /// config.json's `manager` section, for sessions of kind `manager`.
 public struct ManagerSettings: Codable, Equatable, Sendable {
-  /// The model that a Manager conversation runs, unless the conversation has its own.
+  /// The model that a Manager conversation, the operator, and a group chat run, unless the session has its own.
   public var model = "sonnet"
   /// The auto-compact window, in tokens, that sbd sets as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when it starts or
   /// resumes a Manager conversation. Claude Code compacts about 33k tokens below the window, so 183000 compacts

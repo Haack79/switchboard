@@ -63,6 +63,14 @@ import Testing
     #expect(c.model == "opus")
   }
 
+  @Test(arguments: [#""""#, #"" ""#, #""-p""#, #""--model""#, #""a b""#, #"" haiku""#, "5", "true", "[]"])
+  func aBadManagerModelFallsBackToSonnet(_ value: String) throws {
+    let c = try JSONCoding.decode(Config.self, from: #"{"manager": {"model": \#(value)}, "branchPrefix": "haacked/"}"#)
+
+    #expect(c.manager.model == "sonnet")
+    #expect(c.branchPrefix == "haacked/")
+  }
+
   // MARK: Model names
 
   @Test(arguments: ["", " ", "a b", "a\tb", " haiku", "haiku\n", "a\u{00A0}b", "-p", "--model"])

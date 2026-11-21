@@ -338,7 +338,8 @@ public final class Service {
   var liveCap: Int
   /// The `operator` settings that the tick last read, with config.json's modification time then.
   var cachedOperatorSettings: (modified: Date?, settings: OperatorSettings)?
-  /// The model of a Manager conversation without its own. `sb manager model` changes it.
+  /// The model of a Manager conversation, the operator, or a group chat without its own. `sb manager model`
+  /// changes it.
   var managerModel: String
   /// config.json's `issues`. `sb issues source` and `sb issues team` change it.
   var issueSettings: IssueSettings
