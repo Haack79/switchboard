@@ -47,6 +47,7 @@ struct StateBadge: View {
 struct ContentView: View {
   static let windowMinWidth: CGFloat = 900
   static let sidebarMinWidth: CGFloat = 240
+  static let sidebarIdealWidth: CGFloat = 300
 
   /// A view picker segment's label, such as `Inbox 5`. A zero count does not show.
   static func viewLabel(_ name: String, _ count: Int) -> String { count > 0 ? "\(name) \(count)" : name }
@@ -88,7 +89,7 @@ struct ContentView: View {
   var body: some View {
     NavigationSplitView {
       Sidebar()
-        .navigationSplitViewColumnWidth(min: Self.sidebarMinWidth, ideal: 300, max: 420)
+        .navigationSplitViewColumnWidth(min: Self.sidebarMinWidth, ideal: Self.sidebarIdealWidth, max: 420)
     } detail: {
       VStack(spacing: 0) {
         if let problem = model.unreachable {
@@ -220,6 +221,7 @@ struct Sidebar: View {
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
       if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
+      if groups.isEmpty && model.sidebarQueryHidesAll { ContentUnavailableView.search(text: model.sidebarQuery) }
       ForEach(groups) { group in
         let state = group.state
         Section(isExpanded: expanded(state)) {
@@ -288,31 +290,8 @@ struct Sidebar: View {
     } message: { move in
       Text(move.message)
     }
-    // Another toolbar item would push New Session into the overflow menu at the minimum window width, so search
-    // sits here. It looks like a search field, and the panel holds the real one.
-    .safeAreaInset(edge: .top) {
-      Button {
-        model.showingSearch = true
-      } label: {
-        HStack(spacing: 4) {
-          Image(systemName: "magnifyingglass")
-          Text("Search Sessions")
-          Spacer(minLength: 4)
-          Text("⌘K")
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .padding(.horizontal, 8)
-      .padding(.top, 4)
-      .help("Find a session by name, repo, branch, PR, issue, group, reason, or note (⌘K)")
-      .accessibilityLabel("Search Sessions")
-      .accessibilityIdentifier("sidebar-search")
-    }
+    // A toolbar search field would push New Session into the overflow menu at the minimum window width.
+    .searchable(text: $model.sidebarQuery, placement: .sidebar, prompt: "Search Sessions")
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
         FilterBar()
@@ -566,9 +545,10 @@ struct BoardView: View {
   @FocusState private var focused: Bool
   @State private var boardGeometry = BoardGeometry()
   static let contentSpace = "board-content"
-  static let labelWidth: CGFloat = 140
   static let columnWidth: CGFloat = 200
-  static let minColumnWidth: CGFloat = 165
+  /// Five columns at this width fit beside a sidebar of `ContentView.sidebarIdealWidth` in a 1024 pt window.
+  /// A wider sidebar leaves too little room. The Board then scrolls sideways.
+  static let minColumnWidth: CGFloat = 120
   static let maxColumnWidth: CGFloat = 280
   static let columnSpacing: CGFloat = 12
   static let boardPadding = Design.listInset
@@ -581,8 +561,13 @@ struct BoardView: View {
     guard columns > 0 else { return minColumnWidth }
     // Overlay scrollers take no width. The Board reserves the legacy width anyway, so a mouse plugged in later
     // does not make it scroll sideways.
-    let room = width - legacyScrollerWidth - 2 * boardPadding - labelWidth - columnSpacing * CGFloat(columns)
+    let room = width - legacyScrollerWidth - 2 * boardPadding - rowWidth(columnWidth: 0, columns: columns)
     return min(max(room / CGFloat(columns), minColumnWidth), maxColumnWidth)
+  }
+
+  /// How wide a lane's row of `columns` columns draws, each `columnWidth` wide.
+  static func rowWidth(columnWidth: CGFloat, columns: Int) -> CGFloat {
+    CGFloat(columns) * columnWidth + columnSpacing * CGFloat(max(columns - 1, 0))
   }
 
   /// Makes the same moves as a drag, because keyboard and VoiceOver users
@@ -638,36 +623,43 @@ struct BoardView: View {
     } else {
       GeometryReader { geometry in
         let fittedWidth = Self.fittedColumnWidth(available: geometry.size.width, columns: layout.columns.count)
+        let rowWidth = Self.rowWidth(columnWidth: fittedWidth, columns: layout.columns.count)
         ScrollViewReader { proxy in
           ScrollView([.horizontal, .vertical]) {
             LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
               Section {
                 ForEach(layout.lanes) { lane in
                   Divider()
-                  HStack(alignment: .top, spacing: Self.columnSpacing) {
-                    LaneLabel(title: lane.title, group: lane.group, count: lane.cells.joined().count)
-                      .frame(width: Self.labelWidth, alignment: .leading)
-                    ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
-                      VStack(spacing: 8) {
-                        ForEach(stack) { s in
-                          BoardCard(
-                            session: s, keyboardFocused: s.id == ring, boardActive: focused, draggable: drops
-                          ) {
-                            focused = true
-                          }
-                          .contextMenu {
-                            if drops {
-                              SessionMenuItems(session: s, removableSelection: removableSelection) {
-                                moveMenu(s.id, laneGroups: laneGroups)
-                              }
-                            } else {
-                              SessionMenuItems(session: s, removableSelection: removableSelection)
+                  VStack(alignment: .leading, spacing: 8) {
+                    LaneHeader(title: lane.title, group: lane.group, count: lane.cells.joined().count)
+                      .frame(width: rowWidth, alignment: .leading)
+                      .modifier(
+                        BoardFrameReport(
+                          record: { boardGeometry.recordLaneHeader(lane.id, $0) },
+                          drop: { boardGeometry.dropLaneHeader(lane.id, ifStill: $0) }))
+                    HStack(alignment: .top, spacing: Self.columnSpacing) {
+                      ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
+                        VStack(spacing: 8) {
+                          ForEach(stack) { s in
+                            BoardCard(
+                              session: s, keyboardFocused: s.id == ring, boardActive: focused, draggable: drops
+                            ) {
+                              focused = true
                             }
+                            .contextMenu {
+                              if drops {
+                                SessionMenuItems(session: s, removableSelection: removableSelection) {
+                                  moveMenu(s.id, laneGroups: laneGroups)
+                                }
+                              } else {
+                                SessionMenuItems(session: s, removableSelection: removableSelection)
+                              }
+                            }
+                            .id(s.id)
                           }
-                          .id(s.id)
                         }
+                        .frame(width: fittedWidth, alignment: .top)
                       }
-                      .frame(width: fittedWidth, alignment: .top)
                     }
                   }
                   .modifier(LaneDrop(enabled: drops, group: lane.group?.id))
@@ -677,25 +669,29 @@ struct BoardView: View {
                 }
                 DoneFooter(sessions: layout.done, boardActive: focused) { focused = true }
               } header: {
-                HStack(alignment: .center, spacing: Self.columnSpacing) {
-                  VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
+                  WrappingRow(spacing: Self.columnSpacing) {
                     Picker("Lanes", selection: $laneKind) {
                       ForEach(BoardLanes.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .fixedSize()
                     .help("Show a lane per repo or per group")
                     // The header stays pinned, so the name field shows without a scroll.
                     if laneKind == .group { NewGroupRow() }
                     GroupSuggestionButton()
                   }
-                  .frame(width: Self.labelWidth)
-                  ForEach(layout.columns, id: \.self) { column in
-                    HStack(spacing: 4) {
-                      Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
-                      if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
+                  .frame(width: rowWidth, alignment: .leading)
+                  HStack(alignment: .center, spacing: Self.columnSpacing) {
+                    ForEach(layout.columns, id: \.self) { column in
+                      HStack(spacing: 4) {
+                        Text(column.title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary)
+                          .lineLimit(1)
+                        if column == .inReview { NudgeAllMenu(sessions: layout.cards) }
+                      }
+                      .frame(width: fittedWidth, alignment: .leading)
                     }
-                    .frame(width: fittedWidth, alignment: .leading)
                   }
                 }
                 .padding(.vertical, 4)
@@ -792,9 +788,28 @@ private struct LaneDrop: ViewModifier {
   }
 }
 
-/// A lane's label column. A group lane also shows the group's description,
-/// its chat, and its plans' Follow up rows and pending updates.
-private struct LaneLabel: View {
+/// Passes the view's frame in `BoardView.contentSpace` to `record`. When the view goes away, it passes the last
+/// frame it recorded to `drop`.
+struct BoardFrameReport: ViewModifier {
+  let record: (CGRect) -> Void
+  let drop: (CGRect?) -> Void
+  @State private var recordedFrame: CGRect?
+
+  func body(content: Content) -> some View {
+    content
+      .onGeometryChange(for: CGRect.self) {
+        $0.frame(in: .named(BoardView.contentSpace))
+      } action: {
+        recordedFrame = $0
+        record($0)
+      }
+      .onDisappear { drop(recordedFrame) }
+  }
+}
+
+/// A lane's header above its row of columns. A group lane also shows the group's
+/// description, its chat, and its plans' Follow up rows and pending updates.
+private struct LaneHeader: View {
   @EnvironmentObject var model: BoardModel
   let title: String
   let group: GroupSummary?
@@ -802,8 +817,8 @@ private struct LaneLabel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
-      HStack(alignment: .firstTextBaseline, spacing: 4) {
-        Text(title).fontWeight(.semibold).lineLimit(2).layoutPriority(1)
+      WrappingRow(spacing: 8) {
+        Text(title).fontWeight(.semibold).lineLimit(1).accessibilityAddTraits(.isHeader)
         if let group {
           Button {
             model.openNewSession(group: group.id)
@@ -816,24 +831,20 @@ private struct LaneLabel: View {
           .accessibilityLabel("New session in \(group.name)")
           .accessibilityIdentifier("board-new-session-\(group.id)")
         }
-      }
-      if let group {
-        GroupDescriptionView(group: group)
-        GroupAccountMenu(group: group)
-      }
-      Text(count == 1 ? "1 session" : "\(count) sessions")
-        .font(.caption).foregroundStyle(.secondary)
-      if let group {
-        HStack {
+        Text(count == 1 ? "1 session" : "\(count) sessions")
+          .font(.caption).foregroundStyle(.secondary)
+        if let group {
+          GroupAccountMenu(group: group)
           GroupChatButton(group: group)
           Button("Delete") { model.requestDeleteGroup(group) }
             .buttonStyle(.link).font(.caption)
             .help(group.sessions.isEmpty ? "Delete this group" : "Delete this group and move its sessions to Ungrouped")
             .accessibilityLabel("Delete group \(group.name)")
+          GroupPauseButtons(group: group)
+          GroupArtifactsLink(group: group)
         }
-        GroupPauseButtons(group: group)
-        GroupArtifactsLink(group: group)
       }
+      if let group { GroupDescriptionView(group: group) }
       let plans = group?.plans ?? []
       PlanFollowupList(plans: plans)
       PlanArtifactList(plans: plans)
@@ -1106,8 +1117,6 @@ struct HolderBadge: View {
 struct BoardCard: View {
   @EnvironmentObject var model: BoardModel
   @Environment(\.boardGeometry) private var boardGeometry
-  /// The last frame this view wrote to `boardGeometry`.
-  @State private var recordedFrame: CGRect?
   let session: SessionSummary
   /// The Board has keyboard focus on this card, so it draws a ring.
   var keyboardFocused = false
@@ -1246,13 +1255,10 @@ struct BoardCard: View {
         .padding(6)
       }
     }
-    .onGeometryChange(for: CGRect.self) {
-      $0.frame(in: .named(BoardView.contentSpace))
-    } action: {
-      recordedFrame = $0
-      boardGeometry?.record(s.id, $0)
-    }
-    .onDisappear { boardGeometry?.dropFrame(s.id, ifStill: recordedFrame) }
+    .modifier(
+      BoardFrameReport(
+        record: { boardGeometry?.record(s.id, $0) }, drop: { boardGeometry?.dropFrame(s.id, ifStill: $0) })
+    )
     // The ring draws 5 pt outside the card. The column's 8 pt spacing alone would let two rings overlap.
     .padding(.vertical, s.isHighlighted ? 2 : 0)
   }
