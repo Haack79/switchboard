@@ -474,13 +474,7 @@ public struct OperatorSettings: Codable, Equatable, Sendable {
   }
 
   /// The key that `model` replaced. A config.json that has it and no `model` keeps the model it chose.
-  private struct LegacyKeys: CodingKey {
-    var stringValue: String
-    var intValue: Int? { nil }
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { nil }
-    static let judgeModel = LegacyKeys(stringValue: "judgeModel")!
-  }
+  private enum LegacyKeys: String, CodingKey { case judgeModel }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)

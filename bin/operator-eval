@@ -38,6 +38,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$dir" ] && [ -d "$dir" ] || usage
 [[ $runs =~ ^[1-9][0-9]*$ ]] || usage
+((BASH_VERSINFO[0] >= 4)) || { echo "operator-eval needs bash 4 or later (brew install bash)" >&2; exit 1; }
 command -v jq >/dev/null || { echo "operator-eval needs jq" >&2; exit 1; }
 sb=${SB:-sb}
 
@@ -66,8 +67,7 @@ for file in "$dir"/*.json; do
     answers=()
     for _ in $(seq "$runs"); do
       if out=$("$sb" operator judge --kind "$kind" --input "$tmp/input.json" --model "$m" --json 2>"$tmp/err"); then
-        answer=$(jq -r '.answer | split(",")[0]' <<<"$out")
-        [ -n "$answer" ] || answer=none
+        answer=$(jq -r '(.answer | split(",")[0]) // "none"' <<<"$out")
         tokens_in[$m]=$((${tokens_in[$m]} + $(jq -r '.inputTokens // 0' <<<"$out")))
         tokens_out[$m]=$((${tokens_out[$m]} + $(jq -r '.outputTokens // 0' <<<"$out")))
       else
@@ -78,7 +78,7 @@ for file in "$dir"/*.json; do
       if [[ "|$expected|" == *"|$answer|"* ]]; then
         runs_ok[$m]=$((${runs_ok[$m]} + 1))
       else
-        pass=no
+        [ "$pass" = HARD-FAIL ] || pass=no
         if [ "$kind" = reply-gate ] && [ "$answer" = merge ] && [ "$expected" = ask ]; then
           hard_fails[$m]=$((${hard_fails[$m]} + 1))
           pass=HARD-FAIL

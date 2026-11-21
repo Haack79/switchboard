@@ -27,9 +27,10 @@ extension Service {
       guard let value = input[key]?.int else { throw APIError("the \(kind) input needs \"\(key)\" as a number") }
       return value
     }
-    let timeout = config.triage.timeoutSeconds
+    let triageTimeout = config.triage.timeoutSeconds
     func run<T>(
-      _ headless: HeadlessKind, _ arguments: [String], _ prompt: String, parse: (String) throws -> T
+      _ headless: HeadlessKind, _ arguments: [String], _ prompt: String,
+      timeout: Double, parse: (String) throws -> T
     ) throws -> (T, HeadlessReply?) {
       let call = headlessCall(
         headless, session: nil, arguments: arguments, input: prompt, env: env, folder: home.path, timeout: timeout,
@@ -44,21 +45,22 @@ extension Service {
         OperatorJudge.ReplyGate.input(
           repo: try text("repo"), number: try number("number"), title: try text("title"), session: try text("session"),
           reply: try text("reply")),
-        parse: OperatorJudge.ReplyGate.parse)
+        timeout: triageTimeout, parse: OperatorJudge.ReplyGate.parse)
       (answer, detail, reply) = (
         parsed.word.rawValue, parsed.question.isEmpty ? parsed.reason : parsed.question, reply0
       )
     case OperatorJudge.Kind.ciFailure.rawValue:
-      let jobs = (input["jobs"]?.array ?? []).flatMap { job in
-        OperatorJudge.CIFailure.jobs(workflow: job["workflow"]?.string ?? "", log: job["log"]?.string ?? "")
-      }
+      let jobs = Array(
+        (input["jobs"]?.array ?? []).flatMap { job in
+          OperatorJudge.CIFailure.jobs(workflow: job["workflow"]?.string ?? "", log: job["log"]?.string ?? "")
+        }.prefix(OperatorJudge.CIFailure.maxJobs))
       guard !jobs.isEmpty else { throw APIError("the ci-failure input needs jobs, each with a workflow and a log") }
       let (parsed, reply0) = try run(
         .ciFailure, OperatorJudge.CIFailure.arguments(model: model),
         OperatorJudge.CIFailure.input(
           repo: try text("repo"), number: try number("number"), title: try text("title"), head: try text("head"),
           jobs: jobs),
-        parse: OperatorJudge.CIFailure.parse)
+        timeout: triageTimeout, parse: OperatorJudge.CIFailure.parse)
       (answer, detail, reply) = (parsed.cause.rawValue, parsed.message, reply0)
     case "pick-issues":
       let repo = try text("repo")
@@ -83,6 +85,7 @@ extension Service {
       let (parsed, reply0) = try run(
         .topupPick, TopupPick.arguments(model: model),
         TopupPick.input(rubric: try text("rubric"), k: k, candidates: candidates, sessions: sessions),
+        timeout: Double(operatorSettings.topupTimeoutSeconds),
         parse: { try TopupPick.parse($0, candidates: candidates, k: k) })
       answer = parsed.picks.map(\.ref).joined(separator: ",")
       detail = parsed.picks.map { "\($0.ref): \($0.reason)" }.joined(separator: " ")

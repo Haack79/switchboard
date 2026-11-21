@@ -140,12 +140,14 @@ import Testing
   @Test func aBadJudgmentRequestFails() throws {
     let sbd = try Instance()
     let path = try write(sbd, "x.json", ["repo": "a/b"])
+    let complete = try write(
+      sbd, "complete.json", ["repo": "a/b", "number": 7, "title": "t", "session": "s", "reply": "Done."])
     let calls: [[String]] = [
       ["operator", "judge"],
       ["operator", "judge", "--kind", "nope", "--input", path],
       ["operator", "judge", "--kind", "reply-gate", "--input", path],
       ["operator", "judge", "--kind", "reply-gate", "--input", "\(sbd.home.path)/missing.json"],
-      ["operator", "judge", "--kind", "reply-gate", "--input", path, "--model", "-p"],
+      ["operator", "judge", "--kind", "reply-gate", "--input", complete, "--model", "-p"],
     ]
     for words in calls {
       let r = try sbd.run(words)
