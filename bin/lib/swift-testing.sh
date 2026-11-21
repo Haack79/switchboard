@@ -75,6 +75,21 @@ build_test_bundles() {
   done
 }
 
+# test_bundles_exist <test-target>…
+# Succeeds when the build folder holds a bundle of its own for each named test
+# target. swift test --skip-build fails when any test target's bundle is
+# missing, so build_test_bundles is safe only after this succeeds. A new
+# worktree has no bundles. SwiftPM's native build system, the default before
+# Swift 6.4, makes one bundle for all test targets and no product for each, so
+# this fails there too.
+test_bundles_exist() {
+  local bin target
+  bin=$(swift build --show-bin-path) || return 1
+  for target in "$@"; do
+    [ -e "$bin/$target.xctest" ] || return 1
+  done
+}
+
 # Prints one line per test, such as SwitchboardCoreTests.FooTests/bar(), from
 # the last build.
 list_tests() {

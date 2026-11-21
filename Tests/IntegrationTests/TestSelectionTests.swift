@@ -145,9 +145,10 @@ private struct SelectionRun {
 
   var readPackage: Bool { invocations.contains { $0.contains("dump-package") } }
 
-  /// The `swift build` invocations, with their position among all invocations.
+  /// The `swift build` invocations that compile, with their position among all invocations.
   var builds: [(index: Int, args: [String])] {
-    invocations.enumerated().filter { $0.element.first == "build" }.map { ($0.offset, $0.element) }
+    invocations.enumerated().filter { $0.element.first == "build" && !$0.element.contains("--show-bin-path") }
+      .map { ($0.offset, $0.element) }
   }
 
   /// The products that the builds named with `--product`, in the order built.
@@ -180,8 +181,10 @@ private struct SelectionRun {
 /// A temporary git repo with copies of bin/test and bin/lib, committed
 /// with the baseline files. origin/main points at that commit. A stub swift
 /// at the front of PATH logs its arguments, runs `dumpPackage` or prints the
-/// package for `dump-package`, prints `listing` for `test list`, and exits
-/// with `buildStatus` or `testStatus` for a build or test run. A stub
+/// package for `dump-package`, prints `listing` for `test list`, prints a
+/// folder that holds a bundle for each name in `bundles` for
+/// `build --show-bin-path`, and exits with `buildStatus` or `testStatus` for a
+/// build or test run. A stub
 /// xcode-select prints a developer folder that holds only Xcode's
 /// Testing.framework, so bin/lib/swift-testing.sh passes and adds no flags.
 private final class SelectionRepo {
@@ -193,6 +196,8 @@ private final class SelectionRepo {
   let developer: FakeDeveloperDir
   let listingPath: String
   var listing: [String]
+  let binPath: String
+  var bundles = ["SwitchboardCoreTests", "SwitchboardServiceTests", "SwitchboardAppTests", "IntegrationTests"]
   var buildStatus: Int32 = 0
   var testStatus: Int32 = 0
   var dumpPackage: String
@@ -206,6 +211,7 @@ private final class SelectionRepo {
     dumpPackage = "cat \(shellQuote(packagePath)); exit 0"
     developer = try FakeDeveloperDir(folders: [FakeDeveloperDir.xcodeFramework])
     listingPath = "\(repos.root)/listing.txt"
+    binPath = "\(repos.root)/bin-path"
     listing = baselineListing + extraListing
 
     try Repos.create(dir)
@@ -289,20 +295,27 @@ private final class SelectionRepo {
 
   func run(_ args: [String]) throws -> SelectionRun {
     try (listing.joined(separator: "\n") + "\n").write(toFile: listingPath, atomically: true, encoding: .utf8)
+    try? FileManager.default.removeItem(atPath: binPath)
+    for bundle in bundles {
+      try FileManager.default.createDirectory(
+        atPath: "\(binPath)/\(bundle).xctest", withIntermediateDirectories: true)
+    }
     try writeExecutable(
       "\(stubBin)/swift",
       """
       #!/bin/bash
       (IFS=$'\\t'; printf '%s\\n' "$*") >> \(shellQuote(log))
-      prev= dump=0 list=0
+      prev= dump=0 list=0 binpath=0
       for arg in "$@"; do
         case $arg in
           dump-package) dump=1 ;;
+          --show-bin-path) binpath=1 ;;
           list) case $prev in --filter|--skip) ;; *) list=1 ;; esac ;;
         esac
         prev=$arg
       done
       if [ $dump = 1 ]; then \(dumpPackage); fi
+      if [ $binpath = 1 ]; then printf '%s\\n' \(shellQuote(binPath)); exit 0; fi
       case ${1:-} in
         test) if [ $list = 1 ]; then cat \(shellQuote(listingPath)); exit 0; fi; exit \(testStatus) ;;
         build) exit \(buildStatus) ;;
@@ -390,15 +403,16 @@ private func canonicalFilters(_ filters: [String]) -> Set<String> {
   return result
 }
 
-/// Checks that bin/test built exactly the bundles of the targets that `filters` name,
-/// each with `--product` and before the run, then ran swift test once with
-/// `--skip-build` and exactly `filters`, exited 0, and said that CI runs the rest.
-private func expectTargeted(
+/// Checks that bin/test ran swift test once with `--skip-build` and exactly
+/// `filters`, exited 0, and said that CI runs the rest. Returns the run's
+/// position among the invocations.
+@discardableResult
+private func expectFilteredRun(
   _ run: SelectionRun, _ filters: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
-) {
+) -> Int? {
   #expect(run.result.status == 0, "\(run.result.stderr)", sourceLocation: sourceLocation)
   #expect(run.testRuns.count == 1, "\(run.invocations)", sourceLocation: sourceLocation)
-  guard let args = run.testRuns.first, let runIndex = run.invocations.firstIndex(of: args) else { return }
+  guard let args = run.testRuns.first, let runIndex = run.invocations.firstIndex(of: args) else { return nil }
   #expect(
     canonicalFilters(SelectionRun.filters(args)) == canonicalFilters(Array(filters)), "\(args)",
     sourceLocation: sourceLocation)
@@ -406,6 +420,15 @@ private func expectTargeted(
   #expect(
     run.result.stderr.contains("CI runs every other test on every push"), "\(run.result.stderr)",
     sourceLocation: sourceLocation)
+  return runIndex
+}
+
+/// Checks that bin/test built exactly the bundles of the targets that `filters` name,
+/// each with `--product` and before the run, then ran as `expectFilteredRun` checks.
+private func expectTargeted(
+  _ run: SelectionRun, _ filters: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
+) {
+  guard let runIndex = expectFilteredRun(run, filters, sourceLocation: sourceLocation) else { return }
   #expect(!run.builds.isEmpty, "\(run.invocations)", sourceLocation: sourceLocation)
   for build in run.builds {
     #expect(build.index < runIndex, "\(run.invocations)", sourceLocation: sourceLocation)
@@ -417,6 +440,21 @@ private func expectTargeted(
   // that it did not build can hold tests from before the change.
   let filterTargets = Set(filters.compactMap { parseFilter($0)?.target })
   #expect(Set(run.builtProducts) == filterTargets, "\(run.invocations)", sourceLocation: sourceLocation)
+}
+
+/// Checks that bin/test built every test bundle in one `--build-tests` build
+/// before the run, then ran as `expectFilteredRun` checks.
+private func expectBuiltEveryBundle(
+  _ run: SelectionRun, _ filters: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
+) {
+  guard let runIndex = expectFilteredRun(run, filters, sourceLocation: sourceLocation) else { return }
+  #expect(run.builds.count == 1, "\(run.invocations)", sourceLocation: sourceLocation)
+  #expect(
+    run.builds.first.map { $0.index < runIndex && $0.args.contains("--build-tests") } == true,
+    "\(run.invocations)", sourceLocation: sourceLocation)
+  #expect(run.builtProducts.isEmpty, "\(run.invocations)", sourceLocation: sourceLocation)
+  #expect(
+    run.result.stderr.contains("so every test bundle builds"), "\(run.result.stderr)", sourceLocation: sourceLocation)
 }
 
 /// A change to the baseline repo and the filters bin/test should then pass.
@@ -1192,6 +1230,30 @@ private func selectionLines(_ output: String) -> Set<String> {
         suiteFilter("SwitchboardAppTests", "FxAppTests"),
       ])
     #expect(run.builtProducts == ["IntegrationTests", "SwitchboardAppTests"], "\(run.invocations)")
+  }
+
+  /// swift test --skip-build fails when any test target's bundle is missing, as in
+  /// a new worktree, so bin/test builds every bundle then.
+  @Test func aMissingBundleBuildsEveryBundle() throws {
+    let repo = try SelectionRepo()
+    try repo.edit("Tests/SwitchboardCoreTests/FxCoreTests.swift")
+    repo.bundles.removeAll { $0 == "IntegrationTests" }
+
+    let run = try repo.run()
+
+    expectBuiltEveryBundle(run, [suiteFilter("SwitchboardCoreTests", "FxCoreTests")])
+  }
+
+  /// SwiftPM's native build system, the default before Swift 6.4, makes one bundle
+  /// for all test targets and no product for each, so bin/test builds every bundle.
+  @Test func oneBundleForAllTestTargetsBuildsEveryBundle() throws {
+    let repo = try SelectionRepo()
+    try repo.edit("Tests/SwitchboardCoreTests/FxCoreTests.swift")
+    repo.bundles = ["SwitchboardPackageTests"]
+
+    let run = try repo.run()
+
+    expectBuiltEveryBundle(run, [suiteFilter("SwitchboardCoreTests", "FxCoreTests")])
   }
 
   @Test func aFailingTargetedTestRunFailsBinTest() throws {
