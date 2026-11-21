@@ -272,11 +272,13 @@ private func refuses(_ text: String?, _ body: () throws -> Request) -> (Bool, St
     #expect(refused, "\(why)")
   }
 
-  /// The keys that Risk 1 names, and keys that differ from a row's key only in their spelling.
+  /// The keys that Risk 1 names, and keys that differ from a row's key only in their spelling. A host may not send
+  /// `reports`, because it would close the Operator's reports.
   @Test(arguments: [
-    ("send", "images"), ("new", "account"), ("new", "group"), ("get", "host"), ("spawn", "account"),
-    ("spawn", "group"), ("spawn", "followup"), ("spawn", "after"), ("ping", "session"), ("ls", "session"),
-    ("wait", "on"), ("get", "Session"), ("send", "session "), ("events", "follow"), ("answer", "always "),
+    ("send", "images"), ("send", "reports"), ("new", "account"), ("new", "group"), ("get", "host"),
+    ("spawn", "account"), ("spawn", "group"), ("spawn", "followup"), ("spawn", "after"), ("ping", "session"),
+    ("ls", "session"), ("wait", "on"), ("get", "Session"), ("send", "session "), ("events", "follow"),
+    ("answer", "always "),
   ])
   func aKeyThatTheOpDoesNotReadIsRefused(op: String, key: String) {
     var args = PlannedScope.baseArgs(op)

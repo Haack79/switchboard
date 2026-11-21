@@ -68,6 +68,19 @@ final class MessageDrafts {
       })
   }
 
+  /// The key of the unsent answer to the Operator's question on a session. It is apart from the session's own draft,
+  /// so text typed for the Operator never sends to the session's claude, and the reverse. The key names no report,
+  /// so a newer question on the same session keeps the text.
+  static func operatorAnswerKey(session: String) -> String { "operator-answer:\(session)" }
+
+  /// The Operator answer keys of every session whose item is an Operator question.
+  static func operatorAnswerKeys(_ sessions: [SessionSummary]) -> Set<String> {
+    Set(
+      sessions.filter { MessageField.Draft.answersOperator(ref: $0.triage?.ref) }.map {
+        operatorAnswerKey(session: $0.id)
+      })
+  }
+
   /// The key of the user's edit of a draft reply. A new card is a new ref, so its draft of the same number starts
   /// from the session's text.
   static func replyKey(session: String, ref: String, number: Int) -> String {

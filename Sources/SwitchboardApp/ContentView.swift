@@ -75,6 +75,10 @@ struct ContentView: View {
     Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
   }
 
+  private var isPickingPauseTime: Binding<Bool> {
+    Binding(get: { model.pickingPauseTime != nil }, set: { if !$0 { model.pickingPauseTime = nil } })
+  }
+
   private var isEditingLoop: Binding<Bool> {
     Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
   }
@@ -105,8 +109,6 @@ struct ContentView: View {
           FollowupView(session: s, followup: f).id(s.id)
         } else if let s = model.selected, let d = s.docket {
           DocketView(session: s, docket: d).id(s.id)
-        } else if let s = model.selected, s.kind.showsAsChat {
-          ChatView(session: s).id(s.id)
         } else if let s = model.selected {
           SessionView(session: s).id(s.id)
         } else {
@@ -190,7 +192,20 @@ struct ContentView: View {
       DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
     .sheet(isPresented: isPickingSnoozeTime) {
-      if let id = model.pickingSnoozeTime { SnoozePicker(session: id).environmentObject(model) }
+      if let id = model.pickingSnoozeTime {
+        UntilPicker(
+          session: id, verb: "Snooze", apply: { model.snooze(id, until: $0) },
+          close: { model.pickingSnoozeTime = nil }
+        ).environmentObject(model)
+      }
+    }
+    .sheet(isPresented: isPickingPauseTime) {
+      if let id = model.pickingPauseTime {
+        UntilPicker(
+          session: id, verb: "Pause", apply: { model.pause(id, until: $0) },
+          close: { model.pickingPauseTime = nil }
+        ).environmentObject(model)
+      }
     }
     .sheet(isPresented: isEditingLoop) {
       if let request = model.loopEditor {
@@ -246,7 +261,6 @@ struct Sidebar: View {
     let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
-      OperatorRow(activeAccount: activeAccount)
       if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
       ForEach(groups) { group in
         let state = group.state

@@ -478,15 +478,34 @@ private func tmuxHas(_ t: Terminals, _ target: String) throws -> Bool {
   @Test func cleanupDeletesTheIgnoredNamesThatConfigLists() throws {
     let github = try FakeGitHub()
     let (sbd, repo, s) = try finishedSession(github)
-    try ".env\n.notes/\n".write(toFile: "\(repo)/.git/info/exclude", atomically: true, encoding: .utf8)
+    try ".env\n.scratch/\n".write(toFile: "\(repo)/.git/info/exclude", atomically: true, encoding: .utf8)
     try "SECRET=1".write(toFile: "\(s.cwd)/.env", atomically: true, encoding: .utf8)
-    try FileManager.default.createDirectory(atPath: "\(s.cwd)/.notes", withIntermediateDirectories: true)
-    try "x".write(toFile: "\(s.cwd)/.notes/brief.md", atomically: true, encoding: .utf8)
-    try sbd.restart(setting: "cleanupDeletes", to: [".env", ".notes"])
+    try FileManager.default.createDirectory(atPath: "\(s.cwd)/.scratch", withIntermediateDirectories: true)
+    try "x".write(toFile: "\(s.cwd)/.scratch/brief.md", atomically: true, encoding: .utf8)
+    try sbd.restart(setting: "cleanupDeletes", to: [".env", ".scratch"])
 
     try sbd.sb("cleanup", s.id)
 
     #expect(!FileManager.default.fileExists(atPath: s.cwd))
+  }
+
+  @Test func removesAWorktreeWhoseOnlyIgnoredContentIsDotNotes() throws {
+    let github = try FakeGitHub()
+    let (sbd, repo, s) = try finishedSession(github)
+    try ".notes/\n".write(toFile: "\(repo)/.git/info/exclude", atomically: true, encoding: .utf8)
+    try FileManager.default.createDirectory(atPath: "\(s.cwd)/.notes", withIntermediateDirectories: true)
+    try "x".write(toFile: "\(s.cwd)/.notes/brief.md", atomically: true, encoding: .utf8)
+
+    try sbd.sb("cleanup", s.id)
+
+    #expect(!FileManager.default.fileExists(atPath: s.cwd))
+  }
+
+  @Test func refusesAnIgnoredFileNamedDotNotes() throws {
+    try refusesAReadySession([".notes"]) { _, repo, s in
+      try ".notes\n".write(toFile: "\(repo)/.git/info/exclude", atomically: true, encoding: .utf8)
+      try "mine".write(toFile: "\(s.cwd)/.notes", atomically: true, encoding: .utf8)
+    }
   }
 
   @Test(arguments: ["--assume-unchanged", "--skip-worktree"])

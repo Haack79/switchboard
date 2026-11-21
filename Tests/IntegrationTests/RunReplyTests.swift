@@ -186,7 +186,7 @@ import Testing
     #expect(at < (log.lastIndex { $0.role == .user && $0.text == "tick again" } ?? -1))
   }
 
-  /// Decision 8: only a session that shows as a chat measures its transcript for a resumed run.
+  /// Decision 8: only a conversation measures its transcript for a resumed run.
   @Test func aWorkSessionsResumedRunHasASentIdAndNoMark() throws {
     let sbd = try Instance()
     let s = try sbd.idleSession()

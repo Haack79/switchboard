@@ -359,28 +359,26 @@ enum InsideClaudeCode: String, CaseIterable, CustomStringConvertible {
     #expect(input.contains("hello again"), "\(input)")
   }
 
-  /// Test 2, through sbd: a parent hears its child need you once, and the child's clarifying turn adds no line.
-  /// A second child's notice afterwards shows that the parent was taking notices the whole time.
-  @Test func aParentHearsNothingOfAChildsClarifyingTurn() throws {
+  /// Test 2, through sbd: a parent's digest names its child once for needing you, and the child's clarifying turn
+  /// adds nothing to the parent's next digest.
+  @Test func aParentsDigestLeavesOutAChildsClarifyingTurn() throws {
     let sbd = try Instance()
-    let managers = ManagerTests()
-    let parent = try managers.idle(sbd, name: "p")
-    let kid = try managers.child(sbd, of: parent.id, name: "kid")
+    let digest = DigestTests()
+    let p = try digest.parent(sbd, .work)
+    let kid = try digest.child(sbd, of: p, name: "kid", prompt: "one")
     try sbd.waitFor(kid.id, "the kid's summary") { $0.triage?.source == .summary }
     try sbd.setSummary(kid.id, threeDecisionCard)
     try sbd.waitFor(kid.id, "the kid's card") { $0.triage?.source == .session && $0.triage?.decisions.count == 3 }
-    try managers.waitForNotice(sbd, parent.id, after: 0, containing: "(\(kid.id)) needs you")
-    try sbd.waitFor(parent.id, "the parent's reply to the notice") { $0.lastReply?.contains(kid.id) == true }
-    sleep(2)
-    try sbd.waitFor(parent.id, "the parent to finish its turns") { $0.state != .working }
-    let heard = try sbd.messagesFromSbd(parent.id).count
+    try digest.prompt(sbd, p, "first")
+    #expect(digest.contexts(sbd, p).contains { $0.contains(kid.id) }, "the parent never heard the kid need you")
+    let heard = digest.contexts(sbd, p).count
 
     _ = try sbd.ask(kid.id)
-    let kid2 = try managers.child(sbd, of: parent.id, name: "kid2")
-    try managers.waitForNotice(sbd, parent.id, after: heard, containing: "(\(kid2.id))")
+    try digest.prompt(sbd, p, "after the question")
 
-    let told = Array(try sbd.messagesFromSbd(parent.id).dropFirst(heard))
+    let told = Array(digest.contexts(sbd, p).dropFirst(heard))
     #expect(!told.contains { $0.contains(kid.id) }, "\(told)")
+    #expect(try sbd.sbdMessages(p.id).isEmpty)
   }
 
   // MARK: Opening the list

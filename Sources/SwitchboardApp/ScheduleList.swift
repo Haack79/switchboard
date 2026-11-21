@@ -122,7 +122,7 @@ struct ScheduleActions: View {
   }
 }
 
-/// A chat pane's line such as `2 schedules · next in 12m`, which opens the session's schedules in a popover. It
+/// A conversation's line such as `2 schedules · next in 12m`, which opens the session's schedules in a popover. It
 /// draws nothing when the session has no schedule.
 struct SchedulesStrip: View {
   let session: SessionSummary

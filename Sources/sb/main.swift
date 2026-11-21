@@ -11,7 +11,8 @@ let usage = """
                                   remote, and in the groups G1 and G2, or in no
                                   group. --brief prints one line per session:
                                   its id, name, state, reason, PR, open waits,
-                                  and url
+                                  and url. The text and --brief lists leave out
+                                  the operator. --json keeps it
     ls --removed                  list the sessions that sbd removed, newest
                                   first, with the name each had
     new <folder> [--branch B | --worktree] [--base REF] [--name N] [--prompt P]
@@ -113,16 +114,22 @@ let usage = """
     operator [<text>]             open the operator, the one background Manager
                                   session that follows through on the waits that
                                   conversations hand it, creating it the first
-                                  time. With text, send it a message
+                                  time. With text, send it a message. The app
+                                  doesn't show a sidebar row for it. Its work
+                                  shows in the Loops tab's Background Activity
+                                  list, whose Transcript button opens its
+                                  transcript
     operator --log                the last messages of the operator's current
                                   conversation. sbd starts a fresh one after
                                   operator.maxTurns turns (20) or
                                   operator.resetEverySeconds (1 day)
     operator report [--needs-you] [--session S] <text>
                                   record a report. Only the operator runs it.
-                                  --needs-you puts it in the Inbox until you
-                                  answer the operator or acknowledge it. S is
-                                  the session that it is about
+                                  S is the session that it is about.
+                                  --needs-you makes it a question on S's Inbox
+                                  item, or without S, on the conversation that
+                                  handed over the work. It stays open until
+                                  you answer or acknowledge it
     operator approve <wait>       approve the merge that a "judgment needed"
                                   message asks about, after reading the
                                   session's last reply in it. Only the operator
@@ -302,7 +309,8 @@ let usage = """
     ack <session> [--undo]        acknowledge the session's Inbox item: it moves to Waiting until its
                                   reason or its PR's head commit changes or a new turn starts. Nothing
                                   else about the session changes. --undo puts it back in the Inbox.
-                                  Refuses the session that runs it
+                                  On a background follow-through question it closes the question
+                                  instead, and --undo refuses. Refuses the session that runs it
     snooze <session> [--until WHEN | --for DURATION]
                                   take the session's Inbox item out of the Inbox until WHEN (as
                                   wait --until reads it) or for DURATION, 1 hour by default. A new
@@ -1029,11 +1037,15 @@ case "ls", "list":
       let ids = Set(shown.map(\.id))
       let list = JSON.array((result.array ?? []).filter { $0["id"]?.string.map(ids.contains) ?? false })
       printJSON(brief ? briefJSON(list) : list)
-    } else if brief {
-      if shown.isEmpty { print(noSessions) }
-      for s in shown { print(s.briefLine) }
     } else {
-      printSessionList(shown, filter: filter)
+      // The operator has no row in the app, so the text lists leave it out. The JSON keeps it for scripts.
+      let listed = shown.filter { $0.kind != .operator }
+      if brief {
+        if listed.isEmpty { print(noSessions) }
+        for s in listed { print(s.briefLine) }
+      } else {
+        printSessionList(listed, filter: filter)
+      }
     }
   }
 case "new":

@@ -102,6 +102,7 @@ extension Service {
     case .reply:
       let text = args["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       guard !text.isEmpty else { throw APIError("\(option.label) needs the text to send") }
+      if item.source == .report { return try operatorReply(id, item, text, insideClaude: insideClaude) }
       return send(text)
     case .merge:
       return Request(op: "merge", args: ["session": session])
@@ -136,6 +137,23 @@ extension Service {
       }
       return Request(op: "answer", args: .object(answer))
     }
+  }
+
+  /// The request that sends the reply on `id`'s ask item to the operator. It names the session, unless `id` is the
+  /// operator, and carries the ids of the asks on `id` up to the one that the item's ref names. The `sent` event
+  /// closes exactly those reports.
+  private func operatorReply(_ id: String, _ item: TriageItem, _ text: String, insideClaude: JSON) throws -> Request {
+    guard let op = operatorID() else { throw APIError("there is no operator to answer") }
+    guard let latest = Triage.reportID(ref: item.ref) else {
+      throw APIError("\(entries[id]!.session.name) has no question from the operator to answer")
+    }
+    let ids = entries[id]!.facts.operatorItems.asks.map(\.id).filter { $0 <= latest }
+    return Request(
+      op: "send",
+      args: [
+        "session": .string(op), "text": .string(id == op ? text : "About \(entries[id]!.session.name): \(text)"),
+        "reports": .array(ids.map { .number(Double($0)) }), "ref": .string(item.ref), "insideClaude": insideClaude,
+      ])
   }
 
   /// The session's last assistant reply from its transcript, which is read

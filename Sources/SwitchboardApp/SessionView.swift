@@ -13,9 +13,10 @@ final class SessionViewState: ObservableObject {
   @Published var sidePanelFits = true
 }
 
-/// One session: its state and actions, and the Claude terminal and the shell side by side. The user types to
-/// Claude in its terminal. The field that sends Claude a message, with images, shows only on request or while
-/// it holds a draft.
+/// One session of any kind: its state and actions, and the Claude terminal and the shell side by side. The user
+/// types to Claude in its terminal. The field that sends Claude a message, with images, shows only on request or
+/// while it holds a draft. A Manager conversation, a group chat, and the operator also show their conversation
+/// controls and strips.
 struct SessionView: View {
   @EnvironmentObject var model: BoardModel
   let session: SessionSummary
@@ -28,6 +29,13 @@ struct SessionView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      if session.kind == .manager { ManagerStatusStrip(session: session) }
+      if session.kind.isConversation { SchedulesStrip(session: session) }
+      // The Inbox lists every proposal above the item that nests this view.
+      let proposals =
+        model.selection == session.id
+        ? session.chat.map { g in model.planProposals.filter { $0.group == g } } ?? [] : []
+      if !proposals.isEmpty { PlanProposalList(proposals: proposals) }
       PauseBanner(session: session)
       Divider()
       if session.removal?.state == .failed {
@@ -49,6 +57,7 @@ struct SessionView: View {
       // A GeometryReader accepts any width. Without this, the layout above gives the terminals less than
       // their minimum widths, and the shell pane is laid out past the trailing edge.
       .frame(minWidth: SessionView.terminalsMinWidth(session))
+      WorkSkillOfferBar(session: session)
       SessionMessageField(session: session.id, draft: model.messageDraft(for: session))
     }
     // A request that no view took would otherwise take focus the next time this session shows.
@@ -249,8 +258,9 @@ struct SessionView: View {
         BranchSwitchNote(session: session)
         // The title row wraps the session's name at 1024 pt when the account sits in it.
         HStack(spacing: 8) {
-          // ChatHeader shows the account above a chat's terminal view, which nests this view.
-          if !session.kind.showsAsChat { SessionAccountControl(session: session) }
+          SessionAccountControl(session: session)
+          if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
+          if session.kind == .manager { ManagerHeaderControls(session: session) }
           Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
             .font(.caption)
             .foregroundStyle(.tertiary)
@@ -276,8 +286,9 @@ struct SessionView: View {
             .help("Restart claude in this session. It continues the conversation.")
         }
         if session.canPause {
-          Button("Pause") { model.pause(session.id) }
-            .help(PauseBanner.pauseHelp)
+          PauseMenuItems(id: session.id)
+            .fixedSize()
+            .help("Stop claude until you resume it, or until a time you pick.")
         }
         Button(session.markedDone ? "Not Done" : "Done") { model.setDone(session.id, !session.markedDone) }
           .help(
@@ -334,7 +345,8 @@ struct SessionView: View {
 }
 
 /// The Message Claude field under a session's terminals. It observes the draft, so typing into a hidden draft
-/// elsewhere shows it here.
+/// elsewhere shows it here. A Manager conversation's or the operator's field checks a draft for a work skill
+/// before it sends it.
 private struct SessionMessageField: View {
   @EnvironmentObject var model: BoardModel
   let session: String
@@ -348,8 +360,8 @@ private struct SessionMessageField: View {
         takesFocus: model.messageFieldFocus == session,
         onFocus: { [model, session] in model.releaseMessageFieldFocus(session) },
         onEmptyEscape: { [model, session] in model.hideMessageField(session) },
-        // Text typed while the send was on its way stays, and so does the field.
-        onSent: { [model, session, draft] in if draft.isEmpty { model.hideMessageField(session) } }
+        onSent: { [model, session, draft] in model.hideMessageFieldIfEmpty(session, draft: draft) },
+        intercept: { [model, session] in model.submitChecked(session: session, draft: $0, then: $1) }
       )
       .padding(8)
       // A field that shows only for its draft would vanish under the cursor when the user empties the draft. A

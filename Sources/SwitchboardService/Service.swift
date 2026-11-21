@@ -438,6 +438,9 @@ public final class Service {
       if entries[id]?.session.host == nil { try settleUncertain(id, texts) } else { unsettled[id] = texts }
     }
     markInterruptedPosts()
+    // Replay gives no session its Operator items. The parent marks must include them, or the next tick tells each
+    // parent again about an ask that it already heard about.
+    syncOperatorItems()
     seedParentMarks(now: nowMs())
     migrateReadState()
     try? refreshManagerGuide()
@@ -786,7 +789,16 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
+      // Only the user's message closes the operator's reports, so `reports` from a Claude Code is dropped.
+      var extra: [String: JSON] = [:]
+      if let reports = args["reports"] {
+        // A dropped `reports` would make the `sent` event close every open report.
+        guard let list = reports.array, list.allSatisfy({ $0.int != nil }) else {
+          throw APIError("send's reports must be an array of integer report ids")
+        }
+        if author == .you, id == operatorID() { extra["reports"] = .array(list) }
+      }
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere, extra: extra)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -1019,9 +1031,9 @@ public final class Service {
         break
       }
       try nameConversation(id, prompt: payload["prompt"]?.string)
-      let digestText = digest(id, now: event.t)
+      // A host's hook answer never reaches claude, so a host session keeps its digest and its replies unheard.
+      let digestText = stamp == nil ? digest(id, now: event.t) : nil
       if let digestText { record(id, "digest", ["text": .string(digestText)]) }
-      // A host's hook answer never reaches claude, so a host session keeps its replies unheard.
       let context = [digestText, stamp == nil ? repliesNotice(id) : nil].compactMap { $0 }
       if !context.isEmpty { answer = ParentDigest.hookOutput(context.joined(separator: "\n\n"), event: kind) }
     case "PreToolUse":
@@ -1068,6 +1080,8 @@ public final class Service {
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
       dropStaleFailedRemoval(id, event: event)
+      // `recordReport` syncs after it routes the report, so the ask never shows on a fallback owner first.
+      if e.session.kind == .operator, event.kind != OperatorReport.event { syncOperatorItems() }
     }
     releaseCards(id)
     return event
@@ -1419,6 +1433,8 @@ public final class Service {
     session.host = args.host
     session.issue = args.issue
     configure(&session)
+    // A conversation shows Claude's terminal alone. The user opens its shell on demand.
+    if session.kind.isConversation { session.shellClosed = true }
     // config.json's `model` is not for Manager conversations. They run `managerModel` at launch.
     if session.model == nil, session.kind != .manager { session.model = config.model }
     if session.kind != .operator { try refuseOperatorName(session.name) }
@@ -1438,8 +1454,10 @@ public final class Service {
     if let parent = session.parent, entries[parent]?.session.kind == .manager {
       record(parent, "child", ["child": .string(id)])
     }
-    if session.kind.showsAsChat { recordRead(id, 0) }
-    try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    if session.kind.isConversation { recordRead(id, 0) }
+    if session.shellClosed != true {
+      try site(for: session).terminals().create(paneName(id, .shell), cwd: folder.cwd, env: newPaneEnv(id))
+    }
     try launch(id, prompt: args.prompt, trigger: .create)
     return summary(id)
   }
@@ -1449,6 +1467,8 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+    // The operator's waits, and whether a session may own an item, decide which sessions show the operator's items.
+    syncOperatorItems()
   }
 
   /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
@@ -1675,12 +1695,14 @@ public final class Service {
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
+  /// `extra` adds fields to the `sent` event.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> Delivery {
     try deliver(
-      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere,
+      extra: extra
     ).delivery
   }
 
@@ -1693,11 +1715,12 @@ public final class Service {
   /// As `send`, but it also returns the message's `sent` event.
   func deliver(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
-    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
+    var extra = extra
+    if runHere { extra["runHere"] = true }
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
@@ -1731,11 +1754,11 @@ public final class Service {
   }
 
   /// The conversation and the transcript's size before a launch with a prompt. `chat-log` uses them to find a loop
-  /// run's prompt, and to end an earlier run's mark at any later launch. Only a session that shows as a chat gets
-  /// them, because no other kind links to its messages. A size that a host did not answer leaves both out. A missing transcript reads as
+  /// run's prompt, and to end an earlier run's mark at any later launch. Only a conversation gets them, because
+  /// `chat-log` reads only conversations. A size that a host did not answer leaves both out. A missing transcript reads as
   /// size 0.
   private func resumeMark(_ id: String) -> [String: JSON] {
-    guard let session = entries[id]?.session, session.kind.showsAsChat else { return [:] }
+    guard let session = entries[id]?.session, session.kind.isConversation else { return [:] }
     let size: UInt64
     do { size = try transcriptSize(id)?.size ?? 0 } catch { return [:] }
     return ["conversation": .string(session.claudeSessionId), "transcript_bytes": .number(Double(size))]
@@ -2774,6 +2797,8 @@ public final class Service {
       superviseHosts(now: now)
       superviseSites(now: now)
       closeExitedShells()
+      // Pauses, removals, and conversations' activity change the owners of the operator's items without an event.
+      syncOperatorItems()
       for id in entries.keys.sorted() {
         let live = entries[id]?.facts.live ?? false
         switch claudeState(id) {
@@ -2846,7 +2871,6 @@ public final class Service {
       expireGroupMessages(now: now)
       readyDueFollowups(now: now)
       pollDocketsIfDue(now: now)
-      notifyParents(now: now)
       applyMCPChanges(now: now)
       autoContinueSessions(now: now)
       pruneActivityIfDue(now: now)
@@ -2902,7 +2926,7 @@ public final class Service {
       markedDone: s.done)
     out.url = SessionLink.url(for: id).absoluteString
     // `prNumbers` keeps no repo, so a host could read the number of an earlier PR in a repo that it may not read.
-    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip notices a parent already got.
+    // `shownFacts` keeps every number, because `seedParentMarks` reads them to skip PRs that a parent already heard about.
     if origin == .mac {
       out.startBranch = BranchSwitch.startBranch(s, facts)
       let earlier = facts.earlierPRNumbers
@@ -2919,7 +2943,7 @@ public final class Service {
     out.mcp = s.mcp
     out.kind = s.kind
     out.chat = s.chat
-    if s.kind.showsAsChat { out.activity = ChatActivity(facts) }
+    if s.kind.isConversation { out.activity = ChatActivity(facts) }
     let shown = Triage.itemAndDecisions(facts, verdict, kind: s.kind)
     out.triage = shown.item
     if out.triage != nil {
