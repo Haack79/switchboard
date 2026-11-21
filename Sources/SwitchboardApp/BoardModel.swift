@@ -338,6 +338,9 @@ final class BoardModel: ObservableObject {
   @Published var defaultAutoMode: Bool?
   /// sbd's refusal of the last change in Settings ▸ General. The tab shows it instead of the main window's banner.
   @Published var settingsError: String?
+  /// The Settings ▸ General writes that sbd hasn't answered yet, by op. A reply applies only when no newer write of
+  /// its op is pending, so an older answer doesn't undo a newer click.
+  var pendingSettingWrites: [String: Int] = [:]
   /// The loop that the user last moved to in the Loops view, by schedule id.
   @Published var loopFocus: String?
   /// Counts moves in the Loops view. Each one scrolls to the current loop.

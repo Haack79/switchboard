@@ -27,6 +27,9 @@ struct SettingsView: View {
 /// This Mac's live cap, the auto mode of new sessions, and the account of new sessions.
 struct GeneralSettings: View {
   @EnvironmentObject var model: BoardModel
+  /// The number in the cap field. It reaches sbd on Return or when the field loses focus, not on each keystroke.
+  @State private var capDraft = 1
+  @FocusState private var capFocused: Bool
 
   var body: some View {
     let offline = model.unreachable != nil
@@ -38,7 +41,11 @@ struct GeneralSettings: View {
         let cap = Binding(get: { model.liveCap ?? 1 }, set: { model.setLiveCap($0) })
         LabeledContent("Live cap on this Mac") {
           HStack {
-            TextField("Live cap", value: cap, format: .number)
+            TextField("Live cap", value: $capDraft, format: .number)
+              .focused($capFocused)
+              .onSubmit { model.setLiveCap(capDraft) }
+              .onChange(of: capFocused) { if !capFocused { model.setLiveCap(capDraft) } }
+              .onChange(of: model.liveCap, initial: true) { capDraft = model.liveCap ?? 1 }
               .labelsHidden()
               .multilineTextAlignment(.trailing)
               .frame(width: 56)

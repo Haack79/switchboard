@@ -107,6 +107,30 @@ private final class TabBox {
     #expect(model.liveCap == 9)
   }
 
+  /// sbd answers writes in order. The answer to the first click must not undo the second click while the second is
+  /// still on its way, or the Stepper's next click would count from the older cap.
+  @Test func anOlderCapAnswerLeavesANewerPendingCap() async {
+    let model = offlineModel()
+    let sent = SentRequests()
+    let release = DispatchSemaphore(value: 0)
+    model.send = { op, args in
+      sent.append(op, args)
+      let cap = args["cap"]?.int ?? 3
+      if cap == 5 { release.wait() }
+      return try JSON(encoding: LiveStatus(cap: cap, live: [], queued: []))
+    }
+    model.liveCap = 3
+
+    model.setLiveCap(4)
+    model.setLiveCap(5)
+    await settle { model.pendingSettingWrites["live"] == 1 }
+
+    #expect(model.liveCap == 5)
+    release.signal()
+    await settle { model.pendingSettingWrites["live"] == 0 }
+    #expect(model.liveCap == 5)
+  }
+
   /// sbd's answer wins over the value that the toggle sent.
   @Test func setAutoModeSendsTheSettingAndShowsSbdsAnswer() async {
     let (model, sent) = model(Sbd(autoMode: false))

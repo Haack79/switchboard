@@ -15,8 +15,8 @@ extension BoardModel {
       let live = try? send("live", [:])
       let autoMode = try? send("auto-mode", [:])
       Task { @MainActor in
-        live.map(self.applyLive)
-        autoMode.map(self.applyAutoMode)
+        if self.pendingSettingWrites["live", default: 0] == 0 { live.map(self.applyLive) }
+        if self.pendingSettingWrites["auto-mode", default: 0] == 0 { autoMode.map(self.applyAutoMode) }
       }
     }
   }
@@ -49,16 +49,23 @@ extension BoardModel {
   /// Sends a Settings ▸ General change. A refusal shows in Settings instead of the main window's banner, and the
   /// controls go back to sbd's settings.
   private func changeSetting(_ op: String, _ args: [String: JSON], apply: @escaping (JSON) -> Void) {
+    pendingSettingWrites[op, default: 0] += 1
     perform(
       op, args,
       then: { reply in
         self.settingsError = nil
-        apply(reply)
+        if self.finishSettingWrite(op) { apply(reply) }
       },
       failed: { error in
         self.settingsError = "\(error)"
-        self.loadSettings()
+        if self.finishSettingWrite(op) { self.loadSettings() }
       })
+  }
+
+  /// Counts the answer to a write of `op`, and gives whether it answers the newest one.
+  private func finishSettingWrite(_ op: String) -> Bool {
+    pendingSettingWrites[op, default: 1] -= 1
+    return pendingSettingWrites[op] == 0
   }
 
   private func applyLive(_ reply: JSON) {
