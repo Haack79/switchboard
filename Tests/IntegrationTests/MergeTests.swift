@@ -408,17 +408,17 @@ extension Instance {
     #expect(got["acknowledged"]?.bool == true)
   }
 
-  @Test func mergeByAPRNumberThatTwoSessionsShareIsRefused() throws {
+  @Test func mergeByAPRNumberGoesToTheSessionThatOwnsIt() throws {
     let github = try FakeGitHub()
     let sbd = try Instance.withMergeStub(github)
-    _ = try sbd.session(in: MergeTests.charts, branch: MergeTests.branch, folder: "one")
+    _ = try readySession(sbd)
     _ = try sbd.session(in: MergeTests.charts, branch: MergeTests.branch, folder: "two")
     try sbd.poll()
 
-    let r = try sbd.run(["merge", "18303"])
+    try sbd.sb("merge", "18303")
 
-    #expect(r.status != 0)
-    #expect(sbd.ghMerges().isEmpty)
+    #expect(
+      sbd.ghMerges() == ["pr merge 18303 --repo PostHog/charts --merge --match-head-commit \(head(github))"])
   }
 
   /// The second PR has #18303's number in another repository.

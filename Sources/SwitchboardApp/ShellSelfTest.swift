@@ -8,7 +8,8 @@ import SwiftUI
 /// `click close` clicks the × on the Shell pane's label with mouse events at the button's place in the
 /// window. `click open` clicks Open Shell on the Claude pane's label the same way. SwiftUI builds no
 /// accessibility elements without an assistive app, so the test can't press a button by its label.
-/// `menu <menu> <item>` runs a menu item. `show-terminal` shows the terminals of an Inbox item, as its Terminal
+/// `menu <menu> <item>` runs a menu item. `titles <menu>` reports the menu's item titles, each between bars, as in
+/// `|Back|Forward|`. `show-terminal` shows the terminals of an Inbox item, as its Terminal
 /// toggle does. `select <session>` selects a session. `type <text>` types the text and
 /// Return into the shell pane. `ctrl-d` types Ctrl-D there. `panes` reports how many terminals the window
 /// shows. `cmd-w` sends ⌘W to the menu bar and reports the menu item that owns ⌘W. `nav-keys` sends each of
@@ -23,12 +24,17 @@ import SwiftUI
 /// sheet's step: `none`, `checking`, or `confirming <number of sessions it deletes>`. `board-click <session>
 /// [count] [cmd|shift]` clicks the session's Board card `count` times, as a double click does for 2, with ⌘ or ⇧
 /// held. `board-click-empty <session>` clicks the empty space just below the card. `board-drag <session>
-/// <session> [cmd]` drags from the empty space beside the first card, on the side that faces the second, to the
-/// middle of the second. The three report `posted on` the hit view's type and send their events over the next
-/// half second. `board-selection` reports the selected ids, sorted and joined by commas, or `none`.
+/// <session> [cmd] [card]` drags from the empty space beside the first card, on the side that faces the second, to
+/// the middle of the second. With `card`, the drag starts at the middle of the first card. The three report
+/// `posted on` the hit view's type and send their events over the next half second. `board-selection` reports the
+/// selected ids, sorted and joined by commas, or `none`. `drag-control` adds a draggable text view outside the
+/// Board to the window, drags it the same way, and also reports `posted on`. `drags` reports how many drag
+/// sessions have started since launch from the view each drag pressed or one of its superviews.
 @MainActor
 enum ShellSelfTest {
   static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
+  /// `board-drag` hides this view so that it can't take a card drag.
+  private static var dragControl: NSView?
 
   static func start(_ model: BoardModel) {
     guard let folder else { return }
@@ -59,15 +65,15 @@ enum ShellSelfTest {
       return "shown"
     case "menu":
       let names = rest.split(separator: " ", maxSplits: 1).map(String.init)
-      guard names.count == 2, let menu = NSApp.mainMenu?.item(withTitle: names[0])?.submenu else { return "no menu" }
-      // SwiftUI sets the items' titles when the menu opens.
-      menu.delegate?.menuNeedsUpdate?(menu)
-      menu.update()
+      guard names.count == 2, let menu = refreshedMenu(names[0]) else { return "no menu" }
       let index = menu.indexOfItem(withTitle: names[1])
       guard index >= 0 else { return "not found in \(menu.items.map(\.title))" }
       guard menu.items[index].isEnabled else { return "disabled" }
       menu.performActionForItem(at: index)
       return "ran"
+    case "titles":
+      guard let menu = refreshedMenu(rest) else { return "no menu" }
+      return "|" + menu.items.filter { !$0.isSeparatorItem }.map(\.title).joined(separator: "|") + "|"
     case "select":
       model.selection = rest
       return "selected"
@@ -135,20 +141,44 @@ enum ShellSelfTest {
       guard let card = boardCard(rest) else { return "no card" }
       return press(at: NSPoint(x: card.midX, y: card.minY - 4))
     case "board-drag":
+      dragControl?.isHidden = true
       let args = rest.split(separator: " ").map(String.init)
       // Scrolling the second card into view can move the first, so both frames are read after both scrolls.
       guard args.count >= 2, boardCard(args[1]) != nil, let from = boardCard(args[0]),
         let to = boardCard(args[1], scroll: false)
       else { return "no card" }
-      // The drag starts in the gap on the side of the first card that faces the second, so it crosses both.
-      let start = NSPoint(x: from.midX, y: to.midY < from.midY ? from.maxY + 4 : from.minY - 4)
+      // Without `card`, the drag starts in the gap on the side of the first card that faces the second, so it
+      // crosses both.
+      let gap = to.midY < from.midY ? from.maxY + 4 : from.minY - 4
+      let start = NSPoint(x: from.midX, y: args.contains("card") ? from.midY : gap)
       return drag(from: start, to: NSPoint(x: to.midX, y: to.midY), flags: args.contains("cmd") ? .command : [])
+    case "drag-control":
+      // The control goes in the window's frame view, above every other view, so the drag hits it.
+      guard let frameView = window?.contentView?.superview else { return "no window" }
+      let control = NSHostingView(rootView: Text(verbatim: "drag control").padding(20).draggable("drag control"))
+      control.frame = NSRect(x: frameView.bounds.midX - 80, y: frameView.bounds.midY - 30, width: 160, height: 60)
+      frameView.addSubview(control, positioned: .above, relativeTo: nil)
+      dragControl = control
+      frameView.layoutSubtreeIfNeeded()
+      let start = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
+      return drag(from: start, to: NSPoint(x: start.x + 100, y: start.y + 100), flags: [])
+    case "drags":
+      return "\(DragWatch.sessions)"
     case "board-selection":
       let ids = model.multiSelection.sorted()
       return ids.isEmpty ? "none" : ids.joined(separator: ",")
     default:
       return "unknown command"
     }
+  }
+
+  /// The menu bar's menu with `title`. SwiftUI sets the items' titles when the menu opens. This function asks for
+  /// them first.
+  private static func refreshedMenu(_ title: String) -> NSMenu? {
+    guard let menu = NSApp.mainMenu?.item(withTitle: title)?.submenu else { return nil }
+    menu.delegate?.menuNeedsUpdate?(menu)
+    menu.update()
+    return menu
   }
 
   /// The frame of the session's Board card in window coordinates, after the Board scrolls the card and 24 pt
@@ -202,6 +232,7 @@ enum ShellSelfTest {
   private static func drag(from start: NSPoint, to end: NSPoint, flags: NSEvent.ModifierFlags) -> String {
     guard let view = hitView(at: start) else { return "nothing at \(Int(start.x)),\(Int(start.y))" }
     acceptFirstMouse(view)
+    DragWatch.watch(view)
     Task { @MainActor in
       guard let down = mouse(.leftMouseDown, at: start, flags: flags) else { return }
       window?.sendEvent(down)
@@ -381,5 +412,37 @@ final class ClickAnchorView: NSView {
       if let found = find(name, in: subview) { return found }
     }
     return nil
+  }
+}
+
+/// Counts the drag sessions that views start. It hooks `beginDraggingSession(with:event:source:)` on the class of a
+/// view and of each of its superviews, because SwiftUI starts the session on a hosting view, which overrides
+/// the method.
+@MainActor
+private enum DragWatch {
+  static var sessions = 0
+  private static var hooked: Set<ObjectIdentifier> = []
+
+  static func watch(_ view: NSView?) {
+    var next = view
+    while let view = next {
+      hook(type(of: view))
+      next = view.superview
+    }
+  }
+
+  private static func hook(_ cls: AnyClass) {
+    guard hooked.insert(ObjectIdentifier(cls)).inserted else { return }
+    let selector = #selector(NSView.beginDraggingSession(with:event:source:))
+    guard let method = class_getInstanceMethod(cls, selector) else { return }
+    typealias Begin =
+      @convention(c) (NSView, Selector, [NSDraggingItem], NSEvent, NSDraggingSource) -> NSDraggingSession
+    let original = unsafeBitCast(method_getImplementation(method), to: Begin.self)
+    let block: @convention(block) (NSView, [NSDraggingItem], NSEvent, NSDraggingSource) -> NSDraggingSession = {
+      view, items, event, source in
+      MainActor.assumeIsolated { sessions += 1 }
+      return original(view, selector, items, event, source)
+    }
+    class_replaceMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
   }
 }

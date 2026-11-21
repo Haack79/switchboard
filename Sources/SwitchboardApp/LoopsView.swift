@@ -99,7 +99,8 @@ private struct LoopListHeader: View {
       Spacer(minLength: 0)
       NewLoopButton().fixedSize()
     }
-    .padding(8)
+    .padding(.horizontal, Design.listInset)
+    .padding(.vertical, 8)
   }
 }
 
