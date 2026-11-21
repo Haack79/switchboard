@@ -1049,6 +1049,7 @@ import Testing
 
     sbd.stopSbd()
     try sbd.startSbd()
+    try #require(try sbd.get(kid.id).reason == Self.askReason)
     try digests.prompt(sbd, parent, "second")
 
     #expect(digests.contexts(sbd, parent).count == heard.count)
