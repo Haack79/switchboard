@@ -15,10 +15,17 @@ extension Service {
     }
     let model = args["model"]?.string ?? operatorSettings.model
     if let problem = Manager.modelProblem(model) { throw APIError(problem) }
-    let env: [String: String] = try queue.sync {
-      let op = try ensureOperator()
-      return headlessEnv(session: op, account: triageAccount(for: op).account)
+    // An existing operator gives the live judges' account. Without one, the call takes `triage.account` or the active
+    // account, so an eval never creates or launches an operator.
+    let (account, env): (String, [String: String]) = queue.sync {
+      if let op = operatorID(quiet: true) {
+        let triage = triageAccount(for: op)
+        return (triage.key, headlessEnv(session: op, account: triage.account))
+      }
+      let account = config.triage.account.map(ClaudeAccount.init(folder:)) ?? activeAccount
+      return (account.folder, headlessEnv(session: nil, account: account))
     }
+    guard quota.hasBudget(account: account) else { throw APIError("no quota is left for \(account)") }
     func text(_ key: String) throws -> String {
       guard let value = input[key]?.string else { throw APIError("the \(kind) input needs \"\(key)\" as text") }
       return value

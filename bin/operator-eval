@@ -12,8 +12,8 @@
 # `expected` lists the acceptable answers, split by "|". A pick-issues answer is its first pick. The script runs
 # every case on every model --runs times through `sb operator judge`, which uses sbd's own prompt, schema, and
 # account, and prints a table of the answers. A case passes for a model when every run gave an acceptable answer.
-# A reply-gate case that expects `ask` and got `merge` in any run is a hard fail, because sbd would merge a PR
-# that needed the user.
+# A reply-gate run that answers `merge` where `merge` is not an acceptable answer is a hard fail, because sbd would
+# merge a PR that needed the user.
 #
 # The last lines say whether the model meets the bar for `operator.model`: no hard fail, and at least 90 percent
 # of all runs acceptable. They also give the tokens per judgment. It runs the `sb` on PATH, or $SB.
@@ -79,7 +79,7 @@ for file in "$dir"/*.json; do
         runs_ok[$m]=$((${runs_ok[$m]} + 1))
       else
         [ "$pass" = HARD-FAIL ] || pass=no
-        if [ "$kind" = reply-gate ] && [ "$answer" = merge ] && [ "$expected" = ask ]; then
+        if [ "$kind" = reply-gate ] && [ "$answer" = merge ]; then
           hard_fails[$m]=$((${hard_fails[$m]} + 1))
           pass=HARD-FAIL
         fi

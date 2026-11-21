@@ -118,6 +118,8 @@ import Testing
     #expect(sbd.judgeCalls() == ["haiku", "opus"])
     #expect(sbd.judgeInput().contains("Nothing is left for you."))
     #expect(try sbd.sb("operator", "reports", "--all").isEmpty)
+    // The call takes the active account, so it neither creates nor launches an operator.
+    #expect(try sbd.run("get", "Operator").status != 0)
   }
 
   @Test func aCIFailureJudgmentAnswersTheCause() throws {
