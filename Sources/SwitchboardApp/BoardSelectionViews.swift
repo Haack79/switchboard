@@ -11,6 +11,8 @@ final class BoardGeometry {
   /// rectangle ends, unless the card draws again first.
   private(set) var frames: [String: CGRect] = [:]
   var header: CGRect = .zero
+  /// The frame of each lane's header, by lane id. Its text fields and buttons take the clicks and drags there.
+  private(set) var laneHeaders: [String: CGRect] = [:]
   /// A view inside the Board's scroll view, which finds the scroll view.
   weak var anchor: NSView?
   /// Where the last event of a rectangle drag put the pointer, in window coordinates. The pointer rests there
@@ -29,6 +31,16 @@ final class BoardGeometry {
   }
 
   func keepFrames(_ ids: Set<String>) { frames = frames.filter { ids.contains($0.key) } }
+
+  func recordLaneHeader(_ lane: String, _ frame: CGRect) { laneHeaders[lane] = frame }
+
+  /// Removes the frame of a lane header view that went away. A second view can draw the same lane, and SwiftUI
+  /// may report its frame before the first view disappears. It removes the frame only when the departing view
+  /// wrote the stored frame.
+  func dropLaneHeader(_ lane: String, ifStill frame: CGRect?) {
+    guard let frame, laneHeaders[lane] == frame else { return }
+    laneHeaders[lane] = nil
+  }
 
   /// Stores the frame that a card view reports. It cancels a pending removal of that card's frame.
   func record(_ id: String, _ frame: CGRect) {
@@ -135,8 +147,7 @@ struct BoardMarqueeSelection: ViewModifier {
 
   private func onEmptySpace(_ point: CGPoint) -> Bool {
     BoardRect.startsSelection(
-      at: point, frames: geometry.frames, labelEdge: BoardView.boardPadding + BoardView.labelWidth,
-      header: geometry.header)
+      at: point, frames: geometry.frames, blocked: [geometry.header] + geometry.laneHeaders.values)
   }
 
   private func select() {
