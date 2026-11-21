@@ -228,6 +228,8 @@ public struct Clarifying: Codable, Equatable, Sendable {
   public var message: String
   /// True once claude reported the message as a prompt.
   public var started: Bool
+  /// True once sbd started to paste the message. Until then, the message can still wait in the queue.
+  public var pasted: Bool
 }
 
 /// The data of a `decision_asked` event. `verdict` and `item` are what the session showed when the user asked.
@@ -295,6 +297,7 @@ extension SessionSummary {
 extension SessionFacts {
   static let unansweredAsk = "The turn ended without an answer."
   static let undeliveredAsk = "The question never reached the session. Ask again."
+  static let changedAsk = "The question changed before it reached the session. Ask again."
   static let unconfirmedAsk =
     "Switchboard can't tell whether your question reached the session. Ask again if no answer appears."
 
@@ -303,8 +306,9 @@ extension SessionFacts {
   /// unless it starts the clarifying turn. `turnEnded` is true when the event
   /// ended the running turn.
   mutating func applyDecisions(_ event: Event, turnEnded: Bool) {
-    if let ask = clarifying, ask.started, !event.fromSubagent, turnEnded || event.kind == "Stop" {
-      // A subagent's end of the turn leaves the ask open. The main Stop that follows files the reply.
+    if let ask = clarifying, ask.started, !event.fromSubagent, turnEnded || Self.endsTurn(event) {
+      // A subagent's end of the turn leaves the ask open. The main session's own end of the turn closes it, and a
+      // main Stop files its reply.
       let reply = event.kind == "Stop" ? event.data["last_assistant_message"]?.string ?? "" : ""
       endClarifying(reply: reply.isEmpty ? nil : reply, error: reply.isEmpty ? Self.unansweredAsk : nil)
     }
@@ -329,6 +333,11 @@ extension SessionFacts {
       clarifying = nil
     case "decision_asked":
       applyAsk(event)
+    case "pasting", "delivered", "requeued":
+      // A failed paste puts the message back in the queue.
+      guard var ask = clarifying, !ask.started, event.data["text"]?.string == ask.message else { break }
+      ask.pasted = event.kind != "requeued"
+      clarifying = ask
     case "UserPromptSubmit":
       applyPromptToList(event.data["prompt"]?.string ?? "")
     case "SessionEnd", "stopped", "exited":
@@ -364,6 +373,16 @@ extension SessionFacts {
 }
 
 extension SessionFacts {
+  /// Whether the main session's event ends its turn. `turnEnded` is false for one that comes after a subagent's
+  /// end of the turn, because that end already cleared `turnRunning`.
+  private static func endsTurn(_ event: Event) -> Bool {
+    switch event.kind {
+    case "Stop", "StopFailure", "idle": true
+    case "Notification": event.data["notification_type"]?.string == "idle_prompt"
+    default: false
+    }
+  }
+
   /// Records an ask about a decision of the open, fresh list that the event names. An ask while another one is
   /// pending records nothing, because only one clarifying turn can be matched to its reply. The first ask of a
   /// hold saves the verdict and the item that the hold keeps.
@@ -374,18 +393,24 @@ extension SessionFacts {
     if heldAsk == nil { heldAsk = ask }
     decisionList?.exchanges.append(
       DecisionExchange(askId: ask.askId, number: ask.number, text: ask.text, pending: true))
-    clarifying = Clarifying(askId: ask.askId, number: ask.number, message: ask.message, started: false)
+    clarifying = Clarifying(askId: ask.askId, number: ask.number, message: ask.message, started: false, pasted: false)
   }
 
   /// The prompt that is the ask's message starts the clarifying turn and leaves the list fresh. Any other prompt
-  /// makes the list stale, and it ends a clarifying turn that never stopped with an error.
+  /// makes the list stale, and it ends a clarifying turn that never stopped with an error. After the paste, any
+  /// other prompt also ends the unstarted ask with an error. Text that the user typed in the terminal while the
+  /// paste ran changed the message into that prompt, so the message never arrives as its own prompt.
   private mutating func applyPromptToList(_ prompt: String) {
-    if var ask = clarifying, !ask.started, InboxRequest.isPrompt(prompt, of: ask.message) {
-      ask.started = true
-      clarifying = ask
-      return
+    if var ask = clarifying, !ask.started {
+      if InboxRequest.isPrompt(prompt, of: ask.message) {
+        ask.started = true
+        clarifying = ask
+        return
+      }
+      if ask.pasted { endClarifying(error: Self.changedAsk) }
+    } else if clarifying != nil {
+      endClarifying(error: Self.unansweredAsk)
     }
-    if clarifying?.started == true { endClarifying(error: Self.unansweredAsk) }
     decisionList?.stale = true
   }
 

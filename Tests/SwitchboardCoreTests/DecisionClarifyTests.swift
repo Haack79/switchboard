@@ -381,9 +381,9 @@ extension DecisionClarifyVerdictTests {
     var testDescription: String { name }
   }
 
-  /// Tests 3 and 4. Only the question itself, with nothing after it but
-  /// attached images, starts the clarifying turn. Any other prompt makes the
-  /// list stale and leaves the clarifying turn unstarted.
+  /// Tests 3 and 4. After the paste, only the question itself, with nothing after it but attached images, starts the
+  /// clarifying turn. Any other prompt is the question as the user changed it in the terminal before claude took it.
+  /// It makes the list stale and closes the ask with an error, because the question's own prompt never comes.
   @Test(arguments: [
     PromptCase(name: "the question", prompt: askMessage, clarifying: true),
     PromptCase(name: "the question with an image", prompt: askMessage + " [Image #1]", clarifying: true),
@@ -402,18 +402,80 @@ extension DecisionClarifyVerdictTests {
     track(&a.facts, [promptEvent(8, t: 310, c.prompt)])
 
     #expect(a.facts.decisionList?.stale == !c.clarifying)
-    let clarifying = try #require(a.facts.clarifying, "the prompt closed the ask before it started")
-    #expect(clarifying.started == c.clarifying)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    if c.clarifying {
+      #expect(a.facts.clarifying?.started == true)
+      #expect(exchange.pending)
+    } else {
+      #expect(a.facts.clarifying == nil)
+      #expect(exchange.error == "The question changed before it reached the session. Ask again.")
+      #expect(!exchange.pending)
+      #expect(exchange.reply == nil)
+    }
   }
 
-  /// Test 4. A typed prompt that arrives before the question leaves the ask
-  /// waiting for its own prompt.
-  @Test func aTypedPromptBeforeTheQuestionDoesNotStartTheClarifyingTurn() throws {
+  /// A paste that sbd records only as `delivered` counts as a paste too.
+  @Test(arguments: ["pasting", "delivered"])
+  func anEditedQuestionAfterItsPasteClosesTheAskAndMakesTheListStale(_ pasted: String) throws {
     var a = try Asked(.needsYou)
+    track(
+      &a.facts,
+      [
+        sentQuestion(6, t: 301),
+        Event(id: 7, session: "s1", t: 302, kind: pasted, data: ["text": .string(askMessage)]),
+      ])
 
-    track(&a.facts, [sentQuestion(6, t: 301), promptEvent(7, t: 305, "go on")])
+    let v = track(&a.facts, [promptEvent(8, t: 310, askMessage.replacingOccurrences(of: "task", with: "job"))])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == "The question changed before it reached the session. Ask again.")
+    #expect(!exchange.pending)
+    #expect(a.facts.decisionList?.stale == true)
+    #expect(v.state == .working, "\(v.state) \(v.reason)")
+  }
+
+  /// What came before a prompt that is not the question, while the question has not been pasted.
+  enum BeforePaste: String, CaseIterable, Sendable, CustomTestStringConvertible {
+    /// sbd chose to paste, but the paste waits until claude's prompt box shows empty.
+    case sentToPaste
+    case queued
+    /// The paste failed and the question went back to the queue.
+    case requeued
+    case pasteOfAnotherMessage
+
+    var testDescription: String { rawValue }
+
+    var events: [Event] {
+      switch self {
+      case .sentToPaste: [sentQuestion(6, t: 301)]
+      case .queued:
+        [
+          Event(
+            id: 6, session: "s1", t: 301, kind: "sent",
+            data: ["text": .string(askMessage), "by": "sbd", "delivery": .string(Delivery.queued.rawValue)])
+        ]
+      case .requeued:
+        [
+          sentQuestion(6, t: 301), pasting(7, t: 302),
+          Event(id: 8, session: "s1", t: 303, kind: "requeued", data: ["text": .string(askMessage)]),
+        ]
+      case .pasteOfAnotherMessage: [sentQuestion(6, t: 301), pasting(7, t: 302, message: "hello")]
+      }
+    }
+  }
+
+  /// Test 4. A typed prompt that arrives before the question's paste starts leaves the ask waiting for its own
+  /// prompt.
+  @Test(arguments: BeforePaste.allCases)
+  func aTypedPromptBeforeTheQuestionsPasteLeavesTheAskPending(_ before: BeforePaste) throws {
+    var a = try Asked(.needsYou)
+    track(&a.facts, before.events)
+
+    track(&a.facts, [promptEvent(9, t: 305, "go on")])
 
     #expect(a.facts.clarifying?.started == false)
+    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
     #expect(a.facts.decisionList?.stale == true)
   }
 
@@ -706,6 +768,29 @@ extension DecisionClarifyListTests {
     #expect(exchange.reply == "B would break the public API.")
     #expect(exchange.pending == false)
     #expect(a.facts.clarifying == nil)
+  }
+
+  /// A subagent's end clears `turnRunning`, so the main session's later end of the turn ends no turn. It still
+  /// closes the started ask with an error.
+  @Test(arguments: ["Stop", "StopFailure"], [TurnEnd.stopFailure, .idlePrompt, .idle])
+  func aMainEndAfterASubagentEndedTheTurnClosesTheStartedAsk(_ subagentKind: String, _ end: TurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+    let subagentEnd = Event(
+      id: 9, session: "s1", t: 315, kind: subagentKind,
+      data: ["last_assistant_message": "a subagent's answer", "agent_id": "sub-1"])
+    track(&a.facts, [promptEvent(8, t: 310, askMessage), subagentEnd])
+    try #require(a.facts.clarifying?.started == true)
+    try #require(!a.facts.turnRunning)
+
+    track(&a.facts, [end.event(10, t: 320)])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == SessionFacts.unansweredAsk)
+    #expect(!exchange.pending)
+    #expect(exchange.reply == nil)
+    #expect(a.facts.decisionList?.stale == false)
   }
 
   /// A subagent's end of the turn leaves the started ask open, so claude's exit closes it with an error.
