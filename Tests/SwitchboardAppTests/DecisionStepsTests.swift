@@ -5,17 +5,10 @@ import Testing
 
 @testable import SwitchboardApp
 
-/// A yes-or-no decision.
-private func decision(_ number: Int, options: [String] = ["Yes", "No"]) -> PendingDecision {
-  PendingDecision(
-    number: number, header: "Header \(number)", question: "Question \(number)?",
-    options: options.map { PendingDecision.Option(label: $0) })
-}
-
 /// A list of yes-or-no decisions with the given numbers, where each decision in `answered` has the answer Yes.
 private func list(_ numbers: [Int], answered: [Int] = []) -> DecisionList {
   DecisionList(
-    decisions: numbers.map { decision($0) }, ref: "session:1",
+    decisions: numbers.map(yesNoDecision), ref: "session:1",
     answers: answered.map { DecisionAnswer(number: $0, labels: ["Yes"]) })
 }
 
@@ -210,14 +203,6 @@ private func list(_ numbers: [Int], answered: [Int] = []) -> DecisionList {
 }
 
 // MARK: Other answer drafts
-
-/// A session whose item shows decisions 1 to 3 under `ref`.
-private func listed(_ id: String, ref: String = "summary:1") -> SessionSummary {
-  var s = needsItem(id)
-  s.triage?.ref = ref
-  s.triage?.decisions = list([1, 2, 3]).decisions
-  return s
-}
 
 @MainActor
 @Suite struct DecisionDrafts {

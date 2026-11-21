@@ -12,11 +12,8 @@ import Testing
 private let listRef = "summary:3"
 private let askNumber = 2
 private let askText = "Why not call it task?"
-private let askMessage =
-  "Question about decision 2 (Name) in your last reply, before I decide: Why not call it task?\n\n"
-  + "Answer only this question, in text. Don't change files, run commands that change anything, or start work. "
-  + "Don't write `sb summary set` or ask with AskUserQuestion for this answer. "
-  + "I'll send all my decisions together when I'm done."
+private let askMessage = DecisionAsk.message(
+  about: PendingDecision(number: askNumber, header: "Name", question: "", options: []), askText)
 
 /// The verdict that `decision_asked` saves: what sbd showed when the user asked.
 private struct SavedVerdict: Equatable, CustomStringConvertible {
@@ -99,13 +96,10 @@ private func decisionAsked(
     data: [
       "ref": .string(ref), "number": .number(Double(number)), "askId": .string(askId), "text": .string(text),
       "message": .string(message),
-      "verdict": [
-        "state": .string(verdict.state.rawValue), "reason": .string(verdict.reason),
-        "since": .number(Double(verdict.since)),
-      ],
+      "verdict": ["state": .string(verdict.state.rawValue), "reason": .string(verdict.reason)],
       "item": [
         "title": .string(item.title), "summary": .string(item.summary), "kind": .string(item.kind.rawValue),
-        "ref": .string(item.ref),
+        "source": .string(item.source.rawValue), "ref": .string(item.ref),
       ],
     ])
 }
@@ -508,38 +502,6 @@ extension DecisionClarifyVerdictTests {
     #expect(a.facts.decisionList?.stale == true)
     #expect(v.state == .working, "\(v.state) \(v.reason)")
   }
-
-  /// A failed send closes the ask with its error.
-  @Test func decisionClarifiedClosesTheAskWithItsError() throws {
-    var a = try Asked(.needsYou)
-
-    track(
-      &a.facts,
-      [
-        Event(
-          id: 6, session: "s1", t: 301, kind: "decision_clarified",
-          data: ["askId": "ask-1", "error": "claude is not running"])
-      ])
-
-    #expect(a.facts.clarifying == nil)
-    let exchange = try #require(a.facts.decisionList?.exchanges.first)
-    #expect(exchange.error == "claude is not running")
-    #expect(exchange.pending == false)
-    #expect(exchange.reply == nil)
-  }
-
-  /// A `decision_clarified` for another ask leaves this one pending.
-  @Test func decisionClarifiedForAnotherAskLeavesThisOne() throws {
-    var a = try Asked(.needsYou)
-
-    track(
-      &a.facts,
-      [Event(id: 6, session: "s1", t: 301, kind: "decision_clarified", data: ["askId": "ask-0", "error": "failed"])])
-
-    #expect(a.facts.clarifying?.askId == "ask-1")
-    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
-    #expect(a.facts.decisionList?.exchanges.first?.error == nil)
-  }
 }
 
 extension DecisionClarifyListTests {
@@ -704,12 +666,84 @@ extension DecisionClarifyListTests {
     #expect(a.facts.decisionList?.exchanges.first?.pending == true)
   }
 
+  /// A main Stop after a subagent's Stop still files the reply, although the subagent's Stop ended the turn.
+  @Test func aMainStopAfterASubagentStopFilesTheReply() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(
+      &a.facts,
+      [
+        promptEvent(8, t: 310, askMessage),
+        Event(
+          id: 9, session: "s1", t: 315, kind: "Stop",
+          data: ["last_assistant_message": "a subagent's answer", "agent_id": "sub-1"]),
+        stop(10, 320, "B would break the public API."),
+      ])
+
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.reply == "B would break the public API.")
+    #expect(exchange.pending == false)
+    #expect(a.facts.clarifying == nil)
+  }
+
+  /// A subagent's end of the turn leaves the started ask open, so claude's exit closes it with an error.
+  @Test func anExitAfterASubagentEndedTheTurnClosesTheStartedAsk() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+    var subagentEnd = TurnEnd.stopFailure.event(9, t: 315)
+    subagentEnd.data = .object((subagentEnd.data.object ?? [:]).merging(["agent_id": "sub-1"]) { $1 })
+    track(&a.facts, [promptEvent(8, t: 310, askMessage), subagentEnd])
+    try #require(a.facts.clarifying?.started == true)
+    try #require(!a.facts.turnRunning)
+
+    track(&a.facts, [TurnEnd.exited.event(10, t: 320)])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == SessionFacts.unansweredAsk)
+    #expect(exchange.pending == false)
+  }
+
+  /// Other events end the turn without a Stop too: a prompt that the skill check blocks, a card answer that
+  /// interrupts the turn, and a deny without a message. Each closes the started ask with an error.
+  @Test(arguments: SilentTurnEnd.allCases)
+  func anyOtherEndOfTheClarifyingTurnClosesTheAskWithAnError(_ end: SilentTurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+    track(
+      &a.facts,
+      [
+        promptEvent(8, t: 310, askMessage),
+        Event(
+          id: 9, session: "s1", t: 315, kind: "PermissionRequest",
+          data: .object(tool("Bash", ["command": "rm -rf build"]))),
+      ])
+    try #require(a.facts.clarifying?.started == true)
+    try #require(a.facts.cards.first?.id == 9)
+
+    track(&a.facts, [end.event(10, t: 320, card: 9)])
+
+    #expect(!a.facts.turnRunning)
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == SessionFacts.unansweredAsk)
+    #expect(exchange.pending == false)
+    #expect(exchange.reply == nil)
+  }
+
+  /// The one test that pins the message's text. The other tests build it with `DecisionAsk.message`.
   @Test func theMessageNamesTheDecisionByNumberAndHeader() throws {
     let decision = PendingDecision(
       number: askNumber, header: "Name", question: "What do we call it?",
       options: [.init(label: "A"), .init(label: "B")])
 
-    #expect(DecisionAsk.message(about: decision, askText) == askMessage)
+    #expect(
+      DecisionAsk.message(about: decision, askText)
+        == "Question about decision 2 (Name) in your last reply, before I decide: Why not call it task?\n\n"
+        + "Answer only this question, in text. Don't change files, run commands that change anything, or start "
+        + "work. Don't write `sb summary set` or ask with AskUserQuestion this turn. "
+        + "I'll send all my decisions together when I'm done.")
   }
 
   /// A list that an older sbd wrote has no exchanges.
@@ -743,6 +777,28 @@ enum TurnEnd: String, CaseIterable, Sendable, CustomTestStringConvertible {
     case .sessionEnd: Event(id: id, session: "s1", t: t, kind: "SessionEnd")
     case .stopped: Event(id: id, session: "s1", t: t, kind: "stopped")
     case .exited: Event(id: id, session: "s1", t: t, kind: "exited")
+    }
+  }
+}
+
+/// An event that ends a turn in `SessionFacts.apply` without a Stop and that no `TurnEnd` covers.
+enum SilentTurnEnd: String, CaseIterable, Sendable, CustomTestStringConvertible {
+  case skillBlocked
+  case interruptedAnswer
+  case denyWithoutMessage
+
+  var testDescription: String { rawValue }
+
+  func event(_ id: Int64, t: Int64, card: Int) -> Event {
+    switch self {
+    case .skillBlocked:
+      Event(id: id, session: "s1", t: t, kind: "skill_blocked", data: ["skill": "go", "via": "prompt", "by": "haiku"])
+    case .interruptedAnswer:
+      Event(
+        id: id, session: "s1", t: t, kind: "answered",
+        data: ["card": .number(Double(card)), "behavior": "allow", "interrupted": true])
+    case .denyWithoutMessage:
+      Event(id: id, session: "s1", t: t, kind: "answered", data: ["card": .number(Double(card)), "behavior": "deny"])
     }
   }
 }

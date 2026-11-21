@@ -494,11 +494,7 @@ import Testing
   func deciding(_ id: String, ref: String = "summary:1", _ numbers: [Int]) -> SessionSummary {
     var s = needsItem(id)
     s.triage?.ref = ref
-    s.triage?.decisions = numbers.map {
-      PendingDecision(
-        number: $0, header: "Header \($0)", question: "Question \($0)?",
-        options: [PendingDecision.Option(label: "Yes"), PendingDecision.Option(label: "No")])
-    }
+    s.triage?.decisions = numbers.map(yesNoDecision)
     return s
   }
 

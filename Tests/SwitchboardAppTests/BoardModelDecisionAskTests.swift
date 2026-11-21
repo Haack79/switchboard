@@ -33,11 +33,7 @@ import Testing
     s.reason = "read its last reply and decide what's next"
     s.since = 1_000
     s.triage?.ref = "session:5"
-    let decisions = [1, 2, 3].map {
-      PendingDecision(
-        number: $0, header: "Header \($0)", question: "Question \($0)?",
-        options: [PendingDecision.Option(label: "Yes"), PendingDecision.Option(label: "No")])
-    }
+    let decisions = [1, 2, 3].map(yesNoDecision)
     s.triage?.decisions = decisions
     s.lastReply = "I planned it. Three decisions need you."
     var exchanges: [DecisionExchange] = []

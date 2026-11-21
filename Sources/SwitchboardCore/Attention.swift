@@ -459,12 +459,13 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     applyCards(event, userPrompt: userPrompt)
     applyTriage(event)
     applyMergeBrief(event)
-    applyDecisions(event)
+    let turnEnded = turnWasRunning && !turnRunning
+    applyDecisions(event, turnEnded: turnEnded)
     applyDraftReplies(event)
     applyAutoContinue(event, userPrompt: userPrompt)
     applyAcknowledgment(event, promptsBefore: promptsBefore)
     applySnooze(event, before: snoozeBefore, touchedBefore: touchedBefore)
-    applyRequest(event, userPrompt: userPrompt, turnEnded: turnWasRunning && !turnRunning)
+    applyRequest(event, userPrompt: userPrompt, turnEnded: turnEnded)
     applyReports(event)
   }
 

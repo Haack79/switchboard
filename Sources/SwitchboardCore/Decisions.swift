@@ -141,6 +141,15 @@ public struct DecisionList: Codable, Equatable, Sendable {
   /// The numbers of the decisions without an answer.
   public var unanswered: [Int] { decisions.map(\.number).filter { answer($0) == nil } }
 
+  /// The decision whose question waits for its answer. sbd takes one question per session at a time.
+  public var pendingAsk: Int? { exchanges.first(where: \.pending)?.number }
+
+  /// Why sbd refuses to answer, submit, or discard the list, or nil. The pending question's reply can change the
+  /// user's answers.
+  public var pendingAskReason: String? {
+    pendingAsk.map { "Wait for the answer to your question about decision \($0)" }
+  }
+
   /// Ends the pending exchange of the ask with the session's reply or with an error.
   mutating func close(ask askId: String, reply: String? = nil, error: String? = nil) {
     guard let i = exchanges.firstIndex(where: { $0.askId == askId && $0.pending }) else { return }
@@ -237,13 +246,10 @@ public struct DecisionAsk: Codable, Equatable, Sendable {
   public struct SavedVerdict: Codable, Equatable, Sendable {
     var state: AttentionState
     var reason: String
-    /// The session's `stateSince` at the ask.
-    var since: Int64
 
-    public init(state: AttentionState, reason: String, since: Int64) {
+    public init(state: AttentionState, reason: String) {
       self.state = state
       self.reason = reason
-      self.since = since
     }
   }
 
@@ -251,12 +257,14 @@ public struct DecisionAsk: Codable, Equatable, Sendable {
     var title: String
     var summary: String
     var kind: TriageKind
+    var source: TriageSource
     var ref: String
 
     public init(_ item: TriageItem) {
       title = item.title
       summary = item.summary
       kind = item.kind
+      source = item.source
       ref = item.ref
     }
   }
@@ -265,7 +273,7 @@ public struct DecisionAsk: Codable, Equatable, Sendable {
   public static func message(about decision: PendingDecision, _ text: String) -> String {
     "Question about decision \(decision.number) (\(decision.header)) in your last reply, before I decide: \(text)\n\n"
       + "Answer only this question, in text. Don't change files, run commands that change anything, or start work. "
-      + "Don't write `sb summary set` or ask with AskUserQuestion for this answer. "
+      + "Don't write `sb summary set` or ask with AskUserQuestion this turn. "
       + "I'll send all my decisions together when I'm done."
   }
 }
@@ -299,8 +307,14 @@ extension SessionFacts {
 
   /// The decision events build the open list. Only an ask changes the
   /// verdict, through `heldAsk`. A new prompt makes the open list stale,
-  /// unless it starts the clarifying turn.
-  mutating func applyDecisions(_ event: Event) {
+  /// unless it starts the clarifying turn. `turnEnded` is true when the event
+  /// ended the running turn.
+  mutating func applyDecisions(_ event: Event, turnEnded: Bool) {
+    if let ask = clarifying, ask.started, !event.fromSubagent, turnEnded || event.kind == "Stop" {
+      // A subagent's end of the turn leaves the ask open. The main Stop that follows files the reply.
+      let reply = event.kind == "Stop" ? event.data["last_assistant_message"]?.string ?? "" : ""
+      endClarifying(reply: reply.isEmpty ? nil : reply, error: reply.isEmpty ? Self.unansweredAsk : nil)
+    }
     switch event.kind {
     case "decisions_opened":
       guard let ref = event.data["ref"]?.string, let raw = event.data["decisions"],
@@ -322,35 +336,18 @@ extension SessionFacts {
       clarifying = nil
     case "decision_asked":
       applyAsk(event)
-    case "decision_clarified":
-      guard let askId = event.data["askId"]?.string else { break }
-      decisionList?.close(ask: askId, error: event.data["error"]?.string ?? Self.unansweredAsk)
-      if clarifying?.askId == askId { clarifying = nil }
     case "UserPromptSubmit":
       applyPromptToList(event.data["prompt"]?.string ?? "")
-    case "Stop" where !event.fromSubagent:
-      guard let ask = clarifying, ask.started else { break }
-      let reply = event.data["last_assistant_message"]?.string ?? ""
-      decisionList?.close(
-        ask: ask.askId, reply: reply.isEmpty ? nil : reply, error: reply.isEmpty ? Self.unansweredAsk : nil)
-      clarifying = nil
     case "SessionEnd", "stopped", "exited":
       // A claude that ends before the question's prompt arrived lost the question, and no prompt can start the
-      // clarifying turn. The pending ask would refuse every change to the list for good.
+      // clarifying turn. A started ask is still open here only when a subagent ended the turn. Either pending ask
+      // would refuse every change to the list for good.
       guard let ask = clarifying else { break }
-      decisionList?.close(ask: ask.askId, error: ask.started ? Self.unansweredAsk : Self.undeliveredAsk)
-      clarifying = nil
-    case "StopFailure" where !event.fromSubagent, "idle",
-      "Notification" where !event.fromSubagent && event.data["notification_type"]?.string == "idle_prompt":
-      // These end the turn without a Stop, so no reply can come, and the pending ask would refuse Submit for good.
-      guard let ask = clarifying, ask.started else { break }
-      decisionList?.close(ask: ask.askId, error: Self.unansweredAsk)
-      clarifying = nil
+      endClarifying(error: ask.started ? Self.unansweredAsk : Self.undeliveredAsk)
     case "delivery_unknown":
       // sbd restarted during the question's paste and found no sign of it in the transcript.
       guard let ask = clarifying, !ask.started, event.data["text"]?.string == ask.message else { break }
-      decisionList?.close(ask: ask.askId, error: Self.unconfirmedAsk)
-      clarifying = nil
+      endClarifying(error: Self.unconfirmedAsk)
     default:
       break
     }
@@ -388,11 +385,15 @@ extension SessionFacts {
       clarifying = ask
       return
     }
-    if let ask = clarifying, ask.started {
-      decisionList?.close(ask: ask.askId, error: Self.unansweredAsk)
-      clarifying = nil
-    }
+    if clarifying?.started == true { endClarifying(error: Self.unansweredAsk) }
     decisionList?.stale = true
+  }
+
+  /// Ends the pending ask with the session's reply or with an error.
+  private mutating func endClarifying(reply: String? = nil, error: String? = nil) {
+    guard let ask = clarifying else { return }
+    decisionList?.close(ask: ask.askId, reply: reply, error: error)
+    clarifying = nil
   }
 }
 

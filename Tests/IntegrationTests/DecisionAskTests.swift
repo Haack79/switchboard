@@ -5,12 +5,10 @@ import Testing
 /// The question that the tests ask about decision 2 of the three-decision card, whose header is "Name".
 private let askText = "why not B?"
 
-/// The message that sbd sends the session for a question about one decision.
+/// The message that sbd sends the session for a question about one decision. The message names the decision by
+/// its number and header only.
 func clarifyingMessage(_ number: Int, _ header: String, _ text: String) -> String {
-  "Question about decision \(number) (\(header)) in your last reply, before I decide: \(text)\n\n"
-    + "Answer only this question, in text. Don't change files, run commands that change anything, or start work. "
-    + "Don't write `sb summary set` or ask with AskUserQuestion for this answer. "
-    + "I'll send all my decisions together when I'm done."
+  DecisionAsk.message(about: PendingDecision(number: number, header: header, question: "", options: []), text)
 }
 
 /// The stub answers a prompt that matches none of its commands with "Done: <prompt>".
@@ -428,7 +426,7 @@ enum InsideClaudeCode: String, CaseIterable, CustomStringConvertible {
     #expect(refused.status != 0, "\(text(refused))")
     #expect(
       refused.stderr.contains(
-        "This turn answers a question about decision 2. Reply in text; Switchboard shows your reply under that decision."
+        "This turn answers a question about decision 2. Switchboard did not save a summary card. Reply in text, and Switchboard shows your reply under that decision."
       ), "\(refused.stderr)")
     try sbd.stopClarifyingTurn(s.id)
     try sbd.waitForClosedAsk(s.id)

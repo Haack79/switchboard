@@ -786,6 +786,10 @@ final class BoardModel: ObservableObject {
       messageDrafts.prune(
         keeping: Set(list.map(MessageDrafts.key)).union(MessageDrafts.decisionKeys(list))
           .union(MessageDrafts.replyKeys(list)))
+      let ids = Set(list.map(\.id))
+      if decisionSteps.keys.contains(where: { !ids.contains($0) }) {
+        decisionSteps = decisionSteps.filter { ids.contains($0.key) }
+      }
       if !sameShown(allSessions, list) { allSessions = list }
       // After the new list, so that the filter change reads each session's group from the same poll as the groups.
       if let groups { applyGroups(groups) }

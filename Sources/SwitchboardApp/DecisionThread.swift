@@ -1,11 +1,6 @@
 import SwiftUI
 import SwitchboardCore
 
-/// A control of the step view that sbd refuses while a question about a decision waits for its answer.
-enum DecisionControl: CaseIterable, Sendable {
-  case ask, answer, submit, discard
-}
-
 /// What a decision's dot shows about the questions asked about it.
 enum DecisionThreadMark: Equatable, Sendable {
   /// The user asked about the decision, and no question waits for its answer.
@@ -18,23 +13,16 @@ extension DecisionList {
   /// The questions about decision `number` and their answers, oldest first.
   func exchanges(about number: Int) -> [DecisionExchange] { exchanges.filter { $0.number == number } }
 
-  func threadMark(_ number: Int) -> DecisionThreadMark? {
-    let asked = exchanges(about: number)
-    if asked.contains(where: \.pending) { return .answering }
-    return asked.isEmpty ? nil : .asked
+  /// The mark of each decision that the user asked about, by decision number.
+  var threadMarks: [Int: DecisionThreadMark] {
+    exchanges.reduce(into: [:]) { marks, x in
+      if x.pending { marks[x.number] = .answering } else if marks[x.number] == nil { marks[x.number] = .asked }
+    }
   }
 
-  /// The decision whose question waits for its answer. sbd takes one question per session at a time.
-  var pendingAsk: Int? { exchanges.first(where: \.pending)?.number }
-
-  /// Why `control` is off, or nil while it is on. Every control is off while a question waits for its answer.
-  /// Submit, an answer, and Discard show the text of sbd's own refusal.
-  func disabledReason(for control: DecisionControl) -> String? {
-    guard let number = pendingAsk else { return nil }
-    switch control {
-    case .ask: return "The session is still answering your question about decision \(number)"
-    case .answer, .submit, .discard: return "Wait for the answer to your question about decision \(number)"
-    }
+  /// Why Ask is off, or nil. The answers, Submit, and Discard show `pendingAskReason`, which is sbd's refusal.
+  var askOffReason: String? {
+    pendingAsk.map { "The session is still answering your question about decision \($0)" }
   }
 }
 
@@ -62,7 +50,7 @@ struct DecisionThread: View {
   var focus: FocusState<DecisionFocus?>.Binding
 
   var body: some View {
-    let reason = list.disabledReason(for: .ask)
+    let reason = list.askOffReason
     VStack(alignment: .leading, spacing: 10) {
       Text("Ask about this decision").font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
       ForEach(list.exchanges(about: decision), id: \.askId) { exchange($0) }
@@ -86,7 +74,7 @@ struct DecisionThread: View {
   }
 
   private var canAsk: Bool {
-    !ReplyOption.trimmed(draft.text).isEmpty && list.disabledReason(for: .ask) == nil
+    !ReplyOption.trimmed(draft.text).isEmpty && list.askOffReason == nil
       && !model.deciding.contains("\(session)/ask")
   }
 
@@ -109,7 +97,7 @@ struct DecisionThread: View {
       }
     }
     .padding(.leading, 10)
-    .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 2) }
+    .overlay(alignment: .leading) { QuoteBar() }
     .accessibilityElement(children: .contain)
   }
 

@@ -31,7 +31,7 @@ extension Service {
     let id = try lookup(args)
     if let ask = entries[id]!.facts.clarifying, ask.started {
       throw APIError(
-        "This turn answers a question about decision \(ask.number). Reply in text; Switchboard shows your reply under that decision."
+        "This turn answers a question about decision \(ask.number). Switchboard did not save a summary card. Reply in text, and Switchboard shows your reply under that decision."
       )
     }
     guard let raw = args["card"] else { throw APIError("summary set needs the card as JSON") }

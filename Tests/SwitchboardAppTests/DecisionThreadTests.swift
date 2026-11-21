@@ -19,15 +19,9 @@ func decisionExchange(
   return try JSONCoding.convert(JSON.object(fields), to: DecisionExchange.self)
 }
 
-private func decision(_ number: Int) -> PendingDecision {
-  PendingDecision(
-    number: number, header: "Header \(number)", question: "Question \(number)?",
-    options: [PendingDecision.Option(label: "Yes"), PendingDecision.Option(label: "No")])
-}
-
 /// An open list of decisions 1 to 3 under `session:1` with `exchanges`.
 private func list(_ exchanges: [DecisionExchange] = [], numbers: [Int] = [1, 2, 3]) -> DecisionList {
-  DecisionList(decisions: numbers.map(decision), ref: "session:1", exchanges: exchanges)
+  DecisionList(decisions: numbers.map(yesNoDecision), ref: "session:1", exchanges: exchanges)
 }
 
 private func answered(_ askId: String, about number: Int) throws -> DecisionExchange {
@@ -43,14 +37,6 @@ private func failed(_ askId: String, about number: Int) throws -> DecisionExchan
 }
 
 // MARK: Ask drafts
-
-/// A session whose item shows decisions 1 to 3 under `ref`.
-private func listed(_ id: String, ref: String = "summary:1") -> SessionSummary {
-  var s = needsItem(id)
-  s.triage?.ref = ref
-  s.triage?.decisions = [1, 2, 3].map(decision)
-  return s
-}
 
 @MainActor
 @Suite struct DecisionAskDrafts {
@@ -200,98 +186,111 @@ private func listed(_ id: String, ref: String = "summary:1") -> SessionSummary {
 
 @Suite struct DecisionThreadDots {
   @Test func aDecisionWithoutQuestionsHasNoMark() throws {
-    #expect(list([try answered("q-1", about: 2)]).threadMark(1) == nil)
+    #expect(list([try answered("q-1", about: 2)]).threadMarks[1] == nil)
   }
 
   @Test func aDecisionWithAnAnsweredQuestionShowsASpeechMark() throws {
-    #expect(list([try answered("q-1", about: 2)]).threadMark(2) == .asked)
+    #expect(list([try answered("q-1", about: 2)]).threadMarks[2] == .asked)
   }
 
   /// A question that ended without a reply is still a question the user asked, and its error shows in the thread.
   @Test func aDecisionWhoseOnlyQuestionFailedShowsASpeechMark() throws {
-    #expect(list([try failed("q-1", about: 2)]).threadMark(2) == .asked)
+    #expect(list([try failed("q-1", about: 2)]).threadMarks[2] == .asked)
   }
 
   @Test func theDecisionWithThePendingQuestionShowsASpinner() throws {
-    #expect(list([try pending("q-1", about: 2)]).threadMark(2) == .answering)
+    #expect(list([try pending("q-1", about: 2)]).threadMarks[2] == .answering)
   }
 
   /// The spinner wins over the speech mark while the decision's newest question waits.
   @Test func aDecisionWithAnAnsweredAndAPendingQuestionShowsASpinner() throws {
-    #expect(list([try answered("q-1", about: 2), try pending("q-2", about: 2)]).threadMark(2) == .answering)
+    #expect(list([try answered("q-1", about: 2), try pending("q-2", about: 2)]).threadMarks[2] == .answering)
   }
 
   @Test func onlyTheDecisionAskedAboutShowsTheSpinner() throws {
     let l = list([try answered("q-1", about: 1), try pending("q-2", about: 2)])
 
-    #expect(l.threadMark(1) == .asked)
-    #expect(l.threadMark(3) == nil)
+    #expect(l.threadMarks[1] == .asked)
+    #expect(l.threadMarks[3] == nil)
   }
 }
 
 // MARK: Controls while an ask is pending
 
+/// The two reasons that turn controls off while an ask is pending: sbd's refusal of an answer, Submit, and
+/// Discard, and the Ask field's own.
+enum PendingAskReason: CaseIterable, Sendable {
+  case listChange, ask
+
+  func of(_ list: DecisionList) -> String? { self == .listChange ? list.pendingAskReason : list.askOffReason }
+}
+
 @Suite struct DecisionThreadPendingAsk {
   /// sbd's refusal of submit, answer, and discard while an ask is pending.
   static func refusal(_ number: Int) -> String { "Wait for the answer to your question about decision \(number)" }
 
-  @Test(arguments: DecisionControl.allCases)
-  func aPendingQuestionTurnsOffTheControlWithAReasonNamingItsDecision(_ control: DecisionControl) throws {
+  @Test(arguments: PendingAskReason.allCases)
+  func aPendingQuestionTurnsOffTheControlWithAReasonNamingItsDecision(_ reason: PendingAskReason) throws {
     let l = list([try pending("q-1", about: 2)])
 
-    #expect(l.disabledReason(for: control)?.contains("decision 2") == true)
+    #expect(reason.of(l)?.contains("decision 2") == true)
   }
 
   /// The step view shows sbd's own refusal, so the user reads the same reason whether the button or sbd stops them.
-  @Test(arguments: [DecisionControl.submit, .answer, .discard])
-  func submitAnswerAndDiscardShowSbdsRefusal(_ control: DecisionControl) throws {
+  @Test func submitAnswerAndDiscardShowSbdsRefusal() throws {
     let l = list([try pending("q-1", about: 2)])
 
-    #expect(l.disabledReason(for: control) == Self.refusal(2))
+    #expect(l.pendingAskReason == Self.refusal(2))
   }
 
-  @Test(arguments: DecisionControl.allCases)
-  func aListWithoutQuestionsLeavesTheControlOn(_ control: DecisionControl) {
-    #expect(list().disabledReason(for: control) == nil)
+  @Test func askSaysTheSessionIsStillAnswering() throws {
+    let l = list([try pending("q-1", about: 2)])
+
+    #expect(l.askOffReason == "The session is still answering your question about decision 2")
   }
 
-  @Test(arguments: DecisionControl.allCases)
-  func answeredQuestionsLeaveTheControlOn(_ control: DecisionControl) throws {
+  @Test(arguments: PendingAskReason.allCases)
+  func aListWithoutQuestionsLeavesTheControlOn(_ reason: PendingAskReason) {
+    #expect(reason.of(list()) == nil)
+  }
+
+  @Test(arguments: PendingAskReason.allCases)
+  func answeredQuestionsLeaveTheControlOn(_ reason: PendingAskReason) throws {
     let l = list([try answered("q-1", about: 1), try answered("q-2", about: 3)])
 
-    #expect(l.disabledReason(for: control) == nil)
+    #expect(reason.of(l) == nil)
   }
 
   /// sbd closes an ask with an error when its turn ends without a Stop, so Submit works again.
-  @Test(arguments: DecisionControl.allCases)
-  func aQuestionThatEndedWithAnErrorLeavesTheControlOn(_ control: DecisionControl) throws {
-    #expect(list([try failed("q-1", about: 2)]).disabledReason(for: control) == nil)
+  @Test(arguments: PendingAskReason.allCases)
+  func aQuestionThatEndedWithAnErrorLeavesTheControlOn(_ reason: PendingAskReason) throws {
+    #expect(reason.of(list([try failed("q-1", about: 2)])) == nil)
   }
 
   /// The reason names the pending question's decision, not the first or the last exchange's.
-  @Test(arguments: DecisionControl.allCases)
-  func theReasonNamesThePendingQuestionsDecisionAmongOthers(_ control: DecisionControl) throws {
+  @Test(arguments: PendingAskReason.allCases)
+  func theReasonNamesThePendingQuestionsDecisionAmongOthers(_ reason: PendingAskReason) throws {
     let l = list([try answered("q-1", about: 3), try pending("q-2", about: 2), try answered("q-3", about: 1)])
 
-    #expect(l.disabledReason(for: control)?.contains("decision 2") == true)
-    #expect(l.disabledReason(for: control)?.contains("decision 3") == false)
-    #expect(l.disabledReason(for: control)?.contains("decision 1") == false)
+    #expect(reason.of(l)?.contains("decision 2") == true)
+    #expect(reason.of(l)?.contains("decision 3") == false)
+    #expect(reason.of(l)?.contains("decision 1") == false)
   }
 
   /// The decision's number names it, as sbd's refusal does, not its position in the list.
   @Test func theReasonUsesTheDecisionsNumber() throws {
     let l = list([try pending("q-1", about: 9)], numbers: [3, 7, 9])
 
-    #expect(l.disabledReason(for: .submit) == Self.refusal(9))
+    #expect(l.pendingAskReason == Self.refusal(9))
   }
 
   /// Every ask on the list holds every control, so a question about decision 3 also holds the answers to
   /// decision 1 and the Ask field on decision 1.
-  @Test(arguments: DecisionControl.allCases)
-  func aPendingQuestionAboutAnotherDecisionStillTurnsOffTheControl(_ control: DecisionControl) throws {
+  @Test(arguments: PendingAskReason.allCases)
+  func aPendingQuestionAboutAnotherDecisionStillTurnsOffTheControl(_ reason: PendingAskReason) throws {
     let l = list([try pending("q-1", about: 3)])
 
-    #expect(l.disabledReason(for: control)?.contains("decision 3") == true)
+    #expect(reason.of(l)?.contains("decision 3") == true)
   }
 }
 

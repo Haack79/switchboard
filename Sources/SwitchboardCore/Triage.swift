@@ -542,10 +542,8 @@ public enum Triage {
     guard AttentionState.inbox.contains(verdict.state) else { return nil }
     var item: TriageItem
     if verdict.savedAtAsk, let ask = facts.heldAsk {
-      // A list opens only from a session's card or a reply's summary, and the snapshot doesn't name its source.
-      let source: TriageSource = ask.item.ref.hasPrefix("summary:") ? .session : .summary
       item = TriageItem(
-        title: ask.item.title, kind: ask.item.kind, summary: ask.item.summary, source: source, ref: ask.ref)
+        title: ask.item.title, kind: ask.item.kind, summary: ask.item.summary, source: ask.item.source, ref: ask.ref)
     } else if let card = facts.cards.first {
       item = cardItem(card)
       item.ref = card.ref

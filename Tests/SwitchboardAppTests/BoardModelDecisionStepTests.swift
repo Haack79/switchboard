@@ -9,18 +9,6 @@ import Testing
 /// Selecting another Inbox item or opening the session therefore keeps it, and only a new list resets it.
 @MainActor
 @Suite struct BoardModelDecisionStep {
-  /// A session whose item carries yes-or-no decisions 1 to 3 under `ref`.
-  func listed(_ id: String, ref: String = "session:1") -> SessionSummary {
-    var s = needsItem(id)
-    s.triage?.ref = ref
-    s.triage?.decisions = [1, 2, 3].map {
-      PendingDecision(
-        number: $0, header: "Header \($0)", question: "Question \($0)?",
-        options: [PendingDecision.Option(label: "Yes"), PendingDecision.Option(label: "No")])
-    }
-    return s
-  }
-
   /// The step that the view shows for `id`, read under the ref of the list that the model's session shows now, as
   /// `TriageDetail` reads it.
   func step(_ model: BoardModel, _ id: String) -> DecisionStep? {
@@ -34,7 +22,7 @@ import Testing
   func aSetStepReadsBack(_ set: DecisionStep) {
     let model = appliedModel([listed("a")])
 
-    model.setDecisionStep(set, session: "a", ref: "session:1")
+    model.setDecisionStep(set, session: "a", ref: "summary:1")
 
     #expect(step(model, "a") == set)
   }
@@ -48,7 +36,7 @@ import Testing
   @Test func theStepSurvivesTheInboxSelectionMovingAwayAndBack() {
     let model = appliedModel([listed("a"), listed("b")])
     model.inboxFocus = "a"
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     model.inboxFocus = "b"
     model.inboxFocus = "a"
@@ -59,7 +47,7 @@ import Testing
   /// The pane's Open button selects the session in the sidebar, and Back returns to the Inbox.
   @Test func theStepSurvivesOpeningTheSessionAndComingBack() {
     let model = appliedModel([listed("a")])
-    model.setDecisionStep(.review, session: "a", ref: "session:1")
+    model.setDecisionStep(.review, session: "a", ref: "summary:1")
 
     model.selection = "a"
     model.selection = nil
@@ -70,7 +58,7 @@ import Testing
   /// sbd's poll applies the same list every second.
   @Test func theStepSurvivesARefreshWithTheSameList() {
     let model = appliedModel([listed("a")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     model.apply(.success([listed("a")]), followups: nil)
 
@@ -78,8 +66,8 @@ import Testing
   }
 
   @Test func aNewListRefResetsTheStep() {
-    let model = appliedModel([listed("a", ref: "session:1")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    let model = appliedModel([listed("a", ref: "summary:1")])
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
 
@@ -87,8 +75,8 @@ import Testing
   }
 
   @Test func theOldListsStepDoesNotReturnOnALaterRefresh() {
-    let model = appliedModel([listed("a", ref: "session:1")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    let model = appliedModel([listed("a", ref: "summary:1")])
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
 
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
@@ -98,8 +86,8 @@ import Testing
 
   /// The reset clears the old list's step only. A step that the user picks in the new list stays.
   @Test func aStepSetInTheNewListSurvivesARefresh() {
-    let model = appliedModel([listed("a", ref: "session:1")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    let model = appliedModel([listed("a", ref: "summary:1")])
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
 
     model.setDecisionStep(.decision(2), session: "a", ref: "session:2")
@@ -111,20 +99,20 @@ import Testing
   /// `DecisionStepView` sets the step after sbd accepts an answer. When the list's ref changed while the answer
   /// ran, that late write names the old list and must not move the new list off its first unanswered decision.
   @Test func aLateWriteForTheOldListLeavesTheNewListsStepUnset() {
-    let model = appliedModel([listed("a", ref: "session:1")])
+    let model = appliedModel([listed("a", ref: "summary:1")])
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
 
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     #expect(step(model, "a") == nil)
   }
 
   @Test func aLateWriteForTheOldListKeepsAStepSetInTheNewList() {
-    let model = appliedModel([listed("a", ref: "session:1")])
+    let model = appliedModel([listed("a", ref: "summary:1")])
     model.apply(.success([listed("a", ref: "session:2")]), followups: nil)
     model.setDecisionStep(.decision(2), session: "a", ref: "session:2")
 
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     #expect(step(model, "a") == .decision(2))
   }
@@ -132,17 +120,17 @@ import Testing
   @Test func aStepForOneSessionLeavesAnotherSessionsStepUnset() {
     let model = appliedModel([listed("a"), listed("b")])
 
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     #expect(step(model, "b") == nil)
   }
 
   @Test func eachSessionKeepsItsOwnStep() {
     let model = appliedModel([listed("a"), listed("b")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
-    model.setDecisionStep(.review, session: "b", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
+    model.setDecisionStep(.review, session: "b", ref: "summary:1")
 
-    model.setDecisionStep(.decision(2), session: "b", ref: "session:1")
+    model.setDecisionStep(.decision(2), session: "b", ref: "summary:1")
 
     #expect(step(model, "a") == .decision(3))
   }
@@ -154,7 +142,7 @@ import Testing
     let subscription = model.objectWillChange.sink { published += 1 }
     defer { subscription.cancel() }
 
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
 
     #expect(published > 0)
   }
@@ -162,7 +150,7 @@ import Testing
   /// A publish redraws every view, and the poll applies the same list every second.
   @Test func aRefreshWithTheSameListAndAStoredStepDoesNotPublish() {
     let model = appliedModel([listed("a"), listed("b", ref: "session:4")])
-    model.setDecisionStep(.decision(3), session: "a", ref: "session:1")
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
     model.setDecisionStep(.review, session: "b", ref: "session:4")
     var published = 0
     let subscription = model.objectWillChange.sink { published += 1 }
@@ -171,5 +159,17 @@ import Testing
     model.apply(.success([listed("a"), listed("b", ref: "session:4")]), followups: nil)
 
     #expect(published == 0)
+  }
+
+  /// A refresh drops the step of a session that is gone, so the model doesn't keep the steps of deleted sessions.
+  @Test func aRefreshDropsTheStepOfARemovedSession() {
+    let model = appliedModel([listed("a"), listed("b")])
+    model.setDecisionStep(.decision(3), session: "a", ref: "summary:1")
+    model.setDecisionStep(.review, session: "b", ref: "summary:1")
+
+    model.apply(.success([listed("b")]), followups: nil)
+
+    #expect(model.decisionSteps["a"] == nil)
+    #expect(model.decisionSteps["b"] == DecisionStepEntry(ref: "summary:1", step: .review))
   }
 }
