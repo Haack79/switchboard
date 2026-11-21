@@ -58,9 +58,17 @@ import Testing
 
   @Test func linksADocketRowToItsPullRequest() throws {
     let link = try #require(TriageDetail.prLink(for: docketRow(url: "https://github.com/o/r/pull/1")))
-    #expect(link.label == "o/r#1")
+    #expect(link.label == "#1")
+    #expect(link.help == "o/r#1")
     #expect(link.url == URL(string: "https://github.com/o/r/pull/1"))
     #expect(link.owners == nil)
+  }
+
+  @Test func keepsTheWholeDocketRefWhenItHasNoNumber() throws {
+    var s = docketRow(url: "https://github.com/o/r/pull/1")
+    s.docket?.pullRequest = "not a ref"
+    let link = try #require(TriageDetail.prLink(for: s))
+    #expect(link.label == "not a ref")
   }
 
   @Test func refusesADocketUrlThatIsNotHttps() {
@@ -71,7 +79,8 @@ import Testing
     var s = session(waitsToStart: false)
     s.pr = prWithOwners()
     let link = try #require(TriageDetail.prLink(for: s))
-    #expect(link.label == s.pr?.line)
+    #expect(link.label == "#5")
+    #expect(link.help.hasPrefix(try #require(s.pr?.line)))
     #expect(link.url == URL(string: "https://github.com/o/r/pull/5"))
     #expect(link.owners == s.pr?.codeOwners)
   }
