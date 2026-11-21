@@ -33,10 +33,7 @@ extension BoardModel {
 
   private var sidebarRows: [SessionSummary] {
     let c = conversations
-    var rows: [SessionSummary] = c.pinned + c.active + c.archived
-    if let op = operatorSession { rows.append(op) }
-    rows += sidebarGroups.flatMap { $0.rows.map(\.session) }
-    return rows
+    return c.pinned + c.active + c.archived + sidebarGroups.flatMap { $0.rows.map(\.session) }
   }
 
   /// Sets `multiSelection` to `ids`, the ids that are still listed after a refresh or a filter change. With

@@ -438,6 +438,9 @@ public final class Service {
       if entries[id]?.session.host == nil { try settleUncertain(id, texts) } else { unsettled[id] = texts }
     }
     markInterruptedPosts()
+    // Replay gives no session its Operator items. The parent marks must include them, or the next tick tells each
+    // parent again about an ask that it already heard about.
+    syncOperatorItems()
     seedParentMarks(now: nowMs())
     migrateReadState()
     try? refreshManagerGuide()
@@ -786,7 +789,16 @@ public final class Service {
       // A message from a Claude Code, such as the Manager's, doesn't hold the session for the user.
       let request = author == .claude ? nil : args["ref"]?.string.flatMap { inboxRequest(id, ref: $0, message: typed) }
       let trigger: LaunchTrigger = sender == nil || sender == id ? .send : .session
-      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere)
+      // Only the user's message closes the operator's reports, so `reports` from a Claude Code is dropped.
+      var extra: [String: JSON] = [:]
+      if let reports = args["reports"] {
+        // A dropped `reports` would make the `sent` event close every open report.
+        guard let list = reports.array, list.allSatisfy({ $0.int != nil }) else {
+          throw APIError("send's reports must be an array of integer report ids")
+        }
+        if author == .you, id == operatorID() { extra["reports"] = .array(list) }
+      }
+      let delivery = try send(id, text, by: author, trigger: trigger, from: sender, runHere: runHere, extra: extra)
       if let request { record(id, InboxRequest.event, try JSON(encoding: request)) }
       var reply: [String: JSON] = ["delivery": .string(delivery.rawValue)]
       if let session = entries[id]?.session, let pause = session.pause {
@@ -1068,6 +1080,8 @@ public final class Service {
       // background job outlasts the turn or a PR rule stops applying.
       afterTrack(id, verdict)
       dropStaleFailedRemoval(id, event: event)
+      // `recordReport` syncs after it routes the report, so the ask never shows on a fallback owner first.
+      if e.session.kind == .operator, event.kind != OperatorReport.event { syncOperatorItems() }
     }
     releaseCards(id)
     return event
@@ -1453,6 +1467,8 @@ public final class Service {
     change(&session)
     entries[id]?.session = session
     try store.save(session)
+    // The operator's waits, and whether a session may own an item, decide which sessions show the operator's items.
+    syncOperatorItems()
   }
 
   /// Gives the session a new name, unless the name breaks `sb get Operator`. A naming call that has not answered
@@ -1679,12 +1695,14 @@ public final class Service {
   /// `from` is the session that sent the message, which the `sent` event records.
   /// A paused session holds every message in its queue, with no launch and no paste, until the resume.
   /// `runHere` lets the message's work skill run in a manager-kind session, from the moment claude gets it.
+  /// `extra` adds fields to the `sent` event.
   func send(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> Delivery {
     try deliver(
-      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere
+      id, text, by: by, launchesWithPrompt: launchesWithPrompt, trigger: trigger, from: from, runHere: runHere,
+      extra: extra
     ).delivery
   }
 
@@ -1697,11 +1715,12 @@ public final class Service {
   /// As `send`, but it also returns the message's `sent` event.
   func deliver(
     _ id: String, _ text: String, by: MessageAuthor, launchesWithPrompt: Bool = true, trigger: LaunchTrigger,
-    from: String? = nil, runHere: Bool = false
+    from: String? = nil, runHere: Bool = false, extra: [String: JSON] = [:]
   ) throws -> SentMessage {
     guard let e = entries[id] else { throw APIError("no session \(id)") }
     if let refusal = removalRefusal(id) { throw refusal }
-    let extra: [String: JSON] = runHere ? ["runHere": true] : [:]
+    var extra = extra
+    if runHere { extra["runHere"] = true }
     if Pause.blocker(e.session) != nil {
       let sent = try recordSent(id, text, .queued, by: by, from: from, extra: extra.merging(["held": true]) { $1 })
       entries[id]?.pending.append(QueuedMessage(text: text, sent: sent))
@@ -2778,6 +2797,8 @@ public final class Service {
       superviseHosts(now: now)
       superviseSites(now: now)
       closeExitedShells()
+      // Pauses, removals, and conversations' activity change the owners of the operator's items without an event.
+      syncOperatorItems()
       for id in entries.keys.sorted() {
         let live = entries[id]?.facts.live ?? false
         switch claudeState(id) {

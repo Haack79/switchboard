@@ -244,7 +244,6 @@ struct Sidebar: View {
     let groups = model.sidebarGroups
     List(selection: model.sidebarSelection) {
       ConversationsSection(activeAccount: activeAccount, removableSelection: removableSelection)
-      OperatorRow(activeAccount: activeAccount)
       if groups.isEmpty && model.filterHidesAllWork { FilterHidesAll() }
       ForEach(groups) { group in
         let state = group.state
