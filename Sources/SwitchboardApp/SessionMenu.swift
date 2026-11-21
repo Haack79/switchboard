@@ -95,7 +95,7 @@ struct SessionMenuItems<Extra: View>: View {
     case .copyLink:
       CopyLinkMenuItem(session: session)
     case .pause:
-      Button("Pause") { model.pause(id) }.help(PauseBanner.pauseHelp)
+      PauseMenuItems(id: id)
     case .resume:
       Button("Resume") { model.resume(id) }.help(PauseBanner.resumeHelp)
     case .startNow:

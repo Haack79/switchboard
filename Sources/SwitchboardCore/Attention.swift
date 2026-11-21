@@ -121,6 +121,11 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var pr: PullRequest?
   /// When the `pr` event that set `pr` was recorded.
   public var prRead: Int64?
+  /// The id of the live session that owns the PR this session works on, when sbd refused to link it here. A `pr`
+  /// event clears it.
+  public var prOwner: String?
+  /// The number of the PR on the folder's branch that sbd refused to show, because the session keeps its first PR.
+  public var refusedPR: Int?
   /// The number of every PR that the session has had, including one that
   /// dropped out since.
   public var prNumbers: Set<Int> = []
@@ -223,6 +228,14 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   /// is open, because a new report clears it. A `conversation-reset` clears it too, because the new conversation
   /// never saw those reports.
   public var acknowledgedReports: [OperatorReport] = []
+  /// The session that owns each routed report, by report id, from the operator's `report-routed` events.
+  public var reportOwners: [Int64: String] = [:]
+  /// The Manager conversation that handed off the wait message that the operator works on: the `handedFrom` of
+  /// the last `sent` event, or nil when that event has none.
+  public var workFrom: String?
+  /// The operator's asks and waits that this session owns. sbd sets them with `OperatorItems.assign`, and no event
+  /// folds them.
+  public var operatorItems = OperatorItems()
   /// The input context of a Manager conversation's latest turn, from its `context` events. Nil since a `/clear`
   /// or a compaction until the next turn's read.
   public var contextTokens: Int?
@@ -417,7 +430,12 @@ public struct SessionFacts: Codable, Equatable, Sendable {
       if let id = d["agent_id"]?.string { subagents.insert(id) }
     case "SubagentStop":
       if let id = d["agent_id"]?.string { subagents.remove(id) }
+    case "pr-refused":
+      refusedPR = d["number"]?.int
+    case "pr-owned":
+      prOwner = d["owner"]?.string
     case "pr":
+      prOwner = nil
       let next = d["pr"].flatMap { try? JSONCoding.convert($0, to: PullRequest.self) }
       noteBoard(from: pr, to: next, at: event.t)
       pr = next
@@ -562,14 +580,16 @@ public struct Verdict: Equatable, Sendable {
   public var summarizesPR = false
   /// The "Before you merge" panel. Only the Ready to merge verdict has one.
   public var review: MergeReview?
-  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. Of the rules after the
-  /// blocking prompts, the operator's Inbox admits only this one.
+  /// True for the wait rule's Needs you: an overdue wait or a `notify` outcome. The operator's Inbox admits it
+  /// only for a `notify` outcome.
   public var byWaitRule = false
   /// The ids of the overdue waits that the wait rule's reason names, in the session's order. A `notify` outcome
   /// has no wait left, so it names none.
   public var overdueWaits: [String] = []
   /// True for the failed removal's Needs you. Its item offers Retry and Keep, so it takes no reply question.
   public var removalFailed = false
+  /// True for a verdict that the operator's routed asks or waits gave. Its item has source `.report`.
+  public var fromOperator = false
 
   public static func == (a: Verdict, b: Verdict) -> Bool { a.state == b.state && a.reason == b.reason }
 }
@@ -666,25 +686,40 @@ public enum Attention {
       return Verdict(state: .needsYou, reason: oneLine("Delete failed: \(removal.error ?? "")"), removalFailed: true)
     }
     if session.done { return Verdict(state: .done, reason: "marked done") }
+    if session.kind == .operator { return operatorRules(session, facts, now: now) }
     if let verdict = followupVerdict(session) { return verdict }
     if let verdict = docketVerdict(session, facts) { return verdict }
     if let unread = facts.unread { return unreadVerdict(session, facts, unread, stateOf: stateOf) }
-    if let card = facts.cards.first {
+    let ask = askVerdict(facts.operatorItems)
+    // An ask outranks a card that doesn't block, which a conversation's Inbox would not show (Decision 55 in the
+    // notes repo's `plans/410-invisible-operator.md`).
+    if let card = facts.cards.first, ask == nil || facts.hasBlockingPrompt {
       return Verdict(state: .needsYou, reason: oneLine(card.reason))
     }
-    if facts.exitedAtTrust {
-      return Verdict(
-        state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
-    }
+    if facts.exitedAtTrust { return trustExitVerdict }
     if let v = openPromptVerdict(facts) { return v }
-    if let v = reportVerdict(session, facts) { return v }
+    if let ask { return ask }
     if let v = finishedPR(session, facts, now: now) { return v }
-    if facts.turnRunning {
-      if let tool = facts.runningTool {
-        return Verdict(state: .working, reason: oneLine("\(tool.summary) (\(minutes(now - tool.since)))"))
-      }
-      return Verdict(state: .working, reason: "working (\(minutes(now - (facts.turnStarted ?? now))))")
+    if facts.turnRunning { return workingVerdict(facts, now: now) }
+    let idle = idleRules(session, facts, now: now, stateOf: stateOf)
+    // A merge wait watches for Ready to merge, which `openPR` gives below the session's own waits, and a `session` wait
+    // settles on Stale and on its wanted state, so a routed held wait must hide none of them. It comes before every
+    // other idle verdict, the session's own waits included.
+    let watched = Set(
+      facts.operatorItems.heldWaits.filter { $0.kind == .session && $0.session?.id == session.id }
+        .map { $0.state ?? .done })
+    if idle.state != .readyToMerge, idle.state != .stale, !watched.contains(idle.state),
+      let held = heldWaitVerdict(facts.operatorItems, now: now)
+    {
+      return held
     }
+    return idle
+  }
+
+  /// The rules for a session whose turn doesn't run and that no prompt, ask, or finished PR decides.
+  private static func idleRules(
+    _ session: Session, _ facts: SessionFacts, now: Int64, stateOf: (String) -> AttentionState?
+  ) -> Verdict {
     if let verdict = waitVerdict(session, facts, now: now) { return verdict }
     if facts.prompts == 0 && facts.lastReply == nil {
       if facts.launchPromptPending(now: now) {
@@ -713,6 +748,17 @@ public enum Attention {
     }
     if let v = unreviewedPR(facts) { return v }
     return replyVerdict(facts.lastReply ?? "")
+  }
+
+  static let trustExitVerdict = Verdict(
+    state: .needsYou, reason: "claude exited at the folder trust prompt. Open the session to answer it again")
+
+  /// Working, with the running tool or the turn's age.
+  static func workingVerdict(_ facts: SessionFacts, now: Int64) -> Verdict {
+    if let tool = facts.runningTool {
+      return Verdict(state: .working, reason: oneLine("\(tool.summary) (\(minutes(now - tool.since)))"))
+    }
+    return Verdict(state: .working, reason: "working (\(minutes(now - (facts.turnStarted ?? now))))")
   }
 
   /// The verdict of a session whose host sbd can't read: the state that the session had when the link
