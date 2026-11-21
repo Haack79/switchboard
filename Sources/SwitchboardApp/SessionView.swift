@@ -261,12 +261,14 @@ struct SessionView: View {
           SessionAccountControl(session: session)
           if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
           if session.kind == .manager { ManagerHeaderControls(session: session) }
-          Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .textSelection(.enabled)
+          Text(
+            [RepoLabels.label(for: session), session.branch, session.cwd].compactMap { $0 }.joined(separator: " · ")
+          )
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .textSelection(.enabled)
         }
       }
       Spacer()
