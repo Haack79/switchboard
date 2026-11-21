@@ -254,7 +254,9 @@ enum ResendRefusal: String, CaseIterable, CustomStringConvertible {
     case .delivered:
       try sbd.sb("decide", s.id, "--submit")
       try sbd.waitFor(s.id, "the reply to the decisions") { $0.lastReply?.hasPrefix("Done: My decisions") == true }
-      try #require(try !sbd.events(s.id, "delivered", text: try sbd.submittedMessage(s.id)).isEmpty)
+      // The paste records `delivered` after claude can finish the turn.
+      let message = try sbd.submittedMessage(s.id)
+      try sbd.waitFor("the decisions' delivered") { try !sbd.events(s.id, "delivered", text: message).isEmpty }
     }
   }
 }
@@ -403,7 +405,7 @@ enum ResendRefusal: String, CaseIterable, CustomStringConvertible {
     try sbd.sb("send", s.id, text)
     try sbd.waitFor(s.id, "the first copy's reply") { $0.lastReply == "Done: \(text)" }
     try #require(sbd.transcriptContains(s, text))
-    let deliveredBefore = try sbd.events(s.id, "delivered", text: text).count
+    try sbd.waitFor("the first copy's delivered") { try sbd.events(s.id, "delivered", text: text).count == 1 }
     sbd.hold("hold-delivered")
     sbd.hold("hold")
     let before = sbd.completePastes()
@@ -416,7 +418,7 @@ enum ResendRefusal: String, CaseIterable, CustomStringConvertible {
     try sbd.startSbd()
 
     try sbd.waitFor("delivery_unknown") { try sbd.events(s.id, "delivery_unknown", text: text).count == 1 }
-    #expect(try sbd.events(s.id, "delivered", text: text).count == deliveredBefore)
+    #expect(try sbd.events(s.id, "delivered", text: text).count == 1)
   }
 
   static let draft = "half a thought"

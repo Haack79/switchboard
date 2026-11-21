@@ -625,8 +625,8 @@ import Testing
     sbd.hold("hold-delivered")
 
     try sbd.sb("send", c.id, text)
-    try sbd.waitFor("the command's SessionStart", timeout: 30) {
-      try sbd.events(c.id, after: mark).contains { $0.kind == "SessionStart" && $0.data["source"]?.string == "compact" }
+    try sbd.waitFor("the command's SessionStart", timeout: 30, fetch: { try sbd.events(c.id, after: mark) }) {
+      $0.contains { $0.kind == "SessionStart" && $0.data["source"]?.string == "compact" }
     }
     try #require(try sbd.events(c.id, "delivered", text: text).isEmpty, "hold-delivered let delivered through")
     try sbd.release("hold-delivered")

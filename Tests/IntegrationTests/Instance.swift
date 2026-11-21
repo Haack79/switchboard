@@ -216,8 +216,11 @@ final class Instance {
 
   /// A gate file in the home. While `hold-paste` exists, sbd holds each paste
   /// on the paste queue after it accepted the message and before it records
-  /// `pasting`. While `hold-delivered` exists, sbd holds each paste after
-  /// `host.paste` returned, Enter included, and before it records `delivered`.
+  /// `pasting`. sbd holds each paste that starts while `hold-delivered`
+  /// exists after `host.paste` returned, Enter included, and before it records
+  /// `delivered`. A paste that started before the gate passes it. The gate
+  /// therefore can't stop an earlier paste and block the later pastes behind
+  /// it on the paste queue.
   /// Neither gate blocks the state queue.
   func gate(_ name: String) -> String { "\(home.path)/\(name)" }
 

@@ -1893,9 +1893,12 @@ public final class Service {
         return
       }
       guard queue.sync(execute: { startPaste(id, message) }) else { return }
+      // claude can finish the turn before the paste returns. A test can make the gate after that turn. The paste reads
+      // the gate before it starts, which keeps that gate from holding it.
+      let holdsDelivered = gateIsClosed("hold-delivered")
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
-        waitAtGate("hold-delivered")
+        if holdsDelivered { waitAtGate("hold-delivered") }
         queue.async {
           self.record(id, "delivered", ["text": .string(text)])
           // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
@@ -1984,8 +1987,12 @@ public final class Service {
   /// gates, and they run on the paste queue or the removal queue, never on
   /// the state queue.
   func waitAtGate(_ gate: String) {
-    guard config.testClock else { return }
-    while FileManager.default.fileExists(atPath: "\(home.path)/\(gate)") { usleep(50_000) }
+    while gateIsClosed(gate) { usleep(50_000) }
+  }
+
+  /// Whether the gate file exists in the home of a test instance.
+  func gateIsClosed(_ gate: String) -> Bool {
+    config.testClock && FileManager.default.fileExists(atPath: "\(home.path)/\(gate)")
   }
 
   /// Defers the session's held questions first, so that their cards stay.
