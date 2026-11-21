@@ -148,7 +148,7 @@ final class BoardModel: ObservableObject {
   /// A loop editor's save is on its way to sbd, so a second Save would add a second loop.
   @Published var savingLoop = false
   var presentingSheet: Bool {
-    newSession != nil || showingImport || showingSearch || showingDoneRemoval || showingIssueSetup || quickAsk != nil
+    newSession != nil || showingImport || showingSearch || showingDoneRemoval || quickAsk != nil
       || pickingSnoozeTime != nil || pickingPauseTime != nil || loopEditor != nil
   }
   func openNewSession(group: String? = nil, parent: String? = nil) {
@@ -326,7 +326,18 @@ final class BoardModel: ObservableObject {
   /// The group that the user picked for an issue's Start, by issue id. nil inside picks No Group. An issue with no
   /// entry starts in `KnownRepos.preferredGroup`.
   @Published var issueGroupPicks: [String: String?] = [:]
-  @Published var showingIssueSetup = false
+  /// The offered repositories that the user unchecked. The Issues view's empty state and Settings ▸ Issues share it.
+  @Published var uncheckedIssueRepos: Set<String> = []
+  /// The tab that the Settings window shows.
+  @Published var settingsTab: SettingsTab = .general
+  /// Whether the Settings window is on screen. The GUI checks read it.
+  var settingsShown = false
+  /// This Mac's live cap, as sbd last answered it, or nil before the Settings window reads it.
+  @Published var liveCap: Int?
+  /// Whether new sessions start in auto mode, as sbd last answered it, or nil before the Settings window reads it.
+  @Published var defaultAutoMode: Bool?
+  /// sbd's refusal of the last change in Settings ▸ General. The tab shows it instead of the main window's banner.
+  @Published var settingsError: String?
   /// The loop that the user last moved to in the Loops view, by schedule id.
   @Published var loopFocus: String?
   /// Counts moves in the Loops view. Each one scrolls to the current loop.
@@ -387,7 +398,7 @@ final class BoardModel: ObservableObject {
   /// Item-context and reply reads, which can take seconds for a long or remote transcript. They run apart from the
   /// poll. The queue is serial, so two reads for one session answer in the order the user asked for them.
   private let contextWork = DispatchQueue(label: "switchboard.context")
-  private let worker = DispatchQueue(label: "switchboard.actions")
+  let worker = DispatchQueue(label: "switchboard.actions")
   /// Undo's `rm-cancel` must reach sbd before the removals' `notBefore`, so it does not wait behind a slow action
   /// on `worker`, such as the header's `rm --worktree`.
   let undos = DispatchQueue(label: "switchboard.undo")
@@ -1234,6 +1245,8 @@ final class BoardModel: ObservableObject {
 
   /// Opens the window when the user has closed it. The always-present menu bar item sets this.
   var showWindow: (() -> Void)?
+  /// Opens the Settings window and brings it forward. The always-present menu bar item sets this.
+  var showSettings: (() -> Void)?
 
   /// Selects the listed session as a sidebar click does and brings its window forward. A closed window opens
   /// first. A session that the app does not list is left alone.

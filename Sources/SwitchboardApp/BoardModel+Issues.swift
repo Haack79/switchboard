@@ -275,7 +275,7 @@ extension BoardModel {
   /// view offers them as sources. Two checkouts of one repository give one entry.
   var offeredIssueRepos: [String] { newIssueSources(knownGitHubRepos) }
 
-  /// The orgs and repositories of the sessions and the known repositories, which the setup sheet suggests as
+  /// The orgs and repositories of the sessions and the known repositories, which Settings ▸ Issues suggests as
   /// sources.
   var suggestedIssueSources: [String] {
     let repos = allSessions.compactMap(\.repository) + knownGitHubRepos

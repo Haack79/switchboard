@@ -528,6 +528,8 @@ let usage = """
                                   sheet offers, most recently used first
     repo add <path>               add the repository that holds the folder. A
                                   worktree adds its main checkout
+    auto-mode [on|off]            show or set whether new sessions start in
+                                  auto mode. Sessions that exist keep theirs
     autocontinue [on|off|status]  send "Claude can continue" sessions their
                                   next step on their own, or show what holds
                                   each one back. Off by default
@@ -1221,6 +1223,8 @@ case "repo", "repos":
   repo(a)
 case "autocontinue":
   autoContinue(a)
+case "auto-mode":
+  autoMode(a)
 case "activity":
   activity(a)
 case "live":
