@@ -1,8 +1,8 @@
 import Foundation
-import SwitchboardCore
 import Testing
 
 @testable import SwitchboardApp
+@testable import SwitchboardCore
 
 @Suite struct TriageDetailPane {
   func session(waitsToStart: Bool) -> SessionSummary {
@@ -64,6 +64,15 @@ import Testing
     #expect(link.owners == nil)
   }
 
+  @Test func helpsADocketRowWithItsReviewTitle() throws {
+    var s = docketRow(url: "https://github.com/o/r/pull/1")
+    var review = DocketReview(pullRequest: "o/r#1", url: "https://github.com/o/r/pull/1", state: "reviewing")
+    review.title = "Fix it"
+    s.docket?.review = review
+    let link = try #require(TriageDetail.prLink(for: s))
+    #expect(link.help == "o/r#1: Fix it")
+  }
+
   @Test func keepsTheWholeDocketRefWhenItHasNoNumber() throws {
     var s = docketRow(url: "https://github.com/o/r/pull/1")
     s.docket?.pullRequest = "not a ref"
@@ -80,7 +89,7 @@ import Testing
     s.pr = prWithOwners()
     let link = try #require(TriageDetail.prLink(for: s))
     #expect(link.label == "#5")
-    #expect(link.help.hasPrefix(try #require(s.pr?.line)))
+    #expect(link.help == s.pr?.line)
     #expect(link.url == URL(string: "https://github.com/o/r/pull/5"))
     #expect(link.owners == s.pr?.codeOwners)
   }

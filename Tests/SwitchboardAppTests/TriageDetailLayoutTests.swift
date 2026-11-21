@@ -53,18 +53,19 @@ import Testing
     let hosted = host(session(name: Self.longName, head: Self.head))
 
     #expect(hosted.staticTexts(Self.longName).count == 1)
-    for label in [Self.repoName, Self.branch, "uses \(Self.head)"] {
+    for (label, font) in [(Self.repoName, Font.body), (Self.branch, .body), ("uses \(Self.head)", .caption)] {
       for element in hosted.staticTexts(label) {
         let width = try #require(element.frame?.width)
-        #expect(width >= idealWidth(Text(verbatim: label)) - 1, "\(label) is \(width) pt wide")
+        #expect(width >= idealWidth(Text(verbatim: label).font(font)) - 1, "\(label) is \(width) pt wide")
       }
     }
   }
 
-  @Test func aShortNameShowsTheRepoBranchAndHead() throws {
+  @Test func aShortNameDropsOnlyTheLongBranch() throws {
     let hosted = host(session(name: "x", head: "h"))
 
     #expect(hosted.staticTexts(Self.repoName).count == 1)
+    #expect(hosted.staticTexts(Self.branch).isEmpty)
     #expect(hosted.staticTexts("uses h").count == 1)
     #expect(hosted.prLinks.map(\.label) == [PRLink.accessibilityLabel("#4812")])
   }
@@ -74,6 +75,7 @@ import Testing
     let hosted = host(s)
 
     let link = try #require(hosted.prLinks.first)
+    #expect(link.object.value(forKey: "accessibilityValue") as? String == s.pr?.status.rawValue)
     let help = link.object.value(forKey: "accessibilityHelp") as? String ?? ""
     #expect(help.contains(try #require(s.pr?.line)))
     #expect(help.contains("checks success"))

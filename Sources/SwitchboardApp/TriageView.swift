@@ -18,7 +18,7 @@ struct TriageDetail: View {
       ? .terminal : .summary
   }
 
-  struct Link {
+  struct BarLink {
     /// The PR number, such as "#4812".
     var label: String
     /// The PR's status, title, and head branch, which the label leaves out.
@@ -33,12 +33,12 @@ struct TriageDetail: View {
   /// The PR that the bar links to, with the code owners of that PR. A docket
   /// row links to the PR that docket reviews and ignores its `pr`. The bar
   /// therefore never shows one PR's link beside another PR's code owners.
-  static func prLink(for session: SessionSummary) -> Link? {
+  static func prLink(for session: SessionSummary) -> BarLink? {
     if let docket = session.docket {
       guard let url = docket.link else { return nil }
       let label = DocketRef(docket.pullRequest).map { "#\($0.number)" } ?? docket.pullRequest
       let title = docket.review?.title.flatMap { $0.isEmpty ? nil : $0 }
-      return Link(
+      return BarLink(
         label: label, help: [docket.pullRequest, title].compactMap { $0 }.joined(separator: ": "), url: url)
     }
     guard let pr = session.pr, let url = pr.link else { return nil }
@@ -46,7 +46,7 @@ struct TriageDetail: View {
     var help = pr.line
     if !pr.title.isEmpty { help += " · \(pr.repo): \(pr.title)" }
     if let head { help += ". The PR's branch is \(head). This folder is on \(session.branch ?? "another branch")." }
-    return Link(
+    return BarLink(
       label: pr.numberLabel, help: help, status: pr.status.rawValue, url: url, owners: pr.codeOwners, head: head)
   }
 
@@ -138,7 +138,7 @@ struct TriageDetail: View {
 
   /// The bar's leading items. `dropping` leaves out that many of the branch, the repo, and the PR's head branch, in
   /// that order.
-  private func leading(name: String, link: Link?, dropping: Int) -> some View {
+  private func leading(name: String, link: BarLink?, dropping: Int) -> some View {
     HStack(spacing: 8) {
       Text(name).fontWeight(.medium).lineLimit(1).help(name)
       if dropping < 2, let repo = session.repoFolder {
