@@ -60,7 +60,7 @@ import Testing
     let c = try JSONCoding.decode(Config.self, from: #"{"manager": {"model": "haiku"}}"#)
 
     #expect(c.manager.model == "haiku")
-    #expect(c.model == nil)
+    #expect(c.model == "opus")
   }
 
   // MARK: Model names

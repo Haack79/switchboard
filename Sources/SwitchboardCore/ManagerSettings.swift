@@ -12,7 +12,7 @@ public struct ManagerSettings: Codable, Equatable, Sendable {
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = ManagerSettings()
-    model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
+    model = SessionModel.configModel(try c.decodeIfPresent(JSON.self, forKey: .model), key: "manager.model") ?? d.model
     autoCompactWindow = try c.decodeIfPresent(Int.self, forKey: .autoCompactWindow) ?? d.autoCompactWindow
   }
 }

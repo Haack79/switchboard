@@ -2,41 +2,46 @@ import Testing
 
 @testable import SwitchboardCore
 
-/// The model that a new session stores, and the model that sbd passes with `--model` at each launch.
+private let coordinators: [SessionKind] = [.manager, .operator, .chat]
+private let allKinds: [SessionKind] = [.work] + coordinators
+
+/// The model that a new session stores, and the model that sbd passes with `--model` at each launch. A work
+/// session stores config.json's `model`. A Manager conversation, the operator, and a group chat store none and run
+/// `manager.model` at each launch.
 @Suite struct SessionModelTests {
   // MARK: Stored at creation
 
-  @Test(arguments: [SessionKind.work, .manager, .chat, .operator])
+  @Test(arguments: allKinds)
   func theCallersModelWinsForEveryKind(_ kind: SessionKind) {
     #expect(SessionModel.stored(kind: kind, requested: "sonnet", workModel: "opus") == "sonnet")
   }
 
-  @Test func aManagerConversationStoresNoModel() {
-    #expect(SessionModel.stored(kind: .manager, requested: nil, workModel: "opus") == nil)
+  @Test(arguments: ["opus", "haiku", "claude-opus-5-5", "opus[1m]"])
+  func aWorkSessionWithoutACallersModelStoresTheWorkModel(_ workModel: String) {
+    #expect(SessionModel.stored(kind: .work, requested: nil, workModel: workModel) == workModel)
   }
 
-  @Test(arguments: [SessionKind.work, .chat, .operator])
-  func anyOtherKindStoresTheWorkModel(_ kind: SessionKind) {
-    #expect(SessionModel.stored(kind: kind, requested: nil, workModel: "opus") == "opus")
-  }
-
-  @Test func withoutAWorkModelAWorkSessionStoresNone() {
-    #expect(SessionModel.stored(kind: .work, requested: nil, workModel: nil) == nil)
+  @Test(arguments: coordinators)
+  func aCoordinatorWithoutACallersModelStoresNoneEvenWithAWorkModel(_ kind: SessionKind) {
+    #expect(SessionModel.stored(kind: kind, requested: nil, workModel: "opus") == nil)
   }
 
   // MARK: Passed at launch
 
-  @Test(arguments: [SessionKind.work, .manager, .chat, .operator])
+  @Test(arguments: allKinds)
   func aStoredModelWinsForEveryKind(_ kind: SessionKind) {
     #expect(SessionModel.launch(kind: kind, stored: "opus", coordinatorModel: "haiku") == "opus")
   }
 
-  @Test func aManagerConversationWithoutAStoredModelRunsTheCoordinatorModel() {
-    #expect(SessionModel.launch(kind: .manager, stored: nil, coordinatorModel: "haiku") == "haiku")
+  @Test(arguments: coordinators)
+  func aCoordinatorWithoutAStoredModelRunsTheCoordinatorModel(_ kind: SessionKind) {
+    #expect(SessionModel.launch(kind: kind, stored: nil, coordinatorModel: "haiku") == "haiku")
   }
 
-  @Test(arguments: [SessionKind.work, .chat, .operator])
-  func anyOtherKindWithoutAStoredModelRunsClaudesDefault(_ kind: SessionKind) {
-    #expect(SessionModel.launch(kind: kind, stored: nil, coordinatorModel: "haiku") == nil)
+  /// A work session created before work sessions stored their model, or an imported one, resumes on the model its
+  /// transcript was saved on, so sbd passes no `--model`.
+  @Test(arguments: ["haiku", "sonnet", "opus"])
+  func aWorkSessionWithoutAStoredModelRunsNoModel(_ coordinatorModel: String) {
+    #expect(SessionModel.launch(kind: .work, stored: nil, coordinatorModel: coordinatorModel) == nil)
   }
 }
