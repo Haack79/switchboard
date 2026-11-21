@@ -383,7 +383,8 @@ extension DecisionClarifyVerdictTests {
 
   /// Tests 3 and 4. After the paste, only the question itself, with nothing after it but attached images, starts the
   /// clarifying turn. Any other prompt is the question as the user changed it in the terminal before claude took it.
-  /// It makes the list stale and closes the ask with an error, because the question's own prompt never comes.
+  /// It makes the list stale, and the paste's `delivered` closes the ask with an error, because the question's own
+  /// prompt never comes.
   @Test(arguments: [
     PromptCase(name: "the question", prompt: askMessage, clarifying: true),
     PromptCase(name: "the question with an image", prompt: askMessage + " [Image #1]", clarifying: true),
@@ -399,7 +400,12 @@ extension DecisionClarifyVerdictTests {
     var a = try Asked(.needsYou)
     a.send()
 
-    track(&a.facts, [promptEvent(8, t: 310, c.prompt)])
+    track(
+      &a.facts,
+      [
+        promptEvent(8, t: 310, c.prompt),
+        Event(id: 9, session: "s1", t: 311, kind: "delivered", data: ["text": .string(askMessage)]),
+      ])
 
     #expect(a.facts.decisionList?.stale == !c.clarifying)
     let exchange = try #require(a.facts.decisionList?.exchanges.first)
@@ -414,18 +420,39 @@ extension DecisionClarifyVerdictTests {
     }
   }
 
-  /// A paste that sbd records only as `delivered` counts as a paste too.
-  @Test(arguments: ["pasting", "delivered"])
-  func anEditedQuestionAfterItsPasteClosesTheAskAndMakesTheListStale(_ pasted: String) throws {
-    var a = try Asked(.needsYou)
-    track(
-      &a.facts,
-      [
-        sentQuestion(6, t: 301),
-        Event(id: 7, session: "s1", t: 302, kind: pasted, data: ["text": .string(askMessage)]),
-      ])
+  /// The question as the user changed it during its paste. Claude takes the changed text as one prompt.
+  enum EditedPaste: String, CaseIterable, Sendable, CustomTestStringConvertible {
+    /// The prompt comes while the paste runs, and the paste's `delivered` closes the ask.
+    case promptBeforeDelivered
+    /// A paste that sbd records only as `delivered` counts as a paste too.
+    case onlyDelivered
+    case promptAfterDelivered
 
-    let v = track(&a.facts, [promptEvent(8, t: 310, askMessage.replacingOccurrences(of: "task", with: "job"))])
+    var testDescription: String { rawValue }
+
+    var events: [Event] {
+      let kinds: [String] =
+        switch self {
+        case .promptBeforeDelivered: ["pasting", "UserPromptSubmit", "delivered"]
+        case .onlyDelivered: ["delivered", "UserPromptSubmit"]
+        case .promptAfterDelivered: ["pasting", "delivered", "UserPromptSubmit"]
+        }
+      let edited = askMessage.replacingOccurrences(of: "task", with: "job")
+      return kinds.enumerated().map { i, kind in
+        let id = Int64(7 + i)
+        return kind == "UserPromptSubmit"
+          ? promptEvent(id, t: 302 + Int64(i), edited)
+          : Event(id: id, session: "s1", t: 302 + Int64(i), kind: kind, data: ["text": .string(askMessage)])
+      }
+    }
+  }
+
+  @Test(arguments: EditedPaste.allCases)
+  func anEditedQuestionThatIsDeliveredClosesTheAskAndMakesTheListStale(_ edited: EditedPaste) throws {
+    var a = try Asked(.needsYou)
+    track(&a.facts, [sentQuestion(6, t: 301)])
+
+    let v = track(&a.facts, edited.events)
 
     #expect(a.facts.clarifying == nil)
     let exchange = try #require(a.facts.decisionList?.exchanges.first)
@@ -433,6 +460,47 @@ extension DecisionClarifyVerdictTests {
     #expect(!exchange.pending)
     #expect(a.facts.decisionList?.stale == true)
     #expect(v.state == .working, "\(v.state) \(v.reason)")
+  }
+
+  /// A prompt that the user typed while the paste ran made the paste fail. The question waits in the queue again.
+  @Test func aTypedPromptDuringAPasteThatFailsLeavesTheAskPending() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(
+      &a.facts,
+      [
+        promptEvent(8, t: 305, "go on"),
+        Event(id: 9, session: "s1", t: 306, kind: "requeued", data: ["text": .string(askMessage)]),
+      ])
+
+    #expect(a.facts.clarifying?.started == false)
+    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
+    #expect(a.facts.decisionList?.stale == true)
+  }
+
+  /// The retry of a paste that a typed prompt made fail delivers the question, and its turn files the reply.
+  @Test func theRetryOfAPasteThatATypedPromptMadeFailFilesTheReply() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(
+      &a.facts,
+      [
+        promptEvent(8, t: 305, "go on"),
+        Event(id: 9, session: "s1", t: 306, kind: "requeued", data: ["text": .string(askMessage)]),
+        stop(10, 308, "Going on."),
+        pasting(11, t: 310),
+        Event(id: 12, session: "s1", t: 311, kind: "delivered", data: ["text": .string(askMessage)]),
+        promptEvent(13, t: 312, askMessage),
+        stop(14, 320, ClarifyStart.needsYou.clarifyingReply),
+      ])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.reply == ClarifyStart.needsYou.clarifyingReply)
+    #expect(exchange.error == nil)
+    #expect(!exchange.pending)
   }
 
   /// What came before a prompt that is not the question, while the question has not been pasted.

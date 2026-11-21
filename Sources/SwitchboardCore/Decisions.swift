@@ -222,14 +222,26 @@ public struct DecisionExchange: Codable, Equatable, Sendable {
 /// The turn that a question about a decision starts: the turn of the next prompt that is the message sbd sent
 /// for the ask. It ends at that turn's Stop.
 public struct Clarifying: Codable, Equatable, Sendable {
+  /// How far sbd got with the paste of the message.
+  public enum Paste: String, Codable, Sendable {
+    /// The message waits in the queue. A failed paste puts it back there.
+    case waiting
+    /// sbd recorded `pasting` and has not recorded the paste's result yet.
+    case running
+    /// sbd recorded `delivered`.
+    case landed
+  }
+
   public var askId: String
   public var number: Int
   /// The message that sbd sent for the ask.
   public var message: String
   /// True once claude reported the message as a prompt.
   public var started: Bool
-  /// True once sbd started to paste the message. Until then, the message can still wait in the queue.
-  public var pasted: Bool
+  public var paste: Paste
+  /// True when a prompt that is not the message arrived while the paste ran. When the paste then lands, that prompt
+  /// held the message as the user changed it in the terminal.
+  public var otherPromptDuringPaste: Bool
 }
 
 /// The data of a `decision_asked` event. `verdict` and `item` are what the session showed when the user asked.
@@ -334,9 +346,18 @@ extension SessionFacts {
     case "decision_asked":
       applyAsk(event)
     case "pasting", "delivered", "requeued":
-      // A failed paste puts the message back in the queue.
       guard var ask = clarifying, !ask.started, event.data["text"]?.string == ask.message else { break }
-      ask.pasted = event.kind != "requeued"
+      if event.kind == "delivered" && ask.otherPromptDuringPaste {
+        endClarifying(error: Self.changedAsk)
+        break
+      }
+      // A failed paste puts the message back in the queue, so a prompt during it did not hold the message.
+      switch event.kind {
+      case "pasting": ask.paste = .running
+      case "delivered": ask.paste = .landed
+      default: ask.paste = .waiting
+      }
+      ask.otherPromptDuringPaste = false
       clarifying = ask
     case "UserPromptSubmit":
       applyPromptToList(event.data["prompt"]?.string ?? "")
@@ -393,21 +414,32 @@ extension SessionFacts {
     if heldAsk == nil { heldAsk = ask }
     decisionList?.exchanges.append(
       DecisionExchange(askId: ask.askId, number: ask.number, text: ask.text, pending: true))
-    clarifying = Clarifying(askId: ask.askId, number: ask.number, message: ask.message, started: false, pasted: false)
+    clarifying = Clarifying(
+      askId: ask.askId, number: ask.number, message: ask.message, started: false, paste: .waiting,
+      otherPromptDuringPaste: false)
   }
 
   /// The prompt that is the ask's message starts the clarifying turn and leaves the list fresh. Any other prompt
-  /// makes the list stale, and it ends a clarifying turn that never stopped with an error. After the paste, any
-  /// other prompt also ends the unstarted ask with an error. Text that the user typed in the terminal while the
-  /// paste ran changed the message into that prompt, so the message never arrives as its own prompt.
+  /// makes the list stale, and it ends a clarifying turn that never stopped with an error. After the paste landed,
+  /// any other prompt also ends the unstarted ask with an error. Text that the user typed in the terminal while the
+  /// paste ran changed the message into that prompt, so the message never arrives as its own prompt. A prompt while
+  /// the paste runs ends the ask only when the paste then lands, because a failed paste puts the message back in the
+  /// queue.
   private mutating func applyPromptToList(_ prompt: String) {
     if var ask = clarifying, !ask.started {
       if InboxRequest.isPrompt(prompt, of: ask.message) {
         ask.started = true
+        ask.otherPromptDuringPaste = false
         clarifying = ask
         return
       }
-      if ask.pasted { endClarifying(error: Self.changedAsk) }
+      switch ask.paste {
+      case .waiting: break
+      case .running:
+        ask.otherPromptDuringPaste = true
+        clarifying = ask
+      case .landed: endClarifying(error: Self.changedAsk)
+      }
     } else if clarifying != nil {
       endClarifying(error: Self.unansweredAsk)
     }
