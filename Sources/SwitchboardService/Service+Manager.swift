@@ -47,13 +47,16 @@ extension Service {
   ) throws -> SessionSummary {
     let folder = home.managerFolder
     let named = name ?? prompt.map(Manager.name(fromPrompt:)) ?? Manager.untitled
-    return try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
+    let created = try create(NewSession(path: folder, name: named, prompt: prompt), (folder, nil, nil)) {
       $0.manager = true
       $0.claudeConfigDir = account
       if isOperator { $0.isOperator = true }
       $0.mcp = mcp
       $0.mcpScoped = true
     }
+    // A new conversation is the most recent one, so it takes the Operator's items that no other session owns.
+    syncOperatorItems()
+    return summary(created.id)
   }
 
   /// The `manager-model` request. With `model`, it saves the model in config.json's `manager` and uses it from
@@ -181,21 +184,28 @@ extension Service {
     let text = oneLine(args["text"]?.string ?? "", max: TriageCard.lineLength)
     guard !text.isEmpty else { throw APIError("a report needs text") }
     let about = try args["session"]?.string.map { try lookup(["session": .string($0)]) }
-    let event = try recordReport(text, needsYou: args["needsYou"]?.bool == true, about: about, on: id)
+    let event = try recordReport(
+      text, needsYou: args["needsYou"]?.bool == true, about: about, on: id, handedFrom: entries[id]!.facts.workFrom)
     return try reportRow(OperatorReport(event)!, of: id)
   }
 
   /// Records a report on the operator `op`, cut to one line. `about` is the session that the report is about, and
-  /// `wait` is the wait whose action made the report.
+  /// `wait` is the wait whose action made the report. A needs-you report goes to the session that `askOwner` picks,
+  /// where `handedFrom` is the conversation that handed off the wait that the operator works on.
   @discardableResult
-  func recordReport(_ text: String, needsYou: Bool, about: String?, on op: String, wait: String? = nil) throws -> Event
-  {
+  func recordReport(
+    _ text: String, needsYou: Bool, about: String? = nil, on op: String, wait: String? = nil, handedFrom: String? = nil
+  ) throws -> Event {
     var data: [String: JSON] = [
       "text": .string(oneLine(text, max: TriageCard.lineLength)), "needsYou": .bool(needsYou),
     ]
     if let about { data["about"] = .string(about) }
     if let wait { data["wait"] = .string(wait) }
-    return try recordStored(op, OperatorReport.event, .object(data))
+    let event = try recordStored(op, OperatorReport.event, .object(data))
+    if needsYou, let owner = askOwner(about: about, handedFrom: handedFrom) { routeReport(event, owner: owner) }
+    // `fold` skips the sync for a report, so that the ask never shows on a fallback owner before its routing.
+    syncOperatorItems()
+    return event
   }
 
   /// The `operator-reports` request: the operator's reports, oldest first, each with whether it is open. It
@@ -231,6 +241,15 @@ extension Service {
   }
 
   func mostRecentManager() -> String? { managerList().first?.id }
+
+  /// The newest conversation that may own the Operator's items, read from the entries without building summaries.
+  /// It orders by the fields that `Manager.newestFirst` compares. It skips a paused or done conversation, which
+  /// `mostRecentManager` would give, so that an item goes to the next conversation and not to the Operator.
+  func newestConversation() -> String? {
+    entries.values.filter { $0.session.kind == .manager && mayOwnOperatorItems($0.session.id) }.min {
+      ($0.facts.lastActivity, $0.session.created) > ($1.facts.lastActivity, $1.session.created)
+    }?.session.id
+  }
 
   /// The conversation that `ref` names by id, unique id prefix, or unique name.
   func managerConversation(_ ref: String) throws -> String {

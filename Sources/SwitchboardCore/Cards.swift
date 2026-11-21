@@ -342,6 +342,11 @@ extension SessionFacts {
   /// The open card for Claude Code's trust dialog.
   public var trustCard: Card? { cards.first { $0.kind == .trust } }
 
+  /// Whether the session waits on a prompt that only the user can answer, as `Triage.hasBlockingPrompt` decides.
+  public var hasBlockingPrompt: Bool {
+    Triage.hasBlockingPrompt(cards: cards, openPrompt: openPermission != nil || openQuestion != nil)
+  }
+
   /// Why the open prompt has no card, which the Inbox item says in its
   /// summary. It is nil while the session has a card or no open prompt.
   public var cardlessPromptReason: String? {
