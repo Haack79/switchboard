@@ -650,10 +650,11 @@ struct BoardView: View {
                     ForEach(Array(zip(layout.columns, lane.cells)), id: \.0) { _, stack in
                       VStack(spacing: 8) {
                         ForEach(stack) { s in
-                          BoardCard(session: s, keyboardFocused: s.id == ring, boardActive: focused) {
+                          BoardCard(
+                            session: s, keyboardFocused: s.id == ring, boardActive: focused, draggable: drops
+                          ) {
                             focused = true
                           }
-                          .modifier(CardDrag(id: s.id, enabled: drops))
                           .contextMenu {
                             if drops {
                               SessionMenuItems(session: s, removableSelection: removableSelection) {
@@ -1112,6 +1113,8 @@ struct BoardCard: View {
   var keyboardFocused = false
   /// The Board has keyboard focus, so a selected card draws the emphasized selection color.
   var boardActive = false
+  /// A drag of the card moves it, or the Board selection it belongs to, onto a lane.
+  var draggable = false
   /// Gives the Board keyboard focus, so Escape, Return, and Space reach it after a click.
   var activate: () -> Void = {}
 
@@ -1201,6 +1204,7 @@ struct BoardCard: View {
         }
         // The ring stays clear of the 2 pt Needs-you edge, which a 3 pt outset would touch.
         .highlightRing(s.isHighlighted, cornerRadius: 8, outset: 5)
+        .modifier(CardDrag(id: s.id, enabled: draggable))
       }
       .buttonStyle(.plain)
       .hoverCard(

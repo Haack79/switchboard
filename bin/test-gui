@@ -43,11 +43,15 @@
 # checks that a click selects a card and stays on the Board, that ⌘-click adds a card, that ⇧-click adds the
 # cards between, that a click on empty space clears the selection, that a drag from empty space selects the
 # cards it covers, and that a double click opens the session.
+# The boarddrag check starts on the Board with Group lanes and drags a card through the app's ShellSelfTest
+# commands. It checks that a click on a draggable card selects it and that a drag starts a drag session. A
+# drag that the app posts starts a session only with some SwiftUI versions. The check first drags a draggable
+# view outside the Board, and it skips when that drag starts no session either.
 # The wake check stops a session's claude three times through the app's WakeSelfTest,
 # and checks that three keys in its terminal start it once, that a click starts it,
 # and that a drag does not.
 # Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, multiselect,
-# boardselect, wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
+# boardselect, boarddrag, wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
 # The script ends the app, sbd, the tmux server, the stand-in, and its folder
 # in /tmp when it exits, whether or not the checks passed. It keeps the app's
 # log, the screen, and the pane PNGs in .build/gui-test/terminal. After any
@@ -62,9 +66,9 @@ checks=("$@")
 read -r -a skips <<<"${SB_GUI_SKIP:-}"
 for name in ${checks[@]+"${checks[@]}"} ${skips[@]+"${skips[@]}"}; do
   case $name in
-  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | boardselect | wake) ;;
+  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | boardselect | boarddrag | wake) ;;
   *)
-    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, boardselect, and wake." >&2
+    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, boardselect, boarddrag, and wake." >&2
     exit 2
     ;;
   esac
@@ -870,6 +874,50 @@ check_boardselect() {
 }
 
 if wants boardselect; then check_boardselect; fi
+
+check_boarddrag() {
+  check=boarddrag
+  local shots="$home/shots/boarddrag" a b result control
+  mkdir "$shots"
+  echo "Checking drags of Board cards…"
+  new_session boarddrag-a
+  a=$session
+  new_session boarddrag-b
+  b=$session
+  shows() { [ "$(app where)" = "$1" ]; }
+  more_drags_than() { [ "$(app drags)" -gt "$1" ]; }
+  selection_is() { [ "$(app board-selection)" = "$1" ]; }
+  posted() {
+    result=$(app "$@")
+    [[ $result == posted* ]]
+  }
+
+  # A launch argument sets the lanes for this run only. A card is draggable only in Group lanes.
+  SB_HISTORY=board SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" -boardLanes group >>"$shots/app.log" 2>&1 &
+  app_pid=$!
+  wait_for 60 shows board || fail "the app did not show the Board: $(app where)"
+  # A posted drag's session never ends, because no real mouse-up reaches it. That session swallows later clicks,
+  # so the click comes first.
+  wait_for 10 posted board-click "$a" || fail "the app could not click the card of $a: $result"
+  wait_for 5 selection_is "$a" || fail "a click did not select the draggable card of $a: $(app board-selection)"
+  posted drag-control || fail "the app could not drag the control view: $result"
+  if ! wait_for 5 more_drags_than 0; then
+    control=$(app drags)
+    [ "$control" = 0 ] || fail "the app did not report its drag sessions after the control drag: $control"
+    end_app
+    save_shots
+    echo "skip: boarddrag (this SwiftUI starts no drag session from posted mouse events)"
+    return
+  fi
+  control=$(app drags)
+  wait_for 10 posted board-drag "$a" "$b" card || fail "the app could not drag the card of $a: $result"
+  wait_for 5 more_drags_than "$control" || fail "dragging the card of $a started no drag session"
+  end_app
+  save_shots
+  echo "ok: boarddrag (a click selects a draggable card, a card drag starts a drag session)"
+}
+
+if wants boarddrag; then check_boarddrag; fi
 
 # sbd records each start of claude with what caused it, so `sb events` is the evidence.
 check_wake() {
