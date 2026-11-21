@@ -145,6 +145,18 @@ private struct SelectionRun {
 
   var readPackage: Bool { invocations.contains { $0.contains("dump-package") } }
 
+  /// The `swift build` invocations, with their position among all invocations.
+  var builds: [(index: Int, args: [String])] {
+    invocations.enumerated().filter { $0.element.first == "build" }.map { ($0.offset, $0.element) }
+  }
+
+  /// The products that the builds named with `--product`, in the order built.
+  var builtProducts: [String] {
+    builds.flatMap { build in
+      zip(build.args, build.args.dropFirst()).filter { $0.0 == "--product" }.map { $0.1 }
+    }
+  }
+
   static func isList(_ args: [String]) -> Bool {
     zip([""] + args, args).contains { prev, arg in arg == "list" && prev != "--filter" && prev != "--skip" }
   }
@@ -378,7 +390,8 @@ private func canonicalFilters(_ filters: [String]) -> Set<String> {
   return result
 }
 
-/// Checks that bin/test built the tests, then ran swift test once with
+/// Checks that bin/test built exactly the bundles of the targets that `filters` name,
+/// each with `--product` and before the run, then ran swift test once with
 /// `--skip-build` and exactly `filters`, exited 0, and said that CI runs the rest.
 private func expectTargeted(
   _ run: SelectionRun, _ filters: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
@@ -393,8 +406,17 @@ private func expectTargeted(
   #expect(
     run.result.stderr.contains("CI runs every other test on every push"), "\(run.result.stderr)",
     sourceLocation: sourceLocation)
-  let buildIndex = run.invocations.firstIndex { $0.first == "build" && $0.contains("--build-tests") }
-  #expect(buildIndex.map { $0 < runIndex } == true, "\(run.invocations)", sourceLocation: sourceLocation)
+  #expect(!run.builds.isEmpty, "\(run.invocations)", sourceLocation: sourceLocation)
+  for build in run.builds {
+    #expect(build.index < runIndex, "\(run.invocations)", sourceLocation: sourceLocation)
+    #expect(!build.args.contains("--build-tests"), "\(build.args)", sourceLocation: sourceLocation)
+    // swift build honors only the last --product it is given, so a second one would leave a bundle stale.
+    #expect(build.args.filter { $0 == "--product" }.count == 1, "\(build.args)", sourceLocation: sourceLocation)
+  }
+  // A bundle that a filter names must be a bundle that this run built, because a bundle
+  // that it did not build can hold tests from before the change.
+  let filterTargets = Set(filters.compactMap { parseFilter($0)?.target })
+  #expect(Set(run.builtProducts) == filterTargets, "\(run.invocations)", sourceLocation: sourceLocation)
 }
 
 /// A change to the baseline repo and the filters bin/test should then pass.
@@ -1127,6 +1149,49 @@ private func selectionLines(_ output: String) -> Set<String> {
       }
       #expect(declared, "\(entry)")
     }
+  }
+
+  @Test func aCoreTestEditBuildsOnlyTheCoreBundle() throws {
+    let repo = try SelectionRepo()
+    try repo.edit("Tests/SwitchboardCoreTests/FxCoreTests.swift")
+
+    let run = try repo.run()
+
+    expectTargeted(run, [suiteFilter("SwitchboardCoreTests", "FxCoreTests")])
+    #expect(run.builtProducts == ["SwitchboardCoreTests"], "\(run.invocations)")
+  }
+
+  @Test func editsInTwoBundlesBuildBothAndNoOther() throws {
+    let repo = try SelectionRepo()
+    try repo.edit("Tests/SwitchboardCoreTests/FxCoreTests.swift")
+    try repo.edit("Tests/SwitchboardServiceTests/FxServiceTests.swift")
+
+    let run = try repo.run()
+
+    expectTargeted(
+      run,
+      [suiteFilter("SwitchboardCoreTests", "FxCoreTests"), suiteFilter("SwitchboardServiceTests", "FxServiceTests")])
+  }
+
+  /// A suite filter that falls back to the smoke suites can name a target that the selection
+  /// did not, so the run builds that target's bundle before it runs those suites.
+  @Test func aSmokeSuiteInAnotherTargetGetsItsBundleBuilt() throws {
+    let repo = try SelectionRepo(
+      files: ["Tests/smoke-suites": "SwitchboardAppTests.FxAppTests\n"], listing: ["IntegrationTests.FxShapeTests/a()"])
+    try repo.add(
+      "Tests/IntegrationTests/FxShapeTests.swift",
+      "import Testing\n\nstruct FxShapeTests {\n  @Test func a() {}\n}\n\nstruct FxOtherShapeTests {\n  @Test func a() {}\n}\n"
+    )
+
+    let run = try repo.run()
+
+    expectTargeted(
+      run,
+      [
+        suiteFilter("IntegrationTests", "FxShapeTests", "FxOtherShapeTests"),
+        suiteFilter("SwitchboardAppTests", "FxAppTests"),
+      ])
+    #expect(run.builtProducts == ["IntegrationTests", "SwitchboardAppTests"], "\(run.invocations)")
   }
 
   @Test func aFailingTargetedTestRunFailsBinTest() throws {

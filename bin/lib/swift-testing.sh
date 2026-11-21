@@ -62,6 +62,19 @@ build_tests() {
   "$swiftpm" build --build-tests ${args[@]+"${args[@]}"}
 }
 
+# build_test_bundles <test-target>…
+# Builds only the named test targets' bundles, and what each one depends on,
+# including the executables it runs. The other bundles keep whatever the last
+# build left in them, so a caller runs only the tests of the targets it names.
+# swift build honors only the last --product it is given, so each bundle gets
+# its own build.
+build_test_bundles() {
+  local target
+  for target in "$@"; do
+    "$swiftpm" build --product "$target" ${args[@]+"${args[@]}"}
+  done
+}
+
 # Prints one line per test, such as SwitchboardCoreTests.FooTests/bar(), from
 # the last build.
 list_tests() {
