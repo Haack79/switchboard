@@ -208,6 +208,31 @@ enum InsideClaudeCode: String, CaseIterable, CustomStringConvertible {
     #expect(try sbd.decisionListJSON(s.id)["exchanges"]?.array?.count == 1)
   }
 
+  /// A second ask, after the first clarifying turn ended, goes out, files its reply under its own decision, and keeps
+  /// the hold that the first ask started.
+  @Test func aSecondAskAfterTheFirstReplyIsFiledUnderItsDecision() throws {
+    let sbd = try Instance()
+    let s = try sbd.decisionSession()
+    let before = try sbd.shown(s.id)
+    let question = "why not every tile?"
+
+    let first = try sbd.ask(s.id)
+    #expect(try sbd.shown(s.id) == before, "after the first reply")
+    let r = try sbd.runAsk(s.id, "3", question, more: ["--timeout", "20", "--json"])
+
+    #expect(r.status == 0, "\(text(r))")
+    let second = try #require(JSON.parse(r.stdout), "not JSON: \(r.stdout)")
+    #expect(second["reply"]?.string == "Done: " + clarifyingMessage(3, "Icons", question), "\(second.text)")
+    let exchanges = try sbd.exchanges(s.id)
+    #expect(exchanges.map(\.askId) == [first["askId"]?.string, second["askId"]?.string].compactMap { $0 })
+    #expect(exchanges.map(\.number) == [2, 3])
+    #expect(exchanges.map(\.reply) == [stubReply, "Done: " + clarifyingMessage(3, "Icons", question)])
+    #expect(exchanges.map(\.pending) == [false, false])
+    #expect(try sbd.decisionListJSON(s.id)["exchanges"]?.array?.count == 2)
+    #expect(try sbd.questions(s.id).count == 2)
+    #expect(try sbd.shown(s.id) == before, "after the second reply")
+  }
+
   @Test func decidePrintsTheQuestionUnderItsDecision() throws {
     let sbd = try Instance()
     let s = try sbd.decisionSession()

@@ -250,7 +250,7 @@ final class BoardModel: ObservableObject {
   /// replies, so a second click can't ask the group's chat to read the artifact again.
   @Published var usingAsPlan: Set<String> = []
   /// The decision requests that wait for sbd: `<session>/<number>` for an
-  /// answer, and `<session>/submit` and `<session>/discard`.
+  /// answer, `<session>/ask` for a question, and `<session>/submit` and `<session>/discard`.
   @Published var deciding: Set<String> = []
   /// sbd's refusal of the last decision request, by session. The card shows it.
   @Published var decisionErrors: [String: String] = [:]
@@ -1547,6 +1547,15 @@ final class BoardModel: ObservableObject {
     decide(session, "decision-discard", ["session": .string(session)], key: "\(session)/discard")
   }
 
+  /// Asks the session about one decision of the list whose ref the user saw. `asked` runs once sbd accepts the
+  /// question. sbd takes one question per session at a time, so a second ask waits for the first whatever its decision.
+  func askDecision(_ session: String, ref: String, number: Int, text: String, asked: (() -> Void)? = nil) {
+    let args: [String: JSON] = [
+      "session": .string(session), "ref": .string(ref), "number": .number(Double(number)), "text": .string(text),
+    ]
+    decide(session, "decision-ask", args, key: "\(session)/ask", then: asked)
+  }
+
   /// A second request with the same key does nothing until sbd answers the first.
   private func decide(
     _ session: String, _ op: String, _ args: [String: JSON], key: String, then: (() -> Void)? = nil
@@ -1751,6 +1760,11 @@ final class BoardModel: ObservableObject {
   /// What the user typed as the Other answer to one decision and has not sent.
   func otherAnswerDraft(session: String, ref: String, decision: Int) -> MessageField.Draft {
     messageDrafts.draft(for: MessageDrafts.otherAnswerKey(session: session, ref: ref, decision: decision))
+  }
+
+  /// What the user typed as a question about one decision and has not asked.
+  func askDraft(session: String, ref: String, decision: Int) -> MessageField.Draft {
+    messageDrafts.draft(for: MessageDrafts.askKey(session: session, ref: ref, decision: decision))
   }
 
   /// The user's edit of a draft reply. An empty field starts again with `initial`, the session's text.
