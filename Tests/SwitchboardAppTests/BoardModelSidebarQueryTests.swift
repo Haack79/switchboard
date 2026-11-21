@@ -345,4 +345,43 @@ private func work(
 
     #expect(model.selection == "b")
   }
+
+  // MARK: Multi-selection
+
+  @Test func theMultiSelectionKeepsTheSessionsTheQueryHides() {
+    let model = model(navigable, query: "login")
+    model.multiSelection = ["a", "b", "c"]
+
+    #expect(model.multiSelected.map(\.id) == ["a", "b", "c"])
+    #expect(model.removableSelectionCount == 3)
+  }
+
+  @Test func aQueryThatHidesEverySelectedSessionKeepsTheMultiSelection() {
+    let model = model(navigable, query: "zzz")
+    model.multiSelection = ["a", "b"]
+
+    #expect(model.multiSelected.map(\.id) == ["a", "b"])
+    #expect(model.removableSelectionCount == 2)
+  }
+
+  // MARK: Showing a session
+
+  @Test func openingASessionTheQueryHidesClearsTheQuery() {
+    let model = model(navigable, query: "login")
+
+    model.openFromSearch("b")
+
+    #expect(model.sidebarQuery == "")
+    #expect(model.selection == "b")
+    #expect(model.sidebarOrder.contains("b"))
+  }
+
+  @Test func openingASessionTheQueryShowsKeepsTheQuery() {
+    let model = model(navigable, query: "login")
+
+    model.openFromSearch("c")
+
+    #expect(model.sidebarQuery == "login")
+    #expect(model.selection == "c")
+  }
 }

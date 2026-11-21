@@ -645,10 +645,12 @@ final class BoardModel: ObservableObject {
   /// The sidebar's groups, in state order, without empty ones. The Manager has
   /// its own row above the groups, so a session it started is top level, like
   /// one with no parent. A session whose parent is another session nests under
-  /// that parent while both are in the same group.
-  var sidebarGroups: [SidebarGroup] {
-    let listed = sidebarSessions
-    return AttentionState.allCases.compactMap { state in
+  /// that parent while both are in the same group. It lists only the work sessions that `sidebarQuery` matches.
+  var sidebarGroups: [SidebarGroup] { Self.sidebarGroups(sidebarSessions) }
+
+  /// `listed` grouped by state, as the sidebar groups its rows.
+  static func sidebarGroups(_ listed: [SessionSummary]) -> [SidebarGroup] {
+    AttentionState.allCases.compactMap { state in
       let group = listed.filter { $0.state == state }
       return group.isEmpty ? nil : SidebarGroup(state: state, rows: SessionTree.rows(group))
     }
@@ -664,6 +666,11 @@ final class BoardModel: ObservableObject {
 
   /// True when the sidebar's search field hides every work session that the filters show.
   var sidebarQueryHidesAll: Bool { !workBoard.isEmpty && sidebarSessions.isEmpty }
+
+  /// True when the filters show `session` but the sidebar's search field hides its row.
+  func sidebarQueryHides(_ session: SessionSummary) -> Bool {
+    workBoard.contains { $0.id == session.id } && !sidebarSessions.contains { $0.id == session.id }
+  }
 
   var triage: [SessionSummary] { Triage.order(sessions) }
 
