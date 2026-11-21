@@ -411,7 +411,7 @@ extension SessionFacts {
     guard clarifying == nil, let ask = try? JSONCoding.convert(event.data, to: DecisionAsk.self),
       let list = decisionList, list.ref == ask.ref, !list.stale
     else { return }
-    if heldAsk == nil { heldAsk = ask }
+    if heldAsk == nil { heldAsk = Box(ask) }
     decisionList?.exchanges.append(
       DecisionExchange(askId: ask.askId, number: ask.number, text: ask.text, pending: true))
     clarifying = Clarifying(

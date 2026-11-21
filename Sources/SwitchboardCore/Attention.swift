@@ -205,7 +205,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var clarifying: Clarifying?
   /// The first ask about a decision of the open list, while that list is open and fresh. `Attention.rules`
   /// returns its verdict and `Triage.liveItem` its item, so the clarifying turns change neither.
-  public var heldAsk: DecisionAsk?
+  public var heldAsk: Box<DecisionAsk>?
   /// What sbd found for each draft's reply target.
   public var draftReplies = DraftReplyFacts()
   /// The ref of the item whose decisions the last accepted submit sent.
