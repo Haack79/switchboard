@@ -35,39 +35,34 @@ public enum Prompt: String, CaseIterable, Sendable {
     case .skillClassifier, .mergeBrief, .quickAsk, .topupPick, .operatorReplyGate, .sessionNamer:
       return [:]
     case .triageSummarizer:
-      return [
-        "triageTitleLength": String(Triage.titleLength), "triageCardLineLength": String(TriageCard.lineLength),
-        "triageSummarizerMaxDecisions": String(TriageSummarizer.maxDecisions),
-        "triageCardMaxOptions": String(TriageCard.maxOptions),
-        "triageCardMaxCallouts": String(TriageCard.maxCallouts),
-        "triageCardLabelLength": String(TriageCard.labelLength),
-        "pendingDecisionHeaderLength": String(PendingDecision.headerLength),
-        "pendingDecisionQuestionLength": String(PendingDecision.questionLength),
-        "pendingDecisionContextLength": String(PendingDecision.contextLength),
-        "pendingDecisionMinOptions": String(PendingDecision.minOptions),
-        "pendingDecisionMaxOptions": String(PendingDecision.maxOptions),
-        "triageDraftsMaxDrafts": String(TriageDrafts.maxDrafts),
-      ]
+      return Self.triageLimits
     case .operatorCIFailure:
       return ["ciFailureMaxMessage": String(OperatorJudge.CIFailure.maxMessage)]
     case .planUpdates:
       return ["planUpdatesCellLength": String(PlanUpdates.cellLength)]
     case .triageCard:
-      return [
-        "triageCardLineLength": String(TriageCard.lineLength), "triageTitleLength": String(Triage.titleLength),
-        "triageCardMaxOptions": String(TriageCard.maxOptions), "triageCardLabelLength": String(TriageCard.labelLength),
-        "triageSummarizerMaxDecisions": String(TriageSummarizer.maxDecisions),
-        "pendingDecisionHeaderLength": String(PendingDecision.headerLength),
-        "pendingDecisionQuestionLength": String(PendingDecision.questionLength),
-        "pendingDecisionContextLength": String(PendingDecision.contextLength),
-        "pendingDecisionMinOptions": String(PendingDecision.minOptions),
-        "pendingDecisionMaxOptions": String(PendingDecision.maxOptions),
+      return Self.triageLimits.merging([
         "pendingDecisionDetailLength": String(PendingDecision.detailLength),
-        "triageDraftsMaxDrafts": String(TriageDrafts.maxDrafts),
         "triageDraftsReplyToLength": String(TriageDrafts.replyToLength),
-        "triageCardMaxCallouts": String(TriageCard.maxCallouts),
-      ]
+      ]) { $1 }
     }
+  }
+
+  /// The limits that both the summarizer's prompt and the card format quote.
+  private static var triageLimits: [String: String] {
+    [
+      "triageTitleLength": String(Triage.titleLength), "triageCardLineLength": String(TriageCard.lineLength),
+      "triageSummarizerMaxDecisions": String(TriageSummarizer.maxDecisions),
+      "triageCardMaxOptions": String(TriageCard.maxOptions),
+      "triageCardMaxCallouts": String(TriageCard.maxCallouts),
+      "triageCardLabelLength": String(TriageCard.labelLength),
+      "pendingDecisionHeaderLength": String(PendingDecision.headerLength),
+      "pendingDecisionQuestionLength": String(PendingDecision.questionLength),
+      "pendingDecisionContextLength": String(PendingDecision.contextLength),
+      "pendingDecisionMinOptions": String(PendingDecision.minOptions),
+      "pendingDecisionMaxOptions": String(PendingDecision.maxOptions),
+      "triageDraftsMaxDrafts": String(TriageDrafts.maxDrafts),
+    ]
   }
 }
 
@@ -180,6 +175,13 @@ public enum Prompts {
     return library
   }
 
+  /// The folder that the loaded prompts came from, or the one `load` would read.
+  public static var folderInUse: URL {
+    lock.lock()
+    defer { lock.unlock() }
+    return current?.directory ?? folder()
+  }
+
   /// The prompt's text. A process that did not call `load` reads the files on first use. It exits when it
   /// can't, because a program can't run without its prompts.
   public static func text(_ prompt: Prompt) -> String {
@@ -188,7 +190,7 @@ public enum Prompts {
     if current == nil {
       do { current = try PromptLibrary(directory: folder()) } catch {
         FileHandle.standardError.write(Data("switchboard: \(error)\n".utf8))
-        exit(78)
+        exit(EX_CONFIG)
       }
     }
     return current!.texts[prompt]!

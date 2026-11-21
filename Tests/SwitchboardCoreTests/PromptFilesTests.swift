@@ -107,6 +107,10 @@ import Testing
     #expect(
       found.resolvingSymlinksInPath().path
         == app.appendingPathComponent("Contents/Resources/Prompts").resolvingSymlinksInPath().path)
+    #expect(Prompts.folder(executable: sbd, environment: ["SB_PROMPTS_DIR": "/somewhere"]).path == "/somewhere")
+    #expect(
+      Prompts.folder(executable: sbd, environment: ["SB_PROMPTS_DIR": ""]).resolvingSymlinksInPath().path
+        == app.appendingPathComponent("Contents/Resources/Prompts").resolvingSymlinksInPath().path)
   }
 
   @Test func theEnvironmentOverridesTheFolder() {

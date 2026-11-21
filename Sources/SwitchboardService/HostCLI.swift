@@ -88,26 +88,28 @@ extension UInt8 {
 enum HostCLI {
   /// The subprocess's whole environment. Nothing of sbd's environment is in it. `SB_HOME` makes `sb` a client of
   /// the host's socket, and `SB_CLI_HOST` puts `sb` in host mode.
-  static func environment(hostHome: String, host: String, cwd: String, session: String?, claudecode: String?)
-    -> [String: String]
-  {
+  static func environment(
+    hostHome: String, host: String, cwd: String, session: String?, claudecode: String?, promptsFolder: String? = nil
+  ) -> [String: String] {
     var env = [
       "SB_HOME": hostHome, "HOME": hostHome, "SB_CLI_HOST": host, "SB_CLI_CWD": cwd, "PATH": "/usr/bin:/bin",
       "LANG": "en_US.UTF-8",
     ]
     env["SB_SESSION_ID"] = session
     env["CLAUDECODE"] = claudecode
+    env["SB_PROMPTS_DIR"] = promptsFolder
     return env
   }
 
   /// The sandbox profile of the subprocess. It denies by default and allows only the exec of `sb`, reads of
-  /// `sb`'s folder, and a connect to the host's socket, beyond the system rules that any process needs to start.
+  /// `sb`'s folder, the prompts folder when there is one, and a connect to the host's socket, beyond the system rules that any process needs to start.
   /// It names real paths, because a rule that names a path through a link matches nothing. It throws for a path
   /// that does not exist, for a real path that holds `"`, `\`, or a control character, which a string literal of
   /// the profile can't hold as typed, and for an `sb` whose folder holds the user's home or the host's socket,
   /// because the read rule would then cover the user's files or sbd's state. `home` is the user's home.
   static func profile(
-    sb: String, socket: String, home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    sb: String, socket: String, promptsFolder: String? = nil,
+    home: String = FileManager.default.homeDirectoryForCurrentUser.path
   ) throws -> String {
     let program = try literalPath(sb)
     let folder = try literalPath((program as NSString).deletingLastPathComponent)
@@ -117,7 +119,7 @@ enum HostCLI {
     if let held = [hostSocket, home].compactMap({ $0 }).first(where: { $0 == folder || $0.hasPrefix(inside) }) {
       throw APIError("sb's sandbox would let sb read \(held), because sb's folder \(folder) holds it")
     }
-    return """
+    var rules = """
       (version 1)
       (deny default)
       (import "system.sb")
@@ -125,6 +127,16 @@ enum HostCLI {
       (allow file-read* (subpath "\(folder)"))
       (allow network-outbound (literal "\(hostSocket)"))
       """
+    if let promptsFolder {
+      let prompts = try literalPath(promptsFolder)
+      let promptsInside = prompts.hasSuffix("/") ? prompts : prompts + "/"
+      if let held = [hostSocket, home].compactMap({ $0 }).first(where: { $0 == prompts || $0.hasPrefix(promptsInside) })
+      {
+        throw APIError("sb's sandbox would let sb read \(held), because the prompts folder \(prompts) holds it")
+      }
+      rules += "\n(allow file-read* (subpath \"\(prompts)\"))"
+    }
+    return rules
   }
 
   /// The path with every link resolved, or nil when it names nothing.

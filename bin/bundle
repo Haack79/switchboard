@@ -53,5 +53,5 @@ cat >"$app/Contents/Info.plist" <<PLIST
 PLIST
 codesign --force --sign - "$app/Contents/MacOS/sbd" "$app/Contents/MacOS/sb"
 codesign --force --sign - "$app"
-"$app/Contents/MacOS/sbd" --check-prompts >&2
+env -u SB_PROMPTS_DIR "$app/Contents/MacOS/sbd" --check-prompts >&2
 echo "$app"
