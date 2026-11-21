@@ -1892,10 +1892,10 @@ public final class Service {
         }
         return
       }
-      guard queue.sync(execute: { startPaste(id, message) }) else { return }
       // claude can finish the turn before the paste returns. A test can make the gate after that turn. The paste reads
-      // the gate before it starts, which keeps that gate from holding it.
+      // the gate before it records `pasting`, which keeps that gate from holding it.
       let holdsDelivered = gateIsClosed("hold-delivered")
+      guard queue.sync(execute: { startPaste(id, message) }) else { return }
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
         if holdsDelivered { waitAtGate("hold-delivered") }
