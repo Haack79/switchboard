@@ -2969,6 +2969,7 @@ public final class Service {
     out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
+    out.prOwnedBy = facts.prOwner.flatMap { entries[$0]?.session.name }
     if verdict.acknowledged { out.acknowledged = true }
     if s.highlighted == true { out.highlighted = true }
     if verdict.requested { out.requested = true }
