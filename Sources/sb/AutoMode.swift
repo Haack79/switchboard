@@ -4,11 +4,10 @@ import SwitchboardCore
 /// `sb auto-mode [on|off]`.
 func autoMode(_ a: Args) {
   var args: [String: JSON] = [:]
-  guard a.positional.count <= 1 else { die("auto-mode takes on or off") }
-  switch a.positional.first {
-  case nil: break
-  case "on": args["autoMode"] = true
-  case "off": args["autoMode"] = false
+  switch a.positional {
+  case []: break
+  case ["on"]: args["autoMode"] = true
+  case ["off"]: args["autoMode"] = false
   default: die("auto-mode takes on or off")
   }
   if !args.isEmpty {

@@ -848,20 +848,22 @@ check_settings() {
   new_session settings-one
   shows() { [ "$(app where)" = "session(\"$1\")" ]; }
   settings_is() { [ "$(app settings)" = "$1" ]; }
+  start_app() {
+    SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
+    app_pid=$!
+    wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
+  }
 
   # The gear's path opens Settings from a closed window, so it fails when MenuBarLabel doesn't register the opener.
-  SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
-  app_pid=$!
-  wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
+  # ⌘, then needs a launch of its own, because a Settings window that is already open would pass it without the key.
+  start_app
   settings_is hidden || fail "the Settings window shows before the gear: $(app settings)"
   result=$(app open-settings issues)
   [ "$result" = opened ] || fail "the app could not open Settings at Issues: $result"
   wait_for 10 settings_is "shown issues" || fail "the gear's path did not show Settings at Issues: $(app settings)"
   end_app
 
-  SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
-  app_pid=$!
-  wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
+  start_app
   settings_is hidden || fail "the Settings window shows before ⌘,: $(app settings)"
   result=$(app settings-key)
   # The hidden test app may not refresh a menu item's state, so an enabled Settings… that owns ⌘, also counts.

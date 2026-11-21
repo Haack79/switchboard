@@ -164,15 +164,14 @@ struct IssueSetupView: View {
     let team = IssueTeam(
       labels: Self.list(labels, loaded: loaded?.team.labels), people: Self.list(people, loaded: loaded?.team.people),
       backlog: Self.list(backlog, loaded: loaded?.team.backlog))
-    let previous = loaded
     saveError = nil
-    // A refusal puts the old loaded values back, so the fields count as changed and Save works again.
+    // A refusal leaves config.json as it was, so the loaded values go back to sbd's, and Save works again.
     model.saveIssueSettings(
       labels: team.labels, people: team.people, backlog: team.backlog, defaultPreset: defaultPreset
     ) { error in
       guard let error else { return }
       saveError = error
-      loaded = previous
+      loaded = model.issueList.map(Self.loaded)
     }
     show(Loaded(team: team, preset: defaultPreset))
   }

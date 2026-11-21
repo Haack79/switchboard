@@ -88,46 +88,32 @@ import Testing
 
   // MARK: Every creation path reads the setting
 
-  @Test func aFollowupStartsWithTheChangedSetting() throws {
-    let repos = try Repos()
-    try repos.make("acme/widgets")
-    let sbd = try Instance(config: ["repoRoots": [.string(repos.root)]])
-
-    try sbd.sb("auto-mode", "on")
-    let f = try decode(sbd.sb("followup", "add", "--json", "--repo", "acme/widgets", "Fix the cache."))
-    try sbd.sb("followup", "start", f.id)
-    try sbd.waitFor("claude to start") { try !launches(sbd, f.id).isEmpty }
-
-    #expect(try launches(sbd, f.id).first?.contains("--permission-mode auto") == true)
-  }
-
-  @Test func anImportedFollowupStartsWithTheChangedSetting() throws {
+  /// `followup add` and `followup import` each create the follow-up's session, so both read the setting.
+  @Test func anAddedAndAnImportedFollowupStartWithTheChangedSetting() throws {
     let repos = try Repos()
     try repos.make("acme/widgets")
     let notes = try Repos()
     let file = "\(notes.root)/Followups.md"
-    try "# Followups\n\n## Open\n\n- [ ] 2026-10-26 · [acme/widgets] Fix the cache.\n"
+    try "# Followups\n\n## Open\n\n- [ ] 2026-10-26 · [acme/widgets] Fix the flag.\n"
       .write(toFile: file, atomically: true, encoding: .utf8)
     let sbd = try Instance(config: ["repoRoots": [.string(repos.root)]])
 
     try sbd.sb("auto-mode", "on")
+    let added = try decode(sbd.sb("followup", "add", "--json", "--repo", "acme/widgets", "Fix the cache.")).id
     let imported = try JSONCoding.decode(JSON.self, from: try sbd.sb("followup", "import", "--json", "--file", file))
-    let id = try #require(imported["imported"]?.array?.first?["id"]?.string)
-    try sbd.sb("followup", "start", id)
-    try sbd.waitFor("claude to start") { try !launches(sbd, id).isEmpty }
-
-    #expect(try launches(sbd, id).first?.contains("--permission-mode auto") == true)
+    let importedID = try #require(imported["imported"]?.array?.first?["id"]?.string)
+    for id in [added, importedID] {
+      try sbd.sb("followup", "start", id)
+      try sbd.waitFor("claude to start") { try !launches(sbd, id).isEmpty }
+      #expect(try launches(sbd, id).first?.contains("--permission-mode auto") == true, "\(id)")
+    }
   }
 
   /// config.json leaves auto mode off, so only the set reaches the import.
   @Test func anImportedSessionStartsWithTheChangedSetting() throws {
     let sbd = try Instance(accounts: ["A"])
     let id = UUID().uuidString.lowercased()
-    let row: JSON = [
-      "sessionId": .string(id), "cwd": .string(sbd.work), "kind": "background", "name": "unprompted",
-      "startedAt": .number(Double(nowMs())), "id": "0badf00d", "state": "stopped",
-    ]
-    try sbd.writeAgents("A", [row])
+    try sbd.writeAgents("A", [OperatorResetTests().agentRow(sbd, id, name: "unprompted")])
 
     try sbd.sb("auto-mode", "on")
     let s = try #require(try sbd.client.importSessions([id]).imported.first)
