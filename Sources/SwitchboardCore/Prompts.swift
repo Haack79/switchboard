@@ -85,7 +85,8 @@ enum PromptTemplate {
 
   /// Throws unless the text names exactly the keys of `values`, and every `{{` opens a placeholder.
   static func fill(_ text: String, with values: [String: String], file: String) throws -> String {
-    let names = Set(placeholders(in: text))
+    let found = placeholders(in: text)
+    let names = Set(found)
     let missing = names.subtracting(values.keys).sorted()
     let unused = Set(values.keys).subtracting(names).sorted()
     var problems: [String] = []
@@ -93,7 +94,7 @@ enum PromptTemplate {
       problems.append("it names no value for \(missing.map { "{{\($0)}}" }.joined(separator: ", "))")
     }
     if !unused.isEmpty { problems.append("it never uses \(unused.map { "{{\($0)}}" }.joined(separator: ", "))") }
-    if text.components(separatedBy: "{{").count - 1 != placeholders(in: text).count {
+    if text.components(separatedBy: "{{").count - 1 != found.count {
       problems.append("it has a `{{` that is not a placeholder like {{name}}")
     }
     guard problems.isEmpty else { throw PromptError(description: "\(file): \(problems.joined(separator: "; "))") }
