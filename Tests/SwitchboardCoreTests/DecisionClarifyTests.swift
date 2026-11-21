@@ -604,6 +604,114 @@ extension DecisionClarifyListTests {
     #expect(f.heldAsk == nil)
   }
 
+  /// Test 8's other ends. A turn that ends without a Stop closes the started ask with an error, so the pending-ask
+  /// refusals don't block Submit. The list stays fresh and the hold stays.
+  @Test(arguments: TurnEnd.allCases)
+  func aClarifyingTurnThatEndsWithoutAStopClosesTheAskWithAnError(_ end: TurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+    track(&a.facts, [promptEvent(8, t: 310, askMessage)])
+    try #require(a.facts.clarifying?.started == true)
+
+    track(&a.facts, [end.event(9, t: 320)])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == SessionFacts.unansweredAsk)
+    #expect(exchange.pending == false)
+    #expect(exchange.reply == nil)
+    #expect(a.facts.decisionList?.stale == false)
+    #expect(try a.now(330) == a.verdict)
+  }
+
+  /// Before its prompt arrives, the question may still be on its way, so an end of the earlier turn leaves it pending.
+  @Test(arguments: [TurnEnd.idlePrompt, .stopFailure, .idle])
+  func anEndBeforeTheClarifyingPromptLeavesTheAskPending(_ end: TurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(&a.facts, [end.event(8, t: 310)])
+
+    #expect(a.facts.clarifying?.started == false)
+    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
+  }
+
+  /// A claude that ends before the question's prompt arrived lost the question. The ask closes, so it doesn't
+  /// refuse every change to the list for good.
+  @Test(arguments: [TurnEnd.sessionEnd, .stopped, .exited])
+  func anExitBeforeTheClarifyingPromptClosesTheAsk(_ end: TurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(&a.facts, [end.event(8, t: 310)])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(exchange.error == "The question never reached the session. Ask again.")
+    #expect(exchange.pending == false)
+    #expect(a.facts.decisionList?.stale == false)
+  }
+
+  /// sbd restarted during the question's paste and can't tell whether it landed. The ask closes, and a prompt of
+  /// the message that arrives after all is an ordinary prompt.
+  @Test func anUnknownDeliveryOfTheQuestionClosesTheAsk() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(
+      &a.facts, [Event(id: 8, session: "s1", t: 310, kind: "delivery_unknown", data: ["text": .string(askMessage)])])
+
+    #expect(a.facts.clarifying == nil)
+    let exchange = try #require(a.facts.decisionList?.exchanges.first)
+    #expect(
+      exchange.error
+        == "Switchboard can't tell whether your question reached the session. Ask again if no answer appears.")
+    #expect(exchange.pending == false)
+    track(&a.facts, [promptEvent(9, t: 320, askMessage)])
+    #expect(a.facts.decisionList?.stale == true)
+  }
+
+  /// An unknown delivery of another message, or of the question after its turn started, leaves the ask pending.
+  @Test func anUnknownDeliveryOfAnotherMessageOrAStartedQuestionLeavesTheAsk() throws {
+    var a = try Asked(.needsYou)
+    a.send()
+
+    track(&a.facts, [Event(id: 8, session: "s1", t: 310, kind: "delivery_unknown", data: ["text": "hello"])])
+    #expect(a.facts.clarifying?.askId == "ask-1")
+
+    track(
+      &a.facts,
+      [
+        promptEvent(9, t: 320, askMessage),
+        Event(id: 10, session: "s1", t: 330, kind: "delivery_unknown", data: ["text": .string(askMessage)]),
+      ])
+    #expect(a.facts.clarifying?.started == true)
+    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
+  }
+
+  /// A subagent's StopFailure or idle prompt doesn't end the clarifying turn.
+  @Test(arguments: [TurnEnd.stopFailure, .idlePrompt])
+  func aSubagentsEndLeavesTheAskPending(_ end: TurnEnd) throws {
+    var a = try Asked(.needsYou)
+    a.send()
+    track(&a.facts, [promptEvent(8, t: 310, askMessage)])
+
+    var event = end.event(9, t: 320)
+    event.data = .object((event.data.object ?? [:]).merging(["agent_id": "sub-1"]) { $1 })
+    track(&a.facts, [event])
+
+    #expect(a.facts.clarifying?.started == true)
+    #expect(a.facts.decisionList?.exchanges.first?.pending == true)
+  }
+
+  @Test func theMessageNamesTheDecisionByNumberAndHeader() throws {
+    let decision = PendingDecision(
+      number: askNumber, header: "Name", question: "What do we call it?",
+      options: [.init(label: "A"), .init(label: "B")])
+
+    #expect(DecisionAsk.message(about: decision, askText) == askMessage)
+  }
+
   /// A list that an older sbd wrote has no exchanges.
   @Test func aListWithoutExchangesDecodes() throws {
     let json = #"{"decisions":[],"ref":"summary:3","answers":[],"stale":false,"newer":[]}"#
@@ -611,6 +719,31 @@ extension DecisionClarifyListTests {
     let list = try JSONCoding.decode(DecisionList.self, from: json)
 
     #expect(list.exchanges.isEmpty)
+  }
+}
+
+/// An event that ends a turn without a Stop.
+enum TurnEnd: String, CaseIterable, Sendable, CustomTestStringConvertible {
+  case idlePrompt
+  case stopFailure
+  /// sbd found that Escape ended the turn.
+  case idle
+  case sessionEnd
+  case stopped
+  case exited
+
+  var testDescription: String { rawValue }
+
+  func event(_ id: Int64, t: Int64) -> Event {
+    switch self {
+    case .idlePrompt:
+      Event(id: id, session: "s1", t: t, kind: "Notification", data: ["notification_type": "idle_prompt"])
+    case .stopFailure: Event(id: id, session: "s1", t: t, kind: "StopFailure", data: ["error": "rate_limit"])
+    case .idle: Event(id: id, session: "s1", t: t, kind: "idle")
+    case .sessionEnd: Event(id: id, session: "s1", t: t, kind: "SessionEnd")
+    case .stopped: Event(id: id, session: "s1", t: t, kind: "stopped")
+    case .exited: Event(id: id, session: "s1", t: t, kind: "exited")
+    }
   }
 }
 

@@ -213,7 +213,7 @@ public struct Clarifying: Codable, Equatable, Sendable {
 }
 
 /// The data of a `decision_asked` event. `verdict` and `item` are what the session showed when the user asked.
-struct DecisionAsk: Codable, Equatable, Sendable {
+public struct DecisionAsk: Codable, Equatable, Sendable {
   var ref: String
   var number: Int
   var askId: String
@@ -222,18 +222,51 @@ struct DecisionAsk: Codable, Equatable, Sendable {
   var verdict: SavedVerdict
   var item: SavedItem
 
-  struct SavedVerdict: Codable, Equatable, Sendable {
+  public init(
+    ref: String, number: Int, askId: String, text: String, message: String, verdict: SavedVerdict, item: SavedItem
+  ) {
+    self.ref = ref
+    self.number = number
+    self.askId = askId
+    self.text = text
+    self.message = message
+    self.verdict = verdict
+    self.item = item
+  }
+
+  public struct SavedVerdict: Codable, Equatable, Sendable {
     var state: AttentionState
     var reason: String
     /// The session's `stateSince` at the ask.
     var since: Int64
+
+    public init(state: AttentionState, reason: String, since: Int64) {
+      self.state = state
+      self.reason = reason
+      self.since = since
+    }
   }
 
-  struct SavedItem: Codable, Equatable, Sendable {
+  public struct SavedItem: Codable, Equatable, Sendable {
     var title: String
     var summary: String
     var kind: TriageKind
     var ref: String
+
+    public init(_ item: TriageItem) {
+      title = item.title
+      summary = item.summary
+      kind = item.kind
+      ref = item.ref
+    }
+  }
+
+  /// The message that sbd sends the session for a question about `decision`.
+  public static func message(about decision: PendingDecision, _ text: String) -> String {
+    "Question about decision \(decision.number) (\(decision.header)) in your last reply, before I decide: \(text)\n\n"
+      + "Answer only this question, in text. Don't change files, run commands that change anything, or start work. "
+      + "Don't write `sb summary set` or ask with AskUserQuestion for this answer. "
+      + "I'll send all my decisions together when I'm done."
   }
 }
 
@@ -260,6 +293,9 @@ extension SessionSummary {
 
 extension SessionFacts {
   static let unansweredAsk = "The turn ended without an answer."
+  static let undeliveredAsk = "The question never reached the session. Ask again."
+  static let unconfirmedAsk =
+    "Switchboard can't tell whether your question reached the session. Ask again if no answer appears."
 
   /// The decision events build the open list. Only an ask changes the
   /// verdict, through `heldAsk`. A new prompt makes the open list stale,
@@ -297,6 +333,23 @@ extension SessionFacts {
       let reply = event.data["last_assistant_message"]?.string ?? ""
       decisionList?.close(
         ask: ask.askId, reply: reply.isEmpty ? nil : reply, error: reply.isEmpty ? Self.unansweredAsk : nil)
+      clarifying = nil
+    case "SessionEnd", "stopped", "exited":
+      // A claude that ends before the question's prompt arrived lost the question, and no prompt can start the
+      // clarifying turn. The pending ask would refuse every change to the list for good.
+      guard let ask = clarifying else { break }
+      decisionList?.close(ask: ask.askId, error: ask.started ? Self.unansweredAsk : Self.undeliveredAsk)
+      clarifying = nil
+    case "StopFailure" where !event.fromSubagent, "idle",
+      "Notification" where !event.fromSubagent && event.data["notification_type"]?.string == "idle_prompt":
+      // These end the turn without a Stop, so no reply can come, and the pending ask would refuse Submit for good.
+      guard let ask = clarifying, ask.started else { break }
+      decisionList?.close(ask: ask.askId, error: Self.unansweredAsk)
+      clarifying = nil
+    case "delivery_unknown":
+      // sbd restarted during the question's paste and found no sign of it in the transcript.
+      guard let ask = clarifying, !ask.started, event.data["text"]?.string == ask.message else { break }
+      decisionList?.close(ask: ask.askId, error: Self.unconfirmedAsk)
       clarifying = nil
     default:
       break

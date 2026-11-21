@@ -8,6 +8,8 @@ extension Service {
       return submitDecisions(args)
     case "decision-resend":
       return resendDecisions(args)
+    case "decision-ask":
+      return askDecision(args)
     case "decision-answer":
       return .success(try queue.sync { try answerDecision(args) })
     case "decision-discard":
@@ -16,6 +18,7 @@ extension Service {
           let id = try lookup(args)
           guard entries[id]!.facts.decisionList != nil else { throw noOpenList(summary(id)) }
           try refuseWhileSubmitting(id)
+          try refuseWhileAsking(id)
           record(id, "decisions_discarded")
           return ["session": .string(id)]
         })
@@ -50,6 +53,13 @@ extension Service {
     }
   }
 
+  /// Refuses a change to the list while a question about one of its decisions is pending, because the reply can
+  /// change the user's answers.
+  private func refuseWhileAsking(_ id: String) throws {
+    guard let ask = entries[id]!.facts.clarifying else { return }
+    throw APIError("Wait for the answer to your question about decision \(ask.number)")
+  }
+
   /// Records an answer to a decision of the stored list. The first answer
   /// opens the list from the current item. Nothing is recorded unless the
   /// answer names a decision and an option that the list has. The caller's
@@ -58,6 +68,7 @@ extension Service {
   private func answerDecision(_ args: JSON) throws -> JSON {
     let id = try lookup(args)
     try refuseWhileSubmitting(id)
+    try refuseWhileAsking(id)
     let list = try decisionList(id)
     if let ref = args["ref"]?.string, ref != list.ref {
       throw APIError("\(entries[id]!.session.name) has a new item since you looked. Look again")
@@ -105,17 +116,21 @@ extension Service {
           throw APIError("\(name) took a turn since these decisions. Submit with --stale to send them anyway")
         }
         try refuseWhileSubmitting(id)
+        try refuseWhileAsking(id)
         submittingDecisions.insert(id)
         return (id, list.ref, message)
       }
     } catch {
       return .failure("\(error)")
     }
-    return sendDecisions(id, message) { delivery in
-      guard entries[id]?.facts.decisionList != nil else { return }
-      try recordStored(
-        id, "decisions_submitted",
-        ["message": .string(message), "ref": .string(ref), "delivery": .string(delivery.rawValue)])
+    return sendDecisions(id, message, by: .you) { send in
+      let delivery = try send()
+      if entries[id]?.facts.decisionList != nil {
+        try recordStored(
+          id, "decisions_submitted",
+          ["message": .string(message), "ref": .string(ref), "delivery": .string(delivery.rawValue)])
+      }
+      return ["delivery": .string(delivery.rawValue)]
     }
   }
 
@@ -145,28 +160,97 @@ extension Service {
     } catch {
       return .failure("\(error)")
     }
-    return sendDecisions(id, message) { _ in }
+    return sendDecisions(id, message, by: .you) { send in ["delivery": .string(try send().rawValue)] }
   }
 
-  /// Sends a decisions message as `send` does, and runs `alongside` in the
-  /// same block of the state queue and the same store transaction as the
-  /// send. No other request comes between the send's `sent` event and what
-  /// `alongside` records, and the log keeps both or neither. A stopped claude starts
-  /// without the message as its prompt, so nothing reaches claude before the
-  /// transaction commits. The session leaves `submittingDecisions` in that
-  /// block too.
-  private func sendDecisions(_ id: String, _ message: String, alongside: (Delivery) throws -> Void) -> Response {
+  /// Sends the session a question about one decision of the list that the user saw, as `sendDecisions` sends,
+  /// and returns the ask's id. The first ask opens the list, because the question's prompt drops the item that
+  /// the list would otherwise come from. `decision_asked` saves the verdict and the item from before the
+  /// send, so the clarifying turn changes neither.
+  private func askDecision(_ args: JSON) -> Response {
+    let id: String
+    let message: String
+    do {
+      (id, message) = try queue.sync {
+        let id = try lookup(args)
+        try refuseWhileSubmitting(id)
+        let message = try askable(id, args).message
+        submittingDecisions.insert(id)
+        return (id, message)
+      }
+    } catch {
+      return .failure("\(error)")
+    }
+    return sendDecisions(id, message, by: .sbd) { send in
+      // The session can take a turn while `prepared` reads the processes, so the checks run again here.
+      let (list, decision, text, message) = try askable(id, args)
+      let e = entries[id]!
+      let askId = shortId("q", taken: list.exchanges.map(\.askId))
+      let verdict = Attention.evaluate(e.session, e.facts, now: nowMs(), stateOf: lastState)
+      guard let item = Triage.item(e.facts, verdict, kind: e.session.kind) else {
+        throw APIError("\(e.session.name) shows no item to ask about")
+      }
+      if e.facts.decisionList == nil {
+        try recordStored(
+          id, "decisions_opened", ["decisions": try JSON(encoding: list.decisions), "ref": .string(list.ref)])
+      }
+      let ask = DecisionAsk(
+        ref: list.ref, number: decision.number, askId: askId, text: text, message: message,
+        verdict: .init(state: e.facts.lastState ?? verdict.state, reason: verdict.reason, since: e.facts.stateSince),
+        item: .init(item))
+      try recordStored(id, "decision_asked", try JSON(encoding: ask))
+      _ = try send()
+      return ["askId": .string(askId)]
+    }
+  }
+
+  /// The list, the decision, the trimmed question, and the message for an ask that sbd takes now. It throws the
+  /// reason that sbd refuses the ask.
+  private func askable(_ id: String, _ args: JSON) throws -> (
+    list: DecisionList, decision: PendingDecision, text: String, message: String
+  ) {
+    let e = entries[id]!
+    let name = e.session.name
+    let list = try decisionList(id)
+    guard args["ref"]?.string == list.ref else { throw APIError("\(name) has a new item since you looked. Look again") }
+    if list.stale {
+      throw APIError("\(name) took a turn since these decisions. Send your question as a message instead")
+    }
+    guard let number = args["number"]?.int, let decision = list.decisions.first(where: { $0.number == number }) else {
+      throw APIError("name a decision by its number: \(englishList(list.decisions.map { String($0.number) }))")
+    }
+    let text = args["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if text.isEmpty { throw APIError("the question about decision \(number) is empty") }
+    if let pending = e.facts.clarifying {
+      throw APIError("\(name) is still answering your question about decision \(pending.number)")
+    }
+    if !e.facts.cards.isEmpty { throw APIError("\(name) waits on a card. Answer it before you ask") }
+    if Pause.blocker(e.session) != nil { throw APIError("Resume \(name) first") }
+    if e.facts.turnRunning || !e.pending.isEmpty || messageWaiting(e, now: nowMs()) {
+      throw APIError("\(name) is working; ask when it stops")
+    }
+    return (list, decision, text, DecisionAsk.message(about: decision, text))
+  }
+
+  /// Runs `body` in one block of the state queue and one store transaction. `body` calls the function that it gets
+  /// to send the message as `send` does, and records what goes with the send, before or after it. No other request
+  /// comes between those events, and the log keeps all of them or none. A stopped claude starts without the
+  /// message as its prompt, so nothing reaches claude before the transaction commits. The session leaves
+  /// `submittingDecisions` in that block too, or after `prepared` refuses. The response is what `body` returns.
+  private func sendDecisions(
+    _ id: String, _ message: String, by: MessageAuthor, _ body: (_ send: () throws -> Delivery) throws -> JSON
+  ) -> Response {
     let request = Request(op: "send", args: ["session": .string(id), "text": .string(message)])
+    var bodyRan = false
     do {
       return .success(
         try prepared(request, origin: .mac) {
+          bodyRan = true
           defer { submittingDecisions.remove(id) }
           let before = entries[id]
           do {
             return try store.transaction {
-              let delivery = try send(id, message, by: .you, launchesWithPrompt: false, trigger: .decision)
-              try alongside(delivery)
-              return ["delivery": .string(delivery.rawValue)]
+              try body { try send(id, message, by: by, launchesWithPrompt: false, trigger: .decision) }
             }
           } catch {
             // The log kept none of the writes, so the session's state goes back to match it.
@@ -176,6 +260,8 @@ extension Service {
           }
         })
     } catch {
+      // `prepared` can refuse before the block runs, as for a session that is being deleted.
+      if !bodyRan { queue.sync { _ = submittingDecisions.remove(id) } }
       return .failure("\(error)")
     }
   }

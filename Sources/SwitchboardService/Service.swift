@@ -612,7 +612,7 @@ public final class Service {
       return .success(try JSON(encoding: importSessions(request.args)))
     case "triage", "choose", "reply", "summary-set", "item-context":
       return try triageRequest(request, origin: origin)
-    case "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard":
+    case "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard", "decision-ask":
       return try decisionRequest(request.op, request.args)
     case "plan-attach", "plan-update":
       return .success(try planDocumentRequest(request.op, request.args))
