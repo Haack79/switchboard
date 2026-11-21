@@ -357,7 +357,6 @@ enum ResendRefusal: String, CaseIterable, CustomStringConvertible {
     sbd.hold("hold-delivered")
 
     try sbd.waitFor("delivered while the gate exists") { try !sbd.events(s.id, "delivered", text: text).isEmpty }
-    try sbd.release("hold-delivered")
   }
 
   /// sbd can't store the `sent` event, so it refuses the send and pastes nothing.
