@@ -382,10 +382,10 @@ private let heldByTrunk: [TrunkQueueState] = [.pending, .testing, .passed, .fail
 
   @Test func cancelledRunWithAFailedJobDoesNotAskForAFix() throws {
     let pr = withDepot(
-      samplePR(checks: "FAILURE"), sampleDepot(["unit tests"], status: "cancelled", errors: ["Cancelled by user"]))
+      samplePR(checks: "PENDING"), sampleDepot(["unit tests"], status: "cancelled", errors: ["Cancelled by user"]))
 
     #expect(pr.depotFailure == nil)
-    #expect(try verdict(pr).reason != "fix Depot CI on #42: unit tests")
+    #expect(try verdict(pr) == readTheReply)
   }
 
   @Test func cancelledRunDoesNotResolveACIWait() {
