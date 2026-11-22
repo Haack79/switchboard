@@ -1053,6 +1053,7 @@ check_links() {
     result=$(app click-anchor "$1")
     [[ $result == "clicked at "* ]]
   }
+  terminal_shows() { [ "$(app panes)" = 1 ]; }
   only_link_left() { [ "$(sb get "$a" --json | jq -c '[.links[]?.id]')" = "[\"$1\"]" ]; }
   pinned() {
     result=$(app width 1024)
@@ -1063,9 +1064,11 @@ check_links() {
   SB_SELECT="$a" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" -sessionSidePanel YES >>"$shots/app.log" 2>&1 &
   app_pid=$!
   wait_for 60 shows "session(\"$a\")" || fail "the app did not select $a: $(app where)"
+  # The Claude terminal takes its width once it attaches, so the side panel is measured after that.
+  wait_for 30 terminal_shows || fail "the app did not show the Claude terminal of $a: $(app panes) panes"
   pinned
-  wait_for 10 panel_lists || fail "the side panel does not list both links of $a inside it: $result"
   app snapshot "$shots/side-panel.png" >/dev/null
+  wait_for 10 panel_lists || fail "the side panel does not list both links of $a inside it: $result"
   wait_for 10 clicked "panel-link-$rfc-remove" || fail "the app could not click Remove on $rfc: $result"
   wait_for 10 only_link_left "$slack" || fail "Remove did not delete only $rfc: $(sb get "$a" --json | jq -c '.links')"
   app width restore >/dev/null
