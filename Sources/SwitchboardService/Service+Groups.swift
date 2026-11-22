@@ -46,7 +46,7 @@ extension Service {
     case "group-link-add":
       let by = try Author(parsing: args["by"]?.string)
       return try updateGroup(args) { group in
-        let url = try GroupLink.cleanURL(args["url"]?.string)
+        let url = try ExternalLink.cleanURL(args["url"]?.string)
         if by == .claude {
           guard ArtifactLink.normalized(url) != nil else {
             throw APIError(
@@ -57,8 +57,9 @@ extension Service {
             throw APIError("Claude can't title a link: its title is its URL. Add it without a title")
           }
         }
-        let title = try GroupLink.cleanTitle(args["title"]?.string, url: url)
-        guard group.addLink(GroupLink(id: shortId("l"), title: title, url: url, by: by, t: nowMs())) else {
+        let title = try ExternalLink.cleanTitle(args["title"]?.string, url: url)
+        guard group.addLink(ExternalLink(id: shortId("l"), title: title, url: url, by: LinkAuthor(by), t: nowMs()))
+        else {
           throw APIError("\(group.name) already has a link to \(url)")
         }
       }

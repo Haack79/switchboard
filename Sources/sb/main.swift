@@ -134,6 +134,15 @@ let usage = """
                                   message asks about, after reading the
                                   session's last reply in it. Only the operator
                                   runs it, in its own pane
+    operator model [<name>]       show or set the model of the operator and of its
+                                  judges, sonnet by default. The operator switches
+                                  when its claude next starts, and a judge call
+                                  from the next call
+    operator judge --kind reply-gate|ci-failure|pick-issues --input <file> [--model M]
+                                  run one judgment through the operator's judge
+                                  path, for comparing models. The file is JSON
+                                  with the arguments of the kind's prompt: see
+                                  bin/operator-eval. It acts on nothing
     operator reports [--all]      list the operator's reports, oldest first, and
                                   whether each is open. --all lifts the limit of
                                   \(Event.defaultLimit)
@@ -257,6 +266,13 @@ let usage = """
     note <session> --rm <id>      remove a note. It refuses an open to-do
     note --resolved [--limit N]   list the resolved to-dos, newest first
                                   (default 50). The record outlives the session
+    link add <session> <url> [--title T]
+                                  add an http or https link; the title defaults
+                                  to the URL. Inside Claude, only on its own
+                                  session ($SB_SESSION_ID)
+    link rm <session> <link-id>   remove a link you or Claude added, or hide one
+                                  that Switchboard found. Inside Claude, only a
+                                  link that Claude added
     rename <session> <name>
     issue <session> <ref>|--clear set the GitHub issue that the session's tile
                                   shows: 123, #123, owner/name#123, or an issue
@@ -370,6 +386,11 @@ let usage = """
     decide <session> --resend     send the submitted answers again, only when sbd
                                   restarted while sending them and can't tell whether
                                   the session got them
+    decide <session> --ask <n> <question> [--no-wait] [--timeout S]
+                                  ask the session about decision n and print its reply,
+                                  waiting up to S seconds (600 by default). The session
+                                  answers in a turn that keeps its Inbox item. --no-wait
+                                  prints the question's id. Refuses inside Claude Code
     reply <session>               the session's last reply, as Markdown
     context <session> [--steps N] Claude's last steps up to the session's Inbox item, with
                                   N steps before it (5 by default)
@@ -606,7 +627,7 @@ struct Args {
       "--plan", "--text", "--wait",
       "--set", "--description", "--artifact", "--kind", "--version", "--limit", "--org", "--next",
       "--preset", "--label", "--person", "--backlog", "--steps", "--for",
-      "--reason", "--message", "--drop", "--template-file", "--rubric-file",
+      "--reason", "--message", "--drop", "--template-file", "--rubric-file", "--input",
     ]).union(waitFlags.keys)
     var rest = argv
     while let arg = rest.popFirst() {
@@ -758,6 +779,7 @@ func printSession(_ s: SessionSummary) {
   }
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
   for a in (s.artifacts ?? []).newestFirst { print("  artifact: \(a.title)  \(a.url)  (\(a.caption()))".printable) }
+  for l in (s.links ?? []).reversed() { print(linkLine(l)) }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
@@ -1107,6 +1129,8 @@ case "wait":
   waitCommand(a)
 case "note":
   noteCommand(a)
+case "link":
+  linkCommand(a)
 case "schedule", "schedules":
   scheduleCommand(a)
 case "shell":

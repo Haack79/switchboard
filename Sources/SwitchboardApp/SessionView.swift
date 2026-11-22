@@ -45,9 +45,14 @@ struct SessionView: View {
       CardList(cards: session.cards)
       GeometryReader { geometry in
         let fits = SidePanel.fits(width: geometry.size.width, beside: SessionView.terminalsMinWidth(session))
+        let showsPanel = showsSidePanel && fits
         HStack(spacing: 0) {
-          terminalArea
-          if showsSidePanel && fits {
+          // On macOS 26, a split view that holds only the Claude pane grows past the width it is offered once the
+          // terminal attaches, which pushes the panel past the window's edge. The width limit stops it. Without
+          // the panel, the frame sets no limit, so the terminals keep their own sizes.
+          terminalArea.frame(
+            minWidth: showsPanel ? 0 : nil, maxWidth: showsPanel ? geometry.size.width - SidePanel.width : nil)
+          if showsPanel {
             Divider()
             SidePanelView(session: session)
           }
@@ -270,7 +275,7 @@ struct SessionView: View {
           }
           Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
             .font(.caption)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
             .textSelection(.enabled)

@@ -39,7 +39,7 @@ import Testing
   }
 
   /// The one link of the group that has `url`.
-  func link(_ g: GroupSummary, _ url: String) throws -> GroupLink {
+  func link(_ g: GroupSummary, _ url: String) throws -> ExternalLink {
     try #require(g.links?.first { $0.url == url })
   }
 
@@ -182,12 +182,14 @@ import Testing
     #expect(try sbd.groupLinks(g.id).isEmpty)
   }
 
-  /// URLs that are not http or https, have no scheme or host, or hold whitespace.
+  /// URLs that are not http or https, have no scheme or host, hold whitespace, or hold a user or password part.
   static let refusedURLs = [
     "ftp://example.com/file", "file:///etc/passwd", "javascript:alert(1)", "mailto:ana@example.com",
     "data:text/html,hi", "ssh://git@github.com/o/r", "httpx://example.com", "example.com", "www.example.com/rfcs",
     "//example.com/rfcs", "/rfcs/flag-evaluations", "", "https://exa mple.com", "https://example.com/a\tb",
     "https://example.com\nhttps://evil.example", "https://example.com/a\u{00A0}b", "https://", "https:///rfcs",
+    "https://example.slack.com@evil.example/archives/C0EXAMPLE01/p1794965000000100", "https://user:pass@example.com/",
+    "https://user@example.com", #"https://claude.ai\@evil.com/artifact/x"#,
   ]
 
   @Test(arguments: refusedURLs) func aURLThatIsNotHTTPIsRefused(_ url: String) throws {
@@ -225,7 +227,7 @@ import Testing
   @Test func addTakesATitleOfExactlyTheLimit() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")
-    let title = String(repeating: "a", count: GroupLink.titleLimit)
+    let title = String(repeating: "a", count: ExternalLink.titleLimit)
 
     _ = try linkAdd(sbd, "Flags", Self.rfc, title: title)
 
@@ -235,12 +237,12 @@ import Testing
   @Test func addRefusesATitleOneOverTheLimitAndAddsNoLink() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")
-    let title = String(repeating: "a", count: GroupLink.titleLimit + 1)
+    let title = String(repeating: "a", count: ExternalLink.titleLimit + 1)
 
     let r = try sbd.run(["group", "link", "add", "--json", "Flags", Self.rfc, "--title", title])
 
     #expect(r.status != 0)
-    #expect(r.stderr.contains("\(GroupLink.titleLimit)"))
+    #expect(r.stderr.contains("\(ExternalLink.titleLimit)"))
     #expect(try sbd.groupLinks(g.id).isEmpty)
   }
 
@@ -253,7 +255,7 @@ import Testing
   @Test func addTakesAURLOfExactlyTheLimit() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")
-    let url = Self.url(ofLength: GroupLink.urlLimit)
+    let url = Self.url(ofLength: ExternalLink.urlLimit)
 
     _ = try linkAdd(sbd, "Flags", url, title: "Long")
 
@@ -263,23 +265,23 @@ import Testing
   @Test func aLongURLWithoutATitleKeepsTheWholeURLAndCutsTheTitle() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")
-    let url = Self.url(ofLength: GroupLink.titleLimit + 1)
+    let url = Self.url(ofLength: ExternalLink.titleLimit + 1)
 
     _ = try linkAdd(sbd, "Flags", url)
 
     let added = try #require(try sbd.groupLinks(g.id).first)
     #expect(added.url == url)
-    #expect(added.title.count == GroupLink.titleLimit)
+    #expect(added.title.count == ExternalLink.titleLimit)
   }
 
   @Test func addRefusesAURLOneOverTheLimitAndAddsNoLink() throws {
     let sbd = try Instance()
     let g = try shared.add(sbd, "Flags")
-    let url = Self.url(ofLength: GroupLink.urlLimit + 1)
+    let url = Self.url(ofLength: ExternalLink.urlLimit + 1)
 
     let message = failure(sbd, "group-link-add", ["group": "Flags", "url": .string(url), "by": "you"])
 
-    #expect(message.contains("\(GroupLink.urlLimit)"))
+    #expect(message.contains("\(ExternalLink.urlLimit)"))
     #expect(try sbd.groupLinks(g.id).isEmpty)
   }
 
@@ -689,5 +691,37 @@ import Testing
 
     #expect(try sbd.groupLinks(flags.id).map(\.id) == [mine])
     #expect(try sbd.groupLinks(billing.id).map(\.id) == [theirs])
+  }
+
+  // MARK: kind
+
+  /// Decoding into `ExternalLink` drops the derived keys, so this reads the raw JSON.
+  @Test func sbGroupLsJsonShowsTheKindOfEachLink() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    _ = try linkAdd(sbd, "Flags", SlackExample.reply)
+    _ = try linkAdd(sbd, "Flags", Self.rfc)
+
+    let links = try #require(try sbd.groupEntry(g.id)?["links"]?.array)
+
+    let slack = try #require(links.first { $0["url"]?.string == SlackExample.reply })
+    let rfc = try #require(links.first { $0["url"]?.string == Self.rfc })
+    #expect(slack["kind"]?.string == "slack")
+    #expect(slack["channel"]?.string == SlackExample.channel)
+    #expect(slack["thread"]?.string == SlackExample.rootTs)
+    #expect(rfc["kind"]?.string == "web")
+    #expect(rfc["channel"] == nil)
+    #expect(rfc["thread"] == nil)
+  }
+
+  /// `found` is only for links that sbd derives, so `group-link-add` refuses it as `by`.
+  @Test func aRawAddByFoundIsRefused() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+
+    let message = failure(sbd, "group-link-add", ["group": "Flags", "url": .string(Self.rfc), "by": "found"])
+
+    #expect(message != "no error")
+    #expect(try sbd.groupLinks(g.id).isEmpty)
   }
 }

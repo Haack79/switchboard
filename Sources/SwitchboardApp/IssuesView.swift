@@ -132,6 +132,7 @@ private struct IssueListHeader: View {
 /// with the last preset.
 private struct IssueRows: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var focused: Bool
   let sections: [IssueSection]
 
@@ -167,7 +168,7 @@ private struct IssueRows: View {
         if let row = model.currentIssue { model.startIssue(row) }
       }
       .onChange(of: model.issueJumps) {
-        if let id = model.currentIssue?.id { withAnimation { proxy.scrollTo(id) } }
+        if let id = model.currentIssue?.id { proxy.scrollTo(id, reduceMotion: reduceMotion) }
       }
     }
   }
