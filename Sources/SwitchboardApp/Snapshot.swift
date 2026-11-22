@@ -217,23 +217,24 @@ enum Snapshot {
     defer { restore() }
     let restoreKnockouts = view.layer.map(applyKnockouts) ?? {}
     defer { restoreKnockouts() }
-    let blends = view.layer.map(blendedLayers) ?? []
+    let clips = clipViews(in: view)
+    // An overlay above the content, such as the dimming behind a sheet, covers the scroll views' contents too.
+    let overlays =
+      view.subviews.lastIndex { subview in clips.contains { $0.isDescendant(of: subview) } }
+      .map { content in view.subviews[(content + 1)...].filter { $0.frame == view.bounds }.compactMap(\.layer) } ?? []
+    // `applyKnockouts` has already set its masks. A blend under one of them counts as masked.
+    let blends = blendedLayers(in: view, overlays: overlays)
     let showBlends = hide(blends)
     view.cacheDisplay(in: view.bounds, to: rep)
     NSGraphicsContext.saveGraphicsState()
     defer { NSGraphicsContext.restoreGraphicsState() }
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    let clips = clipViews(in: view)
     for clip in clips { drawContents(of: clip, in: view) }
     showBlends()
     // A blend adds to what is under it, so the background goes in first.
     fillBackground(view)
     for blend in blends { draw(blend, in: view) }
-    // An overlay above the content, such as the dimming behind a sheet, covers the scroll views' contents too.
-    if let content = view.subviews.lastIndex(where: { subview in clips.contains { $0.isDescendant(of: subview) } }) {
-      let overlays = view.subviews[(content + 1)...].filter { $0.frame == view.bounds }.compactMap(\.layer)
-      for overlay in overlays { fillSolids(overlay, in: view) }
-    }
+    for overlay in overlays { fillSolids(overlay, in: view) }
     return rep
   }
 
@@ -252,28 +253,92 @@ enum Snapshot {
   /// The corner radius of a window and of a popover.
   private static let cornerRadius: CGFloat = 10
 
-  /// A layer that the window server blends with what is under it, and the opacity that its ancestors give it.
+  /// A layer that the window server blends with what is under it, the opacity that its ancestors give it, and the
+  /// part of the view where it shows, in the root layer's coordinates.
   private struct BlendedLayer {
     let layer: CALayer
     let mode: CGBlendMode
     let opacity: Float
+    let visible: CGRect
   }
 
   /// The blend mode of each `compositingFilter` that AppKit puts on sidebar text and symbols: plus-lighter in the dark
   /// appearance and plus-darker in the light one.
   private static let blendModes: [String: CGBlendMode] = ["plusL": .plusLighter, "plusD": .plusDarker]
 
-  /// Each layer under `layer` that has a blending `compositingFilter` and that shows. A layer under a hidden or fully
-  /// transparent ancestor does not show, such as an overlay scroller that has faded out.
-  private static func blendedLayers(_ layer: CALayer) -> [BlendedLayer] {
+  /// Each layer under `view`'s layer that has a blending `compositingFilter`, that shows, and that `draw(_:in:)` can
+  /// draw as the window does. A layer under a hidden or fully transparent ancestor does not show, such as an overlay
+  /// scroller that has faded out. `draw(_:in:)` renders the layer alone, clips it to rects, and draws it after
+  /// everything else. So it leaves out a layer that an ancestor changes some other way, such as with a mask, rounded
+  /// clipping, or a transform, and a layer that something drawn after it covers. The `overlays` that `fillSolids`
+  /// draws last do not count. `cacheDisplay` draws the layers it leaves out as plain layers.
+  private static func blendedLayers(in view: NSView, overlays: [CALayer]) -> [BlendedLayer] {
+    guard let root = view.layer else { return [] }
     func visit(_ layer: CALayer, opacity: Float) -> [BlendedLayer] {
       guard !layer.isHidden, layer.opacity > 0 else { return [] }
       if let mode = (layer.compositingFilter as? String).flatMap({ blendModes[$0] }) {
-        return [BlendedLayer(layer: layer, mode: mode, opacity: opacity)]
+        guard isTranslation(layer.transform) else { return [] }
+        let visible = visibleRect(of: layer, in: view)
+        guard !visible.isEmpty, !isCovered(layer, within: visible, root: root, overlays: overlays) else { return [] }
+        return [BlendedLayer(layer: layer, mode: mode, opacity: opacity, visible: visible)]
       }
+      let plain =
+        layer.mask == nil && !(layer.masksToBounds && layer.cornerRadius > 0) && isTranslation(layer.transform)
+        && CATransform3DIsIdentity(layer.sublayerTransform) && (layer.filters ?? []).isEmpty
+        && layer.compositingFilter == nil
+      guard plain else { return [] }
       return (layer.sublayers ?? []).flatMap { visit($0, opacity: opacity * layer.opacity) }
     }
-    return visit(layer, opacity: 1)
+    return visit(root, opacity: 1)
+  }
+
+  private static func isTranslation(_ transform: CATransform3D) -> Bool {
+    CATransform3DIsIdentity(CATransform3DTranslate(transform, -transform.m41, -transform.m42, -transform.m43))
+  }
+
+  /// The part of `layer` that shows inside each ancestor that masks to its bounds and inside the visible part of the
+  /// scroll view that holds it, as `drawContents` draws, in the root layer's coordinates.
+  private static func visibleRect(of layer: CALayer, in view: NSView) -> CGRect {
+    guard let root = view.layer else { return .null }
+    var visible = layer.convert(layer.bounds, to: root)
+    var ancestor = layer.superlayer
+    while let outer = ancestor, outer !== root {
+      if let clip = outer.delegate as? NSClipView { return visible.intersection(visibleRect(of: clip, in: view)) }
+      if outer.masksToBounds { visible = visible.intersection(outer.convert(outer.bounds, to: root)) }
+      ancestor = outer.superlayer
+    }
+    return visible
+  }
+
+  /// Whether a layer that Core Animation draws after `layer` draws something inside `rect`, or whether the draw order
+  /// is unclear because siblings on the way to `root` differ in `zPosition`.
+  private static func isCovered(_ layer: CALayer, within rect: CGRect, root: CALayer, overlays: [CALayer]) -> Bool {
+    var child = layer
+    while child !== root, let parent = child.superlayer {
+      let siblings = (parent.sublayers ?? []).filter { !$0.isHidden }
+      guard siblings.allSatisfy({ $0.zPosition == child.zPosition }),
+        let index = siblings.firstIndex(where: { $0 === child })
+      else { return true }
+      let later = siblings[(index + 1)...].filter { sibling in !overlays.contains { $0 === sibling } }
+      if later.contains(where: { draws($0, within: rect, root: root) }) { return true }
+      child = parent
+    }
+    return false
+  }
+
+  /// Whether `layer` or a layer under it draws anything inside `rect`, a rect in `root`'s coordinates.
+  private static func draws(_ layer: CALayer, within rect: CGRect, root: CALayer) -> Bool {
+    guard !layer.isHidden, layer.opacity > 0 else { return false }
+    let shadow =
+      layer.shadowOpacity > 0
+      ? layer.shadowRadius + max(abs(layer.shadowOffset.width), abs(layer.shadowOffset.height)) : 0
+    let paints =
+      (layer.backgroundColor.map { $0.alpha > 0 } ?? false) || layer.contents != nil || layer.borderWidth > 0
+      || shadow > 0 || layer.compositingFilter != nil
+    if paints && layer.convert(layer.bounds.insetBy(dx: -shadow, dy: -shadow), to: root).intersects(rect) {
+      return true
+    }
+    return (layer.sublayers ?? []).contains { draws($0, within: rect, root: root) }
   }
 
   /// Sets each blended layer's opacity to 0, which leaves it out of `cacheDisplay`, and returns a function that puts
@@ -284,25 +349,13 @@ enum Snapshot {
     return { for (blend, opacity) in zip(blends, opacities) { blend.layer.opacity = opacity } }
   }
 
-  /// Draws `blend` into the current context with its blend mode. The drawing stays inside each ancestor that masks
-  /// to its bounds and inside the visible part of the scroll view that holds it, as `drawContents` draws. An
-  /// ancestor's `mask` and its rounded corners do not clip the drawing.
+  /// Draws `blend` into the current context with its blend mode, inside the part of the view where it shows.
   private static func draw(_ blend: BlendedLayer, in view: NSView) {
     guard let root = view.layer, let context = NSGraphicsContext.current?.cgContext else { return }
     let layer = blend.layer
     let frame = layer.convert(layer.bounds, to: root)
-    var visible = frame
-    var ancestor = layer.superlayer
-    while let outer = ancestor, outer !== root {
-      if let clip = outer.delegate as? NSClipView {
-        visible = visible.intersection(visibleRect(of: clip, in: view))
-        break
-      }
-      if outer.masksToBounds { visible = visible.intersection(outer.convert(outer.bounds, to: root)) }
-      ancestor = outer.superlayer
-    }
     let scale = context.convertToDeviceSpace(CGSize(width: 1, height: 1)).width
-    guard !visible.isEmpty,
+    guard
       let image = bitmapContext(
         width: Int((layer.bounds.width * scale).rounded(.up)), height: Int((layer.bounds.height * scale).rounded(.up)))
     else { return }
@@ -315,7 +368,7 @@ enum Snapshot {
     guard let rendered = image.makeImage() else { return }
     context.saveGState()
     defer { context.restoreGState() }
-    context.clip(to: unflipped(visible, in: view))
+    context.clip(to: unflipped(blend.visible, in: view))
     context.setBlendMode(blend.mode)
     context.setAlpha(CGFloat(blend.opacity))
     context.draw(rendered, in: unflipped(frame, in: view))
@@ -341,13 +394,9 @@ enum Snapshot {
                 .utf8))
           return
         }
-        let path = CGMutablePath()
-        path.addRect(parent.bounds)
-        for shape in shapes { path.addPath(shape) }
         let mask = CAShapeLayer()
         mask.frame = parent.bounds
-        mask.path = path
-        mask.fillRule = .evenOdd
+        mask.path = shapes.reduce(CGPath(rect: parent.bounds, transform: nil)) { $0.subtracting($1) }
         parent.mask = mask
         layer.isHidden = true
         restores.append {

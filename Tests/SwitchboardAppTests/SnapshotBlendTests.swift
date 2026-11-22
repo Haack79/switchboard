@@ -296,6 +296,101 @@ struct BlendCase: Sendable, CustomTestStringConvertible {
     #expect(matches(try canvas.pixel(rep, x: 80, fromTop: 30), try canvas.background(in: rep)))
   }
 
+  /// Each way an ancestor changes a layer that rendering it alone and clipping it to rects can't reproduce.
+  enum AncestorChange: String, CaseIterable, Sendable {
+    case mask, roundedClip, scale, sublayerTransform, filter
+  }
+
+  /// `cacheDisplay` draws a plus layer whose ancestor it can't reproduce as a plain layer.
+  @Test(arguments: AncestorChange.allCases) func aPlusLayerUnderAnAncestorItCantReproduceDrawsPlain(
+    _ change: AncestorChange
+  ) throws {
+    let canvas = Canvas(dark: true)
+    let ancestor = CALayer()
+    ancestor.frame = canvas.view.bounds
+    switch change {
+    case .mask: ancestor.mask = solid(ancestor.bounds, white: 1)
+    case .roundedClip:
+      ancestor.masksToBounds = true
+      ancestor.cornerRadius = 4
+    case .scale: ancestor.transform = CATransform3DMakeScale(1, 1.01, 1)
+    case .sublayerTransform: ancestor.sublayerTransform = CATransform3DMakeScale(1, 1.01, 1)
+    case .filter: ancestor.filters = [SnapshotVibrancy.filter("colorMatrix", SnapshotVibrancy.identity)]
+    }
+    ancestor.addSublayer(plus("plusL", Self.strip, white: 0.3))
+    canvas.root.addSublayer(ancestor)
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), try Canvas.gray(0.3, in: rep)))
+  }
+
+  /// A mask that leaves the plus layer out keeps it out of the drawing.
+  @Test func aPlusLayerThatAnAncestorsMaskLeavesOutDrawsNothing() throws {
+    let canvas = Canvas(dark: true)
+    let ancestor = CALayer()
+    ancestor.frame = canvas.view.bounds
+    ancestor.mask = solid(CGRect(x: 0, y: 0, width: 20, height: 60), white: 1)
+    ancestor.addSublayer(plus("plusL", Self.strip, white: 0.3))
+    canvas.root.addSublayer(ancestor)
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), try canvas.background(in: rep)))
+  }
+
+  @Test func anOpaqueLayerDrawnAfterAPlusLayerCoversIt() throws {
+    let canvas = Canvas(dark: true)
+    canvas.root.addSublayer(plus("plusL", Self.strip, white: 0.3))
+    canvas.root.addSublayer(solid(Self.strip, white: 0))
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), [0, 0, 0]))
+  }
+
+  @Test func aCoveringLayerUnderAnAncestorsLaterSiblingCoversAPlusLayer() throws {
+    let canvas = Canvas(dark: true)
+    let group = CALayer()
+    group.frame = canvas.view.bounds
+    group.addSublayer(plus("plusL", Self.strip, white: 0.3))
+    let later = CALayer()
+    later.frame = canvas.view.bounds
+    later.addSublayer(solid(Self.strip, white: 0))
+    canvas.root.addSublayer(group)
+    canvas.root.addSublayer(later)
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), [0, 0, 0]))
+  }
+
+  /// A later layer that draws elsewhere leaves the plus layer blending.
+  @Test func aLaterLayerElsewhereLeavesAPlusLayerBlending() throws {
+    let canvas = Canvas(dark: true)
+    canvas.root.addSublayer(plus("plusL", Self.strip, white: 0.3))
+    canvas.root.addSublayer(solid(CGRect(x: 0, y: 0, width: 20, height: 20), white: 0))
+
+    let rep = try canvas.cache()
+
+    let expected = blended("plusL", try Canvas.gray(0.3, in: rep), over: try canvas.background(in: rep))
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), expected))
+  }
+
+  /// Core Animation draws siblings in order of `zPosition`, so array order no longer says what draws last.
+  @Test func aPlusLayerAmongSiblingsWithMixedZPositionsDrawsPlain() throws {
+    let canvas = Canvas(dark: true)
+    let blend = plus("plusL", Self.strip, white: 0.3)
+    let raised = solid(CGRect(x: 0, y: 0, width: 20, height: 20), white: 0)
+    raised.zPosition = 1
+    canvas.root.addSublayer(raised)
+    canvas.root.addSublayer(blend)
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: 30), try Canvas.gray(0.3, in: rep)))
+  }
+
   /// The plus layer spans x 20…100 inside an ancestor that spans x 40…80 and masks to its bounds.
   private func clippedCanvas() -> Canvas {
     let canvas = Canvas(dark: true)
@@ -372,6 +467,16 @@ private struct Segment {
     #expect(matches(try segment.canvas.pixel(rep, x: 25, fromTop: 30), try Canvas.gray(1, in: rep)))
   }
 
+  /// The group's copy of the label blends in the window, and the knockout erases it under the pill.
+  @Test(arguments: [false, true]) func aPlusLabelUnderTheKnockoutAddsNothingToTheSelectedLabel(dark: Bool) throws {
+    let segment = Segment(dark: dark)
+    segment.group.sublayers?.first?.compositingFilter = dark ? "plusL" : "plusD"
+
+    let rep = try segment.canvas.cache()
+
+    #expect(matches(try segment.canvas.pixel(rep, x: 60, fromTop: 30), [0, 0, 0]))
+  }
+
   @Test func cacheLeavesTheLayersAsItFoundThem() throws {
     let segment = Segment(dark: true)
     let blend = plus("plusL", CGRect(x: 10, y: 50, width: 20, height: 5), white: 0.3)
@@ -405,15 +510,12 @@ private struct Segment {
       root.addSublayer(parent)
     }
 
-    func maskPath() throws -> CGPath {
-      let mask = try #require(parent.mask as? CAShapeLayer)
-      return try #require(mask.path)
-    }
-
     /// Whether the mask lets `point`, in the superlayer's coordinates, show. No mask lets everything show.
     func shows(_ point: CGPoint) throws -> Bool {
       guard parent.mask != nil else { return true }
-      return try maskPath().contains(point, using: .evenOdd)
+      let mask = try #require(parent.mask as? CAShapeLayer)
+      let rule: CGPathFillRule = mask.fillRule == .evenOdd ? .evenOdd : .winding
+      return try #require(mask.path).contains(point, using: rule)
     }
   }
 
@@ -443,10 +545,10 @@ private struct Segment {
 
     _ = Snapshot.applyKnockouts(tree.root)
 
-    let path = try tree.maskPath()
-    #expect(!path.contains(CGPoint(x: 15, y: 15), using: .evenOdd))
-    #expect(!path.contains(CGPoint(x: 70, y: 15), using: .evenOdd))
-    #expect(path.contains(CGPoint(x: 42, y: 15), using: .evenOdd))
+    #expect(tree.parent.mask != nil)
+    #expect(try !tree.shows(CGPoint(x: 15, y: 15)))
+    #expect(try !tree.shows(CGPoint(x: 70, y: 15)))
+    #expect(try tree.shows(CGPoint(x: 42, y: 15)))
   }
 
   @Test func aRoundedCornerOutsideTheRadiusStaysInTheMask() throws {
@@ -456,9 +558,9 @@ private struct Segment {
 
     _ = Snapshot.applyKnockouts(tree.root)
 
-    let path = try tree.maskPath()
-    #expect(path.contains(CGPoint(x: 20.5, y: 10.5), using: .evenOdd))
-    #expect(!path.contains(CGPoint(x: 40, y: 20), using: .evenOdd))
+    #expect(tree.parent.mask != nil)
+    #expect(try tree.shows(CGPoint(x: 20.5, y: 10.5)))
+    #expect(try !tree.shows(CGPoint(x: 40, y: 20)))
   }
 
   /// A corner that `maskedCorners` leaves out stays square in the window, so the knockout covers it.
@@ -479,9 +581,9 @@ private struct Segment {
 
     _ = Snapshot.applyKnockouts(tree.root)
 
-    let path = try tree.maskPath()
-    #expect(!path.contains(CGPoint(x: 50, y: 20), using: .evenOdd))
-    #expect(path.contains(CGPoint(x: 15, y: 10), using: .evenOdd))
+    #expect(tree.parent.mask != nil)
+    #expect(try !tree.shows(CGPoint(x: 50, y: 20)))
+    #expect(try tree.shows(CGPoint(x: 15, y: 10)))
   }
 
   @Test func findsAKnockoutLayerDeepInTheTree() throws {
@@ -493,7 +595,7 @@ private struct Segment {
 
     _ = Snapshot.applyKnockouts(top)
 
-    #expect(try !tree.maskPath().contains(CGPoint(x: 40, y: 20), using: .evenOdd))
+    #expect(try !tree.shows(CGPoint(x: 40, y: 20)))
   }
 
   @Test(arguments: [nil, "plusL", "plusD", "destIn"])
@@ -621,6 +723,27 @@ private struct Segment {
       shape.frame = CGRect(x: 80, y: 10, width: 40, height: 20)
     }
     return tree
+  }
+
+  /// Two shapes that overlap erase their overlap too.
+  @Test func overlappingShapesBothEraseTheirOverlap() throws {
+    let tree = Tree([solid(Self.rect, white: 0), solid(Self.rect, white: 0)])
+
+    _ = Snapshot.applyKnockouts(tree.root)
+
+    #expect(tree.parent.mask != nil)
+    #expect(try !tree.shows(CGPoint(x: 40, y: 20)))
+  }
+
+  @Test func aKnockoutWhoseBackgroundOverlapsItsShapeErasesBoth() throws {
+    let tree = Tree([solid(Self.rect, white: 0)])
+    tree.knockout.backgroundColor = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+
+    _ = Snapshot.applyKnockouts(tree.root)
+
+    #expect(tree.parent.mask != nil)
+    #expect(try !tree.shows(CGPoint(x: 40, y: 20)))
+    #expect(try !tree.shows(CGPoint(x: 80, y: 20)))
   }
 
   /// A hidden sibling draws nothing, so it does not matter where it sits.
