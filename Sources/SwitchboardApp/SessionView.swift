@@ -45,11 +45,13 @@ struct SessionView: View {
       CardList(cards: session.cards)
       GeometryReader { geometry in
         let fits = SidePanel.fits(width: geometry.size.width, beside: SessionView.terminalsMinWidth(session))
+        let showsPanel = showsSidePanel && fits
         HStack(spacing: 0) {
-          terminalArea
-          if showsSidePanel && fits {
-            Divider()
-            SidePanelView(session: session)
+          // On macOS 26, a split view that holds only the Claude pane grows past the width it is offered once the
+          // terminal attaches, which pushes the panel past the window's edge. The explicit width stops it.
+          terminalArea.frame(width: showsPanel ? geometry.size.width - SidePanel.width : geometry.size.width)
+          if showsPanel {
+            SidePanelView(session: session).overlay(alignment: .leading) { Divider() }
           }
         }
         .onChange(of: fits, initial: true) { if ui.sidePanelFits != fits { ui.sidePanelFits = fits } }
