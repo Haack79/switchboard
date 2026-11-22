@@ -70,7 +70,7 @@ struct LinkRows {
   init(session: SessionSummary, now: Int64 = nowMs()) {
     rows = Self.sorted(
       (session.links ?? []).map {
-        Row(link: $0, owner: .session(session.id), caption: $0.caption(now: now))
+        Self.row($0, owner: .session(session.id), now: now)
       })
   }
 
@@ -78,11 +78,11 @@ struct LinkRows {
   /// `liveSessions` holds. `liveSessions` maps a session id to the session.
   init(group: GroupSummary, liveSessions: [String: SessionSummary], now: Int64 = nowMs()) {
     let own = (group.links ?? []).filter { GroupArtifact(link: $0) == nil }.map {
-      Row(link: $0, owner: .group(group.id), ownerName: "group", caption: "group · \($0.caption(now: now))")
+      Self.row($0, owner: .group(group.id), ownerName: "group", now: now)
     }
     let members = group.sessions.compactMap { liveSessions[$0] }.flatMap { s in
       (s.links ?? []).map {
-        Row(link: $0, owner: .session(s.id), ownerName: s.name, caption: "\(s.name) · \($0.caption(now: now))")
+        Self.row($0, owner: .session(s.id), ownerName: s.name, now: now)
       }
     }
     rows = Self.sorted(own + members)
@@ -99,6 +99,13 @@ struct LinkRows {
     guard let parts = URLComponents(string: link.url), let host = parts.host else { return link.title }
     let path = parts.path == "/" ? "" : parts.path
     return oneLine(host + path, max: ExternalLink.titleLimit)
+  }
+
+  /// The caption starts with the owner's name when there is one.
+  private static func row(_ link: ExternalLink, owner: Owner, ownerName: String? = nil, now: Int64) -> Row {
+    let caption = link.caption(now: now)
+    return Row(
+      link: link, owner: owner, ownerName: ownerName, caption: ownerName.map { "\($0) · \(caption)" } ?? caption)
   }
 
   private static func sorted(_ rows: [Row]) -> [Row] {

@@ -30,9 +30,9 @@ struct PanelRow<Actions: View>: View {
         if let icon {
           Image(systemName: icon.symbol).foregroundStyle(.secondary).accessibilityLabel(icon.label)
         }
-        let text = Text(verbatim: title).textSelection(.enabled).lineLimit(titleLines)
+        Text(verbatim: title).textSelection(.enabled).lineLimit(titleLines)
           .fixedSize(horizontal: false, vertical: true)
-        if let titleHelp { text.help(titleHelp) } else { text }
+          .help(titleHelp ?? "")
         Spacer(minLength: 0)
         if let open {
           Button("Open") { NSWorkspace.shared.open(open.url) }
