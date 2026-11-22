@@ -53,7 +53,8 @@ struct SessionView: View {
           terminalArea.frame(
             minWidth: showsPanel ? 0 : nil, maxWidth: showsPanel ? geometry.size.width - SidePanel.width : nil)
           if showsPanel {
-            SidePanelView(session: session).overlay(alignment: .leading) { Divider() }
+            Divider()
+            SidePanelView(session: session)
           }
         }
         .onChange(of: fits, initial: true) { if ui.sidePanelFits != fits { ui.sidePanelFits = fits } }

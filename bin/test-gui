@@ -1069,6 +1069,8 @@ check_links() {
   pinned
   app snapshot "$shots/side-panel.png" >/dev/null
   wait_for 10 panel_lists || fail "the side panel does not list both links of $a inside it: $result"
+  # A terminal wider than the space beside the panel would report more columns here than the pane shows.
+  echo "links: the Claude terminal's sizes beside the side panel: $(sb screen "$a" | grep '^sizes ')"
   wait_for 10 clicked "panel-link-$rfc-remove" || fail "the app could not click Remove on $rfc: $result"
   wait_for 10 only_link_left "$slack" || fail "Remove did not delete only $rfc: $(sb get "$a" --json | jq -c '.links')"
   app width restore >/dev/null
