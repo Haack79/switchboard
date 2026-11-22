@@ -29,7 +29,10 @@ import SwiftUI
 /// `posted on` the hit view's type and send their events over the next half second. `board-selection` reports the
 /// selected ids, sorted and joined by commas, or `none`. `drag-control` adds a draggable text view outside the
 /// Board to the window, drags it the same way, and also reports `posted on`. `drags` reports how many drag
-/// sessions have started since launch from the view each drag pressed or one of its superviews.
+/// sessions have started since launch from the view each drag pressed or one of its superviews. `settings-key`
+/// sends ⌘, to the menu bar and reports the menu item that ran, as `nav-keys` does. `settings` reports `shown
+/// <tab>` while the Settings window is on screen, else `hidden`. `open-settings <tab>` opens Settings at the tab,
+/// as the Issues view's gear button does.
 @MainActor
 enum ShellSelfTest {
   static let folder = ProcessInfo.processInfo.environment["SB_SHELL_TEST"]
@@ -105,6 +108,15 @@ enum ShellSelfTest {
     case "nav-keys":
       guard let window else { return "no window" }
       return NavShortcuts.all.map { menuItem(running: $0, in: window) }.joined(separator: "; ")
+    case "settings-key":
+      guard let window else { return "no window" }
+      return menuItem(running: KeyboardShortcut(","), in: window)
+    case "settings":
+      return model.settingsShown ? "shown \(model.settingsTab.rawValue)" : "hidden"
+    case "open-settings":
+      guard let tab = SettingsTab(rawValue: rest) else { return "no tab \(rest)" }
+      model.openSettings(tab)
+      return "opened"
     case "mouse":
       guard let window else { return "no window" }
       guard let button = Int(rest), let event = otherMouseDown(button, in: window) else { return "no event" }
