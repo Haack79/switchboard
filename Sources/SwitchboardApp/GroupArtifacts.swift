@@ -62,46 +62,39 @@ struct GroupArtifactsLink: View {
     if let title = GroupArtifactRows.linkTitle(group) {
       LanePopoverLink(
         title: title, help: "Show the artifacts that this group's sessions published or its links point to",
-        accessibilityLabel: "\(title) in group \(group.name)", identifier: "group-artifacts-\(group.id)", width: 420
+        accessibilityLabel: "\(title) in group \(group.name)", identifier: "group-artifacts-\(group.id)"
       ) { GroupArtifactList(group: group) }
     }
   }
 }
 
-/// A group's artifacts in the popover, each with Use as plan, Plan, or Removed.
+/// The rows of a group's artifact popover, each with Use as plan, Plan, or Removed.
 struct GroupArtifactList: View {
   @EnvironmentObject var model: BoardModel
   let group: GroupSummary
 
   var body: some View {
-    let names = Dictionary(model.allSessions.map { ($0.id, $0.name) }) { first, _ in first }
-    ScrollView {
-      VStack(alignment: .leading, spacing: 8) {
-        ForEach(GroupArtifactRows(group: group, liveNames: names).rows) { row in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-              // The title is untrusted text from the tool result, so it never renders as Markdown.
-              if row.artifact.removed == nil, let url = URL(string: row.artifact.url) {
-                Button {
-                  NSWorkspace.shared.open(url)
-                } label: {
-                  Text(verbatim: row.artifact.title)
-                }
-                .buttonStyle(.link)
-                .help(row.artifact.url)
-              } else {
-                Text(verbatim: row.artifact.title)
-              }
-              Text(verbatim: "\(row.sessionLabel) · \(row.caption)").font(.caption).foregroundStyle(.secondary)
+    ForEach(GroupArtifactRows(group: group, liveNames: model.sessionsByID.mapValues(\.name)).rows) { row in
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
+          // The title is untrusted text from the tool result, so it never renders as Markdown.
+          if row.artifact.removed == nil, let url = URL(string: row.artifact.url) {
+            Button {
+              NSWorkspace.shared.open(url)
+            } label: {
+              Text(verbatim: row.artifact.title)
             }
-            Spacer(minLength: 0)
-            action(row)
+            .buttonStyle(.link)
+            .help(row.artifact.url)
+          } else {
+            Text(verbatim: row.artifact.title)
           }
+          Text(verbatim: "\(row.sessionLabel) · \(row.caption)").font(.caption).foregroundStyle(.secondary)
         }
+        Spacer(minLength: 0)
+        action(row)
       }
-      .padding(12)
     }
-    .frame(maxHeight: 360)
   }
 
   @ViewBuilder private func action(_ row: GroupArtifactRows.Row) -> some View {

@@ -1857,6 +1857,19 @@ final class BoardModel: ObservableObject {
     perform("resolve-note", ["session": .string(id), "note": .string(note), "by": .string(Author.you.rawValue)])
   }
 
+  /// Sends `link-rm` for a session's link and `group-link-rm` for a group's. sbd deletes a link that someone added
+  /// and hides a link that it found.
+  func removeLink(_ row: LinkRows.Row) {
+    let by = JSON.string(Author.you.rawValue)
+    switch row.owner {
+    case .session(let id): perform("link-rm", ["session": .string(id), "link": .string(row.link.id), "by": by])
+    case .group(let id): perform("group-link-rm", ["group": .string(id), "link": .string(row.link.id), "by": by])
+    }
+  }
+
+  /// Every listed session by id, whatever the sidebar's filters hide.
+  var sessionsByID: [String: SessionSummary] { Dictionary(allSessions.map { ($0.id, $0) }) { first, _ in first } }
+
   /// What the Done column's delete icon removes, for the confirmation.
   struct DeletePlan {
     var name: String

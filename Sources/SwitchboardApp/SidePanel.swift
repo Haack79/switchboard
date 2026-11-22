@@ -20,12 +20,14 @@ extension Wait.Then {
   }
 }
 
-/// What the session view's side panel shows: the session's open waits, its schedules, its notes, and its artifacts.
+/// What the session view's side panel shows: the session's open waits, its schedules, its notes, its artifacts, and
+/// its links.
 struct SidePanel {
   static let width: CGFloat = 240
   static let noWaits = "No open waits."
   static let noNotes = "No notes."
   static let noArtifacts = "No artifacts."
+  static let noLinks = "No links."
 
   let waitsCount: Int
   /// The panel leaves out the Schedules section of a session without a schedule.
@@ -42,8 +44,9 @@ struct SidePanel {
   /// True when the session lists any artifact, a removed one included.
   let hasArtifacts: Bool
   let artifacts: [SessionArtifact]
+  let links: [LinkRows.Row]
 
-  init(_ s: SessionSummary) {
+  init(_ s: SessionSummary, now: Int64 = nowMs()) {
     let schedules = s.schedules ?? []
     waitsCount = s.waits.count
     showsSchedules = !schedules.isEmpty
@@ -56,6 +59,7 @@ struct SidePanel {
     artifacts = (s.artifacts ?? []).newestFirst
     hasArtifacts = !artifacts.isEmpty
     artifactsCount = artifacts.count(where: { $0.removed == nil })
+    links = LinkRows(session: s, now: now).rows
   }
 
   /// True when `width` holds the panel beside content that needs `beside` points.
@@ -104,6 +108,12 @@ struct SidePanelView: View {
               } : nil,
             caption: artifact.caption())
         }
+        Divider()
+        ListSectionHeader(title: "Links", count: panel.links.count, inset: false)
+        if panel.links.isEmpty { Text(SidePanel.noLinks).foregroundStyle(.secondary) }
+        ForEach(panel.links) { row in
+          LinkRowView(row: row, anchor: "panel-link-\(row.link.id)")
+        }
       }
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -111,5 +121,6 @@ struct SidePanelView: View {
     .frame(width: SidePanel.width)
     .frame(maxHeight: .infinity, alignment: .top)
     .accessibilityIdentifier("session-side-panel")
+    .clickAnchor("session-side-panel")
   }
 }

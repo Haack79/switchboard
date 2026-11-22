@@ -51,13 +51,12 @@ extension PanelRow where Actions == EmptyView {
   }
 }
 
-/// A caption-size link in a Board lane's header that opens a popover.
+/// A caption-size link in a Board lane's header that opens a popover with a scrolling list of `content`.
 struct LanePopoverLink<Content: View>: View {
   let title: String
   let help: String
   let accessibilityLabel: String
   let identifier: String
-  let width: CGFloat
   @ViewBuilder var content: () -> Content
   @State private var showing = false
 
@@ -68,7 +67,15 @@ struct LanePopoverLink<Content: View>: View {
       .accessibilityLabel(accessibilityLabel)
       .accessibilityIdentifier(identifier)
       .clickAnchor(identifier)
-      .popover(isPresented: $showing, arrowEdge: .bottom) { content().frame(width: width) }
+      .popover(isPresented: $showing, arrowEdge: .bottom) {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 8) { content() }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 360)
+        .frame(width: 420)
+      }
       // `showing` stays true when the link leaves the view because its list is empty. Without the reset, the
       // popover would open by itself when the list fills again.
       .onDisappear { showing = false }

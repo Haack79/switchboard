@@ -826,6 +826,7 @@ private struct LaneHeader: View {
             .accessibilityLabel("Delete group \(group.name)")
           GroupPauseButtons(group: group)
           GroupArtifactsLink(group: group)
+          GroupLinksLink(group: group)
         }
       }
       if let group { GroupDescriptionView(group: group) }
