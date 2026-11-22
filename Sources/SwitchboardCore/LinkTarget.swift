@@ -39,7 +39,7 @@ public struct LinkTarget: Equatable, Sendable {
     let segments = Array(path.dropFirst())
     // A Slack workspace or Notion site can have "grafana" in its host name. A host that fails the Grafana parse goes
     // on to the other kinds.
-    if host.contains("grafana"), let target = grafana(host: host, segments) { return target }
+    if host.contains("grafana"), let target = grafana(host: host, port: parts.port, segments) { return target }
     guard parts.port == nil else { return nil }
     switch host {
     case "linear.app": return linear(segments)
@@ -138,13 +138,13 @@ public struct LinkTarget: Equatable, Sendable {
   }
 
   /// `/d/<uid>`, with an optional slug after the uid, on a host whose name contains `grafana`.
-  private static func grafana(host: String, _ segments: [String]) -> LinkTarget? {
+  private static func grafana(host: String, port: Int?, _ segments: [String]) -> LinkTarget? {
     guard segments.count == 2 || (segments.count == 3 && isSlug(segments[2])), segments[0] == "d",
       segments[1].wholeMatch(of: #/[A-Za-z0-9_-]{1,40}/#) != nil
     else { return nil }
     let uid = segments[1]
     return LinkTarget(
-      .grafana, key: "grafana:\(host)/\(uid)",
+      .grafana, key: "grafana:\(host)\(port.map { ":\($0)" } ?? "")/\(uid)",
       title: segments.count == 3 ? "Grafana: \(words(segments[2]))" : "Grafana dashboard \(uid)")
   }
 }
@@ -152,11 +152,13 @@ public struct LinkTarget: Equatable, Sendable {
 /// Finds the https links in free text, such as a prompt.
 public enum LinkScan {
   private static let terminators = Set("<>\"'`|()[]{}\\^")
-  private static let trailing = Set(".,;:!?*_~")
+  private static let trailing = Set(".,;:!?")
+  private static let emphasis = Set("*_~")
 
   /// Each `https://` link in the text, in order and with repeats. A link ends at whitespace, at a control
   /// character, at a character that wraps links in Slack or Markdown text, or at the next `https://`. Trailing
-  /// sentence punctuation and Markdown emphasis are not part of it.
+  /// sentence punctuation is not part of it. A trailing `*`, `_`, or `~` is Markdown emphasis only when the same
+  /// character comes right before the link, because an id such as a Grafana uid can end in `_`.
   public static func urls(in text: String) -> [String] {
     guard text.contains("://") else { return [] }
     var found: [String] = []
@@ -173,8 +175,11 @@ public enum LinkScan {
         }
         end = text.index(after: end)
       }
+      let opener = start.lowerBound > text.startIndex ? text[text.index(before: start.lowerBound)] : nil
       var link = text[start.lowerBound..<end]
-      while let last = link.last, trailing.contains(last) { link = link.dropLast() }
+      while let last = link.last, trailing.contains(last) || (emphasis.contains(last) && last == opener) {
+        link = link.dropLast()
+      }
       if link.count > "https://".count { found.append(String(link)) }
       from = end
     }

@@ -30,7 +30,7 @@ import Testing
     #expect(LinkScan.urls(in: "\(Self.a)\(separator)next line") == [Self.a])
   }
 
-  @Test(arguments: [".", ",", ";", ":", "!", "?", "*", "_", "~", "**", "...", "?!", "_~*.", ".)"])
+  @Test(arguments: [".", ",", ";", ":", "!", "?", "...", "?!", ".)"])
   func trailingPunctuationIsTrimmed(_ trailing: String) {
     #expect(LinkScan.urls(in: "Look at \(Self.a)\(trailing)") == [Self.a])
   }
@@ -46,6 +46,17 @@ import Testing
 
   @Test func aBoldLinkLeavesTheAsterisksOut() {
     #expect(LinkScan.urls(in: "**\(Self.a)**") == [Self.a])
+  }
+
+  @Test(arguments: ["*", "**", "_", "__", "~", "~~"])
+  func emphasisAroundALinkIsLeftOut(_ marker: String) {
+    #expect(LinkScan.urls(in: "See \(marker)\(Self.a)\(marker).") == [Self.a])
+  }
+
+  /// A Grafana uid can end in `_`, so an unpaired trailing `_` stays part of the link.
+  @Test(arguments: ["Look at \(grafanaUnderscore)", "[dashboard](\(grafanaUnderscore))", "*\(grafanaUnderscore)*"])
+  func aTrailingUnderscoreWithoutAnOpeningOneStays(_ text: String) {
+    #expect(LinkScan.urls(in: text) == [grafanaUnderscore])
   }
 
   @Test func aSlackLinkWithALabelLeavesTheLabelOut() {
@@ -104,3 +115,5 @@ import Testing
     #expect(LinkScan.urls(in: text) == [LinkFixtures.slackReply, LinkFixtures.linear])
   }
 }
+
+private let grafanaUnderscore = "https://grafana.example.com/d/api_"

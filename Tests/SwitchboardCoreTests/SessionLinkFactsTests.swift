@@ -66,6 +66,21 @@ private let replyTs = LinkFixtures.replyTs
     #expect(f.links.map(\.id) == [hashedFoundId(LinkFixtures.slackRootKey)])
   }
 
+  @Test func grafanaDashboardsOnTwoPortsAreTwoEntries() {
+    let f = facts([
+      linkPrompt(
+        1000, "Compare https://grafana.example.com:3000/d/abc123 and https://grafana.example.com:4000/d/abc123")
+    ])
+
+    #expect(f.links.count == 2)
+  }
+
+  @Test func aGrafanaUidThatEndsInAnUnderscoreKeepsIt() {
+    let f = facts([linkPrompt(1000, "[dashboard](https://grafana.example.com/d/api_)")])
+
+    #expect(f.links.map(\.url) == ["https://grafana.example.com/d/api_"])
+  }
+
   @Test func theTextAroundALinkIsNotPartOfItsURL() {
     let f = facts([linkPrompt(1000, "Can you look at <\(replyURL)|this thread>?")])
 

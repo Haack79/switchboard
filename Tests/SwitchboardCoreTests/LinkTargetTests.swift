@@ -407,14 +407,20 @@ private let refusedOther: [RefusedLink] = [
 
   // MARK: Ports
 
-  /// Grafana is the only kind that takes a port. The key keeps the uid, and the host part names the Grafana host.
+  /// Grafana is the only kind that takes a port. The key keeps the port, because two ports can be two servers.
   @Test func aGrafanaLinkWithAPortIsAccepted() throws {
     let target = try #require(LinkTarget.parse("https://grafana.example.com:3000/d/abc123/api-latency"))
 
     #expect(target.kind == .grafana)
-    #expect(target.key.hasPrefix("grafana:grafana.example.com"))
-    #expect(target.key.hasSuffix("/abc123"))
+    #expect(target.key == "grafana:grafana.example.com:3000/abc123")
     #expect(target.title == "Grafana: api latency")
+  }
+
+  @Test func grafanaLinksOnTwoPortsHaveDifferentKeys() throws {
+    let first = try #require(LinkTarget.parse("https://grafana.example.com:3000/d/abc123"))
+    let second = try #require(LinkTarget.parse("https://grafana.example.com:4000/d/abc123"))
+
+    #expect(first.key != second.key)
   }
 
   // MARK: Titles
