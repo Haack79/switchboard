@@ -126,12 +126,16 @@ struct NotesSheet: View {
   @EnvironmentObject var model: BoardModel
   let id: String
   let close: () -> Void
+  /// The list scrolls past this height. A long list then never pushes the Done button off the sheet.
+  static let maxListHeight: CGFloat = 480
 
   var body: some View {
     if let session = model.summary(id) {
       VStack(alignment: .leading, spacing: 0) {
         Text("Notes for \(model.sessionNames.name(id))").font(.headline).padding([.horizontal, .top], 12)
-        NotesPopover(session: session)
+        ScrollView { NotesPopover(session: session) }
+          .frame(maxHeight: Self.maxListHeight)
+          .fixedSize(horizontal: false, vertical: true)
         HStack {
           Spacer()
           Button("Done", action: close).keyboardShortcut(.cancelAction)

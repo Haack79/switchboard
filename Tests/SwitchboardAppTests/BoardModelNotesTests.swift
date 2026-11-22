@@ -207,4 +207,13 @@ import Testing
     #expect(model.editingNotes == nil)
     withExtendedLifetime(window) {}
   }
+
+  @Test func aLongListScrollsInsideABoundedSheet() {
+    let model = offlineModel()
+    let todos = (0..<100).map { todoFixture("n\($0)", "to-do number \($0)") }
+    model.apply(.success([notedSession(todos)]), followups: nil)
+    let host = NSHostingView(rootView: NotesSheet(id: "s1") {}.environmentObject(model))
+
+    #expect(host.fittingSize.height < NotesSheet.maxListHeight + 150)
+  }
 }
