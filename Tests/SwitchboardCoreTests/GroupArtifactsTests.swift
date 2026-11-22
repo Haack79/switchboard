@@ -47,14 +47,14 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 
 /// A group link that the user added.
 private func groupLink(
-  _ url: String = artifactShortURL, id: String = "l1", title: String? = nil, by author: Author = .you, t: Int64
+  _ url: String = artifactShortURL, id: String = "l1", title: String? = nil, by author: LinkAuthor = .you, t: Int64
 ) -> ExternalLink {
   ExternalLink(id: id, title: title ?? url, url: url, by: author, t: t)
 }
 
 /// The row that `GroupArtifact(link:)` derives from a link that it must accept.
 private func linkRow(
-  _ url: String = artifactShortURL, id: String = "l1", title: String? = nil, by author: Author = .you, t: Int64
+  _ url: String = artifactShortURL, id: String = "l1", title: String? = nil, by author: LinkAuthor = .you, t: Int64
 ) throws -> GroupArtifact {
   try #require(GroupArtifact(link: groupLink(url, id: id, title: title, by: author, t: t)))
 }

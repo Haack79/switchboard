@@ -47,12 +47,12 @@ extension MCPToolServer {
   static let sessionTools: [Tool] = [
     Tool(
       "list_sessions",
-      "Lists the sessions, with the ones that need the user first. Each one shows its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as the last reply, notes, cards, and artifacts.",
+      "Lists the sessions, with the ones that need the user first. Each one shows its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as the last reply, notes, cards, artifacts, and links.",
       ["full": full]
     ),
     Tool(
       "get_session",
-      "Shows one session: its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as its folder, branch, last reply, notes, cards, its group's name and description, and its artifacts. Get the full form before you act on the session.",
+      "Shows one session: its id, name, url, state, reason, PR, and open waits. Pass `full: true` for every field, such as its folder, branch, last reply, notes, cards, its group's name and description, and its artifacts and links. Get the full form before you act on the session.",
       ["session": session, "full": full],
       required: ["session"]),
     Tool(

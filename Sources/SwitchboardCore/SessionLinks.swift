@@ -1,0 +1,80 @@
+import CryptoKit
+import Foundation
+
+/// A Slack message that the session sent through the claude.ai Slack connector, as its hook says.
+public enum SlackSendCall {
+  static let toolName = "mcp__claude_ai_Slack__slack_send_message"
+
+  /// The link and target of the message that the event records as sent, or nil for any other event. The result
+  /// comes from a tool that the model drives, so each condition refuses what it does not recognize. A draft, a
+  /// failure, and a result whose link does not name the message it reports add nothing.
+  public static func parse(_ event: Event) -> (url: String, target: LinkTarget)? {
+    guard event.kind == "PostToolUse", event.data["tool_name"]?.string == toolName,
+      let result = resultObject(event.data["tool_response"]), let url = result["message_link"]?.string,
+      let target = LinkTarget.parse(url), target.kind == .slack
+    else { return nil }
+    if let context = result["message_context"] {
+      guard context["channel_id"]?.string == target.channel, context["message_ts"]?.string == target.messageTs else {
+        return nil
+      }
+    }
+    return (url, target)
+  }
+
+  /// The result's JSON object: the object itself, or the JSON text of the first text block of an MCP content array.
+  private static func resultObject(_ response: JSON?) -> [String: JSON]? {
+    switch response {
+    case .object(let object):
+      return object
+    case .array(let blocks):
+      guard let text = blocks.first(where: { $0["type"]?.string == "text" })?["text"]?.string else { return nil }
+      return JSON.parse(text)?.object
+    default:
+      return nil
+    }
+  }
+}
+
+extension ExternalLink {
+  /// The id of a link that sbd found, from its target key, so a replay gives the same id. `f` keeps it apart from
+  /// the `l` ids of added links. When an id in `taken` has it already, the next try hashes the key with `#1`,
+  /// `#2`, and so on.
+  public static func foundId(key: String, taken: [String]) -> String {
+    let alphabet = Array(ShortId.alphabet)
+    var attempt = 0
+    while true {
+      let digest = Array(SHA256.hash(data: Data((attempt == 0 ? key : "\(key)#\(attempt)").utf8)))
+      let id = "f" + String((0..<ShortId.length).map { alphabet[Int(digest[$0]) % alphabet.count] })
+      if !taken.contains(id) { return id }
+      attempt += 1
+    }
+  }
+}
+
+extension SessionFacts {
+  /// Records the links of known kinds in a prompt, and the link of a Slack message that the session sent. A link
+  /// whose page the list already holds changes nothing, so the first sighting's URL and time stay.
+  mutating func applyLinks(_ event: Event) {
+    switch event.kind {
+    case "UserPromptSubmit":
+      // A subagent's result arrives as a prompt but is model output.
+      guard !event.fromSubagent, let prompt = event.data["prompt"]?.string, !Attention.isSubagentResult(prompt)
+      else { return }
+      for url in LinkScan.urls(in: prompt) {
+        if let target = LinkTarget.parse(url) { addFoundLink(url: url, target: target, t: event.t) }
+      }
+    case "PostToolUse":
+      if let sent = SlackSendCall.parse(event) { addFoundLink(url: sent.url, target: sent.target, t: event.t) }
+    default:
+      break
+    }
+  }
+
+  private mutating func addFoundLink(url: String, target: LinkTarget, t: Int64) {
+    guard !links.contains(where: { $0.linkTarget?.key == target.key }) else { return }
+    links.append(
+      ExternalLink(
+        id: ExternalLink.foundId(key: target.key, taken: links.map(\.id)), title: target.title, url: url,
+        by: .found, t: t))
+  }
+}

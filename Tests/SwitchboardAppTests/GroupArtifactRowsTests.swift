@@ -38,7 +38,7 @@ private func rows(
 }
 
 /// A group link to an artifact, added five minutes before `now`.
-private func groupLink(url: String = shortLink, by author: Author = .you) -> ExternalLink {
+private func groupLink(url: String = shortLink, by author: LinkAuthor = .you) -> ExternalLink {
   ExternalLink(id: "l1", title: "Flag evaluations plan", url: url, by: author, t: now - 5 * minute)
 }
 
@@ -149,8 +149,8 @@ private func linkRow(_ link: ExternalLink = groupLink()) throws -> GroupArtifact
 
   // MARK: A row from a group link
 
-  @Test(arguments: [(Author.you, "added by you"), (.claude, "added by Claude")])
-  func aLinkOnlyRowIsLabeledWithWhoAddedTheLink(_ author: Author, _ label: String) throws {
+  @Test(arguments: [(LinkAuthor.you, "added by you"), (.claude, "added by Claude")])
+  func aLinkOnlyRowIsLabeledWithWhoAddedTheLink(_ author: LinkAuthor, _ label: String) throws {
     let link = groupLink(by: author)
 
     #expect(rows([try linkRow(link)], links: [link]).map(\.sessionLabel) == [label])

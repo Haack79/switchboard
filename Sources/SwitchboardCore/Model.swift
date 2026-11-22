@@ -340,6 +340,9 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var plans: [PlanSummary]?
   /// The artifacts that the session published, in first-publish order, or nil when there are none.
   public var artifacts: [SessionArtifact]?
+  /// The links of known kinds that sbd found in the session's prompts and sent Slack messages, in first-sighting
+  /// order, or nil when there are none.
+  public var links: [ExternalLink]?
   /// When sbd last started a fresh conversation for the operator, or nil before the first one and for other kinds.
   public var conversationStarted: Int64?
   /// The review that a docket row tracks, or nil for any other session.

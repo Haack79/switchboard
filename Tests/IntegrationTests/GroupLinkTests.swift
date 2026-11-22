@@ -690,4 +690,36 @@ import Testing
     #expect(try sbd.groupLinks(flags.id).map(\.id) == [mine])
     #expect(try sbd.groupLinks(billing.id).map(\.id) == [theirs])
   }
+
+  // MARK: kind
+
+  /// Decoding into `ExternalLink` drops the derived keys, so this reads the raw JSON.
+  @Test func sbGroupLsJsonShowsTheKindOfEachLink() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+    _ = try linkAdd(sbd, "Flags", SlackExample.reply)
+    _ = try linkAdd(sbd, "Flags", Self.rfc)
+
+    let links = try #require(try sbd.groupEntry(g.id)?["links"]?.array)
+
+    let slack = try #require(links.first { $0["url"]?.string == SlackExample.reply })
+    let rfc = try #require(links.first { $0["url"]?.string == Self.rfc })
+    #expect(slack["kind"]?.string == "slack")
+    #expect(slack["channel"]?.string == SlackExample.channel)
+    #expect(slack["thread"]?.string == SlackExample.rootTs)
+    #expect(rfc["kind"]?.string == "web")
+    #expect(rfc["channel"] == nil)
+    #expect(rfc["thread"] == nil)
+  }
+
+  /// `found` is only for links that sbd derives, so `group-link-add` refuses it as `by`.
+  @Test func aRawAddByFoundIsRefused() throws {
+    let sbd = try Instance()
+    let g = try shared.add(sbd, "Flags")
+
+    let message = failure(sbd, "group-link-add", ["group": "Flags", "url": .string(Self.rfc), "by": "found"])
+
+    #expect(message != "no error")
+    #expect(try sbd.groupLinks(g.id).isEmpty)
+  }
 }

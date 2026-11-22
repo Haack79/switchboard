@@ -14,7 +14,9 @@ import Testing
     return g
   }
 
-  func link(_ id: String, _ url: String, title: String? = nil, by author: Author = .you, t: Int64 = 1) -> ExternalLink {
+  func link(_ id: String, _ url: String, title: String? = nil, by author: LinkAuthor = .you, t: Int64 = 1)
+    -> ExternalLink
+  {
     ExternalLink(id: id, title: title ?? url, url: url, by: author, t: t)
   }
 
@@ -330,5 +332,144 @@ import Testing
 
     #expect(merged.links?.map(\.title) == ["Tracker"])
     #expect(merged.links?.map(\.by) == [.you])
+  }
+
+  // MARK: Kind, channel, and thread
+
+  static let rfc = "https://example.com/rfcs/flag-evaluations"
+  static let storedKeys: Set<String> = ["id", "title", "url", "by", "t"]
+
+  /// The link's JSON as `JSONCoding` writes it, for groups on disk and on the wire alike.
+  func encoded(_ link: ExternalLink) throws -> [String: JSON] {
+    try #require(JSON.parse(try JSONCoding.encode(link))?.object)
+  }
+
+  /// A group that main stored has links with the five stored keys and `by` of `you` or `claude`.
+  @Test func aGroupStoredByMainDecodesItsLinksUnchanged() throws {
+    let stored =
+      #"{"id":"g1","name":"Flags","notes":[],"created":0,"links":["#
+      + #"{"id":"l1","title":"Flags RFC","url":"https://example.com/rfcs/flag-evaluations","by":"you","t":7},"#
+      + #"{"id":"l2","title":"https://claude.ai/artifact/AbCdEfGhIjKlMnOpQrStUv","#
+      + #""url":"https://claude.ai/artifact/AbCdEfGhIjKlMnOpQrStUv","by":"claude","t":9}]}"#
+
+    let g = try JSONCoding.decode(SessionGroup.self, from: stored)
+
+    #expect(
+      g.links == [
+        ExternalLink(id: "l1", title: "Flags RFC", url: Self.rfc, by: .you, t: 7),
+        ExternalLink(id: "l2", title: artifactShortURL, url: artifactShortURL, by: .claude, t: 9),
+      ])
+    #expect(g.links?.first?.by == .you)
+  }
+
+  @Test func aStoredFoundLinkDecodesAsFound() throws {
+    let stored =
+      #"{"id":"fab2cd","title":"Linear ENG-123","url":"https://linear.app/example/issue/ENG-123","by":"found","t":3}"#
+
+    let link = try JSONCoding.decode(ExternalLink.self, from: stored)
+
+    #expect(link.by == .found)
+  }
+
+  /// Decoding ignores a stored `kind`, `channel`, and `thread`. The URL alone gives them.
+  @Test func aStoredKindChannelAndThreadAreIgnoredOnDecode() throws {
+    let stored =
+      #"{"id":"l1","title":"RFC","url":"https://example.com/rfcs/flag-evaluations","by":"you","t":7,"#
+      + #""kind":"slack","channel":"C0EXAMPLE01","thread":"1794965000.000100"}"#
+
+    let link = try JSONCoding.decode(ExternalLink.self, from: stored)
+
+    #expect(link == ExternalLink(id: "l1", title: "RFC", url: Self.rfc, by: .you, t: 7))
+    #expect(link.kind == .web)
+    #expect(link.linkTarget?.channel == nil)
+    #expect(link.linkTarget?.thread == nil)
+  }
+
+  @Test func aSlackLinksChannelAndThreadComeFromItsURL() {
+    let link = ExternalLink(id: "l1", title: "Thread", url: LinkFixtures.slackReply, by: .you, t: 1)
+
+    #expect(link.kind == .slack)
+    #expect(link.linkTarget?.channel == LinkFixtures.channel)
+    #expect(link.linkTarget?.thread == LinkFixtures.rootTs)
+  }
+
+  @Test func anEncodedSlackLinkHasExactlyTheStoredKeysAndKindChannelThread() throws {
+    let link = ExternalLink(id: "l1", title: "Thread", url: LinkFixtures.slackReply, by: .you, t: 1)
+
+    let json = try encoded(link)
+
+    #expect(Set(json.keys) == Self.storedKeys.union(["kind", "channel", "thread"]))
+    #expect(json["kind"]?.string == "slack")
+    #expect(json["channel"]?.string == LinkFixtures.channel)
+    #expect(json["thread"]?.string == LinkFixtures.rootTs)
+  }
+
+  @Test func anEncodedRFCLinkIsWebWithoutChannelOrThread() throws {
+    let link = ExternalLink(id: "l1", title: "RFC", url: Self.rfc, by: .you, t: 7)
+
+    let json = try encoded(link)
+
+    #expect(Set(json.keys) == Self.storedKeys.union(["kind"]))
+    #expect(json["kind"]?.string == "web")
+  }
+
+  /// The kind list has no `artifact`, so a claude.ai artifact link is `web`.
+  @Test(arguments: [artifactShortURL, artifactCodeURL]) func anArtifactLinkIsWeb(_ url: String) throws {
+    let link = ExternalLink(id: "l1", title: url, url: url, by: .claude, t: 7)
+
+    let json = try encoded(link)
+
+    #expect(link.kind == .web)
+    #expect(json["kind"]?.string == "web")
+    #expect(Set(json.keys) == Self.storedKeys.union(["kind"]))
+  }
+
+  @Test(arguments: [
+    (LinkFixtures.linear, "linear"), (LinkFixtures.notion, "notion"), (LinkFixtures.google, "google"),
+    (LinkFixtures.grafana, "grafana"), (LinkFixtures.githubPR, "web"),
+  ])
+  func anEncodedLinkOfAnotherKindHasItsKindAndNoChannelOrThread(_ url: String, _ kind: String) throws {
+    let json = try encoded(ExternalLink(id: "l1", title: "Page", url: url, by: .you, t: 7))
+
+    #expect(json["kind"]?.string == kind)
+    #expect(Set(json.keys) == Self.storedKeys.union(["kind"]))
+  }
+
+  @Test(arguments: [
+    ExternalLink(id: "l1", title: "Thread", url: LinkFixtures.slackReply, by: .you, t: 1),
+    ExternalLink(id: "l2", title: "RFC", url: "https://example.com/rfcs/flag-evaluations", by: .you, t: 7),
+    ExternalLink(id: "l3", title: artifactShortURL, url: artifactShortURL, by: .claude, t: 9),
+    ExternalLink(id: "fab2cd", title: "Linear ENG-123", url: LinkFixtures.linear, by: .found, t: 11),
+  ])
+  func aLinkSurvivesEncoding(_ link: ExternalLink) throws {
+    let decoded = try JSONCoding.decode(ExternalLink.self, from: try JSONCoding.encode(link))
+
+    #expect(decoded == link)
+  }
+
+  /// A group that sbd saves after this change writes `kind` into its stored JSON, and decodes back equal.
+  @Test func aGroupWithASlackLinkWritesItsKindAndDecodesEqual() throws {
+    let g = group(
+      "g1", "Flags", links: [ExternalLink(id: "l1", title: "Thread", url: LinkFixtures.slackRoot, by: .you, t: 1)])
+
+    let text = try JSONCoding.encode(g)
+
+    let link = try #require(JSON.parse(text)?["links"]?.array?.first)
+    #expect(link["kind"]?.string == "slack")
+    #expect(link["thread"]?.string == LinkFixtures.rootTs)
+    #expect(try JSONCoding.decode(SessionGroup.self, from: text) == g)
+  }
+
+  @Test func aGroupSummaryWritesTheKindOfEachLink() throws {
+    let g = group(
+      "g1", "Flags",
+      links: [
+        ExternalLink(id: "l1", title: "Thread", url: LinkFixtures.slackRoot, by: .you, t: 1),
+        ExternalLink(id: "l2", title: "RFC", url: Self.rfc, by: .you, t: 2),
+      ])
+
+    let json = try #require(JSON.parse(try JSONCoding.encode(GroupSummary(g, sessions: []))))
+
+    #expect(json["links"]?.array?.compactMap { $0["kind"]?.string } == ["slack", "web"])
   }
 }

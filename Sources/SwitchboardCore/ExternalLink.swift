@@ -7,7 +7,7 @@ public struct ExternalLink: Codable, Equatable, Sendable, Identifiable {
   public var id: String
   public var title: String
   public var url: String
-  public var by: Author
+  public var by: LinkAuthor
   /// Milliseconds since the epoch.
   public var t: Int64
 
@@ -16,13 +16,40 @@ public struct ExternalLink: Codable, Equatable, Sendable, Identifiable {
   /// The longest URL, in characters.
   public static let urlLimit = 2000
 
-  public init(id: String, title: String, url: String, by: Author, t: Int64) {
+  public init(id: String, title: String, url: String, by: LinkAuthor, t: Int64) {
     self.id = id
     self.title = title
     self.url = url
     self.by = by
     self.t = t
   }
+
+  /// The page that the URL names, or nil for a link of no known kind.
+  public var linkTarget: LinkTarget? { LinkTarget.parse(url) }
+  /// The kind of page that the URL names: the kind that `LinkTarget.parse(_:)` finds, else `web`.
+  public var kind: LinkKind { linkTarget?.kind ?? .web }
+
+  private enum CodingKeys: String, CodingKey { case id, title, url, by, t }
+  private enum DerivedKeys: String, CodingKey { case kind, channel, thread }
+
+  /// Writes the stored fields and the fields that the URL gives. Decoding reads only the stored fields, so the URL
+  /// stays the one source of the derived ones.
+  public func encode(to encoder: any Encoder) throws {
+    var stored = encoder.container(keyedBy: CodingKeys.self)
+    try stored.encode(id, forKey: .id)
+    try stored.encode(title, forKey: .title)
+    try stored.encode(url, forKey: .url)
+    try stored.encode(by, forKey: .by)
+    try stored.encode(t, forKey: .t)
+    let target = linkTarget
+    var derived = encoder.container(keyedBy: DerivedKeys.self)
+    try derived.encode(target?.kind ?? .web, forKey: .kind)
+    try derived.encodeIfPresent(target?.channel, forKey: .channel)
+    try derived.encodeIfPresent(target?.thread, forKey: .thread)
+  }
+
+  /// Who put the link there and how long ago, such as "found 3 min ago" or "added by Claude 2 h ago".
+  public func caption(now: Int64 = nowMs()) -> String { "\(by.phrase) \(ago(t, now: now)) ago" }
 
   /// The URL that two links to the same page share: the normalized form of a claude.ai artifact link, else the URL.
   var target: String { ArtifactLink.normalized(url) ?? url }
@@ -47,5 +74,29 @@ public struct ExternalLink: Codable, Equatable, Sendable, Identifiable {
   public static func cleanTitle(_ text: String?, url: String) throws -> String {
     if let title = try SessionGroup.cleanLine(text, limit: titleLimit, noun: "a link title") { return title }
     return url.count <= titleLimit ? url : String(url.prefix(titleLimit - 1)) + "…"
+  }
+}
+
+/// Who put a link on a session or a group.
+public enum LinkAuthor: String, Codable, Sendable {
+  /// sbd found the link in the session's events.
+  case found
+  case you
+  case claude
+
+  public init(_ author: Author) {
+    switch author {
+    case .you: self = .you
+    case .claude: self = .claude
+    }
+  }
+
+  /// "found", "added by you", or "added by Claude".
+  public var phrase: String {
+    switch self {
+    case .found: "found"
+    case .you: "added by you"
+    case .claude: "added by Claude"
+    }
   }
 }

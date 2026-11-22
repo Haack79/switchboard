@@ -58,7 +58,8 @@ extension Service {
           }
         }
         let title = try ExternalLink.cleanTitle(args["title"]?.string, url: url)
-        guard group.addLink(ExternalLink(id: shortId("l"), title: title, url: url, by: by, t: nowMs())) else {
+        guard group.addLink(ExternalLink(id: shortId("l"), title: title, url: url, by: LinkAuthor(by), t: nowMs()))
+        else {
           throw APIError("\(group.name) already has a link to \(url)")
         }
       }
