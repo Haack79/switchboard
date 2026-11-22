@@ -382,7 +382,7 @@ extension Service {
       id: id, name: name ?? c.title, cwd: c.cwd, branch: c.branch, claudeSessionId: c.id, created: nowMs())
     session.started = true
     session.claudeConfigDir = c.account
-    session.autoMode = config.autoMode
+    session.autoMode = defaultAutoMode
     entries[id] = Entry(session: session)
     try store.save(session)
     forget(c.id)
