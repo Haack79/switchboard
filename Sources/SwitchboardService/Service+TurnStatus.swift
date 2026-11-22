@@ -96,7 +96,7 @@ extension Service {
   func claudeAccount(of id: String) -> SessionAccount {
     if let host = entries[id]?.session.host { return .host(host) }
     let folder = localAccountFolder(of: id)
-    return codexName(folder) == nil ? .local(ClaudeAccount(folder: folder)) : .codex(CodexAccount(folder: folder))
+    return claudeAccount(folder: folder).map(SessionAccount.local) ?? .codex(CodexAccount(folder: folder))
   }
 
   /// The folder of the session's transcript account, else the one that its pane sets.
