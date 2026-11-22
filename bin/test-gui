@@ -41,6 +41,9 @@
 # The multiselect check clicks one row in the sidebar through the app's ShellSelfTest commands, adds another
 # row to the selection as a ⌘-click does, checks that the detail pane shows "2 sessions selected", clicks
 # Delete 2 Sessions…, and checks that the confirmation opens and that sbd still lists both sessions.
+# The settings check sends ⌘, through the app's ShellSelfTest commands and checks that it runs Settings… and
+# shows the Settings window at General. It then opens Settings at Issues the way the Issues view's gear button
+# does and checks that the window shows the Issues tab.
 # The boardselect check starts on the Board and drives its cards through the app's ShellSelfTest commands. It
 # checks that a click selects a card and stays on the Board, that ⌘-click adds a card, that ⇧-click adds the
 # cards between, that a click on empty space clears the selection, that a drag from empty space selects the
@@ -53,7 +56,7 @@
 # and checks that three keys in its terminal start it once, that a click starts it,
 # and that a drag does not.
 # Arguments name the checks to run (terminal, relaunch, drafts, shell, drops, keys, slash, multiselect,
-# boardselect, boarddrag, wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
+# settings, boardselect, boarddrag, wake). With none, it runs them all. SB_GUI_SKIP names checks to leave out, separated by spaces.
 # The script ends the app, sbd, the tmux server, the stand-in, and its folder
 # in /tmp when it exits, whether or not the checks passed. It keeps the app's
 # log, the screen, and the pane PNGs in .build/gui-test/terminal. After any
@@ -68,9 +71,9 @@ checks=("$@")
 read -r -a skips <<<"${SB_GUI_SKIP:-}"
 for name in ${checks[@]+"${checks[@]}"} ${skips[@]+"${skips[@]}"}; do
   case $name in
-  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | boardselect | boarddrag | wake) ;;
+  terminal | relaunch | drafts | shell | drops | keys | slash | multiselect | settings | boardselect | boarddrag | wake) ;;
   *)
-    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, boardselect, boarddrag, and wake." >&2
+    echo "bin/test-gui has no check named $name. The checks are terminal, relaunch, drafts, shell, drops, keys, slash, multiselect, settings, boardselect, boarddrag, and wake." >&2
     exit 2
     ;;
   esac
@@ -836,6 +839,42 @@ check_multiselect() {
 }
 
 if wants multiselect; then check_multiselect; fi
+
+check_settings() {
+  check=settings
+  local shots="$home/shots/settings" result
+  mkdir "$shots"
+  echo "Checking the Settings window…"
+  new_session settings-one
+  shows() { [ "$(app where)" = "session(\"$1\")" ]; }
+  settings_is() { [ "$(app settings)" = "$1" ]; }
+  start_app() {
+    SB_SELECT="$session" SB_SHELL_TEST="$shots" "$bin_dir/Switchboard" >>"$shots/app.log" 2>&1 &
+    app_pid=$!
+    wait_for 60 shows "$session" || fail "the app did not select $session: $(app where)"
+  }
+
+  # The gear's path opens Settings from a closed window, so it fails when MenuBarLabel doesn't register the opener.
+  # ⌘, then needs a launch of its own, because a Settings window that is already open would pass it without the key.
+  start_app
+  settings_is hidden || fail "the Settings window shows before the gear: $(app settings)"
+  result=$(app open-settings issues)
+  [ "$result" = opened ] || fail "the app could not open Settings at Issues: $result"
+  wait_for 10 settings_is "shown issues" || fail "the gear's path did not show Settings at Issues: $(app settings)"
+  end_app
+
+  start_app
+  settings_is hidden || fail "the Settings window shows before ⌘,: $(app settings)"
+  result=$(app settings-key)
+  # The hidden test app may not refresh a menu item's state, so an enabled Settings… that owns ⌘, also counts.
+  [[ $result == ", ran Settings…" || $result == *"(Settings… is enabled)" ]] || fail "⌘, did not run Settings…: $result"
+  wait_for 10 settings_is "shown general" || fail "⌘, did not show Settings at General: $(app settings)"
+  end_app
+  save_shots
+  echo "ok: settings (⌘, runs Settings…, the window shows General, the gear's path shows Issues)"
+}
+
+if wants settings; then check_settings; fi
 
 check_boardselect() {
   check=boardselect
