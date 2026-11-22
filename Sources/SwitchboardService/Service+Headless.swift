@@ -7,7 +7,10 @@ extension Service {
   /// The environment of a turn under a Claude account. With `session`, the
   /// turn takes the session's pane environment and account. Without one, it
   /// takes `config.env`. `account` overrides either. The turn is not a
-  /// session, so it gets no session id. `base` is sbd's own environment.
+  /// session, so it gets no session id. `base` is sbd's own environment. A
+  /// turn whose account would be a Codex folder runs under `triage.account`,
+  /// or else the active account, because claude would write Claude files into
+  /// the Codex folder. It reads the state, so it runs on the state queue.
   func headlessEnv(
     session: String?, account: ClaudeAccount?, base: [String: String] = ProcessInfo.processInfo.environment
   ) -> [String: String] {
@@ -23,6 +26,9 @@ extension Service {
     }
     env["SB_SESSION_ID"] = nil
     account?.apply(to: &env)
+    if let folder = env["CLAUDE_CONFIG_DIR"], codexName(folder) != nil {
+      (triageClaudeAccount ?? activeAccount).apply(to: &env)
+    }
     return env
   }
 

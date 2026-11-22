@@ -45,7 +45,7 @@ extension Service {
       let built = TopupCandidates.build(
         repo: gate.repo, group: gate.group, issues: lists.issues, openPRs: lists.openPRs,
         sessions: coverageRows(gate: gate), followups: followups, viewer: issueCache.viewer, team: issueSettings.team)
-      let env = headlessEnv(session: holder, account: config.triage.account.map(ClaudeAccount.init(folder:)))
+      let env = headlessEnv(session: holder, account: triageClaudeAccount)
       return (holder, built, env)
     }
     guard let setup else {

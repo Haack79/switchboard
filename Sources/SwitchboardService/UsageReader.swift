@@ -1,9 +1,9 @@
 import Foundation
 import SwitchboardCore
 
-/// Reads each Claude account's plan usage from the endpoint that claude's
-/// `/usage` reads, on a timer and when `sb usage` asks. One read runs at a
-/// time, on `queue`. The last reading of each account stays in `readings`,
+/// Reads each account's plan usage on a timer and when `sb usage` asks: a
+/// Claude account's from the endpoint that claude's `/usage` reads, a Codex
+/// account's from its newest rollout. One read runs at a time, on `queue`. The last reading of each account stays in `readings`,
 /// which any thread may read. `lock` guards `readings`, so the reader is
 /// Sendable.
 final class UsageReader: @unchecked Sendable {
@@ -38,9 +38,9 @@ final class UsageReader: @unchecked Sendable {
   /// The last reading of each account, in the order of `sb account`. An
   /// account that was never read has no limits.
   func latest() -> [AccountUsage] {
-    let accounts = service.queue.sync { service.listedAccounts().compactMap(\.claude) }
+    let accounts = service.queue.sync { service.listedAccounts() }
     return lock.withLock {
-      accounts.map { readings[$0.folder] ?? AccountUsage(name: $0.name, folder: $0.folder) }
+      accounts.map { readings[$0.folder] ?? AccountUsage(name: $0.name, folder: $0.folder, agent: $0.agent) }
     }
   }
 
@@ -59,12 +59,12 @@ final class UsageReader: @unchecked Sendable {
 
   /// Reads one account now and returns the reading. The caller must not be on
   /// the service's queue.
-  func read(_ account: ClaudeAccount) -> AccountUsage {
+  func read(_ account: Account) -> AccountUsage {
     queue.sync { keep([reading(account)])[0] }
   }
 
   private func readAll() -> [AccountUsage] {
-    let accounts = service.queue.sync { service.listedAccounts().compactMap(\.claude) }
+    let accounts = service.queue.sync { service.listedAccounts() }
     return keep(concurrentMap(accounts) { reading($0) })
   }
 
@@ -80,6 +80,13 @@ final class UsageReader: @unchecked Sendable {
         readings[reading.folder] = reading
         return reading
       }
+    }
+  }
+
+  private func reading(_ account: Account) -> AccountUsage {
+    switch account {
+    case .claude(let claude): reading(claude)
+    case .codex(let codex): reading(codex)
     }
   }
 
@@ -164,6 +171,48 @@ final class UsageReader: @unchecked Sendable {
     _ = try? runCommand(claude, ["mcp", "get", "switchboard-usage-refresh"], env: env, timeout: 30)
   }
 
+  /// The limits of the account's newest rollout, after `codex login status`
+  /// says the account is signed in. A reading's `checked` is the time Codex
+  /// reported the limits. Without a rollout that has them, the reading has
+  /// no limits and no error.
+  private func reading(_ account: CodexAccount) -> AccountUsage {
+    var usage = AccountUsage(name: account.name, folder: account.folder, agent: .codex, source: "rollout")
+    do {
+      try requireCodexLogin(account)
+      if let rollout = CodexRollout.rateLimits(home: account.folder) {
+        usage.limits = rollout.limits
+        usage.checked = rollout.checked
+      }
+    } catch {
+      usage.fail(with: error)
+    }
+    return usage
+  }
+
+  /// How long `codex login status` may take before the reading records an error.
+  private static let codexLoginTimeout = 10.0
+
+  /// Throws `SignedOut` when `codex login status` exits 1, and another error
+  /// when it fails otherwise or takes longer than `codexLoginTimeout`. A
+  /// keyring login leaves no auth.json, so only codex can tell.
+  private func requireCodexLogin(_ account: CodexAccount) throws {
+    let program = service.config.codex
+    guard let codex = findExecutable(program) else { throw APIError("can't find \(program)") }
+    var env = ProcessInfo.processInfo.environment
+    account.apply(to: &env)
+    let started = Date()
+    let r = try runCommand(codex, ["login", "status"], env: env, timeout: Self.codexLoginTimeout)
+    switch r.status {
+    case 0: return
+    case 1: throw SignedOut(login: account.loginCommand, then: "")
+    case _ where Date().timeIntervalSince(started) >= Self.codexLoginTimeout:
+      throw APIError("`codex login status` did not answer within \(Int(Self.codexLoginTimeout)) s")
+    default:
+      let detail = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+      throw APIError("`codex login status` exited with status \(r.status)\(detail.isEmpty ? "" : ": \(detail)")")
+    }
+  }
+
   private func fetch(_ token: String) throws -> Data {
     guard let url = URL(string: settings.url) else { throw APIError("usage.url \(settings.url) is not a URL") }
     var request = URLRequest(url: url, timeoutInterval: 15)
@@ -208,8 +257,11 @@ extension AccountUsage {
   }
 }
 
-/// The account has no credentials, so claude would ask for /login.
+/// The account has no credentials, so its agent would ask for a login.
 struct SignedOut: Error, CustomStringConvertible {
+  /// The command that starts the login.
   var login: String
-  var description: String { "not signed in; run `\(login)` and /login" }
+  /// What the user does once `login` runs. claude needs /login. codex login signs in by itself.
+  var then = " and /login"
+  var description: String { "not signed in; run `\(login)`\(then)" }
 }

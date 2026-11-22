@@ -139,6 +139,7 @@ extension Service {
       let id = try lookup(args)
       let s = entries[id]!.session
       guard s.waitsToStart else { throw APIError("\(mention(id)) isn't a follow-up that waits to start") }
+      if let name = codexName(followupAccount(s)) { throw APIError(Self.codexRefusal(name)) }
       guard starting.insert(id).inserted else { throw APIError("\(mention(id)) is starting") }
       return s
     }
@@ -169,7 +170,7 @@ extension Service {
         s.branch = folder.branch
         s.repo = folder.repo
         s.model = s.model ?? config.model
-        s.claudeConfigDir = accountGroupForNew(s)?.account ?? s.claudeConfigDir ?? activeAccount.folder
+        s.claudeConfigDir = followupAccount(s)
         s.done = false
         s.followup?.started = nowMs()
       }

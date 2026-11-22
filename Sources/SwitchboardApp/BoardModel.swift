@@ -934,6 +934,17 @@ final class BoardModel: ObservableObject {
   /// The account that new sessions without a parent use.
   var activeAccount: AccountInfo? { accounts.first(where: \.active) }
 
+  /// The accounts that sessions can run on, which the New Session sheet, the group account menu, and the move
+  /// menus offer. sbd lists Codex accounts, but runs no session on one yet.
+  var sessionAccounts: [AccountInfo] {
+    accounts.filter {
+      switch $0.agent {
+      case .claude: true
+      case .codex: false
+      }
+    }
+  }
+
   /// The active account's folder. It is the default folder until the accounts load.
   var activeAccountFolder: String { activeAccount?.folder ?? ClaudeAccount.defaultFolder }
 
@@ -955,7 +966,7 @@ final class BoardModel: ObservableObject {
   /// gets no offer, because a moved session's next resume would ask for /login.
   var moveTarget: AccountInfo? {
     guard let active = activeAccount, usage.first(where: { $0.folder == active.folder })?.signedOut != true,
-      accounts.contains(where: { !$0.active && $0.sessions > 0 })
+      sessionAccounts.contains(where: { !$0.active && $0.sessions > 0 })
     else { return nil }
     return active
   }
@@ -2081,5 +2092,5 @@ struct AccountSwitch: Identifiable {
   /// False when the change only moves sessions to the active account.
   var switches: Bool
   var id: String { folder }
-  var name: String { ClaudeAccount(folder: folder).name }
+  var name: String { Account.name(ofFolder: folder) }
 }

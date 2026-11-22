@@ -50,20 +50,6 @@ public struct ClaudeAccount: Hashable, Sendable {
     return last.hasPrefix(".claude-") ? String(last.dropFirst(".claude-".count)) : last
   }
 
-  /// The account that `ref` names: a short name from `name`, or a folder.
-  /// Throws when no known account matches, or when the folder holds no
-  /// account.
-  public static func resolve(_ ref: String, among known: [ClaudeAccount]) throws -> ClaudeAccount {
-    if let match = known.first(where: { $0.name == ref }) { return match }
-    let account = ClaudeAccount(folder: ref)
-    guard account.holdsAccount else {
-      let names = known.map(\.name).joined(separator: ", ")
-      throw APIError(
-        "\(ref) is no Claude account (no .claude.json in \(account.folder)). Known accounts: \(names)")
-    }
-    return account
-  }
-
   /// The default account, then each ~/.claude-* folder that holds a .claude.json, by name.
   public static func discover(home: String = NSHomeDirectory()) -> [ClaudeAccount] {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []

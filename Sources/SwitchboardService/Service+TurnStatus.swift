@@ -75,6 +75,8 @@ extension Service {
       guard entries[id]?.turnProbe.check(activity: activity, now: now) == true else { continue }
       let site = self.site(for: e.session)
       let account = claudeAccount(of: id)
+      // `claude agents` must not run under a folder that became a Codex account while its claude ran.
+      if case .local(let local) = account, codexName(local.folder) != nil { continue }
       let check = TurnCheck(id: id, claudeSessionId: e.session.claudeSessionId, activity: activity)
       if let i = due.firstIndex(where: { $0.site === site && $0.account == account }) {
         due[i].checks.append(check)

@@ -214,9 +214,17 @@ extension Service {
   /// The account of a one-shot call that sbd makes for the session `id`: `triage.account` when it is set, or else
   /// the session's own. `key` is the account that the call's quota counts against. `account` is the override that
   /// `headlessEnv` applies, nil when the call takes the session's pane environment.
+  /// A session whose account is a Codex folder takes the active account, because claude can't run under Codex's.
   func triageAccount(for id: String) -> (key: String, account: ClaudeAccount?) {
-    let account = config.triage.account.map(ClaudeAccount.init(folder:))
-    return (account?.folder ?? claudeAccount(of: id).key, account)
+    if let account = triageClaudeAccount { return (account.folder, account) }
+    let own = claudeAccount(of: id)
+    if case .local(let account) = own, codexName(account.folder) != nil { return (activeAccount.folder, activeAccount) }
+    return (own.key, nil)
+  }
+
+  /// `triage.account`, or nil when it is unset or names a Codex folder.
+  var triageClaudeAccount: ClaudeAccount? {
+    config.triage.account.flatMap { codexName($0) == nil ? ClaudeAccount(folder: $0) : nil }
   }
 
   /// Starts each model call that `verdict` asks for: the turn's summary and the PR's merge brief.
