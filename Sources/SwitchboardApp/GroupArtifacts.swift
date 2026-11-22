@@ -44,7 +44,7 @@ struct GroupArtifactRows {
     -> String
   {
     if let session = artifact.session { return "by \(liveNames[session] ?? artifact.sessionName ?? session)" }
-    return group.links?.first(where: { $0.id == artifact.link })?.by == .claude ? "added by Claude" : "added by you"
+    return (group.links?.first(where: { $0.id == artifact.link })?.by ?? .you).phrase
   }
 
   static func linkTitle(_ group: GroupSummary) -> String? {

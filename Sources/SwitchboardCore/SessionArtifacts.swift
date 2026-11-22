@@ -65,7 +65,7 @@ public struct GroupArtifact: Codable, Equatable, Sendable {
 
   /// The row of a group link to a claude.ai artifact, or nil for a link that `ArtifactLink.normalized(_:)` refuses.
   /// Its `published` and `updated` are when the link was added.
-  public init?(link: GroupLink) {
+  public init?(link: ExternalLink) {
     guard let url = ArtifactLink.normalized(link.url) else { return nil }
     self.init(
       url: url, artifactId: ArtifactLink.artifactId(of: url), title: link.title, published: link.t, updated: link.t,
