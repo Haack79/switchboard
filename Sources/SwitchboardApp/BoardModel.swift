@@ -608,7 +608,7 @@ final class BoardModel: ObservableObject {
   }
 
   /// The Manager and a group chat count only while a prompt blocks them. The
-  /// toolbar star fills and turns the Needs you color while the Manager needs you.
+  /// toolbar's Manager icon fills and turns the Needs you color while the Manager needs you.
   var needsUser: [SessionSummary] { sessions.filter(Triage.needsYou) }
 
   /// The Manager conversations, newest activity first, as `sb manager ls` lists them.
@@ -616,7 +616,7 @@ final class BoardModel: ObservableObject {
     sessions.filter { $0.kind == .manager }.sorted(by: Manager.newestFirst)
   }
 
-  /// The Manager conversation that the toolbar star names while one waits on the user.
+  /// The Manager conversation that the toolbar's Manager icon names while one waits on the user.
   var waitingManager: SessionSummary? { managers.first { ChatMark($0).needsMeReason != nil } }
 
   /// The operator. It reads every listed session, because the filter can hide the operator.
