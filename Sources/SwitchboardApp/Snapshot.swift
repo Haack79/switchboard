@@ -325,15 +325,14 @@ enum Snapshot {
   /// labels under the selected segment of a segmented control, which draws its own label on top. `cacheDisplay`
   /// erases everything under the shapes instead, including the selected segment. This hides each such layer and masks
   /// its superlayer to leave out the shapes. It returns a function that puts both back. It leaves a layer alone
-  /// unless the mask can stand for it: the layer is the superlayer's last sublayer, the superlayer has no mask, and
+  /// unless the mask can stand for it: every visible sibling draws before the layer, the superlayer has no mask, and
   /// the layer and its sublayers draw only opaque solid rounded rects.
   static func applyKnockouts(_ layer: CALayer) -> () -> Void {
     var restores: [() -> Void] = []
     func visit(_ layer: CALayer) {
       guard !layer.isHidden else { return }
       if (layer.compositingFilter as? String) == "destOut" {
-        // The mask erases from every sublayer of the superlayer. The window erases only from the sublayers before it.
-        guard let parent = layer.superlayer, parent.sublayers?.last === layer, parent.mask == nil,
+        guard let parent = layer.superlayer, drawsLast(layer, in: parent), parent.mask == nil,
           let shapes = knockoutShapes(layer, in: parent)
         else {
           FileHandle.standardError.write(
@@ -363,20 +362,31 @@ enum Snapshot {
     return { restores.reversed().forEach { $0() } }
   }
 
+  /// Whether Core Animation draws every visible sibling of `layer` before it. The mask erases from every sublayer of
+  /// `parent`, and the window erases only from the sublayers drawn before the knockout. Core Animation draws siblings
+  /// in order of `zPosition`, then in array order.
+  private static func drawsLast(_ layer: CALayer, in parent: CALayer) -> Bool {
+    let siblings = (parent.sublayers ?? []).filter { !$0.isHidden }
+    return siblings.last === layer && siblings.allSatisfy { $0.zPosition == layer.zPosition }
+  }
+
   /// The outlines of what the knockout `layer` erases, in `parent`'s coordinates, or nil when something it draws is
   /// not an opaque solid rounded rect.
   private static func knockoutShapes(_ layer: CALayer, in parent: CALayer) -> [CGPath]? {
-    // A subclass such as CAShapeLayer or CATextLayer draws more than its background.
+    // A plain CALayer draws its background, border, shadow, contents, and sublayers, and its filters, mask, opacity,
+    // and transforms change them. A subclass such as CAShapeLayer or CATextLayer draws more.
     func isSolid(_ shape: CALayer) -> Bool {
-      type(of: shape) == CALayer.self && (shape.filters ?? []).isEmpty
-        && shape.contents == nil && shape.mask == nil && shape.borderWidth == 0 && shape.shadowOpacity == 0
+      type(of: shape) == CALayer.self && (shape.filters ?? []).isEmpty && (shape.backgroundFilters ?? []).isEmpty
+        && CATransform3DIsIdentity(shape.sublayerTransform) && shape.contents == nil && shape.mask == nil
+        && shape.borderWidth == 0 && shape.shadowOpacity == 0
         && shape.opacity == 1 && CATransform3DIsIdentity(shape.transform)
         && (shape.cornerRadius == 0 || shape.maskedCorners == Self.allCorners)
         && (shape.backgroundColor.map { $0.alpha == 1 } ?? true)
     }
     let sublayers = (layer.sublayers ?? []).filter { !$0.isHidden }
     guard isSolid(layer),
-      sublayers.allSatisfy({ isSolid($0) && $0.compositingFilter == nil && ($0.sublayers ?? []).isEmpty })
+      sublayers.allSatisfy({ isSolid($0) && $0.compositingFilter == nil && ($0.sublayers ?? []).isEmpty }),
+      !layer.masksToBounds || sublayers.allSatisfy({ layer.bounds.contains($0.frame) })
     else { return nil }
     return ([layer] + sublayers).filter { $0.backgroundColor != nil }.map { shape in
       let rect = shape.convert(shape.bounds, to: parent)
