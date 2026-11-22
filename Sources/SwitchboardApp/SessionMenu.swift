@@ -6,6 +6,7 @@ enum SessionMenuAction: Hashable {
   case highlight
   case snooze
   case copyLink
+  case notes
   case pause
   case resume
   case startNow
@@ -33,6 +34,7 @@ enum SessionMenu {
     if HighlightMenuItem.title(for: s) != nil { safe.append(.highlight) }
     if s.canSnooze { safe.append(.snooze) }
     safe.append(.copyLink)
+    safe.append(.notes)
     if s.pause != nil {
       safe.append(.resume)
     } else if s.canPause {
@@ -94,6 +96,8 @@ struct SessionMenuItems<Extra: View>: View {
       SnoozeMenuItems(session: session)
     case .copyLink:
       CopyLinkMenuItem(session: session)
+    case .notes:
+      Button("Notes…") { model.editingNotes = id }
     case .pause:
       PauseMenuItems(id: id)
     case .resume:

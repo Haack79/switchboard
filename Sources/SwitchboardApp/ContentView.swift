@@ -153,6 +153,11 @@ struct ContentView: View {
         ).environmentObject(model)
       }
     }
+    .sheet(isPresented: model.isPresent(\.editingNotes)) {
+      if let id = model.editingNotes {
+        NotesSheet(id: id) { model.editingNotes = nil }.environmentObject(model)
+      }
+    }
     .sheet(isPresented: model.isPresent(\.loopEditor)) {
       if let request = model.loopEditor {
         LoopEditor(
@@ -520,6 +525,7 @@ enum BoardLanes: String, CaseIterable {
 /// `MergeBoard.columns`. Done sessions and merged PRs collapse into a footer.
 struct BoardView: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(BoardLanes.storageKey) private var laneKind = BoardLanes.repo
   @FocusState private var focused: Bool
   @State private var boardGeometry = BoardGeometry()
@@ -725,7 +731,7 @@ struct BoardView: View {
           // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
           .onAppear { if !model.namingGroup { focused = true } }
           .onChange(of: model.boardJumps, initial: true) {
-            if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+            if let id = model.boardFocus { proxy.scrollTo(id, reduceMotion: reduceMotion) }
           }
         }
       }
