@@ -303,14 +303,10 @@ private struct CodexHome {
   }
 
   private func read(_ text: String) throws -> CodexRollout.Reading? {
-    let home = try tempFolder()
-    defer { try? FileManager.default.removeItem(atPath: home) }
-    let dir = "\(home)/sessions/2026/11/20"
-    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    try (text + "\n").write(
-      toFile: "\(dir)/rollout-2026-11-20T09-15-02-01941d3a-7c00-7000-8000-000000000001.jsonl", atomically: true,
-      encoding: .utf8)
-    return CodexRollout.rateLimits(home: home)
+    let home = try CodexHome()
+    defer { home.remove() }
+    try home.rollout(text + "\n")
+    return CodexRollout.rateLimits(home: home.path)
   }
 
   @Test(arguments: ["1e300", "1e16", "-5", "0"])

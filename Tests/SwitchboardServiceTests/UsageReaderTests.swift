@@ -55,6 +55,18 @@ import Testing
     #expect(failure(CommandResult(status: 1, stdout: "", stderr: "Not logged in\n")) is SignedOut)
   }
 
+  /// codex exits 1 for a config it can't load or a login it can't read, and logging in again fixes neither.
+  @Test(arguments: [
+    "Error loading configuration: config.toml: expected a table\n", "Error checking login status: permission denied\n",
+  ])
+  func anExitOneThatIsNotASignOutNamesTheProblem(_ stderr: String) {
+    let error = failure(CommandResult(status: 1, stdout: "", stderr: stderr))
+
+    #expect(error != nil)
+    #expect(!(error is SignedOut))
+    #expect("\(error.map { "\($0)" } ?? "")".contains(stderr.trimmingCharacters(in: .newlines)))
+  }
+
   @Test func anotherStatusNamesTheProblem() {
     let error = failure(CommandResult(status: 2, stdout: "", stderr: "boom\n"))
 

@@ -94,7 +94,7 @@ import Testing
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func aHeadlessTurnUnderACodexHomeWithACodexTriageAccountRunsUnderTheActiveAccount() throws {
+  func aHeadlessTurnUnderACodexHomeWithNoTriageAccountRunsUnderTheActiveAccount() throws {
     try withAccounts { service, home, claude, cx in
       try claude.write(toFile: home.activeAccount, atomically: true, encoding: .utf8)
       let env = service.queue.sync {

@@ -4,15 +4,10 @@ import Testing
 
 private func codex(_ folder: String) -> CodexAccount { CodexAccount(folder: folder) }
 
-private func discovered(_ home: String) -> [Account] { Account.discover(home: home) }
-
-private func resolve(_ ref: String, among known: [Account]) throws -> Account {
-  try Account.resolve(ref, among: known)
+/// The accounts that discovery finds in `home`, with neither list set.
+private func discovered(_ home: String) -> [Account] {
+  Account.listed(claudeConfigDirs: nil, codexHomes: nil, home: home)
 }
-
-private func agent(_ account: Account) -> Agent { account.agent }
-
-private func codexOf(_ account: Account) -> CodexAccount? { account.codex }
 
 /// A home folder in the temporary folder, so discovery never reads the
 /// user's ~/.claude* or ~/.codex*.
@@ -78,16 +73,16 @@ private struct FakeHome {
 
     #expect(account.folder == codex("~/.codex-work").folder)
     #expect(account.name == "codex-work")
-    #expect(agent(account) == .codex)
-    #expect(codexOf(account) == codex("~/.codex-work"))
+    #expect(account.agent == .codex)
+    #expect(account.codex == codex("~/.codex-work"))
     #expect(account.claude == nil)
   }
 
   @Test func aClaudeAccountRunsClaudeAndHasNoCodexAccount() {
     let account = Account.claude(ClaudeAccount(folder: "~/.claude-work"))
 
-    #expect(agent(account) == .claude)
-    #expect(codexOf(account) == nil)
+    #expect(account.agent == .claude)
+    #expect(account.codex == nil)
   }
 
   /// `--json` output and stored rows write the agent by these names.
@@ -97,7 +92,7 @@ private struct FakeHome {
   }
 }
 
-/// Discovery by name (H1 a): ~/.codex and each ~/.codex-* folder is a Codex
+/// Discovery by name: ~/.codex and each ~/.codex-* folder is a Codex
 /// account. A Codex folder needs no file, because a keyring login leaves none.
 @Suite struct CodexAccountDiscovery {
   @Test func findsTheDefaultCodexFolderAsTheCodexAccount() throws {
@@ -107,7 +102,7 @@ private struct FakeHome {
 
     let account = try #require(home.account(at: folder))
 
-    #expect(agent(account) == .codex)
+    #expect(account.agent == .codex)
     #expect(account.name == "codex")
   }
 
@@ -119,7 +114,7 @@ private struct FakeHome {
 
     let account = try #require(home.account(at: folder), "\(files)")
 
-    #expect(agent(account) == .codex)
+    #expect(account.agent == .codex)
     #expect(account.name == "codex-x")
   }
 
@@ -165,7 +160,7 @@ private struct FakeHome {
 
     let account = try #require(home.account(at: folder))
 
-    #expect(agent(account) == .claude)
+    #expect(account.agent == .claude)
     #expect(account.name == "a")
   }
 
@@ -184,7 +179,7 @@ private struct FakeHome {
     let accounts = discovered(home.path)
 
     #expect(accounts.compactMap(\.claude) == ClaudeAccount.discover(home: home.path))
-    #expect(Set(accounts.compactMap(codexOf).map(\.name)) == ["codex", "codex-work"])
+    #expect(Set(accounts.compactMap(\.codex).map(\.name)) == ["codex", "codex-work"])
   }
 
   @Test func eachFolderIsListedOnceWithOneAgent() throws {
@@ -209,7 +204,7 @@ private struct FakeHome {
     let folder = try home.folder(".codex-work")
     try home.folder(".claude-a", holding: [".claude.json"])
 
-    let account = try resolve("codex-work", among: discovered(home.path))
+    let account = try Account.resolve("codex-work", among: discovered(home.path))
 
     #expect(account == .codex(codex(folder)))
   }
@@ -220,12 +215,12 @@ private struct FakeHome {
     let folder = try home.folder(".claude-a", holding: [".claude.json"])
     try home.folder(".codex-a")
 
-    let account = try resolve("a", among: discovered(home.path))
+    let account = try Account.resolve("a", among: discovered(home.path))
 
     #expect(account == .claude(ClaudeAccount(folder: folder)))
   }
 
-  /// H3 keeps the agent in a Codex name, so only a Claude folder named
+  /// A Codex name keeps the agent, so only a Claude folder named
   /// `.claude-codex…` can collide with one. The name then resolves to neither.
   @Test(arguments: [(".claude-codex-work", ".codex-work", "codex-work"), (".claude-codex", ".codex", "codex")])
   func refusesANameThatBothAClaudeAndACodexAccountHave(_ claude: String, _ codexName: String, _ name: String) throws {
@@ -236,7 +231,7 @@ private struct FakeHome {
     let known = discovered(home.path)
     #expect(known.filter { $0.name == name }.count == 2)
 
-    let error = #expect(throws: (any Error).self) { try resolve(name, among: known) }
+    let error = #expect(throws: (any Error).self) { try Account.resolve(name, among: known) }
 
     #expect(error.map { "\($0)" }?.contains(name) == true)
   }
@@ -250,10 +245,10 @@ private struct FakeHome {
     let known = discovered(home.path)
 
     for form in [claudeFolder, claudeFolder + "/"] {
-      #expect(try resolve(form, among: known) == .claude(ClaudeAccount(folder: claudeFolder)), "\(form)")
+      #expect(try Account.resolve(form, among: known) == .claude(ClaudeAccount(folder: claudeFolder)), "\(form)")
     }
     for form in [codexFolder, codexFolder + "/"] {
-      #expect(try resolve(form, among: known) == .codex(codex(codexFolder)), "\(form)")
+      #expect(try Account.resolve(form, among: known) == .codex(codex(codexFolder)), "\(form)")
     }
   }
 
@@ -264,7 +259,7 @@ private struct FakeHome {
     defer { home.remove() }
     let folder = try home.folder(".codex-elsewhere", holding: files)
 
-    let account = try resolve(folder, among: [])
+    let account = try Account.resolve(folder, among: [])
 
     #expect(account == .codex(codex(folder)))
   }
@@ -274,8 +269,8 @@ private struct FakeHome {
     defer { home.remove() }
     let folder = try home.folder(".codex-x", holding: [".claude.json"])
 
-    #expect(throws: (any Error).self) { try resolve(folder, among: discovered(home.path)) }
-    #expect(throws: (any Error).self) { try resolve(folder, among: []) }
+    #expect(throws: (any Error).self) { try Account.resolve(folder, among: discovered(home.path)) }
+    #expect(throws: (any Error).self) { try Account.resolve(folder, among: []) }
   }
 
   /// The Claude branch keeps requiring .claude.json. Codex files don't make
@@ -285,7 +280,7 @@ private struct FakeHome {
     defer { home.remove() }
     let folder = try home.folder("elsewhere", holding: ["config.toml", "auth.json"])
 
-    #expect(throws: (any Error).self) { try resolve(folder, among: []) }
+    #expect(throws: (any Error).self) { try Account.resolve(folder, among: []) }
   }
 
   @Test func aClaudeFolderGivenByPathStillNeedsAClaudeLogin() throws {
@@ -294,8 +289,8 @@ private struct FakeHome {
     let empty = try home.folder(".claude-empty")
     let signed = try home.folder(".claude-signed", holding: [".claude.json"])
 
-    #expect(throws: (any Error).self) { try resolve(empty, among: []) }
-    #expect(try resolve(signed, among: []) == .claude(ClaudeAccount(folder: signed)))
+    #expect(throws: (any Error).self) { try Account.resolve(empty, among: []) }
+    #expect(try Account.resolve(signed, among: []) == .claude(ClaudeAccount(folder: signed)))
   }
 
   /// A `codexHomes` entry need not be named like a Codex folder. Its path
@@ -306,8 +301,8 @@ private struct FakeHome {
     let folder = try home.folder("codex-homes/work")
     let known: [Account] = [.codex(codex(folder))]
 
-    #expect(try resolve(folder, among: known) == .codex(codex(folder)))
-    #expect(try resolve(folder + "/", among: known) == .codex(codex(folder)))
+    #expect(try Account.resolve(folder, among: known) == .codex(codex(folder)))
+    #expect(try Account.resolve(folder + "/", among: known) == .codex(codex(folder)))
   }
 
   @Test func anUnknownNameIsRefused() throws {
@@ -315,11 +310,11 @@ private struct FakeHome {
     defer { home.remove() }
     try home.folder(".codex-work")
 
-    #expect(throws: (any Error).self) { try resolve("nobody", among: discovered(home.path)) }
+    #expect(throws: (any Error).self) { try Account.resolve("nobody", among: discovered(home.path)) }
   }
 }
 
-/// H1: `codexHomes` in config.json replaces discovery when set, like
+/// `codexHomes` in config.json replaces discovery when set, like
 /// `claudeConfigDirs`. `codex` names the program that sbd runs for
 /// `codex login status`.
 @Suite struct CodexAccountConfig {
@@ -362,9 +357,36 @@ private struct FakeHome {
 
     #expect(accounts == [.codex(codex(folder))])
   }
+
+  /// Each list replaces discovery of its own kind only, so a user who already set `claudeConfigDirs` still gets
+  /// the discovered ~/.codex* folders.
+  @Test func aClaudeConfigDirsListLeavesCodexDiscoveryOn() throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let listed = try home.folder("listed", holding: [".claude.json"])
+    try home.folder(".claude-a", holding: [".claude.json"])
+    let codexFolder = try home.folder(".codex-x")
+
+    let accounts = Account.listed(claudeConfigDirs: [listed], codexHomes: nil, home: home.path)
+
+    #expect(accounts == [.claude(ClaudeAccount(folder: listed)), .codex(codex(codexFolder))])
+  }
+
+  @Test func aCodexHomesListLeavesClaudeDiscoveryOn() throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let listed = try home.folder("listed")
+    let claudeFolder = try home.folder(".claude-a", holding: [".claude.json"])
+    try home.folder(".codex-x")
+
+    let accounts = Account.listed(claudeConfigDirs: nil, codexHomes: [listed], home: home.path)
+
+    #expect(accounts.compactMap(\.claude).map(\.folder).contains(ClaudeAccount(folder: claudeFolder).folder))
+    #expect(accounts.compactMap(\.codex) == [codex(listed)])
+  }
 }
 
-/// H1: `Account.refusals` gives a reason for each folder that matches both kinds. sbd logs the reasons at start.
+/// `Account.survey` gives a reason for each folder that matches both kinds. sbd logs the reasons at start.
 @Suite struct CodexAccountRefusals {
   @Test func eachFolderThatMatchesBothKindsHasAReason() throws {
     let home = try FakeHome()
@@ -373,7 +395,7 @@ private struct FakeHome {
     try home.folder(".codex-ok")
     try home.folder(".claude-a", holding: [".claude.json"])
 
-    let reasons = Account.refusals(claudeConfigDirs: nil, codexHomes: nil, home: home.path)
+    let reasons = Account.survey(claudeConfigDirs: nil, codexHomes: nil, home: home.path).refusals
 
     #expect(reasons.count == 1, "\(reasons)")
     #expect(reasons.first?.contains(both) == true, "\(reasons)")
@@ -384,7 +406,7 @@ private struct FakeHome {
     defer { home.remove() }
     let shared = try home.folder("shared")
 
-    let reasons = Account.refusals(claudeConfigDirs: [shared], codexHomes: [shared], home: home.path)
+    let reasons = Account.survey(claudeConfigDirs: [shared], codexHomes: [shared], home: home.path).refusals
 
     #expect(reasons.map { $0.contains("codexHomes") } == [true], "\(reasons)")
   }

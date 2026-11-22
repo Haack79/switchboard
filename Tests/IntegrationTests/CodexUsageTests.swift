@@ -4,7 +4,7 @@ import Testing
 
 /// `sb usage` for Codex accounts: limits from the newest rollout with
 /// `"source": "rollout"`, "no reading" without one, and sign-in from `codex
-/// login status` (H7 a). Claude readings keep their keys and gain only `agent`.
+/// login status`. Claude readings keep their keys and gain only `agent`.
 @Suite(.blocking(timeLimit: .seconds(120))) struct CodexUsageTests {
   /// A sbd with the Claude account A, active and signed in, and the Codex
   /// account `.codex-work`. Its usage reader asks `fake` for A.
@@ -36,7 +36,7 @@ import Testing
     #expect(reading.signedOut != true)
   }
 
-  /// H5: `checked` is the time Codex reported the limits, not the time sbd read the file.
+  /// `checked` is the time Codex reported the limits, not the time sbd read the file.
   @Test func aCodexReadingIsCheckedAtTheTimeCodexReportedIt() throws {
     let fake = try FakeUsage()
     let sbd = try instance(fake)
@@ -60,6 +60,7 @@ import Testing
     #expect(block.contains("Weekly"), "\(block)")
     #expect(block.contains("13%") || block.contains("12%"), "\(block)")
     #expect(block.contains("34%"), "\(block)")
+    #expect(block.contains("reported "), "\(block)")
   }
 
   /// Without a rollout, sbd shows no number. A missing rollout is not a sign-out.
@@ -78,7 +79,7 @@ import Testing
     #expect(block.contains("no Codex limits seen yet"), "\(block)")
   }
 
-  /// H7 (a): a keyring login leaves no auth.json, so only `codex login status` decides.
+  /// A keyring login leaves no auth.json, so only `codex login status` decides.
   @Test func aCodexAccountWithoutAuthJsonIsSignedInWhenCodexSaysSo() throws {
     let fake = try FakeUsage()
     let sbd = try instance(fake)
@@ -92,7 +93,7 @@ import Testing
     #expect(reading.error == nil)
   }
 
-  /// H7 (a): the stub exits 1 for `login status`. An auth.json doesn't overrule it.
+  /// The stub exits 1 for `login status`. An auth.json doesn't overrule it.
   @Test func aCodexAccountThatCodexReportsSignedOutIsSignedOut() throws {
     let fake = try FakeUsage()
     let sbd = try instance(fake)
@@ -104,6 +105,7 @@ import Testing
 
     #expect(reading.signedOut == true)
     #expect(reading.error?.contains("codex login") == true, "\(reading.error ?? "nil")")
+    #expect(reading.error?.contains("/login") == false, "\(reading.error ?? "nil")")
   }
 
   /// A `codex login status` that never answers costs the read 10 s and records an error, not a sign-out.
@@ -150,7 +152,7 @@ import Testing
 
   // MARK: Parity for Claude accounts
 
-  /// H5: a Claude reading keeps every key it had and gains only `agent`.
+  /// A Claude reading keeps every key it had and gains only `agent`.
   @Test func aClaudeReadingGainsOnlyTheAgentKey() throws {
     let fake = try FakeUsage()
     let sbd = try instance(fake)

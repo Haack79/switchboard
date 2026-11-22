@@ -236,7 +236,7 @@ extension Service {
 
   /// `triage.account`, or nil when it is unset or names a Codex folder.
   var triageClaudeAccount: ClaudeAccount? {
-    config.triage.account.flatMap { codexName($0) == nil ? ClaudeAccount(folder: $0) : nil }
+    config.triage.account.flatMap { claudeAccount(folder: $0) }
   }
 
   /// Starts each model call that `verdict` asks for: the turn's summary and the PR's merge brief.

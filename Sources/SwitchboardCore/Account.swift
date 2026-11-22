@@ -85,13 +85,13 @@ public enum Account: Hashable, Sendable {
     claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
   ) -> (accounts: [Account], refusals: [String]) {
     let found = candidates(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home)
-    let claude = found.claude.map { ($0, claudeClash($0, codexHomes: codexHomes)) }
-    let codex = found.codex.map { ($0, $0.clash) }
+    let claude = found.claude.map { (account: $0, clash: claudeClash($0, codexHomes: codexHomes)) }
+    let codex = found.codex.map { (account: $0, clash: $0.clash) }
     var seen = Set<String>()
     let accounts =
-      (claude.filter { $0.1 == nil }.map { Account.claude($0.0) }
-      + codex.filter { $0.1 == nil }.map { Account.codex($0.0) }).filter { seen.insert($0.folder).inserted }
-    return (accounts, claude.compactMap(\.1) + codex.compactMap(\.1))
+      (claude.filter { $0.clash == nil }.map { Account.claude($0.account) }
+      + codex.filter { $0.clash == nil }.map { Account.codex($0.account) }).filter { seen.insert($0.folder).inserted }
+    return (accounts, claude.compactMap(\.clash) + codex.compactMap(\.clash))
   }
 
   /// The accounts that `survey` lists.
@@ -99,13 +99,6 @@ public enum Account: Hashable, Sendable {
     claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
   ) -> [Account] {
     survey(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home).accounts
-  }
-
-  /// Why `survey` leaves out each folder that a list names or discovery finds.
-  public static func refusals(
-    claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
-  ) -> [String] {
-    survey(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home).refusals
   }
 
   /// The folders that the lists name, or else that discovery finds. Discovery lists the home folder once for
@@ -125,11 +118,6 @@ public enum Account: Hashable, Sendable {
   /// Why a Claude folder is no Claude account: `CodexAccount.whyCodex` claims it.
   private static func claudeClash(_ account: ClaudeAccount, codexHomes: [String]?) -> String? {
     CodexAccount.whyCodex(account.folder, codexHomes: codexHomes).map { "\($0), so it is no Claude account" }
-  }
-
-  /// The Claude accounts and then the Codex accounts in the home folder.
-  public static func discover(home: String = NSHomeDirectory()) -> [Account] {
-    listed(claudeConfigDirs: nil, codexHomes: nil, home: home)
   }
 
   /// The account that `ref` names: a short name, or a folder. It refuses a

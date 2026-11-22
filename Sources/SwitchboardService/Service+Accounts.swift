@@ -13,7 +13,7 @@ extension Service {
   var activeAccount: ClaudeAccount {
     if let chosenAccount { return chosenAccount }
     let configured = config.env["CLAUDE_CONFIG_DIR"] ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
-    return ClaudeAccount(folder: configured.flatMap { codexName($0) == nil ? $0 : nil } ?? ClaudeAccount.defaultFolder)
+    return configured.flatMap { claudeAccount(folder: $0) } ?? ClaudeAccount(folder: ClaudeAccount.defaultFolder)
   }
 
   /// Reads the account that `sb account use` chose. It ignores a folder that
@@ -52,6 +52,11 @@ extension Service {
   /// makes it neither kind.
   func codexName(_ folder: String) -> String? {
     CodexAccount.whyCodex(folder, codexHomes: config.codexHomes) == nil ? nil : CodexAccount(folder: folder).name
+  }
+
+  /// The Claude account in `folder`, or nil when `codexName` claims the folder.
+  func claudeAccount(folder: String) -> ClaudeAccount? {
+    codexName(folder) == nil ? ClaudeAccount(folder: folder) : nil
   }
 
   /// Why a session can't start, or a request can't use, the Codex account `name`.
@@ -104,7 +109,7 @@ extension Service {
   /// or became a Codex account, uses the account it would use without the group.
   func accountGroupForNew(_ session: Session) -> SessionGroup? {
     accountGroup(of: session).flatMap {
-      codexName($0.account!) == nil && ClaudeAccount(folder: $0.account!).holdsAccount ? $0 : nil
+      claudeAccount(folder: $0.account!)?.holdsAccount == true ? $0 : nil
     }
   }
 
@@ -391,11 +396,14 @@ extension Service {
   /// launch tries again.
   func moveToGroupAccount(_ id: String) {
     guard let session = entries[id]?.session, let target = accountGroup(of: session)?.account else { return }
-    let from = claudeAccount(of: id).key
+    let own = claudeAccount(of: id)
+    let from = own.key
     guard from != target else { return }
     let account = ClaudeAccount(folder: target)
     let reason: String?
-    if let name = codexName(from) ?? codexName(target) {
+    if case .codex(let codex) = own {
+      reason = Self.codexMoveRefusal(codex.name)
+    } else if let name = codexName(target) {
       reason = Self.codexMoveRefusal(name)
     } else if !account.holdsAccount {
       reason = "\(target) holds no Claude account"

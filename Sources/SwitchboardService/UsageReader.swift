@@ -197,21 +197,25 @@ final class UsageReader: @unchecked Sendable {
   /// auth.json, so only codex can tell whether the account is signed in.
   private func requireCodexLogin(_ account: CodexAccount) throws {
     let program = service.config.codex
-    guard let codex = findExecutable(program) else { throw APIError("can't find \(program)") }
+    guard let codex = findExecutable(program) else {
+      throw APIError("can't find \(program). Set \"codex\" in \(service.home.config) to its path")
+    }
     var env = ProcessInfo.processInfo.environment
     account.apply(to: &env)
     try Self.checkCodexLogin(
       runCommand(codex, ["login", "status"], env: env, timeout: Self.codexLoginTimeout), login: account.loginCommand)
   }
 
-  /// Throws `SignedOut` when `codex login status` exits 1 by itself, and
-  /// another error when it fails otherwise or the timeout ends it. A codex
-  /// that SIGTERM ends may exit 1, so it checks the timeout first.
+  /// Throws `SignedOut` when `codex login status` exits 1 and says the account
+  /// is not logged in, and another error when it fails otherwise or the timeout
+  /// ends it. codex also exits 1 when it can't load its config or read its
+  /// login, and logging in again fixes neither. A codex that SIGTERM ends may
+  /// exit 1, so it checks the timeout first.
   static func checkCodexLogin(_ r: CommandResult, login: String) throws {
     if r.timedOut { throw APIError("`codex login status` did not answer within \(Int(codexLoginTimeout)) s") }
     switch r.status {
     case 0: return
-    case 1: throw SignedOut(login: login, then: "")
+    case 1 where (r.stderr + r.stdout).contains("Not logged in"): throw SignedOut(login: login, then: "")
     default: throw APIError("`codex login status` failed: \(r.problem)")
     }
   }

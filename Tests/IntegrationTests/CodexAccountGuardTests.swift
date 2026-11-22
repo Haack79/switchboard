@@ -4,8 +4,8 @@ import Testing
 
 /// Risk 1: no path that runs claude or reads Claude files under an account
 /// gets a Codex account. Each test passes a Codex account through one input
-/// shape that resolves an account. Shapes that the plan names refuse it.
-/// Headless and triage fall back to a Claude account. Every test also checks
+/// shape that resolves an account. A shape that starts or moves a session
+/// refuses it. Headless and triage fall back to a Claude account. Every test also checks
 /// the property itself: claude never ran with CLAUDE_CONFIG_DIR set to a
 /// Codex folder, and no Codex folder gained Claude files.
 ///
@@ -144,7 +144,7 @@ import Testing
     #expect(try sbd.client.call("followup-ls", as: [SessionSummary].self).isEmpty)
   }
 
-  /// H6 (a): `sb account use` writes ~/.sb/account, which only a Claude account may hold.
+  /// `sb account use` writes ~/.sb/account, which only a Claude account may hold.
   @Test func accountUseRefusesACodexAccount() throws {
     let sbd = try instance()
     let chosen = try String(contentsOfFile: sbd.home.activeAccount, encoding: .utf8)
@@ -176,7 +176,7 @@ import Testing
 
     let refusal = failure(sbd, "followup-start", ["session": .string(f.id)])
 
-    #expect(refusal != "no error")
+    #expect(refusal.contains("Codex"), "\(refusal)")
     #expect(try sbd.get(f.id).state == .notStarted)
     try expectNoLaunch(sbd, under: sbd.account("B"), since: since, headlessSince: headlessSince)
   }
@@ -190,8 +190,10 @@ import Testing
     let headlessSince = sbd.headlessAccounts().count
     try sbd.makeCodex("B")
 
-    _ = try sbd.run("send", s.id, "again")
+    let r = try sbd.run("send", s.id, "again")
 
+    #expect(r.status != 0, "\(r.stdout)")
+    #expect(r.stderr.contains("Codex"), "\(r.stderr)")
     try expectNoLaunch(sbd, under: sbd.account("B"), since: since, headlessSince: headlessSince)
     #expect(try sbd.get(s.id).claudePid == nil)
   }
@@ -207,11 +209,12 @@ import Testing
 
     let r = try sbd.run(["new", "--json", "--prompt", "hello", sbd.work], env: inside(parent.id))
 
-    if r.status == 0 { #expect(try decode(r.stdout).account != sbd.account("B")) }
+    #expect(r.status != 0, "\(r.stdout)")
+    #expect(r.stderr.contains("Codex"), "\(r.stderr)")
     try expectNoLaunch(sbd, under: sbd.account("B"), since: since, headlessSince: headlessSince)
   }
 
-  /// A group on B. Once B is a Codex account, a new session in the group does not run on it.
+  /// A group on B. Once B is a Codex account, a new session in the group runs on the active account A.
   @Test func aNewSessionInAGroupWhoseAccountBecameCodexDoesNotRunOnIt() throws {
     let sbd = try instance()
     try sbd.sb("group", "add", "--json", "Flags")
@@ -220,9 +223,9 @@ import Testing
     let headlessSince = sbd.headlessAccounts().count
     try sbd.makeCodex("B")
 
-    let r = try? sbd.client.call("new", ["path": .string(sbd.work), "group": "Flags", "prompt": "hello"])
+    let r = try sbd.client.call("new", ["path": .string(sbd.work), "group": "Flags", "prompt": "hello"])
 
-    if let account = r?["account"]?.string { #expect(account != sbd.account("B")) }
+    #expect(r["account"]?.string == sbd.account("A"))
     try expectNoLaunch(sbd, under: sbd.account("B"), since: since, headlessSince: headlessSince)
   }
 
@@ -295,7 +298,8 @@ import Testing
   // MARK: Headless and triage fall back to a Claude account
 
   /// The summary call that `triage.account` would pay for runs under the
-  /// active Claude account when `triage.account` names a Codex account.
+  /// session's own Claude account when `triage.account` names a Codex
+  /// account. The session runs on the active account A here.
   @Test func aTriageAccountThatNamesACodexAccountFallsBackToAClaudeAccount() throws {
     let sbd = try Instance(
       accounts: ["A"], codexAccounts: [".codex-work"], inheriting: .unset, startingSbd: false)
@@ -457,10 +461,10 @@ import Testing
 
     let r = try sbd.run(["account", "move", "--json", "A"])
 
-    if r.status == 0 {
-      let move = try JSONCoding.decode(AccountMove.self, from: r.stdout)
-      #expect(!move.moved.contains(s.id))
-    }
+    #expect(r.status == 0, "\(r.stderr)")
+    let move = try JSONCoding.decode(AccountMove.self, from: r.stdout)
+    #expect(!move.moved.contains(s.id))
+    #expect(move.blocked.first { $0.session == s.id }?.reason.contains("Codex") == true, "\(move.blocked)")
     #expect(try sbd.get(s.id).account == sbd.account("B"))
     #expect(accountTests.transcript(sbd, "A", s) == nil)
   }

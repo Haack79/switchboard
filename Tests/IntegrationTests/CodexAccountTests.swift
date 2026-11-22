@@ -2,9 +2,9 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-/// `sb account` and `sb account add` with Codex accounts: discovery by name
-/// (H1 a), the `codexHomes` override, names that keep the agent (H3), the
-/// `agent` key (H5), and folder classification (Risk 3).
+/// `sb account` and `sb account add` with Codex accounts: discovery by name,
+/// the `codexHomes` override, names that keep the agent, the `agent` key, and
+/// folder classification (Risk 3).
 @Suite(.blocking(timeLimit: .seconds(120))) struct CodexAccountTests {
   /// The fields of an `account-add` request. This is the one place that names them.
   func addRequest(_ name: String, agent: String) -> [String: JSON] {
@@ -33,7 +33,7 @@ import Testing
     #expect(rows.allSatisfy { $0.object?["agent"] != nil }, "\(rows)")
   }
 
-  /// H6 (a): new sessions keep using a Claude account, whatever Codex folders exist.
+  /// New sessions keep using a Claude account, whatever Codex folders exist.
   @Test func theActiveAccountIsAClaudeAccount() throws {
     let sbd = try Instance.discovering { home in
       try makeFolder("\(home)/.codex")
@@ -81,7 +81,7 @@ import Testing
     #expect(!folders.contains("\(sbd.userHome)/.codex-notes"))
   }
 
-  /// H1: `codexHomes` replaces discovery, as `claudeConfigDirs` does.
+  /// `codexHomes` replaces discovery, as `claudeConfigDirs` does.
   @Test func codexHomesReplacesDiscovery() throws {
     let sbd = try Instance(accounts: ["A"], codexAccounts: ["W"], inheriting: .unset, startingSbd: false)
     try makeFolder("\(sbd.userHome)/.codex-found")
@@ -125,7 +125,7 @@ import Testing
     #expect(try sbd.row(rows, sbd.account("A"))["agent"]?.string == "claude")
   }
 
-  /// H3: a Claude folder named `.claude-codex-work` and a Codex folder named
+  /// A Claude folder named `.claude-codex-work` and a Codex folder named
   /// `.codex-work` both answer to `codex-work`, so that name picks neither.
   @Test func anAmbiguousNameIsRefusedAndEachFolderStillWorks() throws {
     let sbd = try Instance.discovering { home in
@@ -145,7 +145,7 @@ import Testing
     #expect(active.map { $0["folder"]?.string } == [claudeFolder])
   }
 
-  // MARK: sb account add (H4 a)
+  // MARK: sb account add
 
   @Test func addCreatesACodexFolderAndPrintsItsLoginCommand() throws {
     let sbd = try Instance.discovering()
@@ -229,7 +229,7 @@ import Testing
     #expect(sbd.tree("\(sbd.userHome)/\(folderName)") == [file])
   }
 
-  /// H3: `~/.claude-codex-work` would share the name `codex-work` with `~/.codex-work`, which picks neither.
+  /// `~/.claude-codex-work` would share the name `codex-work` with `~/.codex-work`, which picks neither.
   @Test func addRefusesANameThatAnotherAccountHas() throws {
     let sbd = try Instance.discovering { home in try makeFolder("\(home)/.codex-work") }
 
@@ -257,7 +257,7 @@ import Testing
 
   // MARK: Parity for Claude accounts
 
-  /// H5: a Claude row keeps every key it had and gains only `agent`.
+  /// A Claude row keeps every key it had and gains only `agent`.
   @Test func aClaudeRowGainsOnlyTheAgentKey() throws {
     let sbd = try Instance(accounts: ["A"], codexAccounts: [".codex-work"], inheriting: .unset)
     try sbd.sb("account", "use", "A")

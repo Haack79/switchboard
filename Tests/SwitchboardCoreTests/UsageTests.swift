@@ -219,6 +219,15 @@ let legacyWithoutASession = Data(
 
     #expect(try JSONCoding.convert(try encoded(reading), to: AccountUsage.self) == reading)
   }
+
+  /// An older sbd writes no `agent`, and `sb` and the app read its rows during an update.
+  @Test func aRowWithoutAnAgentIsAClaudeRow() throws {
+    let usage = Data(#"{"name":"a","folder":"/a","limits":[]}"#.utf8)
+    let account = Data(#"{"name":"a","folder":"/a","active":true,"sessions":0}"#.utf8)
+
+    #expect(try JSONCoding.decoder.decode(AccountUsage.self, from: usage).agent == .claude)
+    #expect(try JSONCoding.decoder.decode(AccountInfo.self, from: account).agent == .claude)
+  }
 }
 
 @Suite struct UsageBudgetTests {
