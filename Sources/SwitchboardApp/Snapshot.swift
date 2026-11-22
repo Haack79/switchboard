@@ -325,14 +325,17 @@ enum Snapshot {
   /// labels under the selected segment of a segmented control, which draws its own label on top. `cacheDisplay`
   /// erases everything under the shapes instead, including the selected segment. This hides each such layer and masks
   /// its superlayer to leave out the shapes. It returns a function that puts both back. It leaves a layer alone
-  /// unless the mask can stand for it: the superlayer has no mask, and the layer and its sublayers draw only opaque
-  /// solid rounded rects.
+  /// unless the mask can stand for it: the layer is the superlayer's last sublayer, the superlayer has no mask, and
+  /// the layer and its sublayers draw only opaque solid rounded rects.
   static func applyKnockouts(_ layer: CALayer) -> () -> Void {
     var restores: [() -> Void] = []
     func visit(_ layer: CALayer) {
       guard !layer.isHidden else { return }
       if (layer.compositingFilter as? String) == "destOut" {
-        guard let parent = layer.superlayer, parent.mask == nil, let shapes = knockoutShapes(layer, in: parent) else {
+        // The mask erases from every sublayer of the superlayer. The window erases only from the sublayers before it.
+        guard let parent = layer.superlayer, parent.sublayers?.last === layer, parent.mask == nil,
+          let shapes = knockoutShapes(layer, in: parent)
+        else {
           FileHandle.standardError.write(
             Data(
               "snapshot: a knockout layer is not drawn as the window shows it, so the drawing erases too much under it\n"
@@ -363,14 +366,18 @@ enum Snapshot {
   /// The outlines of what the knockout `layer` erases, in `parent`'s coordinates, or nil when something it draws is
   /// not an opaque solid rounded rect.
   private static func knockoutShapes(_ layer: CALayer, in parent: CALayer) -> [CGPath]? {
+    // A subclass such as CAShapeLayer or CATextLayer draws more than its background.
     func isSolid(_ shape: CALayer) -> Bool {
-      shape.contents == nil && shape.mask == nil && shape.borderWidth == 0 && shape.shadowOpacity == 0
+      type(of: shape) == CALayer.self && (shape.filters ?? []).isEmpty
+        && shape.contents == nil && shape.mask == nil && shape.borderWidth == 0 && shape.shadowOpacity == 0
         && shape.opacity == 1 && CATransform3DIsIdentity(shape.transform)
         && (shape.cornerRadius == 0 || shape.maskedCorners == Self.allCorners)
         && (shape.backgroundColor.map { $0.alpha == 1 } ?? true)
     }
     let sublayers = (layer.sublayers ?? []).filter { !$0.isHidden }
-    guard isSolid(layer), sublayers.allSatisfy({ isSolid($0) && ($0.sublayers ?? []).isEmpty }) else { return nil }
+    guard isSolid(layer),
+      sublayers.allSatisfy({ isSolid($0) && $0.compositingFilter == nil && ($0.sublayers ?? []).isEmpty })
+    else { return nil }
     return ([layer] + sublayers).filter { $0.backgroundColor != nil }.map { shape in
       let rect = shape.convert(shape.bounds, to: parent)
       let radius = min(shape.cornerRadius, rect.width / 2, rect.height / 2)

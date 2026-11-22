@@ -180,6 +180,34 @@ struct BlendCase: Sendable, CustomTestStringConvertible {
     #expect(matches(try canvas.pixel(rep, x: 60, fromTop: outside), background))
   }
 
+  /// A 0.1 gray layer whose first 18 points hold a 0.4 gray sublayer. A plain copy shows which row `cacheDisplay`
+  /// puts the sublayer in, and the blended layer must draw it in the same row, not upside down.
+  @Test(arguments: [false, true]) func aPlusLayerKeepsItsContentRightSideUp(flipped: Bool) throws {
+    func tree(_ make: (CGRect, CGFloat) -> CALayer) -> CALayer {
+      let layer = make(CGRect(x: 40, y: 12, width: 40, height: 36), 0.1)
+      layer.addSublayer(solid(CGRect(x: 0, y: 0, width: 40, height: 18), white: 0.4))
+      return layer
+    }
+    let control = Canvas(dark: true, flipped: flipped)
+    control.root.addSublayer(tree { solid($0, white: $1) })
+    let controlRep = try control.cache()
+    let light = try Canvas.gray(0.4, in: controlRep)
+    let firstRowShowsSublayer = matches(try control.pixel(controlRep, x: 60, fromTop: 21), light)
+    try #require(firstRowShowsSublayer != matches(try control.pixel(controlRep, x: 60, fromTop: 39), light))
+    let (sublayerRow, layerRow): (CGFloat, CGFloat) = firstRowShowsSublayer ? (21, 39) : (39, 21)
+    let canvas = Canvas(dark: true, flipped: flipped)
+    let blend = tree { plus("plusL", $0, white: $1) }
+    canvas.root.addSublayer(blend)
+    if flipped { try #require(blend.contentsAreFlipped()) }
+
+    let rep = try canvas.cache()
+
+    let background = try canvas.background(in: rep)
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: sublayerRow), blended("plusL", light, over: background)))
+    let dark = try Canvas.gray(0.1, in: rep)
+    #expect(matches(try canvas.pixel(rep, x: 60, fromTop: layerRow), blended("plusL", dark, over: background)))
+  }
+
   @Test func aPlusLayerInAnOffsetAncestorDrawsAtItsPositionInTheView() throws {
     let canvas = Canvas(dark: true)
     let container = CALayer()
@@ -345,13 +373,14 @@ private struct Segment {
   @Test func cacheLeavesTheLayersAsItFoundThem() throws {
     let segment = Segment(dark: true)
     let blend = plus("plusL", CGRect(x: 10, y: 50, width: 20, height: 5), white: 0.3)
+    blend.opacity = 0.6
     segment.canvas.root.addSublayer(blend)
 
     _ = try segment.canvas.cache()
 
     #expect(!segment.knockout.isHidden)
     #expect(segment.group.mask == nil)
-    #expect(blend.opacity == 1)
+    #expect(blend.opacity == 0.6)
     #expect(blend.compositingFilter as? String == "plusL")
   }
 }
@@ -541,6 +570,13 @@ private struct Segment {
     case shapeIsTranslucent
     case shapeIsPartlyTransparent
     case knockoutIsPartlyTransparent
+    case shapeHasAMask
+    case shapeHasABorder
+    case shapeHasAShadow
+    case knockoutIsTransformed
+    case shapeIsAShapeLayer
+    case shapeHasAFilter
+    case aSiblingDrawsAfterTheKnockout
   }
 
   static func refusedTree(_ refusal: Refusal) throws -> Tree {
@@ -557,6 +593,17 @@ private struct Segment {
     case .shapeIsTranslucent: shape.backgroundColor = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.5)
     case .shapeIsPartlyTransparent: shape.opacity = 0.5
     case .knockoutIsPartlyTransparent: tree.knockout.opacity = 0.5
+    case .shapeHasAMask: shape.mask = solid(shape.bounds, white: 1)
+    case .shapeHasABorder: shape.borderWidth = 1
+    case .shapeHasAShadow: shape.shadowOpacity = 0.5
+    case .knockoutIsTransformed: tree.knockout.transform = CATransform3DMakeScale(0.5, 0.5, 1)
+    case .shapeIsAShapeLayer:
+      let drawn = CAShapeLayer()
+      drawn.frame = Self.rect
+      drawn.path = CGPath(rect: CGRect(x: 0, y: 0, width: 10, height: 10), transform: nil)
+      tree.knockout.addSublayer(drawn)
+    case .shapeHasAFilter: shape.filters = [SnapshotVibrancy.filter("colorMatrix", SnapshotVibrancy.identity)]
+    case .aSiblingDrawsAfterTheKnockout: tree.parent.addSublayer(solid(tree.parent.bounds, white: 0.2))
     }
     return tree
   }
