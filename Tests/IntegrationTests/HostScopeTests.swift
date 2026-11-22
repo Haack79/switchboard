@@ -395,6 +395,7 @@ private let otherDestination = "haacked@other.local"
     "host-connect", "host-disconnect", "live", "auto-mode", "autocontinue", "snapshots", "poll", "repos", "repo-add",
     "clock",
     "triage", "choose", "decisions", "decision-answer", "decision-submit", "decision-resend", "decision-discard",
+    "decision-ask",
     "plan-attach", "plan-update", "plan-propose", "plan-apply", "plan-artifact-read", "plan-artifact-rewrite",
     "plan-artifact-apply", "plan-artifact-reject", "plan-artifact-report", "plan-followup", "plan-ls", "plan-get",
     "plan-detach", "plan-auto", "plan-proposals", "plan-reject", "followup-add", "followup-ls", "followup-start",
