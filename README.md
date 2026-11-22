@@ -42,7 +42,7 @@ See [Accounts](docs/accounts.md).
 
 ### Waits and notes
 
-A wait says what a session is waiting on: CI, a review, a merge, a deploy, another session, or a time. Switchboard resolves most waits on its own and then resumes the session with what happened. Notes and to-dos stay with the session. The session view lists its waits, schedules, and notes in a panel beside its terminals.
+A wait says what a session is waiting on: CI, a review, a merge, a deploy, another session, or a time. Switchboard resolves most waits on its own and then resumes the session with what happened. Notes and to-dos stay with the session. The session view lists its waits, schedules, notes, artifacts, and links in a panel beside its terminals.
 
 <img src="docs/images/session-panel.png" width="240" alt="A session's side panel, with a wait on CI, a manual wait, an hourly schedule, a to-do, and a note">
 
