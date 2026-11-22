@@ -48,8 +48,8 @@ private func list(_ live: [ArtifactMember], kept: [GroupArtifact] = []) -> [Grou
 /// A group link that the user added.
 private func groupLink(
   _ url: String = artifactShortURL, id: String = "l1", title: String? = nil, by author: Author = .you, t: Int64
-) -> GroupLink {
-  GroupLink(id: id, title: title ?? url, url: url, by: author, t: t)
+) -> ExternalLink {
+  ExternalLink(id: id, title: title ?? url, url: url, by: author, t: t)
 }
 
 /// The row that `GroupArtifact(link:)` derives from a link that it must accept.
@@ -211,7 +211,7 @@ private func linkRow(
     var others: [ArtifactMember] = []
     var kept: [GroupArtifact] = []
     /// The group's links. Each one that `GroupArtifact(link:)` accepts lists as a row.
-    var links: [GroupLink] = []
+    var links: [ExternalLink] = []
     var testDescription: String { name }
 
     var linkRows: [GroupArtifact] { links.compactMap(GroupArtifact.init(link:)) }

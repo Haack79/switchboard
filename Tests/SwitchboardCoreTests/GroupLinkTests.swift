@@ -6,7 +6,7 @@ import Testing
 /// them and as a merge carries them over.
 @Suite struct GroupLinkTests {
   func group(
-    _ id: String, _ name: String, description: String? = nil, by author: Author? = nil, links: [GroupLink]? = nil
+    _ id: String, _ name: String, description: String? = nil, by author: Author? = nil, links: [ExternalLink]? = nil
   ) -> SessionGroup {
     var g = SessionGroup(id: id, name: name, description: description, created: 0)
     g.descriptionBy = author
@@ -14,8 +14,8 @@ import Testing
     return g
   }
 
-  func link(_ id: String, _ url: String, title: String? = nil, by author: Author = .you, t: Int64 = 1) -> GroupLink {
-    GroupLink(id: id, title: title ?? url, url: url, by: author, t: t)
+  func link(_ id: String, _ url: String, title: String? = nil, by author: Author = .you, t: Int64 = 1) -> ExternalLink {
+    ExternalLink(id: id, title: title ?? url, url: url, by: author, t: t)
   }
 
   // MARK: Links in a merge
@@ -221,27 +221,27 @@ import Testing
   }
 
   @Test(arguments: [nil, "", "  \n "]) func withoutATitleTheTitleIsTheURL(_ title: String?) throws {
-    let url = Self.url(ofLength: GroupLink.titleLimit)
+    let url = Self.url(ofLength: ExternalLink.titleLimit)
 
-    #expect(try GroupLink.cleanTitle(title, url: url) == url)
+    #expect(try ExternalLink.cleanTitle(title, url: url) == url)
   }
 
   /// A session reads the title, so a long URL doesn't make the title pass its limit.
-  @Test(arguments: [GroupLink.titleLimit + 1, GroupLink.urlLimit])
+  @Test(arguments: [ExternalLink.titleLimit + 1, ExternalLink.urlLimit])
   func aURLOverTheTitleLimitIsCutForTheTitle(_ length: Int) throws {
     let url = Self.url(ofLength: length)
 
-    let title = try GroupLink.cleanTitle(nil, url: url)
+    let title = try ExternalLink.cleanTitle(nil, url: url)
 
-    #expect(title.count == GroupLink.titleLimit)
+    #expect(title.count == ExternalLink.titleLimit)
     #expect(title.hasSuffix("…"))
     #expect(url.hasPrefix(title.dropLast()))
   }
 
   @Test func aGivenTitleOverTheLimitIsRefused() {
-    let title = String(repeating: "a", count: GroupLink.titleLimit + 1)
+    let title = String(repeating: "a", count: ExternalLink.titleLimit + 1)
 
-    #expect(throws: (any Error).self) { try GroupLink.cleanTitle(title, url: "https://a.example") }
+    #expect(throws: (any Error).self) { try ExternalLink.cleanTitle(title, url: "https://a.example") }
   }
 
   // MARK: Links to claude.ai artifacts
@@ -256,7 +256,7 @@ import Testing
     ("\(artifactCodeURL)/?x=1#y", artifactCodeURL),
   ])
   func cleanURLNormalizesAClaudeArtifactLink(_ url: String, _ expected: String) throws {
-    #expect(try GroupLink.cleanURL(url) == expected)
+    #expect(try ExternalLink.cleanURL(url) == expected)
   }
 
   @Test(arguments: [
@@ -264,7 +264,7 @@ import Testing
     "https://claude.ai/chat/\(artifactShortId)", "https://claude.ai.evil.com/artifact/\(artifactShortId)",
   ])
   func cleanURLLeavesALinkThatIsNotAClaudeArtifactAsGiven(_ url: String) throws {
-    #expect(try GroupLink.cleanURL(url) == url)
+    #expect(try ExternalLink.cleanURL(url) == url)
   }
 
   /// Links already stored keep their form, so `addLink` compares artifact links by their normalized form.

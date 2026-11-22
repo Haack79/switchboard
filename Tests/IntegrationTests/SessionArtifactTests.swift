@@ -88,7 +88,7 @@ extension Instance {
   }
 
   /// The group's links in `sb group ls --json`.
-  func groupLinks(_ id: String) throws -> [GroupLink] {
+  func groupLinks(_ id: String) throws -> [ExternalLink] {
     let list = try JSONCoding.decode(GroupList.self, from: sb("group", "ls", "--json"))
     return list.groups.first { $0.id == id }?.links ?? []
   }
