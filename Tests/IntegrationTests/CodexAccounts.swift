@@ -4,7 +4,7 @@ import Testing
 
 /// Helpers for the Codex account tests. They read `--json` output as raw
 /// JSON, so a test can tell a missing key from a null one and needs no
-/// Swift name for the new `agent` and `source` keys.
+/// Swift name for the `agent` and `source` keys.
 extension Instance {
   /// A rollout whose last `token_count` reports 12.5% of the 5-hour window
   /// and 34% of the week at 2025-01-02T03:04:05.678Z.

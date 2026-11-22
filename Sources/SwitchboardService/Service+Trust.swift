@@ -9,7 +9,7 @@ extension Service {
   /// trust dialog and reads no prompt. A Codex folder gets no Claude trust entry.
   func trustOwnFolder(_ id: String) {
     guard let session = entries[id]?.session, let folder = ClaudeTrust.ownFolder(session, home: home),
-      case .local(let account) = claudeAccount(of: id), codexName(account.folder) == nil
+      case .local(let account) = claudeAccount(of: id)
     else { return }
     switch ClaudeTrust.trust(folder, account: account) {
     case .alreadyTrusted:

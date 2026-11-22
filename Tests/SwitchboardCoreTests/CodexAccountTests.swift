@@ -2,8 +2,6 @@ import Foundation
 import SwitchboardCore
 import Testing
 
-// The Stage 2 API that these tests call. Each guessed name appears once, here.
-
 private func codex(_ folder: String) -> CodexAccount { CodexAccount(folder: folder) }
 
 private func discovered(_ home: String) -> [Account] { Account.discover(home: home) }
@@ -259,7 +257,7 @@ private struct FakeHome {
     }
   }
 
-  /// A path that `--account` names directly is classified like a discovered folder.
+  /// `resolve` classifies a path that `--account` names directly the way discovery classifies a folder.
   @Test(arguments: [[], ["config.toml", "auth.json"]])
   func aCodexDashFolderGivenByPathIsACodexAccount(_ files: [String]) throws {
     let home = try FakeHome()
@@ -366,7 +364,7 @@ private struct FakeHome {
   }
 }
 
-/// H1: a folder that matches both kinds is refused with a message, which sbd logs at start.
+/// H1: `Account.refusals` gives a reason for each folder that matches both kinds. sbd logs the reasons at start.
 @Suite struct CodexAccountRefusals {
   @Test func eachFolderThatMatchesBothKindsHasAReason() throws {
     let home = try FakeHome()

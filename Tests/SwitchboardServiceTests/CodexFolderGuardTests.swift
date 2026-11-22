@@ -80,7 +80,7 @@ import Testing
     }
   }
 
-  /// `headlessEnv` itself falls back, so a caller that passes a Codex folder still runs claude under Claude.
+  /// `headlessEnv` itself falls back, so a caller that passes a Codex folder still runs claude under a Claude account.
   @Test(.timeLimit(.minutes(1)))
   func aHeadlessTurnUnderACodexHomeRunsUnderTheTriageAccount() throws {
     let triage = "\(NSTemporaryDirectory())placeholder"
@@ -103,6 +103,25 @@ import Testing
       }
 
       #expect(env["CLAUDE_CONFIG_DIR"] == claude)
+    }
+  }
+
+  /// A plan turn that runs as a chat on a Codex home runs under the triage account, so its quota counts there.
+  @Test(.timeLimit(.minutes(1)))
+  func aPlanTurnForAChatOnACodexHomeCountsAgainstTheAccountItRunsUnder() throws {
+    let triage = "\(NSTemporaryDirectory())placeholder"
+    try withAccounts(config: ["triage": ["account": .string(triage)]]) { service, _, _, cx in
+      var chat = makeSession("c1", name: "G")
+      chat.chat = "g"
+      chat.claudeConfigDir = cx
+      let plan = PlanDocument(id: "p1", source: PlanSource(kind: .file, path: "/tmp/plan.md"), group: "g", attached: 0)
+      let turn = service.queue.sync {
+        service.entries["c1"] = Service.Entry(session: chat)
+        return service.planTurnAccount(plan)
+      }
+
+      #expect(turn.account == ClaudeAccount.normalize(triage))
+      #expect(turn.env["CLAUDE_CONFIG_DIR"] == turn.account)
     }
   }
 

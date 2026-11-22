@@ -4,16 +4,15 @@ import Testing
 @testable import SwitchboardCore
 
 /// The limits that the Codex usage reader takes from a CODEX_HOME, and the
-/// time that Codex reported them, in ms since the epoch. This is the one call
-/// to the Stage 2 API in this file.
+/// time that Codex reported them, in ms since the epoch.
 private func reading(_ home: String) -> (limits: [UsageLimit], checked: Int64)? {
   CodexRollout.rateLimits(home: home).map { ($0.limits, $0.checked) }
 }
 
 /// A rollout whose second `token_count` is its last. Its keys follow the
 /// shapes in codex-0.161-research.md section 3 and section 9, not a real
-/// rollout. The envelope's `timestamp` is assumed to be ISO 8601 in UTC with
-/// milliseconds.
+/// rollout. The tests assume that the envelope's `timestamp` is ISO 8601 in
+/// UTC with milliseconds.
 private let recorded = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
   .appendingPathComponent("Fixtures/codex/rollout-token-count.jsonl").path
 
@@ -235,8 +234,8 @@ private struct CodexHome {
   }
 
   /// Rollout names start with the local start time, so path order is age
-  /// order. The older file's mtime is set later, so a reader that went by
-  /// mtime would pick it.
+  /// order. The test gives the older file the later mtime, so a reader that
+  /// went by mtime would pick it.
   @Test func readsTheNewestRolloutByPathOrderNotByModificationTime() throws {
     let home = try CodexHome()
     defer { home.remove() }

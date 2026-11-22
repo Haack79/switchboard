@@ -69,14 +69,21 @@ public struct AccountUsage: Codable, Equatable, Sendable {
   public var signedOut: Bool?
   /// The agent that the account's sessions run. An sbd that reads only Claude accounts leaves it out.
   public var agent: Agent
-  /// "rollout" when the limits come from the newest Codex rollout. `checked`
-  /// is then the time Codex reported them. nil for a Claude reading, whose
-  /// limits come from the usage endpoint at `checked`.
-  public var source: String?
+
+  /// "rollout" for a Codex reading, whose limits come from the newest Codex
+  /// rollout. `checked` is then the time Codex reported them. nil for a
+  /// Claude reading, whose limits come from the usage endpoint at `checked`.
+  /// `--json` writes it. A decode ignores it.
+  private var source: String? {
+    switch agent {
+    case .claude: nil
+    case .codex: "rollout"
+    }
+  }
 
   public init(
     name: String, folder: String, email: String? = nil, limits: [UsageLimit] = [], checked: Int64? = nil,
-    error: String? = nil, signedOut: Bool? = nil, agent: Agent = .claude, source: String? = nil
+    error: String? = nil, signedOut: Bool? = nil, agent: Agent = .claude
   ) {
     self.name = name
     self.folder = folder
@@ -86,7 +93,10 @@ public struct AccountUsage: Codable, Equatable, Sendable {
     self.error = error
     self.signedOut = signedOut
     self.agent = agent
-    self.source = source
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case name, folder, email, limits, checked, error, signedOut, agent, source
   }
 
   public init(from decoder: Decoder) throws {
@@ -99,7 +109,19 @@ public struct AccountUsage: Codable, Equatable, Sendable {
     error = try c.decodeIfPresent(String.self, forKey: .error)
     signedOut = try c.decodeIfPresent(Bool.self, forKey: .signedOut)
     agent = try c.decodeIfPresent(Agent.self, forKey: .agent) ?? .claude
-    source = try c.decodeIfPresent(String.self, forKey: .source)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(name, forKey: .name)
+    try c.encode(folder, forKey: .folder)
+    try c.encodeIfPresent(email, forKey: .email)
+    try c.encode(limits, forKey: .limits)
+    try c.encodeIfPresent(checked, forKey: .checked)
+    try c.encodeIfPresent(error, forKey: .error)
+    try c.encodeIfPresent(signedOut, forKey: .signedOut)
+    try c.encode(agent, forKey: .agent)
+    try c.encodeIfPresent(source, forKey: .source)
   }
 
   /// The percent of the `session` limit, or nil when the reading has none.
@@ -114,7 +136,7 @@ public struct AccountUsage: Codable, Equatable, Sendable {
   /// When Codex reported the limits of a `rollout` reading, such as "reported 3h ago", or nil for a reading
   /// that sbd fetched. A rollout reading is as old as the account's last Codex turn.
   public func reported(now: Int64 = nowMs()) -> String? {
-    guard source == "rollout", let checked, !limits.isEmpty else { return nil }
+    guard agent == .codex, let checked, !limits.isEmpty else { return nil }
     return "reported \(ago(checked, now: now)) ago"
   }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # A stand-in for the codex CLI in sbd's integration tests. It answers only
-# what Stage 2 of the Codex accounts plan runs:
+# these commands:
 #   codex login status   exits 1 and prints "Not logged in" when
 #                        $CODEX_HOME/stub-signed-out exists, else exits 0
 #                        and prints "Logged in using ChatGPT". It never reads
@@ -11,8 +11,8 @@
 # Anything else, such as the interactive `codex login`, prints a message and
 # exits 2.
 #
-# It requires CODEX_HOME, and it refuses a CODEX_HOME in the real user's home,
-# so that a test never reads or writes the user's ~/.codex. The real home comes
+# It requires CODEX_HOME. It refuses a CODEX_HOME in the real user's home, so
+# that a test never reads or writes the user's ~/.codex. The real home comes
 # from the password database, which HOME and CFFIXED_USER_HOME don't change.
 #
 # Each run appends one record to $SB_HOME/codex-calls.log, or to

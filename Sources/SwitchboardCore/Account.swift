@@ -3,6 +3,26 @@ import Foundation
 /// The CLI that an account's sessions run. `--json` output writes it by its raw value.
 public enum Agent: String, Codable, Hashable, Sendable, CaseIterable {
   case claude, codex
+
+  /// The agent's name in text for the user, such as `Codex`.
+  public var displayName: String {
+    switch self {
+    case .claude: "Claude"
+    case .codex: "Codex"
+    }
+  }
+
+  /// Whether Switchboard runs sessions on the agent's accounts.
+  public var runsSessions: Bool {
+    switch self {
+    case .claude: true
+    case .codex: false
+    }
+  }
+
+  /// Why no session runs on a Codex account.
+  public static let onlyClaudeRunsSessions =
+    "Switchboard runs sessions only on Claude accounts until Codex sessions arrive in a later release"
 }
 
 /// An account that sessions run under. Each case is one agent's config
@@ -50,55 +70,61 @@ public enum Account: Hashable, Sendable {
     }
   }
 
-  /// The short name of a stored folder, judged by the folder's name alone.
-  /// It is the name that `name` gives once the folder is listed, except for
-  /// a `codexHomes` entry named like a Claude folder, which no list holds.
+  /// The short name of a stored folder. It judges the folder by its name alone, because the app and `sb` have
+  /// no config to read `codexHomes` from. It matches `name` for every listed account, because no list holds a
+  /// `codexHomes` entry named like a Claude folder.
   public static func name(ofFolder folder: String) -> String {
     CodexAccount.isNamedLikeCodex(folder) ? CodexAccount(folder: folder).name : ClaudeAccount(folder: folder).name
   }
 
-  /// The accounts that sbd lists. `claudeConfigDirs` and `codexHomes`
-  /// replace discovery of their kind when set. A folder named like a Codex
-  /// folder, or one that `codexHomes` lists, is never a Claude account. A
-  /// Codex folder that holds a Claude login or is named like a Claude folder
-  /// is neither kind.
+  /// The accounts that sbd lists, and a reason for each other folder that a list names or discovery finds. sbd
+  /// logs the reasons. `claudeConfigDirs` and `codexHomes` replace discovery of their kind when set. A folder that
+  /// `CodexAccount.whyCodex` claims is never a Claude account. A Codex folder that holds a Claude login or is
+  /// named like a Claude folder is neither kind.
+  public static func survey(
+    claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
+  ) -> (accounts: [Account], refusals: [String]) {
+    let found = candidates(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home)
+    let claude = found.claude.map { ($0, claudeClash($0, codexHomes: codexHomes)) }
+    let codex = found.codex.map { ($0, $0.clash) }
+    var seen = Set<String>()
+    let accounts =
+      (claude.filter { $0.1 == nil }.map { Account.claude($0.0) }
+      + codex.filter { $0.1 == nil }.map { Account.codex($0.0) }).filter { seen.insert($0.folder).inserted }
+    return (accounts, claude.compactMap(\.1) + codex.compactMap(\.1))
+  }
+
+  /// The accounts that `survey` lists.
   public static func listed(
     claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
   ) -> [Account] {
-    let found = candidates(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home)
-    let claude = found.claude.filter { claudeClash($0, codexHomes: codexHomes) == nil }
-    var seen = Set<String>()
-    return (claude.map(Account.claude) + found.codex.filter { $0.clash == nil }.map(Account.codex))
-      .filter { seen.insert($0.folder).inserted }
+    survey(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home).accounts
   }
 
-  /// Why `listed` leaves out each folder that a list names or discovery finds, for sbd's log.
+  /// Why `survey` leaves out each folder that a list names or discovery finds.
   public static func refusals(
     claudeConfigDirs: [String]?, codexHomes: [String]?, home: String = NSHomeDirectory()
   ) -> [String] {
-    let found = candidates(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home)
-    return found.claude.compactMap { claudeClash($0, codexHomes: codexHomes) } + found.codex.compactMap(\.clash)
+    survey(claudeConfigDirs: claudeConfigDirs, codexHomes: codexHomes, home: home).refusals
   }
 
+  /// The folders that the lists name, or else that discovery finds. Discovery lists the home folder once for
+  /// both kinds.
   private static func candidates(
     claudeConfigDirs: [String]?, codexHomes: [String]?, home: String
   ) -> (claude: [ClaudeAccount], codex: [CodexAccount]) {
-    (
-      claudeConfigDirs?.map(ClaudeAccount.init(folder:)) ?? ClaudeAccount.discover(home: home),
-      codexHomes?.map(CodexAccount.init(folder:)) ?? CodexAccount.discover(home: home)
+    let names =
+      claudeConfigDirs != nil && codexHomes != nil
+      ? [] : (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []
+    return (
+      claudeConfigDirs?.map(ClaudeAccount.init(folder:)) ?? ClaudeAccount.discover(names, in: home),
+      codexHomes?.map(CodexAccount.init(folder:)) ?? CodexAccount.discover(names, in: home)
     )
   }
 
-  /// Why a Claude folder is no Claude account: it is named like a Codex folder, in any case, or `codexHomes`
-  /// lists it.
+  /// Why a Claude folder is no Claude account: `CodexAccount.whyCodex` claims it.
   private static func claudeClash(_ account: ClaudeAccount, codexHomes: [String]?) -> String? {
-    if CodexAccount.isNamedLikeCodex(account.folder, ignoringCase: true) {
-      return "\(account.folder) is named like a Codex folder, so it is no Claude account"
-    }
-    if (codexHomes ?? []).contains(where: { ClaudeAccount.normalize($0) == account.folder }) {
-      return "codexHomes lists \(account.folder), so it is no Claude account"
-    }
-    return nil
+    CodexAccount.whyCodex(account.folder, codexHomes: codexHomes).map { "\($0), so it is no Claude account" }
   }
 
   /// The Claude accounts and then the Codex accounts in the home folder.
@@ -106,11 +132,11 @@ public enum Account: Hashable, Sendable {
     listed(claudeConfigDirs: nil, codexHomes: nil, home: home)
   }
 
-  /// The account that `ref` names: a short name, or a folder. A name that
-  /// two known accounts share is refused, so that it never picks one
-  /// silently. A folder that no known account has is a Codex account when it
-  /// is named like one, and a Claude account when it holds a Claude login.
-  public static func resolve(_ ref: String, among known: [Account]) throws -> Account {
+  /// The account that `ref` names: a short name, or a folder. It refuses a
+  /// name that two known accounts share, so that it never picks one
+  /// silently. A folder that no known account has is a Codex account when
+  /// `CodexAccount.whyCodex` claims it, and a Claude account when it holds a Claude login.
+  public static func resolve(_ ref: String, among known: [Account], codexHomes: [String]? = nil) throws -> Account {
     let named = known.filter { $0.name == ref }
     if named.count > 1 {
       let folders = named.map(\.folder).joined(separator: ", ")
@@ -119,11 +145,10 @@ public enum Account: Hashable, Sendable {
     if let match = named.first { return match }
     let folder = ClaudeAccount.normalize(ref)
     if let match = known.first(where: { $0.folder == folder }) { return match }
-    if CodexAccount.isNamedLikeCodex(folder) {
+    if CodexAccount.whyCodex(folder, codexHomes: codexHomes) != nil {
       let account = CodexAccount(folder: folder)
       if let clash = account.clash { throw APIError(clash) }
-      var isDir: ObjCBool = false
-      guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else {
+      guard isDirectory(folder) else {
         throw APIError("\(ref) is no Codex account (no folder \(folder))")
       }
       return .codex(account)

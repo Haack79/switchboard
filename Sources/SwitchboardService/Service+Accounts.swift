@@ -8,17 +8,17 @@ import SwitchboardCore
 extension Service {
   /// The account that a new session without a parent uses: the one that
   /// `sb account use` chose, else CLAUDE_CONFIG_DIR from config.env or from
-  /// sbd's environment, else Claude's default account. A CLAUDE_CONFIG_DIR
-  /// that names a Codex folder is skipped.
+  /// sbd's environment, else Claude's default account. It skips a
+  /// CLAUDE_CONFIG_DIR that names a Codex folder.
   var activeAccount: ClaudeAccount {
     if let chosenAccount { return chosenAccount }
     let configured = config.env["CLAUDE_CONFIG_DIR"] ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
     return ClaudeAccount(folder: configured.flatMap { codexName($0) == nil ? $0 : nil } ?? ClaudeAccount.defaultFolder)
   }
 
-  /// Reads the account that `sb account use` chose. A folder that no longer
-  /// holds a Claude account is ignored, so a removed or reconfigured account
-  /// doesn't stop sessions from starting.
+  /// Reads the account that `sb account use` chose. It ignores a folder that
+  /// no longer holds a Claude account or that is now a Codex folder, so a
+  /// removed or reconfigured account doesn't stop sessions from starting.
   func loadChosenAccount() {
     guard let text = try? String(contentsOfFile: home.activeAccount, encoding: .utf8) else { return }
     let folder = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,11 +35,7 @@ extension Service {
   /// The account that `ref` names. A folder that `codexHomes` lists never
   /// resolves to a Claude account, even when it holds a Claude login.
   func resolveAccount(_ ref: String) throws -> Account {
-    let account = try Account.resolve(ref, among: accounts)
-    if case .claude(let claude) = account, let name = codexName(claude.folder) {
-      throw APIError(Self.codexRefusal(name))
-    }
-    return account
+    try Account.resolve(ref, among: accounts, codexHomes: config.codexHomes)
   }
 
   /// The account that `ref` names, for a request that only a Claude account can serve, such as `account use` or
@@ -51,18 +47,16 @@ extension Service {
     }
   }
 
-  /// The Codex account's name when the folder is named like a Codex folder or `codexHomes` lists it, else nil.
-  /// A Claude-only consumer refuses such a folder, or falls back to a Claude account. The folder may also
-  /// hold a Claude login, which makes it neither kind.
+  /// The Codex account's name when `CodexAccount.whyCodex` claims the folder, else nil. A Claude-only consumer
+  /// refuses such a folder, or falls back to a Claude account. The folder may also hold a Claude login, which
+  /// makes it neither kind.
   func codexName(_ folder: String) -> String? {
-    let folder = ClaudeAccount.normalize(folder)
-    let listed = (config.codexHomes ?? []).contains { ClaudeAccount.normalize($0) == folder }
-    return CodexAccount.isNamedLikeCodex(folder, ignoringCase: true) || listed ? CodexAccount(folder: folder).name : nil
+    CodexAccount.whyCodex(folder, codexHomes: config.codexHomes) == nil ? nil : CodexAccount(folder: folder).name
   }
 
   /// Why a session can't start, or a request can't use, the Codex account `name`.
   static func codexRefusal(_ name: String) -> String {
-    "\(name) is a Codex account, and Switchboard runs sessions only on Claude accounts until Codex sessions arrive in a later release"
+    "\(name) is a Codex account, and \(Agent.onlyClaudeRunsSessions)"
   }
 
   /// Why claude can't launch for the local session `id`: the account that its pane would set is a Codex folder.
@@ -95,14 +89,14 @@ extension Service {
       return bound
     }
     if let named { return named }
-    if let parent, let entry = entries[parent], entry.session.host == nil {
-      let folder = claudeAccount(of: parent).key
-      if let name = codexName(folder) {
-        throw APIError("the parent \(mention(parent)) runs under \(Self.codexRefusal(name)). Name a Claude account")
-      }
-      return folder
+    guard let parent, entries[parent] != nil else { return nil }
+    switch claudeAccount(of: parent) {
+    case .local(let account): return account.folder
+    case .codex(let account):
+      throw APIError(
+        "the parent \(mention(parent)) runs under \(Self.codexRefusal(account.name)). Name a Claude account")
+    case .host: return nil
     }
-    return nil
   }
 
   /// The session's account group, while the group's folder still holds a
@@ -178,23 +172,30 @@ extension Service {
   /// the agent, and returns it with the command that signs it in. Login is
   /// interactive, so sbd never runs it. The name becomes part of a folder in
   /// the home, so it takes only letters, digits, `.`, `_`, and `-`, and starts
-  /// with a letter or digit. An existing folder may hold a login, so it is refused. So is a name that a listed
-  /// account already has, such as `codex-work` for ~/.claude-codex-work beside ~/.codex-work.
+  /// with a letter or digit. It refuses an existing folder, because the
+  /// folder may hold a login. It also refuses a name that a listed account
+  /// already has, such as `codex-work` for ~/.claude-codex-work beside
+  /// ~/.codex-work.
   private func addAccount(_ args: JSON) throws -> JSON {
     let name = args["name"]?.string ?? ""
     guard let raw = args["agent"]?.string, let agent = Agent(rawValue: raw) else {
-      throw APIError("name the agent: claude or codex")
+      throw APIError("name the agent: \(Agent.allCases.map(\.rawValue).joined(separator: " or "))")
     }
     let plain = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
     guard let first = name.first, plain(first), name.allSatisfy({ plain($0) || "._-".contains($0) }) else {
       throw APIError(
         "\"\(name)\" can't name an account. Use letters, digits, '.', '_', and '-', starting with a letter or digit")
     }
-    let account: Account =
-      switch agent {
-      case .claude: .claude(ClaudeAccount(folder: "\(NSHomeDirectory())/.claude-\(name)"))
-      case .codex: .codex(CodexAccount(folder: "\(NSHomeDirectory())/.codex-\(name)"))
-      }
+    let account: Account
+    let login: String
+    switch agent {
+    case .claude:
+      let claude = ClaudeAccount(folder: "\(NSHomeDirectory())/.claude-\(name)")
+      (account, login) = (.claude(claude), "\(claude.command(config.claude)), then /login")
+    case .codex:
+      let codex = CodexAccount(folder: "\(NSHomeDirectory())/.codex-\(name)")
+      (account, login) = (.codex(codex), codex.loginCommand)
+    }
     if let other = accounts.first(where: { $0.name == account.name }) {
       throw APIError("\(other.folder) is already named \(account.name), so the name would pick neither account")
     }
@@ -207,11 +208,6 @@ extension Service {
       }
       throw APIError("can't make \(account.folder): \(error.localizedDescription)")
     }
-    let login =
-      switch account {
-      case .claude(let claude): "\(claude.command(config.claude)), then /login"
-      case .codex(let codex): codex.loginCommand
-      }
     logLine("made the \(agent.rawValue) account folder \(account.folder)")
     return [
       "name": .string(account.name), "folder": .string(account.folder), "agent": .string(agent.rawValue),
@@ -252,11 +248,12 @@ extension Service {
     for id in named ?? entries.keys.sorted() {
       guard let session = entries[id]?.session else { continue }
       let block = { (reason: String) in result.blocked.append(.init(session: id, name: session.name, reason: reason)) }
-      if let reason = notMovable(session, to: target) {
+      let account = claudeAccount(of: id)
+      if let reason = notMovable(session, account: account, to: target) {
         if named != nil { block(reason) }
         continue
       }
-      if let reason = moveRefusal(id, to: target, listsRunningAsMovable: listsRunningAsMovable) {
+      if let reason = moveRefusal(id, account: account, to: target, listsRunningAsMovable: listsRunningAsMovable) {
         block(reason)
         continue
       }
@@ -311,9 +308,9 @@ extension Service {
   /// Why the move does not consider the session: it has not started, or it
   /// already runs under the account. A bulk move skips such a session. A
   /// named move lists it in `blocked`.
-  private func notMovable(_ session: Session, to target: ClaudeAccount) -> String? {
+  private func notMovable(_ session: Session, account: SessionAccount, to target: ClaudeAccount) -> String? {
     if session.cwd.isEmpty { return "it has not started" }
-    if claudeAccount(of: session.id) == .local(target) { return "it already runs under \(target.name)" }
+    if account == .local(target) { return "it already runs under \(target.name)" }
     return nil
   }
 
@@ -321,10 +318,15 @@ extension Service {
   /// sessions as a move. With `listsRunningAsMovable`, a running claude does not refuse the move.
   /// Only a dry run of a move with `stop` sets it, because the real move
   /// stops that claude before it runs and then refuses a claude that still runs.
-  private func moveRefusal(_ id: String, to target: ClaudeAccount, listsRunningAsMovable: Bool) -> String? {
+  private func moveRefusal(
+    _ id: String, account: SessionAccount, to target: ClaudeAccount, listsRunningAsMovable: Bool
+  ) -> String? {
     guard let e = entries[id] else { return "no session \(id)" }
-    if let host = e.session.host { return "it runs under the Claude login of \(host)" }
-    if let name = codexName(claudeAccount(of: id).key) { return Self.codexMoveRefusal(name) }
+    switch account {
+    case .local: break
+    case .codex(let codex): return Self.codexMoveRefusal(codex.name)
+    case .host(let host): return "it runs under the Claude login of \(host)"
+    }
     if let group = accountGroup(of: e.session), let bound = group.account, bound != target.folder {
       return
         "its group \(group.name) runs its sessions under the account \(Account.name(ofFolder: bound)). Move it out of the group, or change the group's account with sb group account"
@@ -365,10 +367,13 @@ extension Service {
   /// transcript has none to copy, and starts its conversation in the account.
   private func move(_ id: String, to target: ClaudeAccount) throws {
     let session = entries[id]!.session
-    guard case .local(let from) = claudeAccount(of: id) else {
-      throw APIError("it runs under the Claude login of \(session.host ?? "its host")")
+    let from: ClaudeAccount
+    switch claudeAccount(of: id) {
+    case .local(let account): from = account
+    case .codex(let account): throw APIError(Self.codexMoveRefusal(account.name))
+    case .host(let host): throw APIError("it runs under the Claude login of \(host)")
     }
-    if let name = codexName(from.folder) ?? codexName(target.folder) { throw APIError(Self.codexMoveRefusal(name)) }
+    if let name = codexName(target.folder) { throw APIError(Self.codexMoveRefusal(name)) }
     if let source = transcriptFile(session) {
       try copyConversation(source, id: session.claudeSessionId, from: from, to: target)
     }

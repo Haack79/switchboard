@@ -82,11 +82,7 @@ public enum QuickAsk {
     rest += ["Inbox:"] + (items.isEmpty ? ["- empty"] : items)
     rest.append("Accounts:")
     rest += accounts.map { a in
-      let agent =
-        switch a.agent {
-        case .claude: ""
-        case .codex: " (Codex: no session runs on it yet)"
-        }
+      let agent = a.agent.runsSessions ? "" : " (\(a.agent.displayName): no session runs on it yet)"
       return
         "- \(a.name)\(a.active ? " (active: new sessions use it)" : "")\(agent): \(a.folder), \(a.sessions) sessions"
     }

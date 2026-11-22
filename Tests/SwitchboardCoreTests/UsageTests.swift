@@ -200,6 +200,27 @@ let legacyWithoutASession = Data(
   }
 }
 
+/// `sb usage --json` writes `"source": "rollout"` for every Codex reading and leaves it out of a Claude one.
+@Suite struct UsageSourceTests {
+  func encoded(_ reading: AccountUsage) throws -> JSON {
+    try JSONCoding.decoder.decode(JSON.self, from: JSONCoding.encoder.encode(reading))
+  }
+
+  @Test func aCodexPlaceholderWithoutLimitsHasTheRolloutSource() throws {
+    #expect(try encoded(AccountUsage(name: "codex", folder: "/c", agent: .codex))["source"]?.string == "rollout")
+  }
+
+  @Test func aClaudeReadingHasNoSource() throws {
+    #expect(try encoded(AccountUsage(name: "a", folder: "/a"))["source"] == nil)
+  }
+
+  @Test func aDecodedCodexReadingKeepsItsAgent() throws {
+    let reading = AccountUsage(name: "codex", folder: "/c", checked: 1, agent: .codex)
+
+    #expect(try JSONCoding.convert(try encoded(reading), to: AccountUsage.self) == reading)
+  }
+}
+
 @Suite struct UsageBudgetTests {
   func reading(_ limits: [UsageLimit], error: String? = nil) -> AccountUsage {
     AccountUsage(name: "A", folder: "/tmp/A", email: nil, limits: limits, checked: 1, error: error)

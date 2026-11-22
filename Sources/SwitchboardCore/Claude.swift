@@ -50,9 +50,19 @@ public struct ClaudeAccount: Hashable, Sendable {
     return last.hasPrefix(".claude-") ? String(last.dropFirst(".claude-".count)) : last
   }
 
+  /// Whether the folder is named ~/.claude or ~/.claude-<something>.
+  public static func isNamedLikeClaude(_ folder: String) -> Bool {
+    let last = (normalize(folder) as NSString).lastPathComponent
+    return last == ".claude" || last.hasPrefix(".claude-")
+  }
+
   /// The default account, then each ~/.claude-* folder that holds a .claude.json, by name.
   public static func discover(home: String = NSHomeDirectory()) -> [ClaudeAccount] {
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []
+    discover((try? FileManager.default.contentsOfDirectory(atPath: home)) ?? [], in: home)
+  }
+
+  /// As `discover(home:)`, but it takes the home folder's entries from `names`.
+  static func discover(_ names: [String], in home: String) -> [ClaudeAccount] {
     let others = names.filter { $0.hasPrefix(".claude-") }.sorted().map { ClaudeAccount(folder: "\(home)/\($0)") }
     return [ClaudeAccount(folder: "\(home)/.claude")] + others.filter(\.holdsAccount)
   }

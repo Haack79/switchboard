@@ -413,7 +413,7 @@ public final class Service {
   /// running claude's queued messages on the state queue.
   public func load() throws {
     loadChosenAccount()
-    for refusal in Account.refusals(claudeConfigDirs: config.claudeConfigDirs, codexHomes: config.codexHomes) {
+    for refusal in Account.survey(claudeConfigDirs: config.claudeConfigDirs, codexHomes: config.codexHomes).refusals {
       logLine("not listing an account: \(refusal)")
     }
     autoContinueOn = autoContinueSwitch.isOn

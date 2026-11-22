@@ -32,3 +32,32 @@ import Testing
     #expect(usage.signedOut == true)
   }
 }
+
+/// `codex login status` under a timeout. A codex that handles SIGTERM can exit 1, which alone means signed out.
+@Suite struct UsageReaderCodexLogin {
+  func failure(_ r: CommandResult) -> Error? {
+    do {
+      try UsageReader.checkCodexLogin(r, login: "codex login")
+      return nil
+    } catch {
+      return error
+    }
+  }
+
+  @Test func anExitOneAfterTheTimeoutIsATimeoutAndNotASignOut() {
+    let error = failure(CommandResult(status: 1, stdout: "", stderr: "", timedOut: true))
+
+    #expect(!(error is SignedOut))
+    #expect("\(error.map { "\($0)" } ?? "")".contains("did not answer"))
+  }
+
+  @Test func anExitOneByItselfIsASignOut() {
+    #expect(failure(CommandResult(status: 1, stdout: "", stderr: "Not logged in\n")) is SignedOut)
+  }
+
+  @Test func anotherStatusNamesTheProblem() {
+    let error = failure(CommandResult(status: 2, stdout: "", stderr: "boom\n"))
+
+    #expect("\(error.map { "\($0)" } ?? "")" == "`codex login status` failed: boom")
+  }
+}

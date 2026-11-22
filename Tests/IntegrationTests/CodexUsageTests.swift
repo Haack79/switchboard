@@ -166,7 +166,8 @@ import Testing
   }
 
   /// The Claude block of the text output reads as it did before Codex
-  /// accounts. Its first line may gain the agent, so only its ends are checked.
+  /// accounts. Its first line also names the agent, so the test checks only
+  /// that line's start and end.
   @Test func theClaudeTextBlockIsUnchanged() throws {
     let fake = try FakeUsage()
     let sbd = try instance(fake)

@@ -36,8 +36,8 @@ extension Service {
   }
 
   /// The session, when its folder exists, its claude is stopped, it isn't paused, no `rm` is removing it,
-  /// the removal job doesn't hold it, and the account that its pane would set is no Codex folder. Every start of claude calls it, so a start that misses the pause check of
-  /// its own still refuses.
+  /// the removal job doesn't hold it, and the account that its pane would set is no Codex folder. Every start
+  /// of claude calls it, so a start that misses the pause check of its own still refuses.
   func requireStartable(_ id: String) throws -> Session {
     guard let session = entries[id]?.session else { throw APIError("no session \(id)") }
     if let refusal = beingDeletedRefusal(id) { throw refusal }

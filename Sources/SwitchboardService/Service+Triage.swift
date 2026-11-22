@@ -212,15 +212,27 @@ extension Service {
   // MARK: Summaries
 
   /// The account of a one-shot call that sbd makes for the session `id`: `triage.account` when it is set, or else
-  /// the session's own. `key` is the account that the call's quota counts against. `account` is the override that
-  /// `headlessEnv` applies, nil when the call takes the session's pane environment.
-  /// A session whose account is a Codex folder takes the active account, because claude can't run under Codex's.
+  /// `headlessAccount(of:)`.
   func triageAccount(for id: String) -> (key: String, account: ClaudeAccount?) {
     if let account = triageClaudeAccount { return (account.folder, account) }
-    let own = claudeAccount(of: id)
-    if case .local(let account) = own, codexName(account.folder) != nil { return (activeAccount.folder, activeAccount) }
-    return (own.key, nil)
+    return headlessAccount(of: id)
   }
+
+  /// The account of a one-shot call that runs as the session `id`. `key` is the account that the call's quota
+  /// counts against. `account` is the override that `headlessEnv` applies. It is nil when the call takes the
+  /// session's pane environment. A session whose account is a Codex folder takes `headlessStandIn`, because
+  /// claude can't run under a Codex folder.
+  func headlessAccount(of id: String) -> (key: String, account: ClaudeAccount?) {
+    let own = claudeAccount(of: id)
+    switch own {
+    case .local, .host: return (own.key, nil)
+    case .codex: return (headlessStandIn.folder, headlessStandIn)
+    }
+  }
+
+  /// The Claude account that a one-shot turn runs under in place of a Codex folder: `triage.account`, else the
+  /// active account.
+  var headlessStandIn: ClaudeAccount { triageClaudeAccount ?? activeAccount }
 
   /// `triage.account`, or nil when it is unset or names a Codex folder.
   var triageClaudeAccount: ClaudeAccount? {

@@ -1,14 +1,19 @@
 import Foundation
+import os
 
 public struct CommandResult: Sendable {
   public var status: Int32
   public var stdout: String
   public var stderr: String
+  /// True when `runCommand` sent SIGTERM because the timeout passed. A
+  /// program that handles SIGTERM can then exit with any status.
+  public var timedOut: Bool
 
-  public init(status: Int32, stdout: String, stderr: String) {
+  public init(status: Int32, stdout: String, stderr: String, timedOut: Bool = false) {
     self.status = status
     self.stdout = stdout
     self.stderr = stderr
+    self.timedOut = timedOut
   }
 }
 
@@ -51,7 +56,13 @@ public func runCommand(
   let stdin = input.map { _ in Pipe() }
   p.standardInput = stdin ?? FileHandle.nullDevice
   try p.run()
-  let kill = DispatchWorkItem { if p.isRunning { p.terminate() } }
+  let timedOut = OSAllocatedUnfairLock(initialState: false)
+  let kill = DispatchWorkItem {
+    if p.isRunning {
+      timedOut.withLock { $0 = true }
+      p.terminate()
+    }
+  }
   defer { kill.cancel() }
   if let timeout { DispatchQueue(label: "runCommand.timeout").asyncAfter(deadline: .now() + timeout, execute: kill) }
   if let stdin, let input {
@@ -74,7 +85,7 @@ public func runCommand(
   p.waitUntilExit()
   return CommandResult(
     status: p.terminationStatus, stdout: String(decoding: outData, as: UTF8.self),
-    stderr: String(decoding: errData, as: UTF8.self))
+    stderr: String(decoding: errData, as: UTF8.self), timedOut: timedOut.withLock { $0 })
 }
 
 /// The text in single quotes, for a command that a POSIX shell runs. It is correct for every

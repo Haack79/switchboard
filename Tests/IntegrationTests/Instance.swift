@@ -93,8 +93,9 @@ final class Instance {
   /// setup can take 1.5 s to start, and the tests start dozens of panes at once.
   /// Each account is a Claude config folder that this creates in the home.
   /// Each Codex account is an empty folder that this creates in the home.
-  /// The config lists only those, so a test never reads the user's accounts,
-  /// and it runs the codex stub, so a test never runs the user's codex.
+  /// The config lists only those, so a test never reads the user's accounts.
+  /// The config names the codex stub as `codex`, so a test never runs the
+  /// user's codex.
   /// The GitHub poller and the usage reader run only when a test asks, and the
   /// Depot poller is off.
   init(

@@ -81,6 +81,24 @@ import Testing
   }
 }
 
+/// `CommandResult.timedOut` tells a timeout apart from the status that a program gives when SIGTERM ends it.
+@Suite struct ProcessesTimeoutTests {
+  /// The shell waits on `sleep` in the background, so the trap runs as soon as SIGTERM arrives.
+  @Test(.timeLimit(.minutes(1))) func aProgramThatExitsOneOnSIGTERMIsReportedAsTimedOut() throws {
+    let r = try runCommand("/bin/bash", ["-c", "trap 'exit 1' TERM; sleep 30 & wait"], timeout: 0.3)
+
+    #expect(r.status == 1)
+    #expect(r.timedOut)
+  }
+
+  @Test func aProgramThatFinishesInTimeIsNotTimedOut() throws {
+    let r = try runCommand("/bin/sh", ["-c", "exit 1"], timeout: 30)
+
+    #expect(r.status == 1)
+    #expect(!r.timedOut)
+  }
+}
+
 @Suite struct ShellQuoteTests {
   @Test(arguments: [
     ("", "''"), ("a b", "'a b'"), ("'", #"''\'''"#), ("it's", #"'it'\''s'"#), ("''", #"''\'''\'''"#),

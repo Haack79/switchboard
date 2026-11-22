@@ -9,7 +9,7 @@ import Testing
 /// the property itself: claude never ran with CLAUDE_CONFIG_DIR set to a
 /// Codex folder, and no Codex folder gained Claude files.
 ///
-/// No Codex session can exist in Stage 2. A stored session, follow-up, or
+/// sbd runs no session on a Codex account. A stored session, follow-up, or
 /// group therefore gets a Codex account through `makeCodex`, which turns
 /// Claude account B into a Codex account, as a renamed or reconfigured
 /// folder would.
@@ -333,7 +333,7 @@ import Testing
 /// Risk 2: a move copies a conversation's files into the target account. A
 /// Codex target, or a session whose account is Codex, refuses every move
 /// shape, because a Codex thread also lives in SQLite rows that a copy
-/// leaves behind. The copy is destructive, so no shape is left untested.
+/// leaves behind. The copy is destructive, so each move shape has a test.
 @Suite(.blocking(timeLimit: .seconds(120))) struct CodexAccountMoveGuardTests {
   let guards = CodexAccountGuardTests()
   let accountTests = AccountTests()
@@ -409,8 +409,8 @@ import Testing
     #expect(sbd.tree(folder).isEmpty)
   }
 
-  /// The group's account was B when it was set. B is a Codex account by the
-  /// member's next launch, so the lazy move is skipped, and the member
+  /// The group's account was B when the test set it. B is a Codex account by
+  /// the member's next launch, so sbd skips the lazy move. The member
   /// launches under its own account.
   @Test func aLazyMoveToAGroupAccountThatBecameCodexIsSkipped() throws {
     let sbd = try guards.instance()

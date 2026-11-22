@@ -16,25 +16,14 @@ struct AccountRow: Identifiable, Equatable {
   var signedOut: Bool { usage?.signedOut == true }
   /// The account's name in a menu that moves sessions to it, which names a signed-out account as such.
   var choiceTitle: String { signedOut ? "\(account.name) (not signed in)" : account.name }
-  /// A click on the row makes the account the one for new sessions. Only a Claude account can be that account.
-  var canChoose: Bool {
-    switch account.agent {
-    case .claude: !account.active && !signedOut
-    case .codex: false
-    }
-  }
+  /// A click on the row makes the account the one for new sessions. Only an account whose agent runs sessions
+  /// can become that account.
+  var canChoose: Bool { account.agent.runsSessions && !account.active && !signedOut }
   var disabledReason: String? {
-    switch account.agent {
-    case .claude: signedOut ? "New sessions can't use it until it signs in." : nil
-    case .codex: "A Codex account. Switchboard runs sessions only on Claude accounts until a later release."
+    guard account.agent.runsSessions else {
+      return "A \(account.agent.displayName) account. \(Agent.onlyClaudeRunsSessions)."
     }
-  }
-  /// The agent's name for the row, such as `Codex`.
-  var agentName: String {
-    switch account.agent {
-    case .claude: "Claude"
-    case .codex: "Codex"
-    }
+    return signedOut ? "New sessions can't use it until it signs in." : nil
   }
 }
 
@@ -222,7 +211,7 @@ private struct AccountBlock: View {
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
           Text(row.account.name).fontWeight(.semibold).foregroundStyle(row.signedOut ? .secondary : .primary)
-          Text(row.agentName).foregroundStyle(.secondary)
+          Text(row.account.agent.displayName).foregroundStyle(.secondary)
           if let email = row.usage?.email { Text(email).foregroundStyle(.secondary) }
           if let sessions = row.sessionCount {
             Spacer(minLength: 6)

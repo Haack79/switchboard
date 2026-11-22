@@ -42,7 +42,7 @@ func account(_ a: Args) {
 }
 
 private let moveUsage = "<name|folder> [--session <ref>]... [--stop] [--dry-run]"
-private let addUsage = "<name> --agent claude|codex"
+private let addUsage = "<name> --agent \(Agent.allCases.map(\.rawValue).joined(separator: "|"))"
 
 /// Whether `use` also moves the existing sessions. `--move` and `--new-only`
 /// answer it. Without either, a terminal asks when a session could move, and a

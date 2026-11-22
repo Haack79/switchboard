@@ -1,9 +1,10 @@
 import Foundation
 import SwitchboardCore
 
-/// Reads each account's plan usage on a timer and when `sb usage` asks: a
-/// Claude account's from the endpoint that claude's `/usage` reads, a Codex
-/// account's from its newest rollout. One read runs at a time, on `queue`. The last reading of each account stays in `readings`,
+/// Reads each account's plan usage on a timer and when `sb usage` asks. A
+/// Claude account's usage comes from the endpoint that claude's `/usage`
+/// reads. A Codex account's comes from its newest rollout. One read runs at
+/// a time, on `queue`. The last reading of each account stays in `readings`,
 /// which any thread may read. `lock` guards `readings`, so the reader is
 /// Sendable.
 final class UsageReader: @unchecked Sendable {
@@ -176,7 +177,7 @@ final class UsageReader: @unchecked Sendable {
   /// reported the limits. Without a rollout that has them, the reading has
   /// no limits and no error.
   private func reading(_ account: CodexAccount) -> AccountUsage {
-    var usage = AccountUsage(name: account.name, folder: account.folder, agent: .codex, source: "rollout")
+    var usage = AccountUsage(name: account.name, folder: account.folder, agent: .codex)
     do {
       try requireCodexLogin(account)
       if let rollout = CodexRollout.rateLimits(home: account.folder) {
@@ -192,24 +193,26 @@ final class UsageReader: @unchecked Sendable {
   /// How long `codex login status` may take before the reading records an error.
   private static let codexLoginTimeout = 10.0
 
-  /// Throws `SignedOut` when `codex login status` exits 1, and another error
-  /// when it fails otherwise or takes longer than `codexLoginTimeout`. A
-  /// keyring login leaves no auth.json, so only codex can tell.
+  /// Runs `codex login status` under the account. A keyring login leaves no
+  /// auth.json, so only codex can tell whether the account is signed in.
   private func requireCodexLogin(_ account: CodexAccount) throws {
     let program = service.config.codex
     guard let codex = findExecutable(program) else { throw APIError("can't find \(program)") }
     var env = ProcessInfo.processInfo.environment
     account.apply(to: &env)
-    let started = Date()
-    let r = try runCommand(codex, ["login", "status"], env: env, timeout: Self.codexLoginTimeout)
+    try Self.checkCodexLogin(
+      runCommand(codex, ["login", "status"], env: env, timeout: Self.codexLoginTimeout), login: account.loginCommand)
+  }
+
+  /// Throws `SignedOut` when `codex login status` exits 1 by itself, and
+  /// another error when it fails otherwise or the timeout ends it. A codex
+  /// that SIGTERM ends may exit 1, so it checks the timeout first.
+  static func checkCodexLogin(_ r: CommandResult, login: String) throws {
+    if r.timedOut { throw APIError("`codex login status` did not answer within \(Int(codexLoginTimeout)) s") }
     switch r.status {
     case 0: return
-    case 1: throw SignedOut(login: account.loginCommand, then: "")
-    case _ where Date().timeIntervalSince(started) >= Self.codexLoginTimeout:
-      throw APIError("`codex login status` did not answer within \(Int(Self.codexLoginTimeout)) s")
-    default:
-      let detail = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-      throw APIError("`codex login status` exited with status \(r.status)\(detail.isEmpty ? "" : ": \(detail)")")
+    case 1: throw SignedOut(login: login, then: "")
+    default: throw APIError("`codex login status` failed: \(r.problem)")
     }
   }
 

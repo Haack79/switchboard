@@ -56,7 +56,7 @@ import Testing
     #expect(try sbd.row(rows, "\(sbd.userHome)/.codex-x")["agent"]?.string == "codex", "\(files)")
   }
 
-  /// Risk 3: a folder that matches both kinds is refused, never guessed.
+  /// Risk 3: sbd refuses a folder that matches both kinds and never guesses its kind.
   @Test func aCodexFolderThatHoldsAClaudeLoginIsNotListed() throws {
     let sbd = try Instance.discovering { home in
       try makeFolder("\(home)/.codex-x", holding: [".claude.json"])
@@ -95,7 +95,8 @@ import Testing
   }
 
   /// Risk 3: a `codexHomes` entry that names a Claude folder is not a Codex
-  /// account. One holds a Claude login. The other is named like a Claude folder.
+  /// account. One entry holds a Claude login, one is named like a Claude
+  /// folder, and one is both.
   @Test(arguments: [("cx", [".claude.json"]), (".claude-x", []), (".claude-y", [".claude.json"])])
   func aCodexHomesEntryThatNamesAClaudeFolderIsNotACodexAccount(_ name: String, _ files: [String]) throws {
     let sbd = try Instance(accounts: ["A"], inheriting: .unset, startingSbd: false)
@@ -186,9 +187,9 @@ import Testing
     #expect(!FileManager.default.fileExists(atPath: "\(sbd.userHome)/.codex-work"))
   }
 
-  /// A name becomes part of a folder name in the home, so one that leaves
-  /// `~/.codex-<name>` or `~/.claude-<name>`, or that `sb` could read as a
-  /// flag, is refused, both from the CLI and in the raw request.
+  /// A name becomes part of a folder name in the home. `add` refuses a name
+  /// that would escape `~/.codex-<name>` or `~/.claude-<name>`, or that `sb`
+  /// could read as a flag, both from the CLI and in the raw request.
   @Test(arguments: ["../x", "a/b", "", "-x", ".", "..", "x/../../y", "/abs"])
   func addRefusesAHostileName(_ name: String) throws {
     let sbd = try Instance.discovering()
@@ -282,7 +283,7 @@ import Testing
     #expect(row["sessions"]?.int == 0)
   }
 
-  /// The text output gains an agent column. The folders' names hold no agent
+  /// The text output has an agent column. The folders' names hold no agent
   /// word, so a line names its agent only through that column.
   @Test func theTextOutputNamesEachAccountsAgent() throws {
     let sbd = try Instance(accounts: ["A"], codexAccounts: ["W"], inheriting: .unset)

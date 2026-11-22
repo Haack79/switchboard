@@ -173,8 +173,8 @@ public struct Config: Codable, Equatable, Sendable {
   /// The Claude config folders whose sessions `sb import` lists, or nil for
   /// `ClaudeAccount.discover()`. ~/.claude means Claude's default account.
   public var claudeConfigDirs: [String]?
-  /// The Codex homes that sbd lists as Codex accounts, or nil for
-  /// `CodexAccount.discover()`. An entry need not be named like ~/.codex-*.
+  /// The Codex homes that sbd lists as Codex accounts, or nil for each
+  /// ~/.codex and ~/.codex-* folder. An entry need not be named like ~/.codex-*.
   public var codexHomes: [String]?
   public var github = GitHubSettings()
   public var depot = DepotSettings()

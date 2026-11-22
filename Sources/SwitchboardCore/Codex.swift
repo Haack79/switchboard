@@ -1,8 +1,9 @@
 import Foundation
 
 /// A Codex account is a CODEX_HOME folder, such as ~/.codex or
-/// ~/.codex-work. Codex keeps its login, settings, and rollouts there. A
-/// keyring login leaves no file in the folder, so the folder alone counts.
+/// ~/.codex-work. Codex keeps its login, settings, and rollouts there. The
+/// folder counts as an account even when it holds no login file, because a
+/// keyring login leaves none.
 public struct CodexAccount: Hashable, Sendable {
   /// The normalized folder.
   public let folder: String
@@ -12,7 +13,8 @@ public struct CodexAccount: Hashable, Sendable {
   /// The folder's name without its leading dot when it is named like a Codex
   /// folder, so ~/.codex is "codex" and ~/.codex-work is "codex-work". The
   /// agent stays in the name, so a Claude and a Codex folder with the same
-  /// suffix get different names. Any other folder is named by its last part.
+  /// suffix get different names. Any other folder's name is its last path
+  /// component.
   public var name: String {
     let last = (folder as NSString).lastPathComponent
     return Self.isNamedLikeCodex(folder) ? String(last.dropFirst()) : last
@@ -29,13 +31,13 @@ public struct CodexAccount: Hashable, Sendable {
 
   /// Why the folder can't be a Codex account although something names it
   /// one: it holds a Claude login, or it is named like a Claude folder. Such
-  /// a folder matches both kinds, so it is refused instead of guessed.
+  /// a folder matches both kinds, so sbd refuses it instead of guessing its
+  /// kind.
   public var clash: String? {
-    let last = (folder as NSString).lastPathComponent
-    if last == ".claude" || last.hasPrefix(".claude-") {
+    if ClaudeAccount.isNamedLikeClaude(folder) {
       return "\(folder) is named like a Claude folder, so it is no Codex account"
     }
-    if FileManager.default.fileExists(atPath: "\(folder)/.claude.json") {
+    if ClaudeAccount(folder: folder).holdsAccount {
       return "\(folder) holds a Claude login (.claude.json), so it is no Codex account"
     }
     return nil
@@ -51,15 +53,23 @@ public struct CodexAccount: Hashable, Sendable {
     return last == ".codex" || (last.hasPrefix(".codex-") && last.count > ".codex-".count)
   }
 
-  /// Each ~/.codex and ~/.codex-* folder, by name. `Account.listed` leaves out the ones with a `clash`.
-  public static func discover(home: String = NSHomeDirectory()) -> [CodexAccount] {
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []
-    return names.filter { isNamedLikeCodex($0) }.sorted().compactMap { name in
-      var isDir: ObjCBool = false
-      let folder = "\(home)/\(name)"
-      guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else { return nil }
-      return CodexAccount(folder: folder)
+  /// Why a guard counts the folder as a Codex folder, or nil when it doesn't: the folder is named like a Codex
+  /// folder in any case, or `codexHomes` lists it. It reads no file, so a folder that also holds a Claude login
+  /// counts.
+  public static func whyCodex(_ folder: String, codexHomes: [String]?) -> String? {
+    let folder = ClaudeAccount.normalize(folder)
+    if isNamedLikeCodex(folder, ignoringCase: true) { return "\(folder) is named like a Codex folder" }
+    if (codexHomes ?? []).contains(where: { ClaudeAccount.normalize($0) == folder }) {
+      return "codexHomes lists \(folder)"
     }
+    return nil
+  }
+
+  /// Each ~/.codex and ~/.codex-* folder among `names`, by name. `names` holds the entries of the home folder.
+  /// `Account.survey` leaves out the ones with a `clash`.
+  static func discover(_ names: [String], in home: String) -> [CodexAccount] {
+    names.filter { isNamedLikeCodex($0) }.sorted().map { "\(home)/\($0)" }.filter(isDirectory)
+      .map(CodexAccount.init(folder:))
   }
 }
 
@@ -79,42 +89,47 @@ public enum CodexRollout {
   /// The newest reading in the home's newest day folder, or nil when it
   /// has none. Rollout names start with the local start time, so path order
   /// is age order. The reader walks that day's rollouts newest first and
-  /// reads each from its end. A compressed `.jsonl.zst` rollout is skipped,
+  /// reads each from its end. It skips a compressed `.jsonl.zst` rollout,
   /// because Codex compresses only cold files.
   public static func rateLimits(home: String) -> Reading? {
-    guard let day = newestDay("\(home)/sessions") else { return nil }
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: day)) ?? []
-    let rollouts = names.filter { $0.hasPrefix("rollout-") && $0.hasSuffix(".jsonl") }.sorted(by: >)
+    let machine = LocalMachine()
+    guard let day = newestDay("\(home)/sessions", on: machine) else { return nil }
+    let rollouts = machine.list(day).filter { $0.hasPrefix("rollout-") && $0.hasSuffix(".jsonl") }.sorted(by: >)
     for name in rollouts {
-      if let reading = lastReading("\(day)/\(name)") { return reading }
+      if let reading = lastReading("\(day)/\(name)", on: machine) { return reading }
     }
     return nil
   }
 
   /// The newest YYYY/MM/DD folder under `sessions`, by name.
-  private static func newestDay(_ sessions: String) -> String? {
+  private static func newestDay(_ sessions: String, on machine: LocalMachine) -> String? {
     var folder = sessions
     for _ in 0..<3 {
-      let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
-      guard let newest = names.filter({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }).max() else { return nil }
+      guard let newest = machine.list(folder).filter({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }).max() else {
+        return nil
+      }
       folder += "/\(newest)"
     }
     return folder
   }
 
-  private static func lastReading(_ path: String) -> Reading? {
+  private static func lastReading(_ path: String, on machine: LocalMachine) -> Reading? {
     var reading: Reading?
-    Transcript.eachLineFromEnd(path, on: LocalMachine()) { data in
+    Transcript.eachLineFromEnd(path, on: machine) { data in
       reading = self.reading(data)
       return reading != nil
     }
     return reading
   }
 
+  private static let tokenCount = Data("token_count".utf8)
+
   /// The reading in one rollout line, or nil when the line is no complete
-  /// `token_count` event with at least one limit window.
+  /// `token_count` event with at least one limit window. It skips a line
+  /// without the bytes `token_count` before the JSON decode.
   static func reading(_ data: Data) -> Reading? {
-    guard let line = try? JSONCoding.decoder.decode(JSON.self, from: data), line["type"]?.string == "event_msg",
+    guard data.range(of: tokenCount) != nil,
+      let line = try? JSONCoding.decoder.decode(JSON.self, from: data), line["type"]?.string == "event_msg",
       let payload = line["payload"], payload["type"]?.string == "token_count",
       let limits = payload["rate_limits"], limits.object != nil,
       let checked = line["timestamp"]?.string.flatMap(Transcript.milliseconds)
@@ -123,29 +138,31 @@ public enum CodexRollout {
     return windows.isEmpty ? nil : Reading(limits: windows, checked: checked)
   }
 
-  /// The largest percent, window, and reset that a reading takes. A larger number, which a newer Codex could
-  /// write in other units, would overflow a conversion to a whole number here or where `sb usage` prints it.
+  /// The largest percent, window, and reset that a reading takes. A newer Codex could write a larger number in
+  /// other units. Such a number would overflow a conversion to a whole number here or where `sb usage` prints it.
   private static let maxPercent = 10_000.0
   private static let maxWindowMinutes = 366.0 * 24 * 60
   private static let maxResetSeconds = 1e11
 
   /// One window, or nil when a number is missing or out of range. Codex reports `resets_at` in seconds since
-  /// the epoch. A reset out of range is left out and the window stays.
+  /// the epoch. It drops a reset that is out of range and keeps the window.
   private static func limit(_ window: JSON) -> UsageLimit? {
     guard let percent = window["used_percent"]?.double, percent >= 0, percent <= maxPercent,
       let minutes = window["window_minutes"]?.double, minutes > 0, minutes <= maxWindowMinutes
     else { return nil }
     let resets = window["resets_at"]?.double.flatMap { $0 > 0 && $0 < maxResetSeconds ? Int64($0) * 1000 : nil }
-    let session = minutes <= 24 * 60
     return UsageLimit(
-      kind: session ? "session" : "weekly_all", label: label(minutes: minutes, session: session), percent: percent,
+      kind: isSession(minutes) ? "session" : "weekly_all", label: label(minutes: minutes), percent: percent,
       resetsAt: resets)
   }
 
+  /// Whether a window of this many minutes is a `session` limit: 24 hours or less.
+  private static func isSession(_ minutes: Double) -> Bool { minutes <= 24 * 60 }
+
   /// The window's length, such as "5-hour" or "Weekly".
-  private static func label(minutes: Double, session: Bool) -> String {
+  private static func label(minutes: Double) -> String {
     if minutes == 7 * 24 * 60 { return "Weekly" }
-    let (unit, size) = session ? ("hour", 60.0) : ("day", 24 * 60.0)
+    let (unit, size) = isSession(minutes) ? ("hour", 60.0) : ("day", 24 * 60.0)
     let count = minutes / size
     return count == count.rounded() ? "\(Int(count))-\(unit)" : "\(Int(minutes))-minute"
   }
