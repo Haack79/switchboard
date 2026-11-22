@@ -449,12 +449,12 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
   /// The sidebar's note icon shows only on a session with notes. The menu is how the user adds the first note.
   @Test(arguments: shapes.indices)
-  func offersNotesOnceBeforeTheDividerInEveryShape(_ i: Int) {
+  func offersNotesOnceBeforeTheDividerInEveryShape(_ i: Int) throws {
     let actions = SessionMenu.actions(for: Self.shapes[i].1, selectionCount: Self.shapes[i].2)
-    let notes = actions.firstIndex(of: .notes)
 
     #expect(actions.filter { $0 == .notes }.count == 1, "\(Self.shapes[i].0)")
-    #expect(notes! < (actions.firstIndex(of: .divider) ?? actions.endIndex), "\(Self.shapes[i].0)")
+    let notes = try #require(actions.firstIndex(of: .notes), "\(Self.shapes[i].0)")
+    #expect(notes < (actions.firstIndex(of: .divider) ?? actions.endIndex), "\(Self.shapes[i].0)")
   }
 
   @Test(arguments: shapes.indices)
