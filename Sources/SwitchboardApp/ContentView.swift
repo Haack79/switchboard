@@ -1171,7 +1171,7 @@ struct BoardCard: View {
             if let until = s.snoozedUntil { SnoozeMark(until: until) }
             if let pause = s.pause { PausedBadge(pause: pause) }
             Text(statusLine)
-              .font(.caption2).foregroundStyle(.tertiary)
+              .font(.caption2).foregroundStyle(.secondary)
           }
         }
         .opacity(s.boardCardOpacity)
