@@ -60,8 +60,14 @@ extension SessionFacts {
       // A subagent's result arrives as a prompt but is model output.
       guard !event.fromSubagent, let prompt = event.data["prompt"]?.string, !Attention.isSubagentResult(prompt)
       else { return }
-      for url in LinkScan.urls(in: prompt) {
-        if let target = LinkTarget.parse(url) { addFoundLink(url: url, target: target, t: event.t) }
+      for found in LinkScan.urls(in: prompt) {
+        // The link as found wins, because an id can end in `_`.
+        for url in [found, LinkScan.withoutTrailingUnderscores(found)] {
+          if let target = LinkTarget.parse(url) {
+            addFoundLink(url: url, target: target, t: event.t)
+            break
+          }
+        }
       }
     case "PostToolUse":
       if let sent = SlackSendCall.parse(event) { addFoundLink(url: sent.url, target: sent.target, t: event.t) }

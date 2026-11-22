@@ -30,7 +30,7 @@ import Testing
     #expect(LinkScan.urls(in: "\(Self.a)\(separator)next line") == [Self.a])
   }
 
-  @Test(arguments: [".", ",", ";", ":", "!", "?", "...", "?!", ".)"])
+  @Test(arguments: [".", ",", ";", ":", "!", "?", "*", "~", "**", "...", "?!", "~*.", ".)"])
   func trailingPunctuationIsTrimmed(_ trailing: String) {
     #expect(LinkScan.urls(in: "Look at \(Self.a)\(trailing)") == [Self.a])
   }
@@ -51,6 +51,16 @@ import Testing
   @Test(arguments: ["*", "**", "_", "__", "~", "~~"])
   func emphasisAroundALinkIsLeftOut(_ marker: String) {
     #expect(LinkScan.urls(in: "See \(marker)\(Self.a)\(marker).") == [Self.a])
+  }
+
+  @Test(arguments: ["**", "~~"])
+  func emphasisAroundAPhraseThatEndsInALinkIsLeftOut(_ marker: String) {
+    #expect(LinkScan.urls(in: "\(marker)Review \(Self.a)\(marker)") == [Self.a])
+  }
+
+  @Test func aLinkWithoutTrailingUnderscoresDropsThemAndThePunctuationAroundThem() {
+    #expect(LinkScan.withoutTrailingUnderscores("\(Self.a)_.__") == Self.a)
+    #expect(LinkScan.withoutTrailingUnderscores(Self.a) == Self.a)
   }
 
   /// A Grafana uid can end in `_`, so an unpaired trailing `_` stays part of the link.

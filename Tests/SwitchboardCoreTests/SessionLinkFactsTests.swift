@@ -75,6 +75,15 @@ private let replyTs = LinkFixtures.replyTs
     #expect(f.links.count == 2)
   }
 
+  @Test(arguments: ["**", "~~", "_", "__"])
+  func aLinkAtTheEndOfAnEmphasizedPhraseIsFound(_ marker: String) {
+    let linear = "https://linear.app/example/issue/ENG-123"
+
+    let f = facts([linkPrompt(1000, "\(marker)Review \(linear)\(marker)")])
+
+    #expect(f.links.map(\.url) == [linear])
+  }
+
   @Test func aGrafanaUidThatEndsInAnUnderscoreKeepsIt() {
     let f = facts([linkPrompt(1000, "[dashboard](https://grafana.example.com/d/api_)")])
 

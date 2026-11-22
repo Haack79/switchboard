@@ -152,13 +152,13 @@ public struct LinkTarget: Equatable, Sendable {
 /// Finds the https links in free text, such as a prompt.
 public enum LinkScan {
   private static let terminators = Set("<>\"'`|()[]{}\\^")
-  private static let trailing = Set(".,;:!?")
-  private static let emphasis = Set("*_~")
+  private static let trailing = Set(".,;:!?*~")
 
   /// Each `https://` link in the text, in order and with repeats. A link ends at whitespace, at a control
   /// character, at a character that wraps links in Slack or Markdown text, or at the next `https://`. Trailing
-  /// sentence punctuation is not part of it. A trailing `*`, `_`, or `~` is Markdown emphasis only when the same
-  /// character comes right before the link, because an id such as a Grafana uid can end in `_`.
+  /// sentence punctuation and Markdown `*` and `~` emphasis are not part of it. A trailing `_` stays unless a `_`
+  /// comes right before the link, because an id such as a Grafana uid can end in `_`. `withoutTrailingUnderscores`
+  /// gives the link without it.
   public static func urls(in text: String) -> [String] {
     guard text.contains("://") else { return [] }
     var found: [String] = []
@@ -177,12 +177,20 @@ public enum LinkScan {
       }
       let opener = start.lowerBound > text.startIndex ? text[text.index(before: start.lowerBound)] : nil
       var link = text[start.lowerBound..<end]
-      while let last = link.last, trailing.contains(last) || (emphasis.contains(last) && last == opener) {
+      while let last = link.last, trailing.contains(last) || (last == "_" && opener == "_") {
         link = link.dropLast()
       }
       if link.count > "https://".count { found.append(String(link)) }
       from = end
     }
     return found
+  }
+
+  /// The link without its trailing `_` and the punctuation and emphasis around them, for a link that `_` emphasis
+  /// closes, such as `_see https://…_`.
+  public static func withoutTrailingUnderscores(_ link: String) -> String {
+    var bare = Substring(link)
+    while let last = bare.last, last == "_" || trailing.contains(last) { bare = bare.dropLast() }
+    return String(bare)
   }
 }
