@@ -3,7 +3,8 @@ import SwitchboardCore
 
 extension Service {
   /// `link-add` adds a link to a session by hand, and `link-rm` deletes an added link or hides a found one. Claude
-  /// acts only on its own session, and `Session.addLink` and `removeLink` keep it from the user's links.
+  /// acts only on its own session. `Session.addLink` and `removeLink` refuse to let Claude remove a link the user
+  /// added, hide a found link, or add back a page the user hid.
   func sessionLinkRequest(_ op: String, _ args: JSON, origin: RequestOrigin) throws -> JSON {
     let id = try lookup(args)
     let by = try Author(parsing: args["by"]?.string)

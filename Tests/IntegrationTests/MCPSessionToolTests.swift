@@ -512,9 +512,16 @@ import Testing
     let other = try sbd.new(name: "bravo")
     let mcp = try MCPClient(sbd, env: inside(s.id))
 
-    _ = try mcp.call("add_link", ["url": .string(Self.rfc), "session": .string(other.id)])
-    _ = try mcp.call("add_link", ["url": "https://example.com/docs/cache-design", "caller": .string(other.id)])
+    let named = try mcp.call("add_link", ["url": .string(Self.rfc), "session": .string(other.id)])
+    let asOther = try mcp.call(
+      "add_link",
+      ["url": "https://example.com/docs/cache-design", "session": .string(other.id), "caller": .string(other.id)])
 
+    #expect(!named.isError, "\(named.text)")
+    #expect(!asOther.isError, "\(asOther.text)")
+    #expect(
+      try sbd.sessionLinks(s.id)?.compactMap { $0["url"]?.string }
+        == [Self.rfc, "https://example.com/docs/cache-design"])
     #expect(try sbd.sessionLinks(other.id) == nil)
   }
 

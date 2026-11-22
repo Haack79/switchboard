@@ -546,10 +546,17 @@ import Testing
     let sbd = try Instance()
     let s = try sbd.new(name: "flags-cache")
 
-    for args in [["link"], ["link", "ls"], ["link", "add"], ["link", "add", s.id], ["link", "rm", s.id]] {
+    let forms: [([String], String)] = [
+      (["link"], "usage: sb link add"),
+      (["link", "ls"], "usage: sb link add"),
+      (["link", "add"], "link add needs a session and a URL"),
+      (["link", "add", s.id], "link add needs a session and a URL"),
+      (["link", "rm", s.id], "link rm needs a session and a link id"),
+    ]
+    for (args, message) in forms {
       let r = try sbd.run(args)
       #expect(r.status != 0, "\(args)")
-      #expect(r.stderr.contains("link"), "\(args): \(r.stderr)")
+      #expect(r.stderr.contains(message), "\(args): \(r.stderr)")
     }
 
     #expect(try sbd.sessionLinks(s.id) == nil)
