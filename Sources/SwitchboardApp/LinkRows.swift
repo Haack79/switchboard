@@ -43,17 +43,25 @@ struct LinkRows {
   struct Row: Equatable, Identifiable {
     var link: ExternalLink
     var owner: Owner
+    /// The owner as the group's list names it: "group" or the session's name. It is nil in the side panel, which
+    /// lists one session's links.
+    var ownerName: String? = nil
     var caption: String
 
     var title: String { LinkRows.title(link) }
 
+    /// The title for VoiceOver. It names the owner, because two rows of the group's list can share a title.
+    var spokenTitle: String { ownerName.map { "\(title) from \($0)" } ?? title }
+
     /// Two sessions that find the same page get the same link id, so the row id also names the owner.
     var id: String { "\(owner.id)/\(link.id)" }
 
-    /// The text of Remove's tooltip. sbd hides a found link and deletes an added one.
+    /// The text of Remove's tooltip. sbd hides a found link and deletes an added one. When it deletes an added
+    /// link, it also hides a found link to the same page.
     var removeHelp: String {
       link.by == .found
-        ? "Hide this link. Switchboard won't add it again unless you add it by hand." : "Delete this link."
+        ? "Hide this link. Switchboard won't add it again unless you add it by hand."
+        : "Remove this link from the list."
     }
   }
 
@@ -70,11 +78,11 @@ struct LinkRows {
   /// `liveSessions` holds. `liveSessions` maps a session id to the session.
   init(group: GroupSummary, liveSessions: [String: SessionSummary], now: Int64 = nowMs()) {
     let own = (group.links ?? []).filter { GroupArtifact(link: $0) == nil }.map {
-      Row(link: $0, owner: .group(group.id), caption: "group · \($0.caption(now: now))")
+      Row(link: $0, owner: .group(group.id), ownerName: "group", caption: "group · \($0.caption(now: now))")
     }
     let members = group.sessions.compactMap { liveSessions[$0] }.flatMap { s in
       (s.links ?? []).map {
-        Row(link: $0, owner: .session(s.id), caption: "\(s.name) · \($0.caption(now: now))")
+        Row(link: $0, owner: .session(s.id), ownerName: s.name, caption: "\(s.name) · \($0.caption(now: now))")
       }
     }
     rows = Self.sorted(own + members)

@@ -1026,9 +1026,9 @@ check_links() {
   group=$(sb group add links-gui "$b" --json | jq -r '.id')
   sb group link add links-gui https://example.com/design --title "Design doc" >/dev/null
   sb group link add links-gui https://claude.ai/artifact/LinksGui1 >/dev/null
-  link_id() { sb get "$1" --json | jq -r --arg url "$2" '.links[] | select(.url == $url) | .id'; }
+  link_id() { sb get "$1" --json | jq -r --arg url "$2" '.links[]? | select(.url == $url) | .id'; }
   group_link_id() {
-    sb group ls --json | jq -r --arg g "$group" --arg url "$1" '.groups[] | select(.id == $g) | .links[] | select(.url == $url) | .id'
+    sb group ls --json | jq -r --arg g "$group" --arg url "$1" '.groups[] | select(.id == $g) | .links[]? | select(.url == $url) | .id'
   }
   rfc=$(link_id "$a" https://example.com/rfc/flags)
   slack=$(link_id "$a" https://acme.slack.com/archives/C0123ABCD/p1700000000000100)
@@ -1053,7 +1053,7 @@ check_links() {
     result=$(app click-anchor "$1")
     [[ $result == "clicked at "* ]]
   }
-  links_left() { [ "$(sb get "$a" --json | jq '.links | length')" = "$1" ]; }
+  only_link_left() { [ "$(sb get "$a" --json | jq -c '[.links[]?.id]')" = "[\"$1\"]" ]; }
   pinned() {
     result=$(app width 1024)
     [ "$result" = "width 1024" ] || fail "the app could not pin the window to 1024 pt: $result"
@@ -1067,7 +1067,7 @@ check_links() {
   wait_for 10 panel_lists || fail "the side panel does not list both links of $a inside it: $result"
   app snapshot "$shots/side-panel.png" >/dev/null
   wait_for 10 clicked "panel-link-$rfc-remove" || fail "the app could not click Remove on $rfc: $result"
-  wait_for 10 links_left 1 || fail "Remove did not delete $rfc: $(sb get "$a" --json | jq -c '.links')"
+  wait_for 10 only_link_left "$slack" || fail "Remove did not delete only $rfc: $(sb get "$a" --json | jq -c '.links')"
   app width restore >/dev/null
   end_app
 

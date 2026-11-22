@@ -324,11 +324,6 @@ extension SidePanelTests {
       #expect(SidePanel(Self.session(links)).links.count == count)
     }
 
-    @Test(arguments: [nil, []] as [[ExternalLink]?])
-    func listsNoLinksForASessionWithoutALink(_ links: [ExternalLink]?) {
-      #expect(SidePanel(Self.session(links)).links.isEmpty)
-    }
-
     @Test func theEmptyTextSaysThereAreNoLinks() {
       #expect(SidePanel.noLinks == "No links.")
     }

@@ -13,14 +13,16 @@ struct LinkRowView: View {
       icon: PanelRow.Icon(symbol: row.link.kind.symbol, label: row.link.kind.label),
       title: row.title,
       open: URL(string: row.link.url).map {
-        PanelRow.Open(url: $0, help: row.link.url, label: "Open link \(row.title)")
+        PanelRow.Open(url: $0, help: row.link.url, label: "Open link \(row.spokenTitle)")
       },
-      caption: row.caption
+      caption: row.caption,
+      titleLines: 2,
+      titleHelp: row.link.url
     ) {
       Button("Remove") { model.removeLink(row) }
         .buttonStyle(.link).font(.caption)
         .help(row.removeHelp)
-        .accessibilityLabel("Remove link \(row.title)")
+        .accessibilityLabel("Remove link \(row.spokenTitle)")
         .clickAnchor("\(anchor)-remove")
     }
     .clickAnchor(anchor)

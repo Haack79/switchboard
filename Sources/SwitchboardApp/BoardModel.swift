@@ -1858,7 +1858,8 @@ final class BoardModel: ObservableObject {
   }
 
   /// Sends `link-rm` for a session's link and `group-link-rm` for a group's. sbd deletes a link that someone added
-  /// and hides a link that it found.
+  /// and hides a link that it found. When it deletes a session's added link, it also hides a found link to the same
+  /// page.
   func removeLink(_ row: LinkRows.Row) {
     let by = JSON.string(Author.you.rawValue)
     switch row.owner {

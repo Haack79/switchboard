@@ -115,6 +115,11 @@ private func groupRows(
     #expect(sessionRows([linkFixture("l1", url: linearURL)]).map(\.title) == ["Linear ENG-12"])
   }
 
+  /// The side panel lists one session's links, so its spoken title doesn't name the owner.
+  @Test func aSessionRowsSpokenTitleIsTheDisplayTitle() {
+    #expect(sessionRows([linkFixture("l1", url: linearURL)]).map(\.spokenTitle) == ["Linear ENG-12"])
+  }
+
   @Test func removeOnAFoundLinkSaysItHidesTheLink() {
     #expect(
       sessionRows([foundFixture("fabc12")]).map(\.removeHelp) == [
@@ -124,7 +129,7 @@ private func groupRows(
 
   @Test(arguments: [LinkAuthor.you, .claude])
   func removeOnAnAddedLinkSaysItRemovesTheLink(_ by: LinkAuthor) {
-    #expect(sessionRows([linkFixture("l1", by: by)]).map(\.removeHelp) == ["Delete this link."])
+    #expect(sessionRows([linkFixture("l1", by: by)]).map(\.removeHelp) == ["Remove this link from the list."])
   }
 
   // MARK: Display title
@@ -138,6 +143,7 @@ private func groupRows(
       linkFixture("l1", url: "https://example.com/rfc/flags?tab=2&x=y#intro"), "example.com/rfc/flags"
     ),
     ("a host without a path, without a title", linkFixture("l1", url: "https://example.com"), "example.com"),
+    ("a host with a root path, without a title", linkFixture("l1", url: "https://example.com/"), "example.com"),
     ("a Slack URL without a title", linkFixture("l1", url: slackURL), "Slack thread in C0123ABCD"),
     ("a Linear URL without a title", linkFixture("l1", url: linearURL), "Linear ENG-12"),
     (
@@ -322,6 +328,23 @@ extension LinkRowsTests {
       let rows = groupRows(nil, members: ["s1", "s2"], live: [s1, s2])
 
       #expect(rows.map(\.owner) == [.session("s1"), .session("s2")])
+    }
+
+    /// VoiceOver reads the buttons' labels without the caption, so the spoken title names the owner.
+    @Test func twoSessionsWithTheSameFoundLinkGiveDifferentSpokenTitles() {
+      let s1 = sessionFixture("s1", links: [foundFixture("fabc12")])
+      let s2 = sessionFixture("s2", name: "other", links: [foundFixture("fabc12")])
+
+      let rows = groupRows(nil, members: ["s1", "s2"], live: [s1, s2])
+
+      #expect(
+        rows.map(\.spokenTitle) == [
+          "Slack thread in C0123ABCD from fix-cache", "Slack thread in C0123ABCD from other",
+        ])
+    }
+
+    @Test func aGroupLinksSpokenTitleNamesTheGroup() {
+      #expect(groupRows([linkFixture("l1", url: linearURL)]).map(\.spokenTitle) == ["Linear ENG-12 from group"])
     }
 
     @Test func aGroupLinkAndASessionLinkWithTheSameIdAndURLGiveTwoRows() {
