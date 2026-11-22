@@ -26,6 +26,8 @@ enum HostScope {
   private static let session = Rule(keys: ["session"], refs: ["session"])
   /// The keys that `noteRequest`, `makeNote`, and `resolveNote` read.
   private static let noteKeys: Set<String> = ["session", "text", "by", "kind", "note"]
+  /// The keys that `sessionLinkRequest` and `requireOwnSession` read.
+  private static let linkKeys: Set<String> = ["session", "url", "title", "link", "by", "caller"]
   /// The fields of `WaitRequest`, and the keys that `waitRequest` reads for `clear-wait` and `resolve-wait`.
   private static let waitKeys: Set<String> = [
     "session", "kind", "target", "who", "environment", "service", "state", "until", "since", "note", "then", "by",
@@ -47,6 +49,8 @@ enum HostScope {
     "note": Rule(keys: noteKeys, refs: ["session"]),
     "remove-note": Rule(keys: noteKeys, refs: ["session"]),
     "resolve-note": Rule(keys: noteKeys, refs: ["session"]),
+    "link-add": Rule(keys: linkKeys, refs: ["session", "caller"]),
+    "link-rm": Rule(keys: linkKeys, refs: ["session", "caller"]),
     "wait": Rule(keys: waitKeys, refs: ["session"], waitTarget: true),
     "clear-wait": Rule(keys: waitKeys, refs: ["session"]),
     "resolve-wait": Rule(keys: waitKeys, refs: ["session"]),

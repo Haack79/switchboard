@@ -95,6 +95,11 @@ public struct Session: Codable, Equatable, Sendable {
   public var pinned: Bool?
   /// True while the user or a session highlighted it. sbd clears it when the session reaches Done.
   public var highlighted: Bool?
+  /// The links that the user or Claude added by hand, oldest first, or nil when there are none.
+  public var addedLinks: [ExternalLink]?
+  /// The URLs of the found links that the user hid, or nil when there are none. A found link stays hidden while
+  /// its page matches one of them, so replay doesn't bring it back.
+  public var hiddenLinks: [String]?
   /// True when every launch starts claude in auto mode, so a resumed session
   /// keeps it. Otherwise sbd passes no permission mode, and Claude's settings
   /// choose one. Nil in a session that an older sbd stored.
@@ -340,8 +345,8 @@ public struct SessionSummary: Codable, Equatable, Sendable, Identifiable {
   public var plans: [PlanSummary]?
   /// The artifacts that the session published, in first-publish order, or nil when there are none.
   public var artifacts: [SessionArtifact]?
-  /// The links of known kinds that sbd found in the session's prompts and sent Slack messages, in first-sighting
-  /// order, or nil when there are none.
+  /// The session's links, oldest first, or nil when there are none: the links of known kinds that sbd found in the
+  /// session's prompts and sent Slack messages, less the hidden ones, and the links that the user or Claude added.
   public var links: [ExternalLink]?
   /// When sbd last started a fresh conversation for the operator, or nil before the first one and for other kinds.
   public var conversationStarted: Int64?

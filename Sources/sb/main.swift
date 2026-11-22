@@ -266,6 +266,13 @@ let usage = """
     note <session> --rm <id>      remove a note. It refuses an open to-do
     note --resolved [--limit N]   list the resolved to-dos, newest first
                                   (default 50). The record outlives the session
+    link add <session> <url> [--title T]
+                                  add an http or https link; the title defaults
+                                  to the URL. Inside Claude, only on its own
+                                  session ($SB_SESSION_ID)
+    link rm <session> <link-id>   remove a link you or Claude added, or hide one
+                                  that Switchboard found. Inside Claude, only a
+                                  link that Claude added
     rename <session> <name>
     issue <session> <ref>|--clear set the GitHub issue that the session's tile
                                   shows: 123, #123, owner/name#123, or an issue
@@ -1122,6 +1129,8 @@ case "wait":
   waitCommand(a)
 case "note":
   noteCommand(a)
+case "link":
+  linkCommand(a)
 case "schedule", "schedules":
   scheduleCommand(a)
 case "shell":

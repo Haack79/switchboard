@@ -842,6 +842,8 @@ public final class Service {
       return try chatReadRequest(args)
     case "note", "remove-note", "resolve-note":
       return try noteRequest(op, args, origin: origin)
+    case "link-add", "link-rm":
+      return try sessionLinkRequest(op, args, origin: origin)
     case "resolved-todos":
       return try resolvedTodos(args)
     case "rm-retry", "rm-keep", "rm-cancel", "removal-notices", "removal-notice-dismiss":
@@ -963,10 +965,14 @@ public final class Service {
   /// `caller`. The refusal says that the session can't do `action`.
   func lookupOther(_ args: JSON, refusing action: String) throws -> String {
     let id = try lookup(args)
-    if let caller = args["caller"]?.string, (try? lookup(["session": .string(caller)])) == id {
-      throw APIError("\(entries[id]!.session.name) can't \(action)")
-    }
+    if isCaller(id, args) { throw APIError("\(entries[id]!.session.name) can't \(action)") }
     return id
+  }
+
+  /// True when the request's `caller` names session `id`.
+  func isCaller(_ id: String, _ args: JSON) -> Bool {
+    guard let caller = args["caller"]?.string else { return false }
+    return (try? lookup(["session": .string(caller)])) == id
   }
 
   // MARK: Hooks
@@ -1472,9 +1478,9 @@ public final class Service {
     return summary(id)
   }
 
-  func update(_ id: String, _ change: (inout Session) -> Void) throws {
+  func update(_ id: String, _ change: (inout Session) throws -> Void) throws {
     guard var session = entries[id]?.session else { throw APIError("no session \(id)") }
-    change(&session)
+    try change(&session)
     entries[id]?.session = session
     try store.save(session)
     // The operator's waits, and whether a session may own an item, decide which sessions show the operator's items.
@@ -2986,7 +2992,8 @@ public final class Service {
     if !facts.dependencies.isEmpty { out.dependencies = facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
     if !facts.artifacts.isEmpty { out.artifacts = facts.artifacts }
-    if !facts.links.isEmpty { out.links = facts.links }
+    let links = s.links(found: facts.links)
+    if !links.isEmpty { out.links = links }
     out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError
