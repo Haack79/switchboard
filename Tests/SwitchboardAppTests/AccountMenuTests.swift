@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import SwitchboardCore
 import Testing
 import os
@@ -50,14 +50,25 @@ import os
     #expect(AccountMenu.help(failed).hasPrefix("automation, usage read failed. "))
   }
 
-  @Test func onlyASpentLimitOrAFailedReadNeedsTheUser() {
+  @Test func onlyASpentLimitOrAFailedReadWarns() {
     let spent = [UsageLimit(kind: "session", label: "Session (5h)", percent: 100, resetsAt: nil)]
-    #expect(!AccountMenu.needsYou(nil))
-    #expect(!AccountMenu.needsYou(row(nil)))
-    #expect(!AccountMenu.needsYou(row(AccountUsage(name: "a", folder: "/a"))))
-    #expect(!AccountMenu.needsYou(row(AccountUsage(name: "a", folder: "/a", limits: limits))))
-    #expect(AccountMenu.needsYou(row(AccountUsage(name: "a", folder: "/a", limits: spent))))
-    #expect(AccountMenu.needsYou(row(AccountUsage(name: "a", folder: "/a", error: "not signed in"))))
+    #expect(!AccountMenu.warns(nil))
+    #expect(!AccountMenu.warns(row(nil)))
+    #expect(!AccountMenu.warns(row(AccountUsage(name: "a", folder: "/a"))))
+    #expect(!AccountMenu.warns(row(AccountUsage(name: "a", folder: "/a", limits: limits))))
+    #expect(AccountMenu.warns(row(AccountUsage(name: "a", folder: "/a", limits: spent))))
+    #expect(AccountMenu.warns(row(AccountUsage(name: "a", folder: "/a", error: "not signed in"))))
+  }
+
+  @Test func theWarningIsNotTheNeedsYouColor() {
+    #expect(AccountMenu.warningColor != AttentionState.needsYou.color)
+  }
+
+  /// A misspelled symbol name draws an empty toolbar item.
+  @Test func bothToolbarSymbolsExist() {
+    for name in [AccountMenu.symbol, AccountMenu.warningSymbol] {
+      #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil, "\(name)")
+    }
   }
 
   @Test func aLimitRowNamesTheResetTimeWhenThereIsOne() {

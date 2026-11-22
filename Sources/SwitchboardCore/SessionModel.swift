@@ -2,16 +2,20 @@
 /// claude for the session. Neither rule reads the parent session's model.
 public enum SessionModel {
   /// The model that a new session stores. The caller's model wins. Otherwise a work session stores `workModel`. A
-  /// Manager conversation, the operator, and a group chat store none and run `coordinatorModel` at launch.
+  /// Manager conversation, the operator, and a group chat store none and take their model at launch.
   public static func stored(kind: SessionKind, requested: String?, workModel: String) -> String? {
     if let requested { return requested }
     return kind.isConversation ? nil : workModel
   }
 
-  /// The model that sbd passes with `--model`. A model stored on the session wins. Otherwise a Manager
-  /// conversation, the operator, and a group chat run `coordinatorModel`. A work session without a stored model
+  /// The model that sbd passes with `--model`. The operator always runs `operatorModel`, because a model stored on
+  /// it came from config.json's `model` when an older sbd created it. For every other kind a stored model wins.
+  /// Otherwise a Manager conversation and a group chat run `coordinatorModel`. A work session without a stored model
   /// gets nil. Such a session was created before work sessions stored their model, and it resumes on the model it ran.
-  public static func launch(kind: SessionKind, stored: String?, coordinatorModel: String) -> String? {
+  public static func launch(
+    kind: SessionKind, stored: String?, coordinatorModel: String, operatorModel: String
+  ) -> String? {
+    if kind == .operator { return operatorModel }
     if let stored { return stored }
     return kind.isConversation ? coordinatorModel : nil
   }

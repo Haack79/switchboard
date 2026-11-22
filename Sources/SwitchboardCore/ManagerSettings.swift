@@ -1,6 +1,6 @@
 /// config.json's `manager` section, for sessions of kind `manager`.
 public struct ManagerSettings: Codable, Equatable, Sendable {
-  /// The model that a Manager conversation, the operator, and a group chat run, unless the session has its own.
+  /// The model that a Manager conversation and a group chat run, unless the session has its own.
   public var model = "sonnet"
   /// The auto-compact window, in tokens, that sbd sets as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when it starts or
   /// resumes a Manager conversation. Claude Code compacts about 33k tokens below the window, so 183000 compacts
@@ -31,7 +31,7 @@ public enum AutoCompact {
 }
 
 extension Manager {
-  /// Why `model` can't be the Manager's model, or nil when it can. claude reads a value that starts with a dash
+  /// Why `model` can't be a session's model, or nil when it can. claude reads a value that starts with a dash
   /// as an option.
   public static func modelProblem(_ model: String) -> String? {
     if model.isEmpty { return "the model needs a name, such as sonnet" }

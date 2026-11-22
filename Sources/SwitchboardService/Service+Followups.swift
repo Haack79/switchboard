@@ -81,7 +81,7 @@ extension Service {
     // takes the active account when it starts.
     session.claudeConfigDir = try accountForNew(named: account, parent: parent, for: session)
     session.followup = followup
-    session.setStartModes(auto: autoMode, plan: planMode, manual: manualMode, defaultAuto: config.autoMode)
+    session.setStartModes(auto: autoMode, plan: planMode, manual: manualMode, defaultAuto: defaultAutoMode)
     try save(session)
     return summary(session.id)
   }
@@ -304,7 +304,7 @@ extension Service {
           id: newSessionID(), name: title, cwd: "", claudeSessionId: UUID().uuidString.lowercased(),
           created: item.added ?? now)
         session.followup = followup
-        session.autoMode = config.autoMode
+        session.autoMode = defaultAutoMode
         try save(session)
         try store.recordImport(item.key)
         imported.append(summary(session.id))
