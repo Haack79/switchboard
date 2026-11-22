@@ -378,4 +378,61 @@ import Testing
     let properties = try #require(tool["inputSchema"]?["properties"]?.object)
     #expect(properties["full"]?["type"]?.string == "boolean")
   }
+
+  // MARK: Links
+
+  @Test func getSessionWithFullCarriesTheSessionsLinks() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(name: "alpha")
+    try sbd.postPromptHook(s.id, prompt: "Review \(SlackExample.root)")
+    let mcp = try MCPClient(sbd)
+
+    let got = try #require(try mcp.call("get_session", ["session": .string(s.id), "full": true]).json)
+
+    let links = try #require(got["links"]?.array)
+    #expect(links.compactMap { $0["url"]?.string } == [SlackExample.root])
+    #expect(links.first?["kind"]?.string == "slack")
+    #expect(links.first?["by"]?.string == "found")
+    #expect(links.first?["thread"]?.string == SlackExample.rootTs)
+  }
+
+  @Test func listSessionsWithFullCarriesLinksOnTheRightSessionOnly() throws {
+    let sbd = try Instance()
+    let a = try sbd.new(name: "alpha")
+    let b = try sbd.new(name: "bravo")
+    try sbd.postSlackSend(a.id, link: SlackExample.dm, channel: SlackExample.dmChannel, ts: SlackExample.replyTs)
+    let mcp = try MCPClient(sbd)
+
+    let listed = try #require(try mcp.call("list_sessions", ["full": true]).json?.array)
+
+    let alpha = try #require(listed.first { $0["id"]?.string == a.id })
+    let bravo = try #require(listed.first { $0["id"]?.string == b.id })
+    #expect(alpha["links"]?.array?.compactMap { $0["url"]?.string } == [SlackExample.dm])
+    #expect(bravo["links"] == nil)
+  }
+
+  @Test func theBriefFormsCarryNoLinks() throws {
+    let sbd = try Instance()
+    let s = try sbd.new(name: "alpha")
+    try sbd.postPromptHook(s.id, prompt: "Review \(SlackExample.root)")
+    let mcp = try MCPClient(sbd)
+
+    let got = try #require(try mcp.call("get_session", ["session": .string(s.id)]).json)
+    let listed = try #require(try mcp.call("list_sessions").json?.array)
+
+    #expect(try sbd.sessionLinks(s.id) != nil)
+    #expect(got["links"] == nil)
+    #expect(!listed.isEmpty)
+    #expect(listed.allSatisfy { $0["links"] == nil })
+  }
+
+  @Test(arguments: [("list_sessions", "artifacts, and links"), ("get_session", "artifacts and links")])
+  func theSessionToolsDescriptionsNameLinks(_ name: String, _ phrase: String) throws {
+    let sbd = try Instance()
+    let mcp = try MCPClient(sbd)
+
+    let tool = try #require(try mcp.tools().first { $0["name"]?.string == name })
+
+    #expect(tool["description"]?.string?.contains(phrase) == true, "\(tool["description"]?.string ?? "")")
+  }
 }

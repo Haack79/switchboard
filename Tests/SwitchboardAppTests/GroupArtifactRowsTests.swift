@@ -18,7 +18,7 @@ private func row(
 }
 
 private func group(
-  _ artifacts: [GroupArtifact]?, plans: [PlanSource] = [], links: [GroupLink]? = nil
+  _ artifacts: [GroupArtifact]?, plans: [PlanSource] = [], links: [ExternalLink]? = nil
 ) -> GroupSummary {
   var g = GroupSummary(SessionGroup(id: "g", name: "G", created: 0, links: links), sessions: ["s1"])
   g.artifacts = artifacts
@@ -31,19 +31,19 @@ private func group(
 }
 
 private func rows(
-  _ artifacts: [GroupArtifact]?, plans: [PlanSource] = [], links: [GroupLink]? = nil,
+  _ artifacts: [GroupArtifact]?, plans: [PlanSource] = [], links: [ExternalLink]? = nil,
   liveNames: [String: String] = ["s1": "fix-cache"]
 ) -> [GroupArtifactRows.Row] {
   GroupArtifactRows(group: group(artifacts, plans: plans, links: links), liveNames: liveNames, now: now).rows
 }
 
 /// A group link to an artifact, added five minutes before `now`.
-private func groupLink(url: String = shortLink, by author: Author = .you) -> GroupLink {
-  GroupLink(id: "l1", title: "Flag evaluations plan", url: url, by: author, t: now - 5 * minute)
+private func groupLink(url: String = shortLink, by author: LinkAuthor = .you) -> ExternalLink {
+  ExternalLink(id: "l1", title: "Flag evaluations plan", url: url, by: author, t: now - 5 * minute)
 }
 
 /// The row of the group link.
-private func linkRow(_ link: GroupLink = groupLink()) throws -> GroupArtifact {
+private func linkRow(_ link: ExternalLink = groupLink()) throws -> GroupArtifact {
   try #require(GroupArtifact(link: link))
 }
 
@@ -149,8 +149,8 @@ private func linkRow(_ link: GroupLink = groupLink()) throws -> GroupArtifact {
 
   // MARK: A row from a group link
 
-  @Test(arguments: [(Author.you, "added by you"), (.claude, "added by Claude")])
-  func aLinkOnlyRowIsLabeledWithWhoAddedTheLink(_ author: Author, _ label: String) throws {
+  @Test(arguments: [(LinkAuthor.you, "added by you"), (.claude, "added by Claude")])
+  func aLinkOnlyRowIsLabeledWithWhoAddedTheLink(_ author: LinkAuthor, _ label: String) throws {
     let link = groupLink(by: author)
 
     #expect(rows([try linkRow(link)], links: [link]).map(\.sessionLabel) == [label])

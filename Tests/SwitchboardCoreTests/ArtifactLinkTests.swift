@@ -213,14 +213,16 @@ private func planAttachLink(_ doc: String) -> String? {
   /// its URL as an artifact, and the row's URL is the one plan attach reads.
   @Test(arguments: allInputs.filter { $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) })
   func aLinkBecomesAnArtifactRowExactlyWhenPlanAttachAcceptsIt(_ link: String) {
-    let row = GroupArtifact(link: GroupLink(id: "l1", title: "Plan", url: link, by: .you, t: 1))
+    let row = GroupArtifact(link: ExternalLink(id: "l1", title: "Plan", url: link, by: .you, t: 1))
 
     #expect(row?.url == planAttachLink(link), "\(link.debugDescription)")
   }
 
   @Test(arguments: allInputs)
   func aLinkRowsURLIsACleanClaudeArtifactLink(_ link: String) throws {
-    guard let row = GroupArtifact(link: GroupLink(id: "l1", title: "Plan", url: link, by: .you, t: 1)) else { return }
+    guard let row = GroupArtifact(link: ExternalLink(id: "l1", title: "Plan", url: link, by: .you, t: 1)) else {
+      return
+    }
 
     #expect(try isCleanArtifactLink(row.url), "\(link.debugDescription) gave \(row.url)")
     #expect(planAttachLink(row.url) == row.url)

@@ -20,14 +20,14 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   public var keptArtifacts: [GroupArtifact]?
   /// The links that the user added, in the order they were added. A merge puts the other group's links after this
   /// group's. Nil in a group that has none.
-  public var links: [GroupLink]?
+  public var links: [ExternalLink]?
 
   /// The longest description, in characters.
   public static let descriptionLimit = 280
 
   public init(
     id: String, name: String, description: String? = nil, descriptionBy: Author? = nil, notes: [Note] = [],
-    created: Int64, account: String? = nil, links: [GroupLink]? = nil
+    created: Int64, account: String? = nil, links: [ExternalLink]? = nil
   ) {
     self.id = id
     self.name = name
@@ -47,7 +47,7 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   /// Adds `link` after the group's links, under a new id when the group already uses its id. It adds nothing and
   /// returns false when the group already has a link to the same URL, or to the same claude.ai artifact in another
   /// form.
-  @discardableResult public mutating func addLink(_ link: GroupLink) -> Bool {
+  @discardableResult public mutating func addLink(_ link: ExternalLink) -> Bool {
     var all = links ?? []
     let target = link.target
     guard !all.contains(where: { $0.target == target }) else { return false }
@@ -135,55 +135,6 @@ public struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
   }
 }
 
-/// A web page attached to a group, such as an RFC or a design doc. A link to a claude.ai artifact also lists among
-/// the group's artifacts. The user adds any link. A Claude Code session adds only a link to a claude.ai artifact.
-public struct GroupLink: Codable, Equatable, Sendable, Identifiable {
-  public var id: String
-  public var title: String
-  public var url: String
-  public var by: Author
-  /// Milliseconds since the epoch.
-  public var t: Int64
-
-  /// The longest title, in characters.
-  public static let titleLimit = 200
-  /// The longest URL, in characters.
-  public static let urlLimit = 2000
-
-  public init(id: String, title: String, url: String, by: Author, t: Int64) {
-    self.id = id
-    self.title = title
-    self.url = url
-    self.by = by
-    self.t = t
-  }
-
-  /// The URL that two links to the same page share: the normalized form of a claude.ai artifact link, else the URL.
-  var target: String { ArtifactLink.normalized(url) ?? url }
-
-  /// The URL without surrounding whitespace, and a claude.ai artifact link in its normalized form. It refuses a URL
-  /// that is not http or https, that has no host, or that holds whitespace, because sessions will read it as one
-  /// token.
-  public static func cleanURL(_ text: String?) throws -> String {
-    let url = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !url.isEmpty else { throw APIError("a link needs a URL") }
-    guard url.count <= urlLimit else {
-      throw APIError("a link URL has at most \(urlLimit) characters, and this one has \(url.count)")
-    }
-    guard !url.contains(where: \.isWhitespace), let parsed = URL(string: url),
-      let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme), parsed.host?.isEmpty == false
-    else { throw APIError("a link needs an http or https URL with a host, not \(url)") }
-    return ArtifactLink.normalized(url) ?? url
-  }
-
-  /// The title on one line. Without a title, it is the URL, cut to `titleLimit` characters with an ellipsis when it
-  /// is longer. It refuses a given title over `titleLimit`.
-  public static func cleanTitle(_ text: String?, url: String) throws -> String {
-    if let title = try SessionGroup.cleanLine(text, limit: titleLimit, noun: "a link title") { return title }
-    return url.count <= titleLimit ? url : String(url.prefix(titleLimit - 1)) + "…"
-  }
-}
-
 /// A group and the ids of its sessions, follow-ups included.
 public struct GroupSummary: Codable, Equatable, Sendable, Identifiable {
   public var id: String
@@ -199,7 +150,7 @@ public struct GroupSummary: Codable, Equatable, Sendable, Identifiable {
   /// The artifacts of the group's sessions, its chat, its removed sessions, and its links to claude.ai artifacts,
   /// newest first, or nil when it has none.
   public var artifacts: [GroupArtifact]?
-  public var links: [GroupLink]?
+  public var links: [ExternalLink]?
 
   public init(_ group: SessionGroup, sessions: [String]) {
     id = group.id

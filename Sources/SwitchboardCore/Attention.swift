@@ -222,6 +222,9 @@ public struct SessionFacts: Codable, Equatable, Sendable {
   public var unread: UnreadHost?
   /// The artifacts that the session published, in first-publish order.
   public var artifacts: [SessionArtifact] = []
+  /// The links of known kinds that sbd found in the session's prompts and sent Slack messages, in first-sighting
+  /// order.
+  public var links: [ExternalLink] = []
   /// The operator's `needsYou` reports that the user has not answered or acknowledged, oldest first.
   public var openReports: [OperatorReport] = []
   /// The reports that the latest `ack` closed, oldest first. An `unack` reopens them. It is empty while a report
@@ -286,6 +289,7 @@ public struct SessionFacts: Codable, Equatable, Sendable {
     let touchedBefore = lastTouched
     applyWait(event, userPrompt: userPrompt)
     applyArtifact(event)
+    applyLinks(event)
     applyConversation(event)
     // A subagent's tool calls don't change what the main session waits on.
     let fromSubagent = event.fromSubagent

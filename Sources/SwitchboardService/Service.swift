@@ -2986,6 +2986,7 @@ public final class Service {
     if !facts.dependencies.isEmpty { out.dependencies = facts.dependencies }
     out.plans = planSummaries(session: s, rowFollowups: rowFollowups)
     if !facts.artifacts.isEmpty { out.artifacts = facts.artifacts }
+    if !facts.links.isEmpty { out.links = facts.links }
     out.conversationStarted = facts.conversationStarted
     out.docket = s.docket.map { DocketSummary($0, facts.docket) }
     out.mergeError = facts.mergeError

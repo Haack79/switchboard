@@ -767,6 +767,9 @@ func printSession(_ s: SessionSummary) {
   }
   for p in s.plans ?? [] { printPlan(p, indent: "  ") }
   for a in (s.artifacts ?? []).newestFirst { print("  artifact: \(a.title)  \(a.url)  (\(a.caption()))".printable) }
+  for l in (s.links ?? []).reversed() {
+    print("  link: \(l.id)  \(l.title)  \(l.url)  (\(l.caption()))".printable)
+  }
   print("  claude session: \(s.claudeSessionId)")
   if let r = s.lastReply { print("  last reply: \(oneLine(r, max: 200))".printable) }
   printPause(s)
