@@ -35,12 +35,7 @@ struct StateBadge: View {
   let state: AttentionState
 
   var body: some View {
-    Text(state.title)
-      .font(.caption.bold())
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(Capsule().fill(state.color.opacity(0.18)))
-      .foregroundStyle(state.color)
+    Text(state.title).pill(state.color, size: .regular)
   }
 }
 
@@ -1092,13 +1087,9 @@ extension BoardHolder {
 extension View {
   /// Small secondary text on one line in a gray capsule.
   func capsuleBadge() -> some View {
-    font(.caption2.bold())
-      .lineLimit(1)
+    lineLimit(1)
       .fixedSize()
-      .padding(.horizontal, 5)
-      .padding(.vertical, 1)
-      .background(Capsule().fill(Color.secondary.opacity(0.15)))
-      .foregroundStyle(.secondary)
+      .pill(.secondary)
   }
 }
 
