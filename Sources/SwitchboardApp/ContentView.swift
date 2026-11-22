@@ -1,6 +1,13 @@
 import SwiftUI
 import SwitchboardCore
 
+extension BoardModel {
+  /// True while `key` holds a value. Dismissing the sheet or dialog sets `key` to nil.
+  fileprivate func isPresent<T>(_ key: ReferenceWritableKeyPath<BoardModel, T?>) -> Binding<Bool> {
+    Binding(get: { self[keyPath: key] != nil }, set: { if !$0 { self[keyPath: key] = nil } })
+  }
+}
+
 extension AttentionState {
   var color: Color {
     switch self {
@@ -49,10 +56,6 @@ struct ContentView: View {
 
   @EnvironmentObject var model: BoardModel
 
-  private var isConfirmingDelete: Binding<Bool> {
-    Binding(get: { model.confirmingDelete != nil }, set: { if !$0 { model.confirmingDelete = nil } })
-  }
-
   private var confirmingCleanupOffer: CleanupOffer? {
     model.board.first { $0.id == model.confirmingCleanup }.flatMap(CleanupOffer.init)
   }
@@ -61,24 +64,8 @@ struct ContentView: View {
     Binding(get: { model.showingDoneRemoval }, set: { if !$0 { model.doneRemoval = nil } })
   }
 
-  private var isPickingSnoozeTime: Binding<Bool> {
-    Binding(get: { model.pickingSnoozeTime != nil }, set: { if !$0 { model.pickingSnoozeTime = nil } })
-  }
-
-  private var isPickingPauseTime: Binding<Bool> {
-    Binding(get: { model.pickingPauseTime != nil }, set: { if !$0 { model.pickingPauseTime = nil } })
-  }
-
-  private var isEditingLoop: Binding<Bool> {
-    Binding(get: { model.loopEditor != nil }, set: { if !$0 { model.loopEditor = nil } })
-  }
-
   private var isShowingQuickAsk: Binding<Bool> {
     Binding(get: { model.quickAsk != nil }, set: { if !$0 { model.closeQuickAsk() } })
-  }
-
-  private var isConfirmingCleanup: Binding<Bool> {
-    Binding(get: { model.confirmingCleanup != nil }, set: { if !$0 { model.confirmingCleanup = nil } })
   }
 
   var body: some View {
@@ -112,7 +99,7 @@ struct ContentView: View {
       }
       // The delete dialog is on the split view. Two dialogs on one view can hide each other.
       .confirmationDialog(
-        confirmingCleanupOffer?.title ?? "Clean up this session?", isPresented: isConfirmingCleanup,
+        confirmingCleanupOffer?.title ?? "Clean up this session?", isPresented: model.isPresent(\.confirmingCleanup),
         presenting: confirmingCleanupOffer
       ) { offer in
         Button("Clean Up", role: .destructive) { model.cleanup(offer.session) }
@@ -123,7 +110,7 @@ struct ContentView: View {
     }
     .removingToolbarTitle()
     .confirmationDialog(
-      "Delete \(model.confirmingDelete?.name ?? "this session")?", isPresented: isConfirmingDelete,
+      "Delete \(model.confirmingDelete?.name ?? "this session")?", isPresented: model.isPresent(\.confirmingDelete),
       presenting: model.confirmingDelete.map { ($0, TodoDeletion($0)) }
     ) { session, todos in
       Button(todos.button("Delete"), role: .destructive) { model.deleteSession(session, resolve: todos.ids) }
@@ -145,7 +132,7 @@ struct ContentView: View {
     .sheet(isPresented: isShowingDoneRemoval) {
       DoneRemovalSheet().environmentObject(model).inlineLinks(model)
     }
-    .sheet(isPresented: isPickingSnoozeTime) {
+    .sheet(isPresented: model.isPresent(\.pickingSnoozeTime)) {
       if let id = model.pickingSnoozeTime {
         UntilPicker(
           session: id, verb: "Snooze", apply: { model.snooze(id, until: $0) },
@@ -153,7 +140,7 @@ struct ContentView: View {
         ).environmentObject(model)
       }
     }
-    .sheet(isPresented: isPickingPauseTime) {
+    .sheet(isPresented: model.isPresent(\.pickingPauseTime)) {
       if let id = model.pickingPauseTime {
         UntilPicker(
           session: id, verb: "Pause", apply: { model.pause(id, until: $0) },
@@ -161,7 +148,12 @@ struct ContentView: View {
         ).environmentObject(model)
       }
     }
-    .sheet(isPresented: isEditingLoop) {
+    .sheet(isPresented: model.isPresent(\.editingNotes)) {
+      if let id = model.editingNotes {
+        NotesSheet(id: id) { model.editingNotes = nil }.environmentObject(model)
+      }
+    }
+    .sheet(isPresented: model.isPresent(\.loopEditor)) {
       if let request = model.loopEditor {
         LoopEditor(
           request: request, schedule: model.editedSchedule(request),
@@ -261,7 +253,7 @@ struct Sidebar: View {
     }
     .takesListFocus(.sidebar, $focused, model: model)
     .confirmationDialog(
-      accountSwitchTitle, isPresented: isSwitchingAccount, presenting: model.switchingAccount
+      accountSwitchTitle, isPresented: model.isPresent(\.switchingAccount), presenting: model.switchingAccount
     ) { change in
       if change.switches {
         Button("New Sessions Only") { model.confirmAccountSwitch(change, move: false) }
@@ -277,7 +269,7 @@ struct Sidebar: View {
       Text(accountSwitchMessage(change))
     }
     .confirmationDialog(
-      model.confirmingAccountMove?.title ?? "", isPresented: isConfirmingAccountMove,
+      model.confirmingAccountMove?.title ?? "", isPresented: model.isPresent(\.confirmingAccountMove),
       presenting: model.confirmingAccountMove
     ) { move in
       Button(move.button) { model.confirmAccountMove(move) }
@@ -312,14 +304,6 @@ struct Sidebar: View {
         }
       }
     }
-  }
-
-  private var isConfirmingAccountMove: Binding<Bool> {
-    Binding(get: { model.confirmingAccountMove != nil }, set: { if !$0 { model.confirmingAccountMove = nil } })
-  }
-
-  private var isSwitchingAccount: Binding<Bool> {
-    Binding(get: { model.switchingAccount != nil }, set: { if !$0 { model.switchingAccount = nil } })
   }
 
   private var accountSwitchTitle: String {
@@ -536,6 +520,7 @@ enum BoardLanes: String, CaseIterable {
 /// `MergeBoard.columns`. Done sessions and merged PRs collapse into a footer.
 struct BoardView: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(BoardLanes.storageKey) private var laneKind = BoardLanes.repo
   @FocusState private var focused: Bool
   @State private var boardGeometry = BoardGeometry()
@@ -741,7 +726,7 @@ struct BoardView: View {
           // ⇧⌘G shows the Board with the new group's name field, which closes when it loses focus while empty.
           .onAppear { if !model.namingGroup { focused = true } }
           .onChange(of: model.boardJumps, initial: true) {
-            if let id = model.boardFocus { withAnimation { proxy.scrollTo(id) } }
+            if let id = model.boardFocus { proxy.scrollTo(id, reduceMotion: reduceMotion) }
           }
         }
       }

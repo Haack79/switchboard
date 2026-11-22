@@ -89,6 +89,7 @@ struct InboxView: View {
 /// the item's Claude terminal.
 struct TriageList: View {
   @EnvironmentObject var model: BoardModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var focused: Bool
 
   var body: some View {
@@ -117,7 +118,7 @@ struct TriageList: View {
         // The rows have no layout yet when the Inbox replaces the Board. A scroll
         // right away often does nothing, so this waits 0.3 s.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-          if let id = model.currentInboxItem { withAnimation { proxy.scrollTo(id) } }
+          if let id = model.currentInboxItem { proxy.scrollTo(id, reduceMotion: reduceMotion) }
         }
       }
     }

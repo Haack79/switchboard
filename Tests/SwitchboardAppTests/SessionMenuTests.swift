@@ -51,7 +51,8 @@ private func isDeleteSelection(_ a: SessionMenuAction) -> Bool {
 private func isDestructive(_ a: SessionMenuAction) -> Bool {
   switch a {
   case .cleanUp, .delete, .deleteSelection: true
-  case .highlight, .snooze, .copyLink, .pause, .resume, .startNow, .stop, .moveToAccount, .unlinkParent, .divider:
+  case .highlight, .snooze, .copyLink, .notes, .pause, .resume, .startNow, .stop, .moveToAccount, .unlinkParent,
+    .divider:
     false
   }
 }
@@ -130,7 +131,8 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil, movesAccount: true, parentName: "planner") == [
-        .highlight, .snooze, .copyLink, .pause, .stop, .moveToAccount, .unlinkParent("Unlink from planner"), .divider,
+        .highlight, .snooze, .copyLink, .notes, .pause, .stop, .moveToAccount, .unlinkParent("Unlink from planner"),
+        .divider,
         expectedDelete(s),
       ])
   }
@@ -334,7 +336,7 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil)
-        == [.snooze, .copyLink, .pause, .startNow, .stop, .divider, .cleanUp, expectedDelete(s)])
+        == [.snooze, .copyLink, .notes, .pause, .startNow, .stop, .divider, .cleanUp, expectedDelete(s)])
   }
 
   @Test func separatesStopFromDeleteWithADivider() {
@@ -342,16 +344,18 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil) == [
-        .highlight, .snooze, .copyLink, .pause, .stop, .divider, expectedDelete(s),
+        .highlight, .snooze, .copyLink, .notes, .pause, .stop, .divider, expectedDelete(s),
       ])
   }
 
   @Test func showsPauseAndStopButNoSnoozeOrDeleteForALiveChat() {
-    #expect(SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil) == [.copyLink, .pause, .stop])
+    #expect(
+      SessionMenu.actions(for: chatItem("c1", group: "g1"), selectionCount: nil) == [.copyLink, .notes, .pause, .stop])
   }
 
   @Test func showsOnlyPauseForAManagerConversationThatIsNotRunning() {
-    #expect(SessionMenu.actions(for: ofKind(.manager, live: false), selectionCount: nil) == [.copyLink, .pause])
+    #expect(
+      SessionMenu.actions(for: ofKind(.manager, live: false), selectionCount: nil) == [.copyLink, .notes, .pause])
   }
 
   @Test func separatesCleanUpAndDeleteFromSnoozeAndPauseWithADivider() {
@@ -359,7 +363,7 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil) == [
-        .snooze, .copyLink, .pause, .divider, .cleanUp, expectedDelete(s),
+        .snooze, .copyLink, .notes, .pause, .divider, .cleanUp, expectedDelete(s),
       ])
   }
 
@@ -369,7 +373,7 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
     var s = cleanupSession(CleanupStatus(state: .removed))
     s.markedDone = true
 
-    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [.copyLink, .divider, expectedDelete(s)])
+    #expect(SessionMenu.actions(for: s, selectionCount: nil) == [.copyLink, .notes, .divider, expectedDelete(s)])
   }
 
   @Test func separatesDeleteOfAPausedSessionWithADivider() {
@@ -378,7 +382,7 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
 
     #expect(
       SessionMenu.actions(for: s, selectionCount: nil) == [
-        .highlight, .snooze, .copyLink, .resume, .divider, expectedDelete(s),
+        .highlight, .snooze, .copyLink, .notes, .resume, .divider, expectedDelete(s),
       ])
   }
 
@@ -441,6 +445,16 @@ private let startedStates = AttentionState.allCases.filter { $0 != .notStarted }
     let actions = SessionMenu.actions(for: Self.shapes[i].1, selectionCount: Self.shapes[i].2)
 
     #expect(actions.filter { $0 == .copyLink }.count == 1, "\(Self.shapes[i].0)")
+  }
+
+  /// The sidebar's note icon shows only on a session with notes. The menu is how the user adds the first note.
+  @Test(arguments: shapes.indices)
+  func offersNotesOnceBeforeTheDividerInEveryShape(_ i: Int) throws {
+    let actions = SessionMenu.actions(for: Self.shapes[i].1, selectionCount: Self.shapes[i].2)
+
+    #expect(actions.filter { $0 == .notes }.count == 1, "\(Self.shapes[i].0)")
+    let notes = try #require(actions.firstIndex(of: .notes), "\(Self.shapes[i].0)")
+    #expect(notes < (actions.firstIndex(of: .divider) ?? actions.endIndex), "\(Self.shapes[i].0)")
   }
 
   @Test(arguments: shapes.indices)
