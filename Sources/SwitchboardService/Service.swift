@@ -336,6 +336,8 @@ public final class Service {
   var memoryPinOff = false
   /// The most claude processes that may run at once. `sb live --set` changes it.
   var liveCap: Int
+  /// Whether new sessions start in auto mode. `sb auto-mode` changes it.
+  var defaultAutoMode: Bool
   /// The `operator` settings that the tick last read, with config.json's modification time then.
   var cachedOperatorSettings: (modified: Date?, settings: OperatorSettings)?
   /// The model of a Manager conversation without its own. `sb manager model` changes it.
@@ -393,6 +395,7 @@ public final class Service {
     self.hostCLIRunner = HostCLIRunner(program: sbPath)
     self.keeper = SnapshotKeeper(path: home.database, every: config.snapshotEvery)
     self.liveCap = config.liveCap
+    self.defaultAutoMode = config.autoMode
     self.managerModel = config.manager.model
     self.issueSettings = config.issues
     let links = Service.makeHostLinks(config: config, home: home)
@@ -856,6 +859,8 @@ public final class Service {
       return try managerHint(args)
     case "manager-model":
       return try managerModelRequest(args)
+    case "auto-mode":
+      return try autoModeRequest(args)
     case "rename":
       let id = try lookup(args)
       guard let name = args["name"]?.string, !name.isEmpty else { throw APIError("rename needs a name") }
@@ -1429,7 +1434,7 @@ public final class Service {
     }
     session.group = try groupOfNew(args.group, parent: session.parent)
     session.setStartModes(
-      auto: args.autoMode, plan: args.planMode, manual: args.manualMode, defaultAuto: config.autoMode)
+      auto: args.autoMode, plan: args.planMode, manual: args.manualMode, defaultAuto: defaultAutoMode)
     session.host = args.host
     session.issue = args.issue
     configure(&session)
@@ -1892,10 +1897,13 @@ public final class Service {
         }
         return
       }
+      // claude can finish the turn before the paste returns. A test can make the gate after that turn. The paste reads
+      // the gate before it records `pasting`, which keeps that gate from holding it.
+      let holdsDelivered = gateIsClosed("hold-delivered")
       guard queue.sync(execute: { startPaste(id, message) }) else { return }
       do {
         try terminals.paste(name, parts?.text ?? text, attachments: parts?.paths)
-        waitAtGate("hold-delivered")
+        if holdsDelivered { waitAtGate("hold-delivered") }
         queue.async {
           self.record(id, "delivered", ["text": .string(text)])
           // Claude Code runs a built-in command without a turn. No UserPromptSubmit clears its paste.
@@ -1984,8 +1992,12 @@ public final class Service {
   /// gates, and they run on the paste queue or the removal queue, never on
   /// the state queue.
   func waitAtGate(_ gate: String) {
-    guard config.testClock else { return }
-    while FileManager.default.fileExists(atPath: "\(home.path)/\(gate)") { usleep(50_000) }
+    while gateIsClosed(gate) { usleep(50_000) }
+  }
+
+  /// Whether the gate file exists in the home of a test instance.
+  func gateIsClosed(_ gate: String) -> Bool {
+    config.testClock && FileManager.default.fileExists(atPath: "\(home.path)/\(gate)")
   }
 
   /// Defers the session's held questions first, so that their cards stay.

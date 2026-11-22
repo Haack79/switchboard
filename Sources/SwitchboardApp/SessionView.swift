@@ -251,6 +251,9 @@ struct SessionView: View {
           HStack(spacing: 4) {
             Link(pr.line, destination: url).font(.caption).help("\(pr.repo): \(pr.title)")
             if let owners = pr.codeOwners { CodeOwnerShield(status: owners) }
+            if let count = pr.commitCount {
+              Text("\(count) \(count == 1 ? "commit" : "commits")").font(.caption).foregroundStyle(.secondary)
+            }
           }
         }
         IssueBadge(session: session)
@@ -261,6 +264,10 @@ struct SessionView: View {
           SessionAccountControl(session: session)
           if session.kind.runsInManagerFolder { MCPServerMenu(session: session) }
           if session.kind == .manager { ManagerHeaderControls(session: session) }
+          if let repo = RepoLabels.label(for: session) {
+            Text(repo).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+              .help("The repo this session works in")
+          }
           Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
             .font(.caption)
             .foregroundStyle(.tertiary)
