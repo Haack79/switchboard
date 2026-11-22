@@ -182,12 +182,14 @@ import Testing
     #expect(try sbd.groupLinks(g.id).isEmpty)
   }
 
-  /// URLs that are not http or https, have no scheme or host, or hold whitespace.
+  /// URLs that are not http or https, have no scheme or host, hold whitespace, or hold a user or password part.
   static let refusedURLs = [
     "ftp://example.com/file", "file:///etc/passwd", "javascript:alert(1)", "mailto:ana@example.com",
     "data:text/html,hi", "ssh://git@github.com/o/r", "httpx://example.com", "example.com", "www.example.com/rfcs",
     "//example.com/rfcs", "/rfcs/flag-evaluations", "", "https://exa mple.com", "https://example.com/a\tb",
     "https://example.com\nhttps://evil.example", "https://example.com/a\u{00A0}b", "https://", "https:///rfcs",
+    "https://example.slack.com@evil.example/archives/C0EXAMPLE01/p1794965000000100", "https://user:pass@example.com/",
+    "https://user@example.com", #"https://claude.ai\@evil.com/artifact/x"#,
   ]
 
   @Test(arguments: refusedURLs) func aURLThatIsNotHTTPIsRefused(_ url: String) throws {

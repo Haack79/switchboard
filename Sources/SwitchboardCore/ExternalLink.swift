@@ -52,11 +52,13 @@ public struct ExternalLink: Codable, Equatable, Sendable, Identifiable {
   public func caption(now: Int64 = nowMs()) -> String { "\(by.phrase) \(ago(t, now: now)) ago" }
 
   /// The URL that two links to the same page share: the normalized form of a claude.ai artifact link, else the URL.
-  var target: String { ArtifactLink.normalized(url) ?? url }
+  var target: String { Self.target(url) }
+
+  static func target(_ url: String) -> String { ArtifactLink.normalized(url) ?? url }
 
   /// The URL without surrounding whitespace, and a claude.ai artifact link in its normalized form. It refuses a URL
   /// that is not http or https, that has no host, or that holds whitespace, because sessions will read it as one
-  /// token.
+  /// token. It refuses a URL with a user name or password, because such a URL shows one host and opens another.
   public static func cleanURL(_ text: String?) throws -> String {
     let url = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     guard !url.isEmpty else { throw APIError("a link needs a URL") }
@@ -66,8 +68,15 @@ public struct ExternalLink: Codable, Equatable, Sendable, Identifiable {
     guard !url.contains(where: \.isWhitespace), let parsed = URL(string: url),
       let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme), parsed.host?.isEmpty == false
     else { throw APIError("a link needs an http or https URL with a host, not \(url)") }
+    guard parsed.user == nil, parsed.password == nil else {
+      throw APIError("a link URL can't hold a user name or password, and \(url) does")
+    }
     return ArtifactLink.normalized(url) ?? url
   }
+
+  /// The key that two URLs of one page share: the `LinkTarget` key of a known kind, else `target`'s form. Hiding a
+  /// found link matches on it, so a reply's link and its thread's link hide together.
+  static func pageKey(_ url: String) -> String { LinkTarget.parse(url)?.key ?? target(url) }
 
   /// The title on one line. Without a title, it is the URL, cut to `titleLimit` characters with an ellipsis when it
   /// is longer. It refuses a given title over `titleLimit`.

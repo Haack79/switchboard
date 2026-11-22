@@ -84,3 +84,86 @@ extension SessionFacts {
         by: .found, t: t))
   }
 }
+
+/// What `Session.addLink` did.
+public enum LinkAdd: Equatable, Sendable {
+  /// It added the link by hand.
+  case added(ExternalLink)
+  /// It took a hidden found link off the hidden list, and the found link lists again with its id.
+  case unhid(ExternalLink)
+}
+
+/// What `Session.removeLink` did.
+public enum LinkRemoval: Equatable, Sendable {
+  /// It deleted a link that the user or Claude added.
+  case deleted(ExternalLink)
+  /// It hid a link that sbd found.
+  case hid(ExternalLink)
+}
+
+extension Session {
+  /// The session's links, ordered by time with found links first on a tie: the found links whose page is not
+  /// hidden and whose URL no added link has, and the added links.
+  public func links(found: [ExternalLink]) -> [ExternalLink] {
+    guard addedLinks != nil || hiddenLinks != nil else { return found }
+    let added = addedLinks ?? []
+    let hidden = Set((hiddenLinks ?? []).map(ExternalLink.pageKey))
+    let addedTargets = Set(added.map(\.target))
+    let shown = found.filter { !hidden.contains(ExternalLink.pageKey($0.url)) && !addedTargets.contains($0.target) }
+    return (shown + added).enumerated()
+      .sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
+      .map(\.element)
+  }
+
+  /// Adds a link by hand, or brings back a hidden found link when the user adds its URL. It refuses a URL that a
+  /// listed link has. Only the user unhides, so it refuses Claude's link to a hidden page.
+  public mutating func addLink(url text: String?, title: String?, by: Author, found: [ExternalLink], now: Int64)
+    throws -> LinkAdd
+  {
+    let url = try ExternalLink.cleanURL(text)
+    var link = ExternalLink(
+      id: "", title: try ExternalLink.cleanTitle(title, url: url), url: url, by: LinkAuthor(by), t: now)
+    if let listed = links(found: found).first(where: { $0.target == link.target }) {
+      throw APIError("\(name) already has a link to \(url) (\(listed.id))")
+    }
+    let page = ExternalLink.pageKey(url)
+    let hidden = hiddenLinks ?? []
+    if by == .claude, hidden.contains(where: { ExternalLink.pageKey($0) == page }) {
+      throw APIError("The user hid a link to this page. Ask the user to run sb link add")
+    }
+    // The check above finds every listed link, so a found link with this URL is hidden.
+    if let back = found.first(where: { $0.target == link.target }) {
+      let rest = hidden.filter { ExternalLink.pageKey($0) != page }
+      hiddenLinks = rest.isEmpty ? nil : rest
+      return .unhid(back)
+    }
+    let added = addedLinks ?? []
+    link.id = shortId("l", taken: (found + added).map(\.id))
+    addedLinks = added + [link]
+    return .added(link)
+  }
+
+  /// Deletes an added link, or hides a listed found link. Claude may delete only a link that Claude added, and
+  /// only the user hides. When the user deletes an added link that has a found link's URL, the found link is
+  /// hidden too, so the link leaves the list.
+  public mutating func removeLink(id: String, by: Author, found: [ExternalLink]) throws -> LinkRemoval {
+    let added = addedLinks ?? []
+    if let link = added.first(where: { $0.id == id }) {
+      guard by == .you || link.by == .claude else {
+        throw APIError("Only you can remove a link you added. Ask the user to run sb link rm")
+      }
+      let rest = added.filter { $0.id != id }
+      addedLinks = rest.isEmpty ? nil : rest
+      if by == .you, let shadowed = links(found: found).first(where: { $0.by == .found && $0.target == link.target }) {
+        hiddenLinks = (hiddenLinks ?? []) + [shadowed.url]
+      }
+      return .deleted(link)
+    }
+    guard let link = links(found: found).first(where: { $0.id == id && $0.by == .found }) else {
+      throw APIError("\(name) has no link \(id)")
+    }
+    guard by == .you else { throw APIError("Only you can hide a link that Switchboard found") }
+    hiddenLinks = (hiddenLinks ?? []) + [link.url]
+    return .hid(link)
+  }
+}

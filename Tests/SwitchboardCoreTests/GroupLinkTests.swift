@@ -269,6 +269,45 @@ import Testing
     #expect(try ExternalLink.cleanURL(url) == url)
   }
 
+  // MARK: User and password parts
+
+  /// URLs whose host as shown differs from the host they open, or that carry credentials.
+  static let userinfoURLs = [
+    "https://example.slack.com@evil.example/archives/C0EXAMPLE01/p1794965000000100",
+    "https://user:pass@example.com/", "https://user@example.com", "http://user@example.com/rfcs",
+    "https://:pass@example.com/", "https://user:@example.com/", "https://USER@Example.com:8443/rfcs",
+    "https://user%40corp@example.com/", "https://claude.ai@evil.com/artifact/\(artifactShortId)",
+  ]
+
+  @Test(arguments: userinfoURLs) func cleanURLRefusesAUserOrPasswordPart(_ url: String) {
+    let message = refusal { try ExternalLink.cleanURL(url) } ?? "no error"
+
+    #expect(message.contains("can't hold a user name or password"), "\(url): \(message)")
+  }
+
+  /// Foundation may refuse a backslash before the userinfo check runs, so this test takes any refusal.
+  @Test func cleanURLRefusesABackslashBeforeAnAt() {
+    #expect(throws: (any Error).self) { try ExternalLink.cleanURL(#"https://claude.ai\@evil.com/artifact/x"#) }
+  }
+
+  /// An `@` outside the authority is no user part.
+  @Test(arguments: [
+    "https://example.com/users/@ana", "https://example.com/rfcs?by=ana@example.com",
+    "https://example.com/rfcs#ana@example.com", "https://example.com:8443/rfcs",
+  ])
+  func cleanURLKeepsAnAtOutsideTheHost(_ url: String) throws {
+    #expect(try ExternalLink.cleanURL(url) == url)
+  }
+
+  @Test func cleanURLAcceptsALookAlikeSlackHostAndItsLinkIsWeb() throws {
+    let url = "https://example.slack.com.evil.example/archives/C0EXAMPLE01/p1794965000000100"
+
+    let cleaned = try ExternalLink.cleanURL(url)
+
+    #expect(cleaned == url)
+    #expect(ExternalLink(id: "l1", title: url, url: cleaned, by: .you, t: 1).kind == .web)
+  }
+
   /// Links already stored keep their form, so `addLink` compares artifact links by their normalized form.
   @Test(arguments: [
     (artifactShortURL, "\(artifactShortURL)#frag"),

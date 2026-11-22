@@ -145,6 +145,18 @@ extension MCPToolServer {
         "todo": boolean("Adds a to-do. The user must resolve it before the session can be deleted."),
       ], required: ["session", "text"]),
     Tool(
+      "add_link",
+      "Adds a link to the calling session, such as a page or thread that the session posted to by a path Switchboard can't see. It takes any http or https URL. Switchboard already lists the Slack, Linear, Notion, Google Docs, and Grafana links in the user's prompts and the messages sent with the Slack connector.",
+      [
+        "url": string("The http or https URL."),
+        "title": string(
+          "A title of one line, at most \(ExternalLink.titleLimit) characters. Without it, the title is the URL."),
+      ], required: ["url"]),
+    Tool(
+      "remove_link",
+      "Removes a link that `add_link` added to the calling session. It refuses a link that the user added and a link that Switchboard found.",
+      ["link": string("The link's id: the `id` of a link in `get_session` with `full`.")], required: ["link"]),
+    Tool(
       "list_groups",
       "Lists the groups with their descriptions, sessions, notes, links, and artifacts, then the sessions in no group. A group's artifacts include its links to claude.ai artifacts."
     ),
