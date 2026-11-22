@@ -293,7 +293,11 @@ enum ShellSelfTest {
     root.layoutSubtreeIfNeeded()
     let frame = anchor.convert(anchor.bounds, to: nil)
     let point = NSPoint(x: frame.minX + clickInset, y: frame.midY)
-    guard let hit = (root.superview ?? root).hitTest(point) else { return "nothing at \(name)" }
+    guard let hit = (root.superview ?? root).hitTest(point) else {
+      let frameView = root.superview ?? root
+      return "nothing at \(name) (\(Int(point.x)),\(Int(point.y)) in a window of \(size(frameView.frame)), content "
+        + "\(size(root.frame)) at \(Int(root.frame.minX)),\(Int(root.frame.minY)))"
+    }
     if let row = enclosingRow(of: anchor), !hit.isDescendant(of: row) {
       return "\(type(of: hit)) covers \(name)"
     }
@@ -328,7 +332,10 @@ enum ShellSelfTest {
   private static func anchors(prefix: String, container: String?) -> String {
     var found: [String] = []
     for root in NSApp.windows.compactMap(\.contentView) {
-      let bounds = root.convert(root.bounds, to: nil)
+      // The frame view is the window's whole area. A content view can be larger than it, and a click outside it
+      // hits nothing.
+      let frameView = root.superview ?? root
+      let bounds = root.convert(root.bounds, to: nil).intersection(frameView.convert(frameView.bounds, to: nil))
       let box = container.flatMap { ClickAnchorView.find($0, in: root) }
       for anchor in ClickAnchorView.all(prefix: prefix, in: root) {
         anchor.scrollToVisible(anchor.bounds)
@@ -343,6 +350,8 @@ enum ShellSelfTest {
     }
     return found.isEmpty ? "none" : found.sorted().joined(separator: ",")
   }
+
+  private static func size(_ rect: NSRect) -> String { "\(Int(rect.width))x\(Int(rect.height))" }
 
   /// Whether `frame` lies inside the window's content and inside the container, give or take 1 pt for rounding.
   static func anchorIsInside(_ frame: NSRect, window: NSRect, container: NSRect?) -> Bool {
