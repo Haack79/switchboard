@@ -288,6 +288,25 @@ struct BlendCase: Sendable, CustomTestStringConvertible {
     #expect(matches(try canvas.pixel(rep, x: 20, fromTop: 30), expected))
   }
 
+  /// Content outside a scroll view's safe area scrolls under an inset bar, so the drawing leaves it out.
+  @Test func aPlusLayerOutsideAScrollViewsSafeAreaDrawsNothing() throws {
+    let canvas = Canvas(dark: true)
+    let scroll = NSScrollView(frame: canvas.view.bounds)
+    scroll.drawsBackground = false
+    scroll.automaticallyAdjustsContentInsets = false
+    scroll.additionalSafeAreaInsets = NSEdgeInsets(top: 0, left: 40, bottom: 0, right: 0)
+    let document = NSView(frame: canvas.view.bounds)
+    document.wantsLayer = true
+    document.layer?.addSublayer(plus("plusL", CGRect(x: 10, y: 20, width: 20, height: 20), white: 0.3))
+    scroll.documentView = document
+    canvas.view.addSubview(scroll)
+    canvas.window.displayIfNeeded()
+
+    let rep = try canvas.cache()
+
+    #expect(matches(try canvas.pixel(rep, x: 20, fromTop: 30), try canvas.background(in: rep)))
+  }
+
   @Test func aPlusLayerInAScrollViewDrawsNothingPastTheScrollView() throws {
     let canvas = scrolledCanvas()
 

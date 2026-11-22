@@ -279,7 +279,8 @@ enum Snapshot {
       if let mode = (layer.compositingFilter as? String).flatMap({ blendModes[$0] }) {
         guard isTranslation(layer.transform) else { return [] }
         let visible = visibleRect(of: layer, in: view)
-        guard !visible.isEmpty, !isCovered(layer, within: visible, root: root, overlays: overlays) else { return [] }
+        // A layer that shows nowhere stays in the list, so it stays out of `cacheDisplay` too.
+        guard visible.isEmpty || !isCovered(layer, within: visible, root: root, overlays: overlays) else { return [] }
         return [BlendedLayer(layer: layer, mode: mode, opacity: opacity, visible: visible)]
       }
       let plain =
@@ -355,7 +356,7 @@ enum Snapshot {
     let layer = blend.layer
     let frame = layer.convert(layer.bounds, to: root)
     let scale = context.convertToDeviceSpace(CGSize(width: 1, height: 1)).width
-    guard
+    guard !blend.visible.isEmpty,
       let image = bitmapContext(
         width: Int((layer.bounds.width * scale).rounded(.up)), height: Int((layer.bounds.height * scale).rounded(.up)))
     else { return }
