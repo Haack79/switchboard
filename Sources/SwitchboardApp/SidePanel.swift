@@ -96,20 +96,13 @@ struct SidePanelView: View {
         ListSectionHeader(title: "Artifacts", count: panel.artifactsCount, inset: false)
         if !panel.hasArtifacts { Text(SidePanel.noArtifacts).foregroundStyle(.secondary) }
         ForEach(panel.artifacts, id: \.url) { artifact in
-          VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              // The title is untrusted text from the tool result, so it never renders as Markdown.
-              Text(verbatim: artifact.title).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-              Spacer(minLength: 0)
-              if artifact.removed == nil, let url = URL(string: artifact.url) {
-                Button("Open") { NSWorkspace.shared.open(url) }
-                  .buttonStyle(.link)
-                  .help(artifact.url)
-                  .accessibilityLabel("Open artifact \(artifact.title)")
-              }
-            }
-            Text(artifact.caption()).font(.caption).foregroundStyle(.secondary)
-          }
+          PanelRow(
+            title: artifact.title,
+            open: artifact.removed == nil
+              ? URL(string: artifact.url).map {
+                PanelRow.Open(url: $0, help: artifact.url, label: "Open artifact \(artifact.title)")
+              } : nil,
+            caption: artifact.caption())
         }
       }
       .padding(10)
