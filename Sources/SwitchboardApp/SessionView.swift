@@ -48,8 +48,10 @@ struct SessionView: View {
         let showsPanel = showsSidePanel && fits
         HStack(spacing: 0) {
           // On macOS 26, a split view that holds only the Claude pane grows past the width it is offered once the
-          // terminal attaches, which pushes the panel past the window's edge. The explicit width stops it.
-          terminalArea.frame(width: showsPanel ? geometry.size.width - SidePanel.width : geometry.size.width)
+          // terminal attaches, which pushes the panel past the window's edge. The width limit stops it. Without
+          // the panel, the frame sets no limit, so the terminals keep their own sizes.
+          terminalArea.frame(
+            minWidth: showsPanel ? 0 : nil, maxWidth: showsPanel ? geometry.size.width - SidePanel.width : nil)
           if showsPanel {
             SidePanelView(session: session).overlay(alignment: .leading) { Divider() }
           }
