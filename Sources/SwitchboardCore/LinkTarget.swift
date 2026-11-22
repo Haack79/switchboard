@@ -37,7 +37,9 @@ public struct LinkTarget: Equatable, Sendable {
     // A path is "/" followed by non-empty segments, so a trailing slash or "//" refuses the link.
     guard path.count >= 2, path[0].isEmpty, !path.dropFirst().contains(where: \.isEmpty) else { return nil }
     let segments = Array(path.dropFirst())
-    if host.contains("grafana") { return grafana(host: host, segments) }
+    // A Slack workspace or Notion site can have "grafana" in its host name. A host that fails the Grafana parse goes
+    // on to the other kinds.
+    if host.contains("grafana"), let target = grafana(host: host, segments) { return target }
     guard parts.port == nil else { return nil }
     switch host {
     case "linear.app": return linear(segments)

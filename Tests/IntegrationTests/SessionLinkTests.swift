@@ -89,9 +89,7 @@ extension Instance {
   /// The launch prompt runs through the claude stub's real UserPromptSubmit.
   @Test func aPromptWithASlackThreadLinkListsItInSbGetJson() throws {
     let sbd = try Instance()
-    let url =
-      "https://example.slack.com/archives/\(SlackExample.channel)/\(SlackExample.replyP)"
-      + "?thread_ts=\(SlackExample.rootTs)&cid=\(SlackExample.channel)"
+    let url = SlackExample.reply
 
     let s = try sbd.new(prompt: "Review \(url)", name: "flags-cache")
 
@@ -214,10 +212,16 @@ extension Instance {
     let s = try sbd.new(name: "flags-cache")
     try sbd.postPromptHook(s.id, prompt: "Review \(SlackExample.root)")
     let id = try #require(try sbd.sessionLinks(s.id)?.first?["id"]?.string)
+    try sbd.advanceClock(60_000)
+    let linear = "https://linear.app/example/issue/ENG-123"
+    try sbd.postPromptHook(s.id, prompt: "Also \(linear)")
 
     let text = try sbd.sb("get", s.id)
 
-    let line = try #require(text.split(separator: "\n").map(String.init).first { $0.hasPrefix("  link: ") })
+    let lines = text.split(separator: "\n").map(String.init).filter { $0.hasPrefix("  link: ") }
+    #expect(lines.count == 2, "\(lines)")
+    #expect(lines.first?.contains(linear) == true, "\(lines)")
+    let line = try #require(lines.last)
     #expect(
       line.hasPrefix("  link: \(id)  Slack thread in \(SlackExample.channel)  \(SlackExample.root)  (found "),
       "\(line)")

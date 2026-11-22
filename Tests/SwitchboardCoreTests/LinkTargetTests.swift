@@ -90,6 +90,9 @@ private let acceptedSlack: [AcceptedLink] = [
     "slack workspace with a hyphen and digits", "https://my-team-2.slack.com/archives/\(ch)/\(rootP)",
     workspace: "my-team-2"),
   slack("slack all-digit channel", "https://example.slack.com/archives/0123456789/\(rootP)", channel: "0123456789"),
+  slack(
+    "slack workspace whose name contains grafana", "https://grafana.slack.com/archives/\(ch)/\(rootP)",
+    workspace: "grafana"),
 ]
 
 private let refusedSlack: [RefusedLink] = [
@@ -226,6 +229,9 @@ private let acceptedNotion: [AcceptedLink] = [
   AcceptedLink(
     name: "notion uppercase scheme host and id", url: "HTTPS://WWW.NOTION.SO/Q4-Plan-\(hex.uppercased())",
     kind: .notion, key: "notion:\(hex)", title: "Notion: Q4 Plan"),
+  AcceptedLink(
+    name: "notion site whose name contains grafana", url: "https://grafana.notion.site/Q4-Plan-\(hex)", kind: .notion,
+    key: "notion:\(hex)", title: "Notion: Q4 Plan"),
 ]
 
 private let refusedNotion: [RefusedLink] = [
@@ -409,6 +415,17 @@ private let refusedOther: [RefusedLink] = [
     #expect(target.key.hasPrefix("grafana:grafana.example.com"))
     #expect(target.key.hasSuffix("/abc123"))
     #expect(target.title == "Grafana: api latency")
+  }
+
+  // MARK: Titles
+
+  @Test func aTitleFromALongSlugIsCutToTheTitleLimit() throws {
+    let slug = String(repeating: "a", count: ExternalLink.titleLimit + 50)
+    let target = try #require(LinkTarget.parse("https://grafana.example.com/d/abc123/\(slug)"))
+
+    #expect(target.title.count == ExternalLink.titleLimit)
+    #expect(target.title.hasPrefix("Grafana: aaa"))
+    #expect(target.title.hasSuffix("…"))
   }
 
   // MARK: Length

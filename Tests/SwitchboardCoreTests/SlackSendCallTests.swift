@@ -153,6 +153,10 @@ private let refused: [SendCase] = [
   SendCase(
     name: "message_link not Slack",
     response: slackSendResponse(link: "https://example.com/archives/D0EXAMPLE01/p1794965246462679")),
+  // A link of another known kind parses. Without message_context, only the kind check refuses it.
+  SendCase(
+    name: "message_link of another known kind without message_context",
+    response: slackSendResponse(link: LinkFixtures.linear, channel: nil, ts: nil)),
   SendCase(
     name: "message_link on a look-alike host",
     response: slackSendResponse(link: "https://example.slack.com.evil.example/archives/D0EXAMPLE01/p1794965246462679")),
