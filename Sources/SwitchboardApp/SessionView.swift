@@ -270,7 +270,7 @@ struct SessionView: View {
           }
           Text([session.branch, session.cwd].compactMap { $0 }.joined(separator: " · "))
             .font(.caption)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
             .textSelection(.enabled)
