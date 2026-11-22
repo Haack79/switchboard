@@ -354,26 +354,26 @@ struct DeleteButton: View {
 }
 
 /// Opens the most recent Manager conversation, or starts the first one. The
-/// star turns the Needs you color and fills while a conversation needs you,
+/// icon turns the Needs you color and fills while a conversation needs you,
 /// because the Inbox and the Dock badge leave the conversations out.
 struct ManagerButton: View {
   @EnvironmentObject var model: BoardModel
 
   var body: some View {
     let managers = model.managers
-    let star = ManagerStar(managers)
+    let icon = ManagerIcon(managers)
     Button {
       model.openManager()
     } label: {
-      Label("Manager", systemImage: star == .outline ? "star" : "star.fill")
-        .foregroundStyle(star.color)
+      Label("Manager", systemImage: icon.systemImage)
+        .foregroundStyle(icon.color)
     }
-    .accessibilityValue(star.value)
-    .help(tooltip(star, managers))
+    .accessibilityValue(icon.value)
+    .help(tooltip(icon, managers))
   }
 
-  private func tooltip(_ star: ManagerStar, _ managers: [SessionSummary]) -> String {
-    switch star {
+  private func tooltip(_ icon: ManagerIcon, _ managers: [SessionSummary]) -> String {
+    switch icon {
     case .needsMe:
       guard let waiting = model.waitingManager, let reason = ChatMark(waiting).needsMeReason else {
         return "A Manager conversation needs you (⇧⌘M)"
@@ -387,9 +387,9 @@ struct ManagerButton: View {
   }
 }
 
-/// How the toolbar star looks: orange while a conversation waits on the
-/// user, blue while one has unread replies, and an outline otherwise.
-enum ManagerStar: Equatable {
+/// How the toolbar's Manager icon looks: orange while a conversation waits on
+/// the user, blue while one has unread replies, and an outline otherwise.
+enum ManagerIcon: Equatable {
   case needsMe, unread, outline
 
   init(_ managers: [SessionSummary]) {
@@ -401,6 +401,10 @@ enum ManagerStar: Equatable {
     } else {
       self = .outline
     }
+  }
+
+  var systemImage: String {
+    self == .outline ? "person.crop.circle.badge.checkmark" : "person.crop.circle.fill.badge.checkmark"
   }
 
   var color: Color {
