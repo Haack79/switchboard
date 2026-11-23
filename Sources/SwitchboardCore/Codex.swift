@@ -106,8 +106,7 @@ public enum CodexRollout {
   /// reads each from its end. It skips a compressed `.jsonl.zst` rollout,
   /// because Codex compresses only cold files. It throws when a rollout
   /// can't be read, because that rollout may hold limits.
-  public static func rateLimits(home: String) throws -> Reading? {
-    let machine = LocalMachine()
+  public static func rateLimits(home: String, on machine: any Machine) throws -> Reading? {
     guard let day = newestDay("\(home)/sessions", on: machine) else { return nil }
     let rollouts = machine.list(day).filter { $0.hasPrefix("rollout-") && $0.hasSuffix(".jsonl") }.sorted(by: >)
     for name in rollouts {
@@ -117,7 +116,7 @@ public enum CodexRollout {
   }
 
   /// The newest YYYY/MM/DD folder under `sessions`, by name.
-  private static func newestDay(_ sessions: String, on machine: LocalMachine) -> String? {
+  private static func newestDay(_ sessions: String, on machine: any Machine) -> String? {
     var folder = sessions
     for _ in 0..<3 {
       guard let newest = machine.list(folder).filter({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }).max() else {
@@ -130,7 +129,7 @@ public enum CodexRollout {
 
   /// The rollout's newest reading. A rollout that went away after the listing, as when Codex compressed it,
   /// has none.
-  private static func lastReading(_ path: String, on machine: LocalMachine) throws -> Reading? {
+  private static func lastReading(_ path: String, on machine: any Machine) throws -> Reading? {
     var reading: Reading?
     let read = Transcript.eachLineFromEnd(path, on: machine) { data in
       reading = self.reading(data)

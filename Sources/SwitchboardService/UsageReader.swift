@@ -180,7 +180,7 @@ final class UsageReader: @unchecked Sendable {
     var usage = AccountUsage(name: account.name, folder: account.folder, agent: .codex)
     do {
       try requireCodexLogin(account)
-      if let rollout = try CodexRollout.rateLimits(home: account.folder) {
+      if let rollout = try CodexRollout.rateLimits(home: account.folder, on: service.mac.machine) {
         usage.limits = rollout.limits
         usage.checked = rollout.checked
       }

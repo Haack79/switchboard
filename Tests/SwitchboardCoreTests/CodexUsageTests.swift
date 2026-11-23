@@ -6,7 +6,7 @@ import Testing
 /// The limits that the Codex usage reader takes from a CODEX_HOME, and the
 /// time that Codex reported them, in ms since the epoch.
 private func reading(_ home: String) throws -> (limits: [UsageLimit], checked: Int64)? {
-  try CodexRollout.rateLimits(home: home).map { ($0.limits, $0.checked) }
+  try CodexRollout.rateLimits(home: home, on: LocalMachine()).map { ($0.limits, $0.checked) }
 }
 
 /// A rollout whose second `token_count` is its last. Its keys follow the
@@ -83,7 +83,7 @@ private struct CodexHome {
   }
 }
 
-/// `CodexRollout.rateLimits(home:)`, which `sb usage` reads for a Codex account.
+/// `CodexRollout.rateLimits(home:on:)`, which `sb usage` reads for a Codex account.
 @Suite struct CodexUsageTests {
   @Test func readsTheLimitsOfTheLastTokenCountInTheRecordedRollout() throws {
     let home = try CodexHome()
@@ -331,7 +331,7 @@ private struct CodexHome {
     let home = try CodexHome()
     defer { home.remove() }
     try home.rollout(text + "\n")
-    return try CodexRollout.rateLimits(home: home.path)
+    return try CodexRollout.rateLimits(home: home.path, on: LocalMachine())
   }
 
   @Test(arguments: ["1e300", "1e16", "-5", "0"])
