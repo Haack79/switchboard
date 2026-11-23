@@ -39,6 +39,16 @@ func offlineClient() -> Client {
 }
 
 /// A model on `offlineClient()`. `apply` sets the Dock badge, which needs NSApp.
+/// The width that `view` takes when nothing squeezes it.
+@MainActor func idealWidth<V: View>(_ view: V) -> CGFloat {
+  NSHostingView(rootView: view.fixedSize()).fittingSize.width
+}
+
+/// The width that `view` takes when its parent offers it `width`.
+@MainActor func fittedWidth<V: View>(of view: V, offered width: CGFloat) -> CGFloat {
+  NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).width
+}
+
 @MainActor
 func offlineModel() -> BoardModel {
   _ = NSApplication.shared
