@@ -54,14 +54,29 @@ public struct CodexAccount: Hashable, Sendable {
   }
 
   /// Why a guard counts the folder as a Codex folder, or nil when it doesn't: the folder is named like a Codex
-  /// folder in any case, or `codexHomes` lists it in any case. It reads no file, so a folder that also holds a
-  /// Claude login counts.
+  /// folder in any case, or `codexHomes` lists it. A folder that also holds a Claude login counts.
   public static func whyCodex(_ folder: String, codexHomes: [String]?) -> String? {
     let folder = ClaudeAccount.normalize(folder)
     if isNamedLikeCodex(folder, ignoringCase: true) { return "\(folder) is named like a Codex folder" }
-    let listed = codexHomes?.contains { ClaudeAccount.normalize($0).caseInsensitiveCompare(folder) == .orderedSame }
+    let listed = codexHomes?.contains { home in
+      let home = ClaudeAccount.normalize(home)
+      return home == folder || (home.caseInsensitiveCompare(folder) == .orderedSame && sameFolder(home, folder))
+    }
     if listed == true { return "codexHomes lists \(folder)" }
     return nil
+  }
+
+  /// Whether both paths name one folder on disk. A case-insensitive volume gives two paths that differ only in
+  /// case one folder, and a case-sensitive volume gives them two.
+  private static func sameFolder(_ a: String, _ b: String) -> Bool {
+    func identity(_ path: String) -> [AnyHashable]? {
+      guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+        let volume = attributes[.systemNumber] as? AnyHashable, let file = attributes[.systemFileNumber] as? AnyHashable
+      else { return nil }
+      return [volume, file]
+    }
+    guard let first = identity(a) else { return false }
+    return first == identity(b)
   }
 
   /// Each ~/.codex and ~/.codex-* folder among `names`, by name. `names` holds the entries of the home folder.

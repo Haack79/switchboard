@@ -435,11 +435,23 @@ private struct FakeHome {
 
 /// A Mac's file system usually ignores case, so a `codexHomes` entry names the same folder in every case.
 @Suite struct CodexAccountHomesCase {
-  @Test(arguments: ["~/accounts/WORK", "~/Accounts/work", "/tmp/x/accounts/Work/"])
-  func aCodexHomesEntryClaimsTheFolderInAnyCase(_ folder: String) {
-    let listed = folder.hasPrefix("/tmp") ? "/tmp/x/accounts/work" : "~/accounts/work"
+  /// The temporary folder is on a volume that ignores case, as a Mac's volumes usually are.
+  @Test(arguments: ["accounts/WORK", "Accounts/work", "accounts/Work/"])
+  func aCodexHomesEntryClaimsTheSameFolderInAnyCase(_ variant: String) throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let listed = try home.folder("accounts/work")
 
-    #expect(CodexAccount.whyCodex(folder, codexHomes: [listed]) != nil)
+    #expect(CodexAccount.whyCodex("\(home.path)/\(variant)", codexHomes: [listed]) != nil)
+  }
+
+  /// On a volume that keeps case, `WORK` and `work` are two folders, so a case variant counts only when it is
+  /// the listed folder on disk.
+  @Test func aCaseVariantThatIsNoFolderOnDiskIsNotClaimed() {
+    let base = "/tmp/sb-no-such-\(UUID().uuidString)"
+
+    #expect(CodexAccount.whyCodex("\(base)/WORK", codexHomes: ["\(base)/work"]) == nil)
+    #expect(CodexAccount.whyCodex("\(base)/work", codexHomes: ["\(base)/work"]) != nil)
   }
 
   @Test func aClaudeConfigDirsEntryThatCodexHomesListsInAnotherCaseIsNoClaudeAccount() throws {

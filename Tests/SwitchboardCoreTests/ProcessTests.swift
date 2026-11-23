@@ -117,6 +117,20 @@ import Testing
     #expect(r.status == 0)
   }
 
+  /// The background `yes` writes without end. Once `runCommand` gives up on the pipe, the reader closes it, and
+  /// `yes` dies of SIGPIPE instead of filling memory.
+  @Test(.timeLimit(.minutes(1))) func aChildThatKeepsWritingAfterTheCallReturnsDiesOfSIGPIPE() throws {
+    let r = try runCommand("/bin/sh", ["-c", "yes > /dev/stderr & echo $! >&1; exit 0"], timeout: 0.1)
+    let pid = try #require(pid_t(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)), "\(r.stdout)")
+    defer { kill(pid, SIGKILL) }
+
+    let deadline = Date().addingTimeInterval(10)
+    while kill(pid, 0) == 0, Date() < deadline { usleep(50_000) }
+
+    #expect(r.timedOut)
+    #expect(kill(pid, 0) != 0, "yes still runs")
+  }
+
   @Test func aProgramThatFinishesInTimeIsNotTimedOut() throws {
     let r = try runCommand("/bin/sh", ["-c", "exit 1"], timeout: 30)
 

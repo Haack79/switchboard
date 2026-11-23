@@ -55,6 +55,11 @@ import Testing
   func aCodexHomeThatConfigEnvNamesInAnotherCaseIsNotTheActiveAccountAndDoesNotLaunch() throws {
     let lower = "\(NSTemporaryDirectory())sb-case-\(UUID().uuidString)/accounts/work"
     let upper = lower.replacingOccurrences(of: "/accounts/work", with: "/accounts/WORK")
+    try FileManager.default.createDirectory(atPath: lower, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default.removeItem(
+        atPath: ((lower as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent)
+    }
     try withAccounts(config: ["codexHomes": [.string(lower)], "env": ["CLAUDE_CONFIG_DIR": .string(upper)]]) {
       service, _, _, _ in
       let (active, refusal) = service.queue.sync {
