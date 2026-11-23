@@ -91,6 +91,32 @@ import Testing
     #expect(r.timedOut)
   }
 
+  /// The background `sleep` ignores SIGTERM, so it keeps the pipes open after SIGTERM ends the shell.
+  @Test(.timeLimit(.minutes(1))) func aChildThatHoldsThePipesAfterTheTimeoutDoesNotHoldTheCaller() throws {
+    let start = Date()
+    let r = try runCommand(
+      "/bin/bash", ["-c", "trap 'exit 1' TERM; (trap '' TERM; exec sleep 20) & echo $!; wait"], timeout: 0.3)
+    let elapsed = Date().timeIntervalSince(start)
+    if let pid = pid_t(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) { kill(pid, SIGKILL) }
+
+    #expect(elapsed < 5)
+    #expect(r.timedOut)
+    #expect(r.status == 1)
+    #expect(pid_t(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) != nil, "\(r.stdout)")
+  }
+
+  /// The program exits at once, and its background child keeps the pipes open past the timeout.
+  @Test(.timeLimit(.minutes(1))) func aChildThatHoldsThePipesOfAProgramThatExitedInTimeDoesNotHoldTheCaller() throws {
+    let start = Date()
+    let r = try runCommand("/bin/sh", ["-c", "sleep 20 & echo $!"], timeout: 0.5)
+    let elapsed = Date().timeIntervalSince(start)
+    if let pid = pid_t(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) { kill(pid, SIGKILL) }
+
+    #expect(elapsed < 5)
+    #expect(r.timedOut)
+    #expect(r.status == 0)
+  }
+
   @Test func aProgramThatFinishesInTimeIsNotTimedOut() throws {
     let r = try runCommand("/bin/sh", ["-c", "exit 1"], timeout: 30)
 

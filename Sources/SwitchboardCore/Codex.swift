@@ -54,14 +54,13 @@ public struct CodexAccount: Hashable, Sendable {
   }
 
   /// Why a guard counts the folder as a Codex folder, or nil when it doesn't: the folder is named like a Codex
-  /// folder in any case, or `codexHomes` lists it. It reads no file, so a folder that also holds a Claude login
-  /// counts.
+  /// folder in any case, or `codexHomes` lists it in any case. It reads no file, so a folder that also holds a
+  /// Claude login counts.
   public static func whyCodex(_ folder: String, codexHomes: [String]?) -> String? {
     let folder = ClaudeAccount.normalize(folder)
     if isNamedLikeCodex(folder, ignoringCase: true) { return "\(folder) is named like a Codex folder" }
-    if (codexHomes ?? []).contains(where: { ClaudeAccount.normalize($0) == folder }) {
-      return "codexHomes lists \(folder)"
-    }
+    let listed = codexHomes?.contains { ClaudeAccount.normalize($0).caseInsensitiveCompare(folder) == .orderedSame }
+    if listed == true { return "codexHomes lists \(folder)" }
     return nil
   }
 
@@ -90,13 +89,14 @@ public enum CodexRollout {
   /// has none. Rollout names start with the local start time, so path order
   /// is age order. The reader walks that day's rollouts newest first and
   /// reads each from its end. It skips a compressed `.jsonl.zst` rollout,
-  /// because Codex compresses only cold files.
-  public static func rateLimits(home: String) -> Reading? {
+  /// because Codex compresses only cold files. It throws when a rollout
+  /// can't be read, because that rollout may hold limits.
+  public static func rateLimits(home: String) throws -> Reading? {
     let machine = LocalMachine()
     guard let day = newestDay("\(home)/sessions", on: machine) else { return nil }
     let rollouts = machine.list(day).filter { $0.hasPrefix("rollout-") && $0.hasSuffix(".jsonl") }.sorted(by: >)
     for name in rollouts {
-      if let reading = lastReading("\(day)/\(name)", on: machine) { return reading }
+      if let reading = try lastReading("\(day)/\(name)", on: machine) { return reading }
     }
     return nil
   }
@@ -113,12 +113,15 @@ public enum CodexRollout {
     return folder
   }
 
-  private static func lastReading(_ path: String, on machine: LocalMachine) -> Reading? {
+  /// The rollout's newest reading. A rollout that went away after the listing, as when Codex compressed it,
+  /// has none.
+  private static func lastReading(_ path: String, on machine: LocalMachine) throws -> Reading? {
     var reading: Reading?
-    Transcript.eachLineFromEnd(path, on: machine) { data in
+    let read = Transcript.eachLineFromEnd(path, on: machine) { data in
       reading = self.reading(data)
       return reading != nil
     }
+    if !read, machine.exists(path) { throw APIError("can't read the Codex rollout \(path)") }
     return reading
   }
 

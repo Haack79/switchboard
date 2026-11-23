@@ -175,12 +175,12 @@ final class UsageReader: @unchecked Sendable {
   /// The limits of the account's newest rollout, after `codex login status`
   /// says the account is signed in. A reading's `checked` is the time Codex
   /// reported the limits. Without a rollout that has them, the reading has
-  /// no limits and no error.
+  /// no limits and no error. A rollout that can't be read is an error.
   private func reading(_ account: CodexAccount) -> AccountUsage {
     var usage = AccountUsage(name: account.name, folder: account.folder, agent: .codex)
     do {
       try requireCodexLogin(account)
-      if let rollout = CodexRollout.rateLimits(home: account.folder) {
+      if let rollout = try CodexRollout.rateLimits(home: account.folder) {
         usage.limits = rollout.limits
         usage.checked = rollout.checked
       }

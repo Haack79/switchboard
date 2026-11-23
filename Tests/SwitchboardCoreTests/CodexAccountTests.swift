@@ -293,6 +293,27 @@ private struct FakeHome {
     #expect(try Account.resolve(signed, among: []) == .claude(ClaudeAccount(folder: signed)))
   }
 
+  /// A `claudeConfigDirs` entry is known whether or not it holds a Claude login.
+  @Test func aKnownClaudeFolderGivenByPathStillNeedsAClaudeLogin() throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let empty = try home.folder("empty-account")
+    let known: [Account] = [.claude(ClaudeAccount(folder: empty))]
+
+    for form in [empty, empty + "/"] {
+      #expect(throws: (any Error).self, "\(form)") { try Account.resolve(form, among: known) }
+    }
+  }
+
+  @Test func aKnownClaudeAccountWithoutALoginStillResolvesByItsName() throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let empty = try home.folder("empty-account")
+    let known: [Account] = [.claude(ClaudeAccount(folder: empty))]
+
+    #expect(try Account.resolve("empty-account", among: known) == known[0])
+  }
+
   /// A `codexHomes` entry need not be named like a Codex folder. Its path
   /// resolves to the known account.
   @Test func aKnownCodexAccountAtAnyPathResolvesByItsFolder() throws {
@@ -409,5 +430,30 @@ private struct FakeHome {
     let reasons = Account.survey(claudeConfigDirs: [shared], codexHomes: [shared], home: home.path).refusals
 
     #expect(reasons.map { $0.contains("codexHomes") } == [true], "\(reasons)")
+  }
+}
+
+/// A Mac's file system usually ignores case, so a `codexHomes` entry names the same folder in every case.
+@Suite struct CodexAccountHomesCase {
+  @Test(arguments: ["~/accounts/WORK", "~/Accounts/work", "/tmp/x/accounts/Work/"])
+  func aCodexHomesEntryClaimsTheFolderInAnyCase(_ folder: String) {
+    let listed = folder.hasPrefix("/tmp") ? "/tmp/x/accounts/work" : "~/accounts/work"
+
+    #expect(CodexAccount.whyCodex(folder, codexHomes: [listed]) != nil)
+  }
+
+  @Test func aClaudeConfigDirsEntryThatCodexHomesListsInAnotherCaseIsNoClaudeAccount() throws {
+    let home = try FakeHome()
+    defer { home.remove() }
+    let folder = try home.folder("work")
+
+    let survey = Account.survey(claudeConfigDirs: ["\(home.path)/WORK"], codexHomes: [folder], home: home.path)
+
+    #expect(survey.accounts == [.codex(codex(folder))], "\(survey.accounts)")
+    #expect(survey.refusals.map { $0.contains("codexHomes") } == [true], "\(survey.refusals)")
+  }
+
+  @Test func aCodexHomesEntryDoesNotClaimAnotherFolder() {
+    #expect(CodexAccount.whyCodex("/tmp/x/accounts/other", codexHomes: ["/tmp/x/accounts/work"]) == nil)
   }
 }

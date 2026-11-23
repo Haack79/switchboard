@@ -5,8 +5,8 @@ import Testing
 
 /// The limits that the Codex usage reader takes from a CODEX_HOME, and the
 /// time that Codex reported them, in ms since the epoch.
-private func reading(_ home: String) -> (limits: [UsageLimit], checked: Int64)? {
-  CodexRollout.rateLimits(home: home).map { ($0.limits, $0.checked) }
+private func reading(_ home: String) throws -> (limits: [UsageLimit], checked: Int64)? {
+  try CodexRollout.rateLimits(home: home).map { ($0.limits, $0.checked) }
 }
 
 /// A rollout whose second `token_count` is its last. Its keys follow the
@@ -90,7 +90,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(try String(contentsOfFile: recorded, encoding: .utf8))
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.map(\.kind) == ["session", "weekly_all"])
     #expect(r.limits.map(\.percent) == [12.5, 34])
@@ -102,7 +102,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(try String(contentsOfFile: recorded, encoding: .utf8))
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.map(\.resetsAt) == [1_735_805_045_000, 1_736_305_445_000])
   }
@@ -113,7 +113,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(try String(contentsOfFile: recorded, encoding: .utf8))
 
-    #expect(reading(home.path)?.checked == recordedAt)
+    #expect(try reading(home.path)?.checked == recordedAt)
   }
 
   @Test func theLabelsNameTheWindow() throws {
@@ -121,7 +121,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(lines: [tokenCount(), taskComplete])
 
-    #expect(reading(home.path)?.limits.map(\.label) == ["5-hour", "Weekly"])
+    #expect(try reading(home.path)?.limits.map(\.label) == ["5-hour", "Weekly"])
   }
 
   @Test func aNullSecondaryGivesOnlyThePrimaryLimit() throws {
@@ -129,7 +129,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(lines: [tokenCount(primary: (40, 300, 1_795_209_852), secondary: nil)])
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.map(\.kind) == ["session"])
     #expect(r.limits.map(\.percent) == [40])
@@ -140,7 +140,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(lines: [tokenCount(primary: (7, 10080, 1_795_700_000), secondary: nil)])
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.map(\.kind) == ["weekly_all"])
     #expect(r.limits.map(\.percent) == [7])
@@ -154,7 +154,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(lines: [tokenCount(primary: (10, minutes, 1_795_209_852), secondary: nil)])
 
-    #expect(reading(home.path)?.limits.map(\.kind) == [kind])
+    #expect(try reading(home.path)?.limits.map(\.kind) == [kind])
   }
 
   @Test(arguments: ["omit", "null"])
@@ -167,7 +167,7 @@ private struct CodexHome {
       taskComplete,
     ])
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.first?.percent == 21)
     #expect(r.checked == isoMs("2026-11-20T09:15:10.000Z"))
@@ -179,21 +179,46 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(lines: [tokenCount(rateLimits: rateLimits), taskComplete])
 
-    #expect(reading(home.path) == nil)
+    #expect(try reading(home.path) == nil)
   }
 
   @Test func aHomeWithoutSessionsGivesNoReading() throws {
     let home = try CodexHome()
     defer { home.remove() }
 
-    #expect(reading(home.path) == nil)
+    #expect(try reading(home.path) == nil)
     try FileManager.default.createDirectory(
       atPath: "\(home.path)/sessions/2026/11/20", withIntermediateDirectories: true)
-    #expect(reading(home.path) == nil)
+    #expect(try reading(home.path) == nil)
   }
 
-  @Test func aMissingHomeGivesNoReading() {
-    #expect(reading("\(NSTemporaryDirectory())sb-test-missing-\(UUID().uuidString)") == nil)
+  @Test func aMissingHomeGivesNoReading() throws {
+    #expect(try reading("\(NSTemporaryDirectory())sb-test-missing-\(UUID().uuidString)") == nil)
+  }
+
+  /// A rollout that sbd can't read may hold limits, so the reader reports an error instead of no reading.
+  @Test func anUnreadableRolloutIsAnError() throws {
+    let home = try CodexHome()
+    defer { home.remove() }
+    let file = try home.rollout(tokenCount() + "\n")
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file) }
+
+    let error = #expect(throws: (any Error).self) { try reading(home.path) }
+
+    #expect(error.map { "\($0)" }?.contains(file) == true, "\(String(describing: error))")
+  }
+
+  /// A rollout can go between the listing and the read, as when Codex compresses it. The dangling link stands for
+  /// such a rollout: the listing names it, and no file is there.
+  @Test func aRolloutThatIsGoneIsSkipped() throws {
+    let home = try CodexHome()
+    defer { home.remove() }
+    let file = try home.rollout(time: "2026-11-20T09-15-02", tokenCount(primary: (12.5, 300, 1_795_209_852)) + "\n")
+    let gone = file.replacingOccurrences(of: "2026-11-20T09-15-02", with: "2026-11-20T10-00-00")
+    try FileManager.default.createSymbolicLink(atPath: gone, withDestinationPath: "\(home.path)/missing")
+
+    #expect(try reading(home.path)?.limits.first?.percent == 12.5)
   }
 
   /// Codex compresses only cold rollouts, so the reader skips a .jsonl.zst. This
@@ -205,7 +230,7 @@ private struct CodexHome {
     try home.rollout(
       time: "2026-11-20T10-00-00", ext: "jsonl.zst", tokenCount(primary: (99, 300, 1_795_209_852)) + "\n")
 
-    #expect(reading(home.path)?.limits.first?.percent == 12.5)
+    #expect(try reading(home.path)?.limits.first?.percent == 12.5)
   }
 
   @Test func aHomeWithOnlyACompressedRolloutGivesNoReading() throws {
@@ -213,7 +238,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(ext: "jsonl.zst", tokenCount() + "\n")
 
-    #expect(reading(home.path) == nil)
+    #expect(try reading(home.path) == nil)
   }
 
   /// Codex may be writing the file, so its last line can be cut short.
@@ -227,7 +252,7 @@ private struct CodexHome {
     defer { home.remove() }
     try home.rollout(tokenCount(at: "2026-11-20T09:15:30.250Z", primary: (12.5, 300, 1_795_209_852)) + "\n" + cut)
 
-    let r = try #require(reading(home.path))
+    let r = try #require(try reading(home.path))
 
     #expect(r.limits.first?.percent == 12.5)
     #expect(r.checked == isoMs("2026-11-20T09:15:30.250Z"))
@@ -246,7 +271,7 @@ private struct CodexHome {
     try FileManager.default.setAttributes(
       [.modificationDate: Date(timeIntervalSinceNow: -86400)], ofItemAtPath: newer)
 
-    #expect(reading(home.path)?.limits.first?.percent == 40)
+    #expect(try reading(home.path)?.limits.first?.percent == 40)
   }
 
   @Test(arguments: [
@@ -260,7 +285,7 @@ private struct CodexHome {
     try home.rollout(day: oldDay, time: oldTime, lines: [tokenCount(primary: (20, 300, 1_795_209_852))])
     try home.rollout(day: newDay, time: newTime, lines: [tokenCount(primary: (40, 300, 1_795_209_852))])
 
-    #expect(reading(home.path)?.limits.first?.percent == 40)
+    #expect(try reading(home.path)?.limits.first?.percent == 40)
   }
 
   /// A thread that has had no turn yet has no `token_count`. The reader then
@@ -271,7 +296,7 @@ private struct CodexHome {
     try home.rollout(time: "2026-11-20T08-00-00", lines: [tokenCount(primary: (33, 300, 1_795_209_852))])
     try home.rollout(time: "2026-11-20T10-00-00", lines: [taskComplete])
 
-    #expect(reading(home.path)?.limits.first?.percent == 33)
+    #expect(try reading(home.path)?.limits.first?.percent == 33)
   }
 
   @Test func ignoresArchivedSessions() throws {
@@ -282,7 +307,7 @@ private struct CodexHome {
       day: "2026/11/21", time: "2026-11-21T08-00-00", folder: "archived_sessions",
       tokenCount(primary: (99, 300, 1_795_209_852)) + "\n")
 
-    #expect(reading(home.path)?.limits.first?.percent == 33)
+    #expect(try reading(home.path)?.limits.first?.percent == 33)
   }
 
   @Test func anIntegerPercentReadsAsANumber() throws {
@@ -291,7 +316,7 @@ private struct CodexHome {
     let line = tokenCount().replacingOccurrences(of: #""used_percent":12.5"#, with: #""used_percent":12"#)
     try home.rollout(lines: [line])
 
-    #expect(reading(home.path)?.limits.first?.percent == 12)
+    #expect(try reading(home.path)?.limits.first?.percent == 12)
   }
 }
 
@@ -306,7 +331,7 @@ private struct CodexHome {
     let home = try CodexHome()
     defer { home.remove() }
     try home.rollout(text + "\n")
-    return CodexRollout.rateLimits(home: home.path)
+    return try CodexRollout.rateLimits(home: home.path)
   }
 
   @Test(arguments: ["1e300", "1e16", "-5", "0"])

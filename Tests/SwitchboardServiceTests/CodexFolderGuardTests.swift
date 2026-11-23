@@ -50,6 +50,55 @@ import Testing
     }
   }
 
+  /// A Mac's file system usually ignores case, so config.env can name a `codexHomes` entry in another case.
+  @Test(.timeLimit(.minutes(1)))
+  func aCodexHomeThatConfigEnvNamesInAnotherCaseIsNotTheActiveAccountAndDoesNotLaunch() throws {
+    let lower = "\(NSTemporaryDirectory())sb-case-\(UUID().uuidString)/accounts/work"
+    let upper = lower.replacingOccurrences(of: "/accounts/work", with: "/accounts/WORK")
+    try withAccounts(config: ["codexHomes": [.string(lower)], "env": ["CLAUDE_CONFIG_DIR": .string(upper)]]) {
+      service, _, _, _ in
+      let (active, refusal) = service.queue.sync {
+        service.entries["s1"] = Service.Entry(session: makeSession("s1", name: "s1"))
+        return (service.activeAccount.folder, service.codexLaunchRefusal("s1"))
+      }
+
+      #expect(active != ClaudeAccount.normalize(upper))
+      #expect(refusal != nil)
+    }
+  }
+
+  /// claude runs under the default account when the pane's environment has no CLAUDE_CONFIG_DIR, and
+  /// `ClaudeAccount.apply` removes it for the default account.
+  @Test(.timeLimit(.minutes(1)))
+  func aSessionOnTheDefaultAccountDoesNotLaunchWhenCodexHomesListsTheDefaultFolder() throws {
+    try withAccounts(config: ["codexHomes": [.string(ClaudeAccount.defaultFolder)]]) { service, _, _, _ in
+      var session = makeSession("s1", name: "s1")
+      session.claudeConfigDir = ClaudeAccount.defaultFolder
+      let (env, refusal) = service.queue.sync {
+        service.entries["s1"] = Service.Entry(session: session)
+        return (service.paneEnv("s1"), service.codexLaunchRefusal("s1"))
+      }
+
+      #expect(env["CLAUDE_CONFIG_DIR"] == nil)
+      #expect(refusal != nil)
+    }
+  }
+
+  /// config.env names the default folder, so the test doesn't depend on the CLAUDE_CONFIG_DIR of the process
+  /// that runs it.
+  @Test(.timeLimit(.minutes(1)))
+  func theDefaultFolderIsNotListedAsAClaudeAccountWhenCodexHomesListsIt() throws {
+    let config: [String: JSON] = [
+      "codexHomes": [.string(ClaudeAccount.defaultFolder)],
+      "env": ["CLAUDE_CONFIG_DIR": .string(ClaudeAccount.defaultFolder)],
+    ]
+    try withAccounts(config: config) { service, _, claude, _ in
+      let listed = service.queue.sync { service.listedAccounts() }
+
+      #expect(listed.compactMap(\.claude).map(\.folder) == [ClaudeAccount.normalize(claude)], "\(listed)")
+    }
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func aGroupWhoseAccountIsACodexHomeGivesNewSessionsNoAccount() throws {
     try withAccounts { service, _, claude, cx in

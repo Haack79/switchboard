@@ -65,9 +65,11 @@ extension Service {
   }
 
   /// Why claude can't launch for the local session `id`: the account that its pane would set is a Codex folder.
-  /// The stored account, config.env, or sbd's own CLAUDE_CONFIG_DIR may name a folder that became one.
+  /// The stored account, config.env, or sbd's own CLAUDE_CONFIG_DIR may name a folder that became one. A pane
+  /// without CLAUDE_CONFIG_DIR runs claude under the default account.
   func codexLaunchRefusal(_ id: String) -> String? {
-    guard entries[id]?.session.host == nil, let folder = paneEnv(id)["CLAUDE_CONFIG_DIR"], let name = codexName(folder)
+    guard entries[id]?.session.host == nil,
+      let name = codexName(paneEnv(id)["CLAUDE_CONFIG_DIR"] ?? ClaudeAccount.defaultFolder)
     else { return nil }
     return Self.codexRefusal(name)
   }
@@ -125,11 +127,11 @@ extension Service {
   }
 
   /// The accounts that `sb account` lists: `accounts`, with the active account inserted first when `accounts`
-  /// doesn't include it.
+  /// doesn't include it and `codexName` doesn't claim it.
   func listedAccounts() -> [Account] {
     let active = Account.claude(activeAccount)
     var all = accounts
-    if !all.contains(active) { all.insert(active, at: 0) }
+    if !all.contains(active), codexName(active.folder) == nil { all.insert(active, at: 0) }
     return all
   }
 

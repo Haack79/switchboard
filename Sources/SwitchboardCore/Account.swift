@@ -122,8 +122,10 @@ public enum Account: Hashable, Sendable {
 
   /// The account that `ref` names: a short name, or a folder. It refuses a
   /// name that two known accounts share, so that it never picks one
-  /// silently. A folder that no known account has is a Codex account when
-  /// `CodexAccount.whyCodex` claims it, and a Claude account when it holds a Claude login.
+  /// silently. A folder of a known Codex account is that account. Any other
+  /// folder is a Codex account when `CodexAccount.whyCodex` claims it, and a
+  /// Claude account when it holds a Claude login, even when a known Claude
+  /// account has the folder.
   public static func resolve(_ ref: String, among known: [Account], codexHomes: [String]? = nil) throws -> Account {
     let named = known.filter { $0.name == ref }
     if named.count > 1 {
@@ -132,7 +134,7 @@ public enum Account: Hashable, Sendable {
     }
     if let match = named.first { return match }
     let folder = ClaudeAccount.normalize(ref)
-    if let match = known.first(where: { $0.folder == folder }) { return match }
+    if let match = known.first(where: { $0.codex != nil && $0.folder == folder }) { return match }
     if CodexAccount.whyCodex(folder, codexHomes: codexHomes) != nil {
       let account = CodexAccount(folder: folder)
       if let clash = account.clash { throw APIError(clash) }

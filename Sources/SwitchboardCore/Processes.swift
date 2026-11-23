@@ -5,8 +5,11 @@ public struct CommandResult: Sendable {
   public var status: Int32
   public var stdout: String
   public var stderr: String
-  /// True when `runCommand` sent SIGTERM because the timeout passed. A
-  /// program that handles SIGTERM can then exit with any status.
+  /// True when `runCommand` sent SIGTERM because the timeout passed, or when
+  /// the program's output stayed open more than a second past the timeout. A
+  /// program that handles SIGTERM can then exit with any status. A child of
+  /// the program can keep the output open, and `stdout` and `stderr` then
+  /// hold only what arrived before `runCommand` stopped reading.
   public var timedOut: Bool
 
   public init(status: Int32, stdout: String, stderr: String, timedOut: Bool = false) {
@@ -56,6 +59,7 @@ public func runCommand(
   let stdin = input.map { _ in Pipe() }
   p.standardInput = stdin ?? FileHandle.nullDevice
   try p.run()
+  let deadline = timeout.map { DispatchTime.now() + $0 }
   let timedOut = OSAllocatedUnfairLock(initialState: false)
   let kill = DispatchWorkItem {
     if p.isRunning {
@@ -64,28 +68,40 @@ public func runCommand(
     }
   }
   defer { kill.cancel() }
-  if let timeout { DispatchQueue(label: "runCommand.timeout").asyncAfter(deadline: .now() + timeout, execute: kill) }
+  if let deadline { DispatchQueue(label: "runCommand.timeout").asyncAfter(deadline: deadline, execute: kill) }
   if let stdin, let input {
     stdin.fileHandleForWriting.write(input)
     try? stdin.fileHandleForWriting.close()
   }
-  // Reads both pipes before waiting, so a full pipe can't stall the program.
-  // stdout is read on a queue of its own. A global queue gets no thread
-  // while a caller waits here on every thread of Swift's cooperative pool,
-  // as parallel tests do.
-  var outData = Data()
+  // Reads both pipes while the program runs, so a full pipe can't stall it.
   let group = DispatchGroup()
+  let outData = drain(out, label: "runCommand.stdout", group)
+  let errData = drain(err, label: "runCommand.stderr", group)
+  p.waitUntilExit()
+  if let deadline {
+    // A child that outlives the program can keep the pipes open for as long as it runs.
+    if group.wait(timeout: max(deadline, .now()) + 1) == .timedOut { timedOut.withLock { $0 = true } }
+  } else {
+    group.wait()
+  }
+  return CommandResult(
+    status: p.terminationStatus, stdout: String(decoding: outData.withLock { $0 }, as: UTF8.self),
+    stderr: String(decoding: errData.withLock { $0 }, as: UTF8.self), timedOut: timedOut.withLock { $0 })
+}
+
+/// Reads the pipe to its end on a queue of its own, and returns the bytes read so far. A global queue gets no
+/// thread while a caller waits in `runCommand` on every thread of Swift's cooperative pool, as parallel tests do.
+private func drain(_ pipe: Pipe, label: String, _ group: DispatchGroup) -> OSAllocatedUnfairLock<Data> {
+  let data = OSAllocatedUnfairLock(initialState: Data())
   group.enter()
-  DispatchQueue(label: "runCommand.stdout").async {
-    outData = out.fileHandleForReading.readDataToEndOfFile()
+  DispatchQueue(label: label).async {
+    // `availableData` returns each chunk as it arrives. `read(upToCount:)` waits for the whole count.
+    while case let chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
+      data.withLock { $0.append(chunk) }
+    }
     group.leave()
   }
-  let errData = err.fileHandleForReading.readDataToEndOfFile()
-  group.wait()
-  p.waitUntilExit()
-  return CommandResult(
-    status: p.terminationStatus, stdout: String(decoding: outData, as: UTF8.self),
-    stderr: String(decoding: errData, as: UTF8.self), timedOut: timedOut.withLock { $0 })
+  return data
 }
 
 /// The text in single quotes, for a command that a POSIX shell runs. It is correct for every
