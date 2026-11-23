@@ -171,7 +171,7 @@ extension Service {
         s.cwd = folder.cwd
         s.branch = folder.branch
         s.repo = folder.repo
-        s.model = s.model ?? config.model
+        s.model = SessionModel.stored(kind: s.kind, requested: s.model, workModel: config.model)
         s.claudeConfigDir = account
         s.done = false
         s.followup?.started = nowMs()
