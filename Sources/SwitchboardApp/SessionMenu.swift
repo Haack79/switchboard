@@ -79,7 +79,7 @@ struct SessionMenuItems<Extra: View>: View {
       multiSelection: model.multiSelection)
     let actions = SessionMenu.actions(
       for: session, selectionCount: selectionCount,
-      movesAccount: SessionAccountMenu.shows(session, accountCount: model.accounts.count),
+      movesAccount: SessionAccountMenu.shows(session, accountCount: model.sessionAccounts.count),
       parentName: model.linkedParentName(of: session))
     let split = actions.firstIndex(of: .divider) ?? actions.endIndex
     ForEach(actions[..<split], id: \.self, content: item)
